@@ -254,6 +254,8 @@ src-tauri/target/release/bundle/appimage/Meetily_<version>_amd64.AppImage
 
 On macOS, the build process is simplified as GPU acceleration (Metal) is enabled by default.
 
+The following steps should be run from the `frontend` directory.
+
 ### 1. Install Dependencies
 
 ```bash
@@ -267,6 +269,9 @@ brew install cmake node pnpm
 ### 2. Build and Run
 
 ```bash
+# Install deps
+pnpm install
+
 # Development mode (with hot reload)
 pnpm tauri:dev
 
