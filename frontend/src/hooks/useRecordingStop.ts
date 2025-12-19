@@ -46,6 +46,7 @@ export function useRecordingStop(
     flushBuffer,
     clearTranscripts,
     meetingTitle,
+    markMeetingAsSaved,
   } = useTranscripts();
 
   const {
@@ -254,6 +255,9 @@ export function useRecordingStop(
           console.log('✅ Successfully saved COMPLETE meeting with ID:', meetingId);
           console.log('   Transcripts:', freshTranscripts.length);
           console.log('   folder_path:', folderPath);
+
+          // Mark meeting as saved in IndexedDB (for recovery system)
+          await markMeetingAsSaved();
 
           // Clean up session storage
           sessionStorage.removeItem('last_recording_folder_path');

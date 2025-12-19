@@ -592,6 +592,10 @@ pub fn run() {
             audio::recording_commands::attempt_device_reconnect,
             // Playback device detection (Bluetooth warning)
             audio::recording_commands::get_active_audio_output,
+            // Audio recovery commands (for transcript recovery feature)
+            audio::incremental_saver::recover_audio_from_checkpoints,
+            audio::incremental_saver::cleanup_checkpoints,
+            audio::incremental_saver::has_audio_checkpoints,
             console_utils::show_console,
             console_utils::hide_console,
             console_utils::toggle_console,
