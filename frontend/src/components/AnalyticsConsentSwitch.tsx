@@ -1,6 +1,7 @@
-import React, { useContext, useState } from 'react';
+import React, { useContext, useState, useEffect } from 'react';
 import { Switch } from '@/components/ui/switch';
-import { Info, Loader2 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Info, Loader2, Copy, Check } from 'lucide-react';
 import { AnalyticsContext } from './AnalyticsProvider';
 import { load } from '@tauri-apps/plugin-store';
 import { invoke } from '@tauri-apps/api/core';
@@ -12,8 +13,43 @@ export default function AnalyticsConsentSwitch() {
   const { setIsAnalyticsOptedIn, isAnalyticsOptedIn } = useContext(AnalyticsContext);
   const [isProcessing, setIsProcessing] = useState(false);
   const [showModal, setShowModal] = useState(false);
+  const [userId, setUserId] = useState<string>('');
+  const [isCopied, setIsCopied] = useState(false);
 
   // Note: Store loading is handled by AnalyticsProvider to avoid race conditions
+
+  useEffect(() => {
+    const loadUserId = async () => {
+      if (isAnalyticsOptedIn) {
+        try {
+          const id = await Analytics.getPersistentUserId();
+          setUserId(id);
+        } catch (error) {
+          console.error('Failed to load user ID:', error);
+        }
+      } else {
+        setUserId('');
+      }
+    };
+    loadUserId();
+  }, [isAnalyticsOptedIn]);
+
+  const handleCopyUserId = async () => {
+    if (!userId) return;
+
+    try {
+      await navigator.clipboard.writeText(userId);
+      setIsCopied(true);
+      setTimeout(() => setIsCopied(false), 2000);
+
+      // Track that user copied their ID
+      await Analytics.track('user_id_copied', {
+        user_id: userId
+      });
+    } catch (error) {
+      console.error('Failed to copy user ID:', error);
+    }
+  };
 
   const handleToggle = async (enabled: boolean) => {
     // If user is trying to DISABLE, show the modal first
@@ -144,6 +180,44 @@ export default function AnalyticsConsentSwitch() {
             />
           </div>
         </div>
+
+        {/* User ID Display - Only shown when analytics is enabled */}
+        {isAnalyticsOptedIn && userId && (
+          <div className="p-4 border rounded-lg bg-gray-50">
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex-1 min-w-0">
+                <div className="font-medium text-gray-800 mb-1">Your Analytics ID</div>
+                <p className="text-xs text-gray-600 mb-2">
+                  Share this ID when reporting issues to help us investigate your analytics logs
+                </p>
+                <div className="flex items-center gap-2">
+                  <code className="text-xs text-gray-700 bg-white px-2 py-1 rounded border border-gray-300 font-mono flex-1 truncate">
+                    {userId}
+                  </code>
+                  <Button
+                    onClick={handleCopyUserId}
+                    variant="outline"
+                    size="sm"
+                    className="flex-shrink-0"
+                    title="Copy User ID"
+                  >
+                    {isCopied ? (
+                      <>
+                        <Check className="w-3.5 h-3.5 text-green-600" />
+                        <span className="text-green-600">Copied!</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3.5 h-3.5" />
+                        <span>Copy</span>
+                      </>
+                    )}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="flex items-start gap-2 p-2 bg-blue-50 rounded border border-blue-200">
           <Info className="w-4 h-4 text-blue-600 mt-0.5 flex-shrink-0" />
