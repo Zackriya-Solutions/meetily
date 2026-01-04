@@ -16,6 +16,10 @@ pub enum RecordingState {
     Stopping,
 }
 
+// Tray icon status indicators
+const TRAY_RECORDING_TITLE: &str = "👻 Meetily";      // Ghost when recording
+const TRAY_NOT_RECORDING_TITLE: &str = "💤 Meetily";  // Zzz when not recording
+
 pub fn create_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     // Start with default menu, will update with actual state after initialization
     // Pass can_record=true initially, will be updated by update_tray_menu immediately
@@ -23,7 +27,8 @@ pub fn create_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 
     TrayIconBuilder::with_id("main-tray")
         .menu(&menu)
-        .tooltip("Meetily")
+        .tooltip(TRAY_NOT_RECORDING_TITLE)
+        .title(TRAY_NOT_RECORDING_TITLE)  // Show Zzz initially
         .icon(app.default_window_icon().unwrap().clone())
         .on_menu_event(|app, event| handle_menu_event(app, event.id.as_ref()))
         .build(app)?;
@@ -40,6 +45,7 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, item_id: &str) {
         "pause_recording" => pause_recording_handler(app),
         "resume_recording" => resume_recording_handler(app),
         "stop_recording" => stop_recording_handler(app),
+        "toggle_auto_recording" => toggle_auto_recording_handler(app),
         "open_window" => focus_main_window(app),
         "settings" => {
             focus_main_window(app);
@@ -209,6 +215,46 @@ fn check_updates_handler<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
+fn toggle_auto_recording_handler<R: Runtime>(app: &AppHandle<R>) {
+    let app_clone = app.clone();
+    tauri::async_runtime::spawn(async move {
+        // Load current preference
+        match crate::audio::recording_preferences::load_recording_preferences(&app_clone).await {
+            Ok(mut prefs) => {
+                // Toggle auto-recording
+                prefs.auto_recording_enabled = !prefs.auto_recording_enabled;
+                let new_state = prefs.auto_recording_enabled;
+
+                // Save updated preference
+                if let Err(e) = crate::audio::recording_preferences::save_recording_preferences(&app_clone, &prefs).await {
+                    log::error!("Failed to save auto-recording preference: {}", e);
+                    return;
+                }
+
+                log::info!("Auto-recording toggled to: {}", new_state);
+
+                // If enabling auto-recording and not currently recording, start recording
+                if new_state && !crate::audio::recording_commands::is_recording().await {
+                    log::info!("Auto-recording enabled, starting recording...");
+                    // Trigger auto-recording start
+                    if let Err(e) = crate::audio::auto_recording::start_auto_recording(&app_clone).await {
+                        log::error!("Failed to start auto-recording: {}", e);
+                    }
+                } else if !new_state {
+                    log::info!("Auto-recording disabled");
+                    // Note: We don't stop ongoing recording when disabling auto-record
+                }
+
+                // Update tray menu
+                update_tray_menu_async(&app_clone).await;
+            }
+            Err(e) => {
+                log::error!("Failed to load recording preferences: {}", e);
+            }
+        }
+    });
+}
+
 pub fn update_tray_menu<R: Runtime>(app: &AppHandle<R>) {
     // For sync update, spawn async task to get current state
     let app_clone = app.clone();
@@ -221,11 +267,23 @@ pub fn update_tray_menu<R: Runtime>(app: &AppHandle<R>) {
 
 pub fn set_tray_state<R: Runtime>(app: &AppHandle<R>, state: RecordingState) {
     log::info!("Tray: Setting intermediate state: {:?}", state);
+
+    // Determine the tray title based on recording state
+    let tray_title = match state {
+        RecordingState::Recording | RecordingState::Paused | RecordingState::Starting |
+        RecordingState::Pausing | RecordingState::Resuming => TRAY_RECORDING_TITLE,
+        RecordingState::Stopped | RecordingState::Stopping => TRAY_NOT_RECORDING_TITLE,
+    };
+
     // During recording state transitions, we assume recording is allowed (we're already recording)
     if let Ok(menu) = build_menu(app, state, true) {
         if let Some(tray) = app.tray_by_id("main-tray") {
             let result = tray.set_menu(Some(menu));
             log::info!("Tray: Intermediate state menu update result: {:?}", result);
+
+            // Update tray title to show Ghost/Zzz indicator
+            let _ = tray.set_title(Some(tray_title));
+            let _ = tray.set_tooltip(Some(tray_title));
         } else {
             log::warn!("Tray: Could not find tray with id 'main-tray'");
         }
@@ -301,10 +359,25 @@ pub async fn update_tray_menu_async<R: Runtime>(app: &AppHandle<R>) {
     let can_record = check_can_record(app).await;
     log::info!("Tray: can_record: {}", can_record);
 
+    // Determine the tray title based on recording state
+    let tray_title = match recording_state {
+        RecordingState::Recording | RecordingState::Paused | RecordingState::Starting |
+        RecordingState::Pausing | RecordingState::Resuming => TRAY_RECORDING_TITLE,
+        RecordingState::Stopped | RecordingState::Stopping => TRAY_NOT_RECORDING_TITLE,
+    };
+
     if let Ok(menu) = build_menu(app, recording_state, can_record) {
         if let Some(tray) = app.tray_by_id("main-tray") {
             let result = tray.set_menu(Some(menu));
             log::info!("Tray: Menu update result: {:?}", result);
+
+            // Update tray title to show Ghost/Zzz indicator
+            if let Err(e) = tray.set_title(Some(tray_title)) {
+                log::warn!("Tray: Failed to set title: {:?}", e);
+            }
+            if let Err(e) = tray.set_tooltip(Some(tray_title)) {
+                log::warn!("Tray: Failed to set tooltip: {:?}", e);
+            }
         } else {
             log::warn!("Tray: Could not find tray with id 'main-tray'");
         }
@@ -380,6 +453,11 @@ fn build_menu<R: Runtime>(
             }
         }
     }
+
+    // Add auto-recording toggle
+    builder = builder
+        .item(&PredefinedMenuItem::separator(app)?)
+        .item(&MenuItemBuilder::with_id("toggle_auto_recording", "Toggle Auto-Recording").build(app)?);
 
     builder
         .item(&PredefinedMenuItem::separator(app)?)

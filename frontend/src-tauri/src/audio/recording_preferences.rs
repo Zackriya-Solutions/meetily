@@ -23,6 +23,40 @@ pub struct RecordingPreferences {
     #[cfg(target_os = "macos")]
     #[serde(default)]
     pub system_audio_backend: Option<String>,
+
+    // Auto-recording settings
+    #[serde(default = "default_auto_recording_enabled")]
+    pub auto_recording_enabled: bool,
+    #[serde(default = "default_transcript_export_folder")]
+    pub transcript_export_folder: PathBuf,
+    #[serde(default = "default_audio_retention_days")]
+    pub audio_retention_days: u32,
+    #[serde(default = "default_silence_threshold_seconds")]
+    pub silence_threshold_seconds: u32,
+    #[serde(default = "default_minimum_segment_minutes")]
+    pub minimum_segment_minutes: u32,
+}
+
+fn default_auto_recording_enabled() -> bool {
+    true
+}
+
+fn default_transcript_export_folder() -> PathBuf {
+    dirs::document_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("Meeting Transcripts")
+}
+
+fn default_audio_retention_days() -> u32 {
+    7
+}
+
+fn default_silence_threshold_seconds() -> u32 {
+    30
+}
+
+fn default_minimum_segment_minutes() -> u32 {
+    30
 }
 
 impl Default for RecordingPreferences {
@@ -35,6 +69,12 @@ impl Default for RecordingPreferences {
             preferred_system_device: None,
             #[cfg(target_os = "macos")]
             system_audio_backend: Some("coreaudio".to_string()),
+            // Auto-recording defaults
+            auto_recording_enabled: default_auto_recording_enabled(),
+            transcript_export_folder: default_transcript_export_folder(),
+            audio_retention_days: default_audio_retention_days(),
+            silence_threshold_seconds: default_silence_threshold_seconds(),
+            minimum_segment_minutes: default_minimum_segment_minutes(),
         }
     }
 }
@@ -128,9 +168,10 @@ pub async fn load_recording_preferences<R: Runtime>(
         RecordingPreferences::default()
     };
 
-    info!("Loaded recording preferences: save_folder={:?}, auto_save={}, format={}, mic={:?}, system={:?}",
+    info!("Loaded recording preferences: save_folder={:?}, auto_save={}, format={}, mic={:?}, system={:?}, auto_recording={}, retention_days={}",
           prefs.save_folder, prefs.auto_save, prefs.file_format,
-          prefs.preferred_mic_device, prefs.preferred_system_device);
+          prefs.preferred_mic_device, prefs.preferred_system_device,
+          prefs.auto_recording_enabled, prefs.audio_retention_days);
     Ok(prefs)
 }
 
@@ -139,9 +180,10 @@ pub async fn save_recording_preferences<R: Runtime>(
     app: &AppHandle<R>,
     preferences: &RecordingPreferences,
 ) -> Result<()> {
-    info!("Saving recording preferences: save_folder={:?}, auto_save={}, format={}, mic={:?}, system={:?}",
+    info!("Saving recording preferences: save_folder={:?}, auto_save={}, format={}, mic={:?}, system={:?}, auto_recording={}, retention_days={}",
           preferences.save_folder, preferences.auto_save, preferences.file_format,
-          preferences.preferred_mic_device, preferences.preferred_system_device);
+          preferences.preferred_mic_device, preferences.preferred_system_device,
+          preferences.auto_recording_enabled, preferences.audio_retention_days);
 
     // Get or create store
     let store = app
@@ -383,5 +425,100 @@ pub async fn get_audio_backend_info() -> Result<Vec<BackendInfo>, String> {
             description: "Default system audio capture".to_string(),
         }])
     }
+}
+
+// Auto-recording preference commands
+
+/// Get auto-recording enabled status
+#[tauri::command]
+pub async fn get_auto_recording_enabled<R: Runtime>(app: AppHandle<R>) -> Result<bool, String> {
+    let prefs = load_recording_preferences(&app)
+        .await
+        .map_err(|e| format!("Failed to load preferences: {}", e))?;
+    Ok(prefs.auto_recording_enabled)
+}
+
+/// Set auto-recording enabled status
+#[tauri::command]
+pub async fn set_auto_recording_enabled<R: Runtime>(
+    app: AppHandle<R>,
+    enabled: bool,
+) -> Result<(), String> {
+    let mut prefs = load_recording_preferences(&app)
+        .await
+        .map_err(|e| format!("Failed to load preferences: {}", e))?;
+    prefs.auto_recording_enabled = enabled;
+    save_recording_preferences(&app, &prefs)
+        .await
+        .map_err(|e| format!("Failed to save preferences: {}", e))?;
+    info!("Auto-recording enabled set to: {}", enabled);
+    Ok(())
+}
+
+/// Get transcript export folder path
+#[tauri::command]
+pub async fn get_transcript_export_folder<R: Runtime>(app: AppHandle<R>) -> Result<String, String> {
+    let prefs = load_recording_preferences(&app)
+        .await
+        .map_err(|e| format!("Failed to load preferences: {}", e))?;
+    Ok(prefs.transcript_export_folder.to_string_lossy().to_string())
+}
+
+/// Set transcript export folder path
+#[tauri::command]
+pub async fn set_transcript_export_folder<R: Runtime>(
+    app: AppHandle<R>,
+    folder_path: String,
+) -> Result<(), String> {
+    let mut prefs = load_recording_preferences(&app)
+        .await
+        .map_err(|e| format!("Failed to load preferences: {}", e))?;
+    prefs.transcript_export_folder = PathBuf::from(&folder_path);
+
+    // Ensure the directory exists
+    if let Err(e) = std::fs::create_dir_all(&prefs.transcript_export_folder) {
+        return Err(format!("Failed to create transcript export folder: {}", e));
+    }
+
+    save_recording_preferences(&app, &prefs)
+        .await
+        .map_err(|e| format!("Failed to save preferences: {}", e))?;
+    info!("Transcript export folder set to: {}", folder_path);
+    Ok(())
+}
+
+/// Get audio retention period in days
+#[tauri::command]
+pub async fn get_audio_retention_days<R: Runtime>(app: AppHandle<R>) -> Result<u32, String> {
+    let prefs = load_recording_preferences(&app)
+        .await
+        .map_err(|e| format!("Failed to load preferences: {}", e))?;
+    Ok(prefs.audio_retention_days)
+}
+
+/// Set audio retention period in days
+#[tauri::command]
+pub async fn set_audio_retention_days<R: Runtime>(
+    app: AppHandle<R>,
+    days: u32,
+) -> Result<(), String> {
+    let mut prefs = load_recording_preferences(&app)
+        .await
+        .map_err(|e| format!("Failed to load preferences: {}", e))?;
+    prefs.audio_retention_days = days;
+    save_recording_preferences(&app, &prefs)
+        .await
+        .map_err(|e| format!("Failed to save preferences: {}", e))?;
+    info!("Audio retention days set to: {}", days);
+    Ok(())
+}
+
+/// Ensure transcript export folder exists
+pub fn ensure_transcript_export_folder(folder: &PathBuf) -> Result<()> {
+    if !folder.exists() {
+        std::fs::create_dir_all(folder)?;
+        info!("Created transcript export directory: {:?}", folder);
+    }
+    Ok(())
 }
 

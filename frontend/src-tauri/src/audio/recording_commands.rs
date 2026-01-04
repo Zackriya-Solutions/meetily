@@ -280,6 +280,12 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
                         manager.add_transcript_segment(segment);
                     }
                 }
+
+                // Record speech activity for auto-recording silence detection
+                #[cfg(target_os = "macos")]
+                {
+                    crate::audio::auto_recording::AUTO_RECORDING_MANAGER.record_speech_activity();
+                }
             }
         });
         let mut global_listener = TRANSCRIPT_LISTENER_ID.lock().unwrap();
@@ -447,6 +453,12 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
                     if let Some(manager) = manager_guard.as_ref() {
                         manager.add_transcript_segment(segment);
                     }
+                }
+
+                // Record speech activity for auto-recording silence detection
+                #[cfg(target_os = "macos")]
+                {
+                    crate::audio::auto_recording::AUTO_RECORDING_MANAGER.record_speech_activity();
                 }
             }
         });

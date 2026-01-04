@@ -500,6 +500,38 @@ pub fn run() {
                 log::warn!("Failed to resolve resource directory for templates");
             }
 
+            // Initialize auto-recording and cleanup tasks (macOS only)
+            #[cfg(target_os = "macos")]
+            {
+                // Start audio file cleanup task
+                log::info!("Starting audio cleanup background task...");
+                audio::auto_recording::start_cleanup_task(_app.handle().clone());
+
+                // Check if auto-recording is enabled and start it
+                let app_for_auto_record = _app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    // Wait for engines and other systems to initialize
+                    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+
+                    // Check onboarding status before starting auto-recording
+                    let onboarding_complete = match crate::onboarding::load_onboarding_status(&app_for_auto_record).await {
+                        Ok(status) => status.completed,
+                        Err(_) => false,
+                    };
+
+                    if !onboarding_complete {
+                        log::info!("Onboarding not complete, skipping auto-recording start");
+                        return;
+                    }
+
+                    // Start auto-recording if enabled
+                    log::info!("Checking auto-recording preference...");
+                    if let Err(e) = audio::auto_recording::start_auto_recording(&app_for_auto_record).await {
+                        log::warn!("Auto-recording not started: {}", e);
+                    }
+                });
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -707,6 +739,18 @@ pub fn run() {
             onboarding::save_onboarding_status_cmd,
             onboarding::reset_onboarding_status_cmd,
             onboarding::complete_onboarding,
+            // Auto-recording preference commands
+            audio::recording_preferences::get_auto_recording_enabled,
+            audio::recording_preferences::set_auto_recording_enabled,
+            audio::recording_preferences::get_transcript_export_folder,
+            audio::recording_preferences::set_transcript_export_folder,
+            audio::recording_preferences::get_audio_retention_days,
+            audio::recording_preferences::set_audio_retention_days,
+            // Auto-recording control commands
+            audio::auto_recording::get_auto_recording_state,
+            audio::auto_recording::is_auto_recording_running,
+            audio::auto_recording::get_auto_recording_segments,
+            audio::auto_recording::trigger_audio_cleanup,
             // System settings commands
             #[cfg(target_os = "macos")]
             utils::open_system_settings,
