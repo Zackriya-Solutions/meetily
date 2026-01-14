@@ -710,6 +710,10 @@ pub fn run() {
             // System settings commands
             #[cfg(target_os = "macos")]
             utils::open_system_settings,
+            // Retranscription commands
+            audio::retranscription::start_retranscription_command,
+            audio::retranscription::cancel_retranscription_command,
+            audio::retranscription::is_retranscription_in_progress_command,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

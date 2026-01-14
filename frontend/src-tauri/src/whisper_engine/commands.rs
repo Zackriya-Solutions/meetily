@@ -63,8 +63,75 @@ pub async fn whisper_get_available_models() -> Result<Vec<ModelInfo>, String> {
             .await
             .map_err(|e| format!("Failed to discover models: {}", e))
     } else {
-        Err("Whisper engine not initialized".to_string())
+        // Fallback: scan models directory directly without initialized engine
+        log::info!("Whisper engine not initialized, scanning models directory directly");
+        discover_models_standalone()
     }
+}
+
+/// Discover Whisper models by scanning the models directory directly
+/// Used when the Whisper engine isn't initialized (e.g., when using Parakeet for live transcription)
+fn discover_models_standalone() -> Result<Vec<ModelInfo>, String> {
+    use crate::whisper_engine::ModelStatus;
+
+    let models_dir = get_models_directory()
+        .ok_or_else(|| "Models directory not initialized".to_string())?;
+
+    // Whisper models are stored directly in the models directory (not in a whisper subdirectory)
+    let whisper_dir = models_dir.clone();
+
+    log::info!("Scanning for Whisper models in: {}", whisper_dir.display());
+
+    let model_configs = [
+        ("tiny", "ggml-tiny.bin", 39, "Decent", "Very Fast", "Fastest processing"),
+        ("base", "ggml-base.bin", 142, "Good", "Fast", "Good balance"),
+        ("small", "ggml-small.bin", 466, "Good", "Medium", "Better accuracy"),
+        ("medium", "ggml-medium.bin", 1420, "High", "Slow", "High accuracy"),
+        ("large-v3-turbo", "ggml-large-v3-turbo.bin", 809, "High", "Medium", "Best accuracy with speed"),
+        ("large-v3", "ggml-large-v3.bin", 2870, "High", "Slow", "Best accuracy"),
+        ("tiny-q5_0", "ggml-tiny-q5_0.bin", 26, "Decent", "Very Fast", "Quantized tiny"),
+        ("base-q5_0", "ggml-base-q5_0.bin", 85, "Good", "Fast", "Quantized base"),
+        ("small-q5_0", "ggml-small-q5_0.bin", 280, "Good", "Fast", "Quantized small"),
+        ("medium-q5_0", "ggml-medium-q5_0.bin", 852, "High", "Medium", "Quantized medium"),
+        ("large-v3-turbo-q5_0", "ggml-large-v3-turbo-q5_0.bin", 574, "High", "Medium", "Quantized large turbo"),
+        ("large-v3-q5_0", "ggml-large-v3-q5_0.bin", 1050, "High", "Slow", "Quantized large"),
+    ];
+
+    let mut models = Vec::new();
+
+    for (name, filename, size_mb, accuracy, speed, description) in model_configs {
+        let model_path = whisper_dir.join(filename);
+        let status = if model_path.exists() {
+            match std::fs::metadata(&model_path) {
+                Ok(metadata) => {
+                    let file_size_mb = metadata.len() / (1024 * 1024);
+                    if file_size_mb >= 1 {
+                        ModelStatus::Available
+                    } else {
+                        ModelStatus::Missing
+                    }
+                }
+                Err(_) => ModelStatus::Missing,
+            }
+        } else {
+            ModelStatus::Missing
+        };
+
+        models.push(ModelInfo {
+            name: name.to_string(),
+            path: model_path,
+            size_mb,
+            status,
+            accuracy: accuracy.to_string(),
+            speed: speed.to_string(),
+            description: description.to_string(),
+        });
+    }
+
+    let downloaded_count = models.iter().filter(|m| matches!(m.status, ModelStatus::Available)).count();
+    log::info!("Found {} downloaded Whisper models", downloaded_count);
+
+    Ok(models)
 }
 
 #[command]

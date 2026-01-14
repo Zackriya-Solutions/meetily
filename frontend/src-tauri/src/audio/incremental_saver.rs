@@ -433,10 +433,12 @@ mod tests {
         ).unwrap();
 
         // Add 60 seconds worth of audio (should create 2 checkpoints)
-        for _ in 0..120 {  // 120 chunks of 0.5s each
+        for i in 0..120 {  // 120 chunks of 0.5s each
             let chunk = AudioChunk {
                 data: vec![0.5f32; 24000],  // 0.5s at 48kHz
                 sample_rate: 48000,
+                timestamp: i as f64 * 0.5,  // timestamp in seconds
+                chunk_id: i as u64,
                 device_type: DeviceType::Microphone,
             };
             saver.add_chunk(chunk).unwrap();

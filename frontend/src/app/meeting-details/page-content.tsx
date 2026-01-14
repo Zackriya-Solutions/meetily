@@ -166,6 +166,9 @@ export default function PageContent({
           totalCount={totalCount}
           loadedCount={loadedCount}
           onLoadMore={onLoadMore}
+          // Retranscription props
+          meetingId={meeting.id}
+          meetingFolderPath={meeting.folder_path}
         />
         <SummaryPanel
           meeting={meeting}
