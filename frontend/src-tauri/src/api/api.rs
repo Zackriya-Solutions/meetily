@@ -1337,7 +1337,10 @@ pub async fn api_test_custom_openai_connection<R: Runtime>(
                                         // Check if message.content field exists (can be empty string)
                                         let has_message_structure = first_choice
                                             .get("message")
-                                            .and_then(|m| m.get("content"))
+                                            .and_then(|m| {
+                                                m.get("content")
+                                                .or_else(|| m.get("reasoning_content"))
+                                            })
                                             .is_some();
 
                                         if has_message_structure {
@@ -1355,7 +1358,7 @@ pub async fn api_test_custom_openai_connection<R: Runtime>(
 
                         // Response was 200 but doesn't match OpenAI format
                         log_warn!("⚠️ Endpoint returned 200 but response doesn't match OpenAI format: {}", response_text);
-                        Err("Endpoint is reachable but doesn't appear to be OpenAI-compatible. Response is missing 'choices' array or 'message.content' field.".to_string())
+                        Err("Endpoint is reachable but doesn't appear to be OpenAI-compatible. Response is missing 'choices' array or 'message.content' / 'message.reasoning_content' field.".to_string())
                     }
                     Err(e) => {
                         log_warn!("⚠️ Endpoint returned 200 but response is not valid JSON: {}", e);
