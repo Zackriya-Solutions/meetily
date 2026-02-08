@@ -29,6 +29,9 @@
 .DS_Store
 *.pem
 
+# Worktrees
+.worktrees/
+
 # debug
 npm-debug.log*
 yarn-debug.log*

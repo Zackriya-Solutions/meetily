@@ -111,10 +111,23 @@ Whether you're a defense consultant, enterprise executive, legal professional, o
 
 ### 🍎 **macOS**
 
-1. Download `meetily_0.2.0_aarch64.dmg` from [Releases](https://github.com/Zackriya-Solutions/meeting-minutes/releases/latest)
+1. Download the appropriate version for your Mac from [Releases](https://github.com/Zackriya-Solutions/meeting-minutes/releases/latest):
+   - **Apple Silicon (M1/M2/M3/M4):** `meetily_0.2.0_aarch64.dmg`
+   - **Intel-based Mac:** `meetily_0.2.0_x86_64.dmg`
 2. Open the downloaded `.dmg` file
 3. Drag **Meetily** to your Applications folder
 4. Open **Meetily** from Applications folder
+
+**System Requirements:**
+- **macOS 11 (Big Sur) or later**
+- **Apple Silicon (M1/M2/M3/M4) or Intel-based Mac (2012+)**
+- **RAM:** 8GB minimum (16GB recommended for meetings longer than 1 hour)
+- **Storage:** 2GB for application + ~500MB per hour of recorded audio
+- **GPU:** Metal-compatible GPU (all Macs from 2012 onward)
+
+**Performance Notes:**
+- **Apple Silicon:** Optimized with Metal + CoreML acceleration (fastest, 5-10x CPU)
+- **Intel Macs (2012+):** Metal GPU acceleration supported (2-3x faster than CPU)
 
 ### 🐧 **Linux**
 
@@ -182,10 +195,10 @@ Capture microphone and system audio simultaneously with intelligent ducking and 
 
 Built-in support for hardware acceleration across platforms:
 
-- **macOS**: Apple Silicon (Metal) + CoreML
+- **macOS**: Apple Silicon (Metal + CoreML) and Intel Macs (Metal GPU)
 - **Windows/Linux**: NVIDIA (CUDA), AMD/Intel (Vulkan)
 
-Automatically enabled at build time - no configuration needed.
+Automatically enabled at build time - no configuration needed. For detailed information, see [GPU Acceleration Guide](docs/GPU_ACCELERATION.md).
 
 ## System Architecture
 

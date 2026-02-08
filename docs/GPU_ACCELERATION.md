@@ -52,6 +52,30 @@ For detailed instructions on setting up GPU acceleration on Linux, please refer 
 
 On macOS, Metal GPU acceleration is enabled by default. No additional configuration is required.
 
+**Supported Hardware:**
+- **Apple Silicon (M1/M2/M3/M4):** Metal + CoreML (optimal performance)
+- **Intel-based Macs (2012+):** Metal GPU acceleration
+- **Intel Mac (older):** CPU-only fallback
+
+**Performance Characteristics:**
+
+| Hardware | GPU Acceleration | Speed vs CPU | Notes |
+|----------|------------------|--------------|-------|
+| Apple Silicon (M1+) | Metal + CoreML | 5-10x | Best performance |
+| Intel Mac (2012+) | Metal | 2-3x | Good performance |
+| Intel Mac (older) | CPU only | 1x | Fallback to CPU |
+
+**Verifying GPU Acceleration:**
+
+To check if Metal is available on your Mac:
+
+```bash
+# Check if Metal is supported
+system_profiler SPDisplaysDataType | grep Metal
+```
+
+If Metal is supported, you will see "Metal: Supported" in the output.
+
 ### Windows
 
 To enable GPU acceleration on Windows, you will need to install the appropriate toolkit for your GPU (e.g., the CUDA Toolkit for NVIDIA GPUs) and then build the application with the corresponding feature flag enabled.

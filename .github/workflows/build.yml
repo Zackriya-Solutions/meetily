@@ -101,11 +101,10 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pnpm-store-
 
-      - name: install Rust stable
+      - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          # Only aarch64-apple-darwin for Apple Silicon (no Intel support)
-          targets: ${{ contains(inputs.platform, 'macos') && 'aarch64-apple-darwin' || '' }}
+          targets: ${{ contains(inputs.platform, 'macos') && (inputs.target == 'x86_64-apple-darwin' && 'x86_64-apple-darwin' || inputs.target == 'universal-apple-darwin' && 'x86_64-apple-darwin,aarch64-apple-darwin' || 'aarch64-apple-darwin') || '' }}
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -434,7 +433,7 @@ jobs:
           pnpm install
 
       - name: rustup install target
-        if: ${{ inputs.target != '' && !contains(inputs.target, 'unknown-linux-gnu') && !contains(inputs.target, 'pc-windows-msvc') }}
+        if: ${{ inputs.target != '' && !contains(inputs.target, 'unknown-linux-gnu') && !contains(inputs.target, 'pc-windows-msvc') && inputs.target != 'universal-apple-darwin' }}
         run: rustup target add ${{ inputs.target }}
 
       - name: Import Apple Developer Certificate
@@ -464,7 +463,8 @@ jobs:
       - name: Configure build acceleration
         if: contains(inputs.platform, 'macos')
         run: |
-          echo "✓ macOS build will use Metal GPU acceleration (enabled by default)"
+          echo "✓ macOS: Supports both Apple Silicon (aarch64) and Intel (x86_64), plus universal binaries"
+          echo "✓ Metal GPU acceleration enabled by default"
           echo "✓ CoreML acceleration available for Apple Silicon"
 
       - name: Patch asset name pattern
@@ -537,27 +537,43 @@ jobs:
 
           # Determine llama-helper features based on platform
           LLAMA_FEATURES=""
+          TARGET="${{ inputs.target }}"
+
           if [[ "${{ inputs.platform }}" == *"macos"* ]]; then
             LLAMA_FEATURES="--features metal"
-            echo "Using Metal GPU acceleration for macOS"
+            echo "Using Metal GPU acceleration for macOS (target: $TARGET)"
           else
             echo "Using CPU-only mode for Linux"
           fi
 
-          # Build llama-helper from workspace root
-          cargo build --release -p llama-helper $LLAMA_FEATURES
+          # Handle universal macOS builds
+          if [[ "$TARGET" == "universal-apple-darwin" ]]; then
+            echo "Building for universal macOS (both architectures)..."
 
-          # Determine target triple and binary extension
-          TARGET="${{ inputs.target }}"
-          if [[ -z "$TARGET" ]]; then
-            TARGET=$(rustc -vV | grep "host:" | awk '{print $2}')
+            echo "Building Apple Silicon (aarch64) version..."
+            cargo build --release -p llama-helper --features metal --target aarch64-apple-darwin
+
+            echo "Building Intel (x86_64) version..."
+            cargo build --release -p llama-helper --features metal --target x86_64-apple-darwin
+
+            # Copy both binaries
+            mkdir -p frontend/src-tauri/binaries
+            cp target/aarch64-apple-darwin/release/llama-helper frontend/src-tauri/binaries/llama-helper-aarch64-apple-darwin
+            cp target/x86_64-apple-darwin/release/llama-helper frontend/src-tauri/binaries/llama-helper-x86_64-apple-darwin
+
+            echo "Copied both llama-helper binaries to frontend/src-tauri/binaries/"
+            ls -la frontend/src-tauri/binaries/
+            exit 0
           fi
+
+          # Build llama-helper from workspace root
+          cargo build --release -p llama-helper $LLAMA_FEATURES --target $TARGET
 
           # Copy binary to binaries directory
           mkdir -p frontend/src-tauri/binaries
-          cp target/release/llama-helper frontend/src-tauri/binaries/llama-helper-${TARGET}
+          cp target/$TARGET/release/llama-helper frontend/src-tauri/binaries/llama-helper-$TARGET
 
-          echo "Copied llama-helper to frontend/src-tauri/binaries/llama-helper-${TARGET}"
+          echo "Copied llama-helper to frontend/src-tauri/binaries/llama-helper-$TARGET"
           ls -la frontend/src-tauri/binaries/
 
       - name: Build with Tauri
@@ -572,9 +588,11 @@ jobs:
           APPLE_CERTIFICATE: ${{ inputs.sign-binaries && secrets.APPLE_CERTIFICATE || '' }}
           APPLE_CERTIFICATE_PASSWORD: ${{ inputs.sign-binaries && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
           APPLE_SIGNING_IDENTITY: ${{ inputs.sign-binaries && env.CERT_ID || '' }}
-          # Tauri updater signing (ALWAYS enabled for .sig files)
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Tauri updater signing (enabled only when sign-binaries=true AND private key is available)
+          TAURI_SIGNING_PRIVATE_KEY: ${{ inputs.sign-binaries && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ inputs.sign-binaries && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
+          # Only create updater artifacts when both sign-binaries=true and private key exists
+          TAURI_BUNDLE_CREATE_UPDATER_ARTIFACTS: ${{ inputs.sign-binaries && secrets.TAURI_SIGNING_PRIVATE_KEY != '' && 'true' || 'false' }}
           # License validation RSA public key (embedded at build time)
           MEETILY_RSA_PUBLIC_KEY: ${{ secrets.MEETILY_RSA_PUBLIC_KEY }}
           # Supabase configuration (for online license verification)

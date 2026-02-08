@@ -152,8 +152,9 @@ impl HardwareProfile {
 
     #[cfg(target_os = "macos")]
     fn has_metal_support() -> bool {
-        // Simple check for Apple Silicon (Metal is available on Intel Macs too, but less optimal for ML)
-        std::env::consts::ARCH == "aarch64"
+        // Metal is available on both Apple Silicon and Intel Macs
+        // Apple Silicon has optimized CoreML acceleration, but Metal works on both
+        true
     }
 
     fn has_cuda_support() -> bool {

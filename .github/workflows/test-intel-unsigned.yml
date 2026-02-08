@@ -1,0 +1,136 @@
+name: "Test Intel Mac Build (Unsigned)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      test-type:
+        description: '测试类型'
+        required: true
+        type: choice
+        options:
+          - intel
+          - apple-silicon
+          - both
+        default: intel
+
+jobs:
+  test-intel-macos:
+    name: Test macOS (${{ github.event.inputs.test-type }})
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 8
+          run_install: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Get pnpm store directory
+        shell: bash
+        run: |
+          echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+
+      - name: Setup pnpm cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ github.event.inputs.test-type == 'both' && 'x86_64-apple-darwin,aarch64-apple-darwin' || github.event.inputs.test-type == 'intel' && 'x86_64-apple-darwin' || 'aarch64-apple-darwin' }}
+
+      - name: Build llama-helper sidecar for Intel Mac
+        if: ${{ github.event.inputs.test-type == 'intel' || github.event.inputs.test-type == 'both' }}
+        run: |
+          echo "Building llama-helper sidecar for Intel Mac..."
+          cargo build --release -p llama-helper --features metal --target x86_64-apple-darwin
+
+          # Create binaries directory and copy binary
+          mkdir -p frontend/src-tauri/binaries
+          cp target/x86_64-apple-darwin/release/llama-helper frontend/src-tauri/binaries/llama-helper-x86_64-apple-darwin
+
+          echo "✓ llama-helper built for x86_64-apple-darwin"
+          ls -la frontend/src-tauri/binaries/
+
+      - name: Build llama-helper sidecar for Apple Silicon
+        if: ${{ github.event.inputs.test-type == 'apple-silicon' || github.event.inputs.test-type == 'both' }}
+        run: |
+          echo "Building llama-helper sidecar for Apple Silicon..."
+          cargo build --release -p llama-helper --features metal --target aarch64-apple-darwin
+
+          # Create binaries directory and copy binary
+          mkdir -p frontend/src-tauri/binaries
+          cp target/aarch64-apple-darwin/release/llama-helper frontend/src-tauri/binaries/llama-helper-aarch64-apple-darwin
+
+          echo "✓ llama-helper built for aarch64-apple-darwin"
+          ls -la frontend/src-tauri/binaries/
+
+      - name: Install frontend dependencies
+        run: |
+          cd frontend
+          pnpm install
+
+      - name: Configure build
+        run: |
+          echo "✓ Testing build for: ${{ github.event.inputs.test-type }}"
+          echo "✓ Build will NOT be code-signed (for testing only)"
+
+      # 为 Intel Mac 构建
+      - name: Build Tauri app - Intel (unsigned)
+        if: ${{ github.event.inputs.test-type == 'intel' || github.event.inputs.test-type == 'both' }}
+        env:
+          TAURI_BUNDLE_CREATE_UPDATER_ARTIFACTS: "false"
+        run: |
+          cd frontend
+          pnpm run tauri build --target x86_64-apple-darwin
+
+      # 为 Apple Silicon 构建
+      - name: Build Tauri app - Apple Silicon (unsigned)
+        if: ${{ github.event.inputs.test-type == 'apple-silicon' || github.event.inputs.test-type == 'both' }}
+        env:
+          TAURI_BUNDLE_CREATE_UPDATER_ARTIFACTS: "false"
+        run: |
+          cd frontend
+          pnpm run tauri build --target aarch64-apple-darwin
+
+      - name: Verify build output
+        run: |
+          echo "## Build Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [[ "${{ github.event.inputs.test-type }}" == "intel" ]]; then
+            echo "### Intel Mac (x86_64):" >> $GITHUB_STEP_SUMMARY
+            find target/x86_64-apple-darwin/release/bundle -type f | head -10 >> $GITHUB_STEP_SUMMARY || echo "No files found"
+          elif [[ "${{ github.event.inputs.test-type }}" == "apple-silicon" ]]; then
+            echo "### Apple Silicon (aarch64):" >> $GITHUB_STEP_SUMMARY
+            find target/aarch64-apple-darwin/release/bundle -type f | head -10 >> $GITHUB_STEP_SUMMARY || echo "No files found"
+          else
+            echo "### Both Architectures:" >> $GITHUB_STEP_SUMMARY
+            echo "#### Intel:" >> $GITHUB_STEP_SUMMARY
+            find target/x86_64-apple-darwin/release/bundle -type f | head -5 >> $GITHUB_STEP_SUMMARY || echo "No Intel files"
+            echo "#### Apple Silicon:" >> $GITHUB_STEP_SUMMARY
+            find target/aarch64-apple-darwin/release/bundle -type f | head -5 >> $GITHUB_STEP_SUMMARY || echo "No Apple Silicon files"
+          fi
+
+      - name: Upload test artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: meetily-test-${{ github.event.inputs.test-type }}-unsigned
+          path: |
+            target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
+            target/x86_64-apple-darwin/release/bundle/macos/*.app
+            target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+            target/aarch64-apple-darwin/release/bundle/macos/*.app
+          retention-days: 7
+          if-no-files-found: warn

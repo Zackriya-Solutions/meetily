@@ -21,6 +21,15 @@ on:
         required: true
         type: boolean
         default: true
+      build-arch:
+        description: 'Architecture to build'
+        required: true
+        type: choice
+        options:
+          - aarch64  # Apple Silicon
+          - x86_64   # Intel
+          - both     # Both architectures (separate builds)
+        default: aarch64
 
 # Cancel duplicate workflow runs
 concurrency:
@@ -33,7 +42,7 @@ env:
 
 jobs:
   build-macos:
-    name: Build macOS (Apple Silicon)
+    name: Build macOS (${{ github.event.inputs.build-arch == 'x86_64' && 'Intel' || github.event.inputs.build-arch == 'both' && 'Multi-Arch (Apple Silicon + Intel)' || 'Apple Silicon' }})
     runs-on: macos-latest
     permissions:
       contents: write
@@ -93,13 +102,13 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin
+          targets: ${{ github.event.inputs.build-arch == 'x86_64' && 'x86_64-apple-darwin' || github.event.inputs.build-arch == 'both' && 'x86_64-apple-darwin,aarch64-apple-darwin' || 'aarch64-apple-darwin' }}
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
-          key: macos-latest-aarch64-apple-darwin
+          key: macos-latest-${{ github.event.inputs.build-arch }}-apple-darwin
 
       - name: Install frontend dependencies
         run: |
@@ -138,17 +147,40 @@ jobs:
       - name: Build llama-helper sidecar
         run: |
           echo "Building llama-helper sidecar with Metal support..."
-          cargo build --release -p llama-helper --features metal
-          
+
+          # Set target based on architecture choice
+          if [[ "${{ github.event.inputs.build-arch }}" == "x86_64" ]]; then
+            TARGET="x86_64-apple-darwin"
+          elif [[ "${{ github.event.inputs.build-arch }}" == "both" ]]; then
+            # Build both architectures
+            echo "Building Apple Silicon (aarch64) version..."
+            cargo build --release -p llama-helper --features metal --target aarch64-apple-darwin
+            mkdir -p frontend/src-tauri/binaries
+            cp target/aarch64-apple-darwin/release/llama-helper frontend/src-tauri/binaries/llama-helper-aarch64-apple-darwin
+
+            echo "Building Intel (x86_64) version..."
+            cargo build --release -p llama-helper --features metal --target x86_64-apple-darwin
+            cp target/x86_64-apple-darwin/release/llama-helper frontend/src-tauri/binaries/llama-helper-x86_64-apple-darwin
+
+            echo "Built both architectures"
+            ls -la frontend/src-tauri/binaries/
+            exit 0
+          else
+            TARGET="aarch64-apple-darwin"
+          fi
+
+          echo "Building for target: $TARGET"
+          cargo build --release -p llama-helper --features metal --target $TARGET
+
           # Copy binary to binaries directory
           mkdir -p frontend/src-tauri/binaries
-          cp target/release/llama-helper frontend/src-tauri/binaries/llama-helper-aarch64-apple-darwin
-          
+          cp target/$TARGET/release/llama-helper frontend/src-tauri/binaries/llama-helper-$TARGET
+
           echo "Copied llama-helper to frontend/src-tauri/binaries/"
           ls -la frontend/src-tauri/binaries/
 
-      - name: Build Tauri app (with code signing)
-        if: ${{ github.event.inputs.sign-build == 'true' }}
+      - name: Build Tauri app - Apple Silicon (with code signing)
+        if: ${{ github.event.inputs.sign-build == 'true' && (github.event.inputs.build-arch == 'aarch64' || github.event.inputs.build-arch == 'both') }}
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -172,8 +204,33 @@ jobs:
           projectPath: frontend
           args: --target aarch64-apple-darwin ${{ steps.build-profile.outputs.args }}
 
-      - name: Build Tauri app (unsigned)
-        if: ${{ github.event.inputs.sign-build != 'true' }}
+      - name: Build Tauri app - Intel (with code signing)
+        if: ${{ github.event.inputs.sign-build == 'true' && (github.event.inputs.build-arch == 'x86_64' || github.event.inputs.build-arch == 'both') }}
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # macOS code signing
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ env.CERT_ID }}
+          # Tauri updater signing (ALWAYS enabled for .sig files)
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # License validation RSA public key (embedded at build time)
+          MEETILY_RSA_PUBLIC_KEY: ${{ secrets.MEETILY_RSA_PUBLIC_KEY }}
+          # Supabase configuration (for online license verification)
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        with:
+          projectPath: frontend
+          args: --target x86_64-apple-darwin ${{ steps.build-profile.outputs.args }}
+
+      - name: Build Tauri app - Apple Silicon (unsigned)
+        if: ${{ github.event.inputs.sign-build != 'true' && (github.event.inputs.build-arch == 'aarch64' || github.event.inputs.build-arch == 'both') }}
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -189,87 +246,230 @@ jobs:
           projectPath: frontend
           args: --target aarch64-apple-darwin ${{ steps.build-profile.outputs.args }}
 
+      - name: Build Tauri app - Intel (unsigned)
+        if: ${{ github.event.inputs.sign-build != 'true' && (github.event.inputs.build-arch == 'x86_64' || github.event.inputs.build-arch == 'both') }}
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Tauri updater signing (ALWAYS enabled for .sig files)
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # License validation RSA public key (embedded at build time)
+          MEETILY_RSA_PUBLIC_KEY: ${{ secrets.MEETILY_RSA_PUBLIC_KEY }}
+          # Supabase configuration (for online license verification)
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        with:
+          projectPath: frontend
+          args: --target x86_64-apple-darwin ${{ steps.build-profile.outputs.args }}
+
       - name: Verify build artifacts
         run: |
-          echo "Build artifacts:"
-          find target/aarch64-apple-darwin/${{ steps.build-profile.outputs.profile }}/bundle -type f
+          if [[ "${{ github.event.inputs.build-arch }}" == "both" ]]; then
+            echo "=== Apple Silicon (aarch64) Build Artifacts ==="
+            find target/aarch64-apple-darwin/${{ steps.build-profile.outputs.profile }}/bundle -type f 2>/dev/null || echo "No artifacts found"
+            echo ""
+            echo "=== Intel (x86_64) Build Artifacts ==="
+            find target/x86_64-apple-darwin/${{ steps.build-profile.outputs.profile }}/bundle -type f 2>/dev/null || echo "No artifacts found"
+          elif [[ "${{ github.event.inputs.build-arch }}" == "x86_64" ]]; then
+            echo "=== Intel (x86_64) Build Artifacts ==="
+            find target/x86_64-apple-darwin/${{ steps.build-profile.outputs.profile }}/bundle -type f
+          else
+            echo "=== Apple Silicon (aarch64) Build Artifacts ==="
+            find target/aarch64-apple-darwin/${{ steps.build-profile.outputs.profile }}/bundle -type f
+          fi
 
       - name: Verify code signing (App Bundle)
         if: ${{ github.event.inputs.sign-build == 'true' }}
         run: |
-          APP_PATH=$(find target/aarch64-apple-darwin/${{ steps.build-profile.outputs.profile }}/bundle/macos -name "*.app" | head -1)
-          if [ -n "$APP_PATH" ]; then
-            echo "=== Verifying App Bundle: $APP_PATH ==="
+          if [[ "${{ github.event.inputs.build-arch }}" == "both" ]]; then
+            echo "=== Verifying Apple Silicon App Bundle ==="
+            APP_PATH=$(find target/aarch64-apple-darwin/${{ steps.build-profile.outputs.profile }}/bundle/macos -name "*.app" | head -1)
+            if [ -n "$APP_PATH" ]; then
+              echo "App: $APP_PATH"
+              codesign -dv --verbose=4 "$APP_PATH" 2>&1 | grep -i "signature\|authority"
+              codesign --verify --deep --strict "$APP_PATH" && echo "✓ Code signature is valid"
+              spctl -a -vvv "$APP_PATH" && echo "✓ App is notarized"
+            else
+              echo "No Apple Silicon App bundle found"
+            fi
             echo ""
-            echo "Code signature details:"
-            codesign -dv --verbose=4 "$APP_PATH" 2>&1 | grep -i "signature\|authority"
-            echo ""
-            echo "Verifying signature..."
-            codesign --verify --deep --strict "$APP_PATH" && echo "✓ Code signature is valid"
-            echo ""
-            echo "Checking notarization..."
-            spctl -a -vvv "$APP_PATH" && echo "✓ App is notarized and will be accepted by Gatekeeper"
+            echo "=== Verifying Intel App Bundle ==="
+            APP_PATH=$(find target/x86_64-apple-darwin/${{ steps.build-profile.outputs.profile }}/bundle/macos -name "*.app" | head -1)
+            if [ -n "$APP_PATH" ]; then
+              echo "App: $APP_PATH"
+              codesign -dv --verbose=4 "$APP_PATH" 2>&1 | grep -i "signature\|authority"
+              codesign --verify --deep --strict "$APP_PATH" && echo "✓ Code signature is valid"
+              spctl -a -vvv "$APP_PATH" && echo "✓ App is notarized"
+            else
+              echo "No Intel App bundle found"
+            fi
+          elif [[ "${{ github.event.inputs.build-arch }}" == "x86_64" ]]; then
+            echo "=== Verifying Intel App Bundle ==="
+            APP_PATH=$(find target/x86_64-apple-darwin/${{ steps.build-profile.outputs.profile }}/bundle/macos -name "*.app" | head -1)
+            if [ -n "$APP_PATH" ]; then
+              echo "App: $APP_PATH"
+              codesign -dv --verbose=4 "$APP_PATH" 2>&1 | grep -i "signature\|authority"
+              codesign --verify --deep --strict "$APP_PATH" && echo "✓ Code signature is valid"
+              spctl -a -vvv "$APP_PATH" && echo "✓ App is notarized"
+            else
+              echo "No App bundle found"
+            fi
           else
-            echo "No App bundle found to verify"
+            echo "=== Verifying Apple Silicon App Bundle ==="
+            APP_PATH=$(find target/aarch64-apple-darwin/${{ steps.build-profile.outputs.profile }}/bundle/macos -name "*.app" | head -1)
+            if [ -n "$APP_PATH" ]; then
+              echo "App: $APP_PATH"
+              codesign -dv --verbose=4 "$APP_PATH" 2>&1 | grep -i "signature\|authority"
+              codesign --verify --deep --strict "$APP_PATH" && echo "✓ Code signature is valid"
+              spctl -a -vvv "$APP_PATH" && echo "✓ App is notarized"
+            else
+              echo "No App bundle found"
+            fi
           fi
 
       - name: Verify code signing (DMG)
         if: ${{ github.event.inputs.sign-build == 'true' }}
         run: |
-          DMG_PATH=$(find target/aarch64-apple-darwin/${{ steps.build-profile.outputs.profile }}/bundle/dmg -name "*.dmg" | head -1)
-          if [ -n "$DMG_PATH" ]; then
-            echo "=== Verifying DMG: $DMG_PATH ==="
+          if [[ "${{ github.event.inputs.build-arch }}" == "both" ]]; then
+            echo "=== Verifying Apple Silicon DMG ==="
+            DMG_PATH=$(find target/aarch64-apple-darwin/${{ steps.build-profile.outputs.profile }}/bundle/dmg -name "*.dmg" | head -1)
+            if [ -n "$DMG_PATH" ]; then
+              echo "DMG: $DMG_PATH"
+              codesign -dv --verbose=4 "$DMG_PATH" 2>&1 | grep -i "signature\|authority"
+              codesign --verify --deep --strict "$DMG_PATH" && echo "✓ DMG signature is valid"
+            else
+              echo "No Apple Silicon DMG found"
+            fi
             echo ""
-            echo "Code signature details:"
-            codesign -dv --verbose=4 "$DMG_PATH" 2>&1 | grep -i "signature\|authority"
-            echo ""
-            echo "Verifying signature..."
-            codesign --verify --deep --strict "$DMG_PATH" && echo "✓ DMG signature is valid"
-            echo ""
-            echo "Note: DMG contains notarized .app bundle but DMG itself may not be notarized"
-            echo "This is acceptable - users will mount the DMG and run the notarized .app inside"
+            echo "=== Verifying Intel DMG ==="
+            DMG_PATH=$(find target/x86_64-apple-darwin/${{ steps.build-profile.outputs.profile }}/bundle/dmg -name "*.dmg" | head -1)
+            if [ -n "$DMG_PATH" ]; then
+              echo "DMG: $DMG_PATH"
+              codesign -dv --verbose=4 "$DMG_PATH" 2>&1 | grep -i "signature\|authority"
+              codesign --verify --deep --strict "$DMG_PATH" && echo "✓ DMG signature is valid"
+            else
+              echo "No Intel DMG found"
+            fi
+          elif [[ "${{ github.event.inputs.build-arch }}" == "x86_64" ]]; then
+            echo "=== Verifying Intel DMG ==="
+            DMG_PATH=$(find target/x86_64-apple-darwin/${{ steps.build-profile.outputs.profile }}/bundle/dmg -name "*.dmg" | head -1)
+            if [ -n "$DMG_PATH" ]; then
+              echo "DMG: $DMG_PATH"
+              codesign -dv --verbose=4 "$DMG_PATH" 2>&1 | grep -i "signature\|authority"
+              codesign --verify --deep --strict "$DMG_PATH" && echo "✓ DMG signature is valid"
+            else
+              echo "No DMG found"
+            fi
           else
-            echo "No DMG found to verify"
+            echo "=== Verifying Apple Silicon DMG ==="
+            DMG_PATH=$(find target/aarch64-apple-darwin/${{ steps.build-profile.outputs.profile }}/bundle/dmg -name "*.dmg" | head -1)
+            if [ -n "$DMG_PATH" ]; then
+              echo "DMG: $DMG_PATH"
+              codesign -dv --verbose=4 "$DMG_PATH" 2>&1 | grep -i "signature\|authority"
+              codesign --verify --deep --strict "$DMG_PATH" && echo "✓ DMG signature is valid"
+            else
+              echo "No DMG found"
+            fi
           fi
 
       - name: Upload artifacts
         if: ${{ github.event.inputs.upload-artifacts == 'true' }}
         uses: actions/upload-artifact@v4
         with:
-          name: meetily-macos-aarch64-${{ steps.build-profile.outputs.profile }}-${{ steps.get-version.outputs.version }}
+          name: meetily-macos-${{ github.event.inputs.build-arch }}-${{ steps.build-profile.outputs.profile }}-${{ steps.get-version.outputs.version }}
           path: |
-            target/aarch64-apple-darwin/${{ steps.build-profile.outputs.profile }}/bundle/dmg/*.dmg
+            ${{ github.event.inputs.build-arch == 'x86_64' && 'target/x86_64-apple-darwin/${{ steps.build-profile.outputs.profile }}/bundle/dmg/*.dmg
+            target/x86_64-apple-darwin/${{ steps.build-profile.outputs.profile }}/bundle/macos/*.app
+            target/x86_64-apple-darwin/${{ steps.build-profile.outputs.profile }}/bundle/macos/*.app.tar.gz
+            target/x86_64-apple-darwin/${{ steps.build-profile.outputs.profile }}/bundle/macos/*.app.tar.gz.sig' || github.event.inputs.build-arch == 'both' && 'target/aarch64-apple-darwin/${{ steps.build-profile.outputs.profile }}/bundle/dmg/*.dmg
             target/aarch64-apple-darwin/${{ steps.build-profile.outputs.profile }}/bundle/macos/*.app
             target/aarch64-apple-darwin/${{ steps.build-profile.outputs.profile }}/bundle/macos/*.app.tar.gz
             target/aarch64-apple-darwin/${{ steps.build-profile.outputs.profile }}/bundle/macos/*.app.tar.gz.sig
+            target/x86_64-apple-darwin/${{ steps.build-profile.outputs.profile }}/bundle/dmg/*.dmg
+            target/x86_64-apple-darwin/${{ steps.build-profile.outputs.profile }}/bundle/macos/*.app
+            target/x86_64-apple-darwin/${{ steps.build-profile.outputs.profile }}/bundle/macos/*.app.tar.gz
+            target/x86_64-apple-darwin/${{ steps.build-profile.outputs.profile }}/bundle/macos/*.app.tar.gz.sig' || 'target/aarch64-apple-darwin/${{ steps.build-profile.outputs.profile }}/bundle/dmg/*.dmg
+            target/aarch64-apple-darwin/${{ steps.build-profile.outputs.profile }}/bundle/macos/*.app
+            target/aarch64-apple-darwin/${{ steps.build-profile.outputs.profile }}/bundle/macos/*.app.tar.gz
+            target/aarch64-apple-darwin/${{ steps.build-profile.outputs.profile }}/bundle/macos/*.app.tar.gz.sig' }}
           retention-days: 30
+          if-no-files-found: error
 
       - name: Generate build summary
         run: |
+          ARCH_NAME="${{ github.event.inputs.build-arch }}"
+          if [[ "$ARCH_NAME" == "x86_64" ]]; then
+            ARCH_DISPLAY="x86_64 (Intel)"
+          elif [[ "$ARCH_NAME" == "both" ]]; then
+            ARCH_DISPLAY="aarch64 (Apple Silicon) + x86_64 (Intel)"
+          else
+            ARCH_DISPLAY="aarch64 (Apple Silicon)"
+          fi
+
           echo "## 🍎 macOS Build Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| **Version** | ${{ steps.get-version.outputs.version }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Build Profile** | ${{ steps.build-profile.outputs.profile }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Target** | aarch64-apple-darwin (Apple Silicon) |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Target** | $ARCH_DISPLAY |" >> $GITHUB_STEP_SUMMARY
           echo "| **Signed** | ${{ github.event.inputs.sign-build == 'true' && '✅ Yes' || '❌ No' }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 📦 Build Artifacts" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| File Type | Count |" >> $GITHUB_STEP_SUMMARY
-          echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| DMG Installers | $(find target/aarch64-apple-darwin/${{ steps.build-profile.outputs.profile }}/bundle/dmg -name "*.dmg" 2>/dev/null | wc -l) |" >> $GITHUB_STEP_SUMMARY
-          echo "| APP Bundles | $(find target/aarch64-apple-darwin/${{ steps.build-profile.outputs.profile }}/bundle/macos -name "*.app" -type d 2>/dev/null | wc -l) |" >> $GITHUB_STEP_SUMMARY
-          echo "| APP Archives | $(find target/aarch64-apple-darwin/${{ steps.build-profile.outputs.profile }}/bundle/macos -name "*.app.tar.gz" 2>/dev/null | wc -l) |" >> $GITHUB_STEP_SUMMARY
-          echo "| APP Signatures | $(find target/aarch64-apple-darwin/${{ steps.build-profile.outputs.profile }}/bundle/macos -name "*.app.tar.gz.sig" 2>/dev/null | wc -l) |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "<details>" >> $GITHUB_STEP_SUMMARY
-          echo "<summary>📋 File List</summary>" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          find target/aarch64-apple-darwin/${{ steps.build-profile.outputs.profile }}/bundle -type f \( -name "*.dmg" -o -name "*.tar.gz" -o -name "*.sig" \) 2>/dev/null >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "</details>" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [[ "${{ github.event.inputs.build-arch }}" == "both" ]]; then
+            echo "#### Apple Silicon (aarch64)" >> $GITHUB_STEP_SUMMARY
+            echo "| File Type | Count |" >> $GITHUB_STEP_SUMMARY
+            echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| DMG Installers | $(find target/aarch64-apple-darwin/${{ steps.build-profile.outputs.profile }}/bundle/dmg -name "*.dmg" 2>/dev/null | wc -l) |" >> $GITHUB_STEP_SUMMARY
+            echo "| APP Bundles | $(find target/aarch64-apple-darwin/${{ steps.build-profile.outputs.profile }}/bundle/macos -name "*.app" -type d 2>/dev/null | wc -l) |" >> $GITHUB_STEP_SUMMARY
+            echo "| APP Archives | $(find target/aarch64-apple-darwin/${{ steps.build-profile.outputs.profile }}/bundle/macos -name "*.app.tar.gz" 2>/dev/null | wc -l) |" >> $GITHUB_STEP_SUMMARY
+            echo "| APP Signatures | $(find target/aarch64-apple-darwin/${{ steps.build-profile.outputs.profile }}/bundle/macos -name "*.app.tar.gz.sig" 2>/dev/null | wc -l) |" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "#### Intel (x86_64)" >> $GITHUB_STEP_SUMMARY
+            echo "| File Type | Count |" >> $GITHUB_STEP_SUMMARY
+            echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| DMG Installers | $(find target/x86_64-apple-darwin/${{ steps.build-profile.outputs.profile }}/bundle/dmg -name "*.dmg" 2>/dev/null | wc -l) |" >> $GITHUB_STEP_SUMMARY
+            echo "| APP Bundles | $(find target/x86_64-apple-darwin/${{ steps.build-profile.outputs.profile }}/bundle/macos -name "*.app" -type d 2>/dev/null | wc -l) |" >> $GITHUB_STEP_SUMMARY
+            echo "| APP Archives | $(find target/x86_64-apple-darwin/${{ steps.build-profile.outputs.profile }}/bundle/macos -name "*.app.tar.gz" 2>/dev/null | wc -l) |" >> $GITHUB_STEP_SUMMARY
+            echo "| APP Signatures | $(find target/x86_64-apple-darwin/${{ steps.build-profile.outputs.profile }}/bundle/macos -name "*.app.tar.gz.sig" 2>/dev/null | wc -l) |" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "<details>" >> $GITHUB_STEP_SUMMARY
+            echo "<summary>📋 Apple Silicon File List</summary>" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            find target/aarch64-apple-darwin/${{ steps.build-profile.outputs.profile }}/bundle -type f \( -name "*.dmg" -o -name "*.tar.gz" -o -name "*.sig" \) 2>/dev/null >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "</details>" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "<details>" >> $GITHUB_STEP_SUMMARY
+            echo "<summary>📋 Intel File List</summary>" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            find target/x86_64-apple-darwin/${{ steps.build-profile.outputs.profile }}/bundle -type f \( -name "*.dmg" -o -name "*.tar.gz" -o -name "*.sig" \) 2>/dev/null >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "</details>" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          else
+            TARGET_PATH="${{ github.event.inputs.build-arch == 'x86_64' && 'x86_64-apple-darwin' || 'aarch64-apple-darwin' }}"
+            echo "| File Type | Count |" >> $GITHUB_STEP_SUMMARY
+            echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| DMG Installers | $(find target/$TARGET_PATH/${{ steps.build-profile.outputs.profile }}/bundle/dmg -name "*.dmg" 2>/dev/null | wc -l) |" >> $GITHUB_STEP_SUMMARY
+            echo "| APP Bundles | $(find target/$TARGET_PATH/${{ steps.build-profile.outputs.profile }}/bundle/macos -name "*.app" -type d 2>/dev/null | wc -l) |" >> $GITHUB_STEP_SUMMARY
+            echo "| APP Archives | $(find target/$TARGET_PATH/${{ steps.build-profile.outputs.profile }}/bundle/macos -name "*.app.tar.gz" 2>/dev/null | wc -l) |" >> $GITHUB_STEP_SUMMARY
+            echo "| APP Signatures | $(find target/$TARGET_PATH/${{ steps.build-profile.outputs.profile }}/bundle/macos -name "*.app.tar.gz.sig" 2>/dev/null | wc -l) |" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "<details>" >> $GITHUB_STEP_SUMMARY
+            echo "<summary>📋 File List</summary>" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            find target/$TARGET_PATH/${{ steps.build-profile.outputs.profile }}/bundle -type f \( -name "*.dmg" -o -name "*.tar.gz" -o -name "*.sig" \) 2>/dev/null >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "</details>" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
