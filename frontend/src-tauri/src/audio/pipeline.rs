@@ -4,7 +4,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use anyhow::Result;
 use log::{debug, error, info, warn};
-use crate::{perf_debug, batch_audio_metric};
+use crate::batch_audio_metric;
 use super::batch_processor::AudioMetricsBatcher;
 use rubato::{Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction};
 

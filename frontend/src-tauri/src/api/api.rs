@@ -12,7 +12,6 @@ use crate::{
             transcript::TranscriptsRepository,
         },
     },
-    onboarding::load_onboarding_status,
     state::AppState,
     summary::CustomOpenAIConfig,
 };
@@ -466,7 +465,7 @@ pub async fn api_update_profile<R: Runtime>(
 
 #[tauri::command]
 pub async fn api_get_model_config<R: Runtime>(
-    app: AppHandle<R>,
+    _app: AppHandle<R>,
     state: tauri::State<'_, AppState>,
     _auth_token: Option<String>,
 ) -> Result<Option<ModelConfig>, String> {

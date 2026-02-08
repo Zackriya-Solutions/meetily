@@ -10,7 +10,6 @@ use anyhow::{Result, anyhow};
 use reqwest::Client;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
-use crate::{perf_debug, perf_trace};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ModelStatus {

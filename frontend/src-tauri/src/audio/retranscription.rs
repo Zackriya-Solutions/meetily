@@ -9,7 +9,7 @@ use crate::whisper_engine::WhisperEngine;
 use anyhow::{anyhow, Result};
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
@@ -22,8 +22,10 @@ static RETRANSCRIPTION_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 static RETRANSCRIPTION_CANCELLED: AtomicBool = AtomicBool::new(false);
 
 /// VAD redemption time in milliseconds - bridges natural pauses in speech
-/// 400ms matches live transcription settings (pipeline.rs:727)
-const VAD_REDEMPTION_TIME_MS: u32 = 400;
+/// Batch processing needs longer redemption (2000ms) than live pipeline (400ms)
+/// because the entire file is processed at once by VAD, and 400ms fragments
+/// speech at every natural sentence/topic pause (500ms-2s)
+const VAD_REDEMPTION_TIME_MS: u32 = 2000;
 
 /// Progress update emitted during retranscription
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -108,6 +110,37 @@ pub async fn start_retranscription<R: Runtime>(
     result
 }
 
+/// Supported audio extensions for file discovery
+const AUDIO_EXTENSIONS: &[&str] = &["mp4", "m4a", "wav", "mp3", "flac", "ogg", "aac", "wma"];
+
+/// Find audio file in meeting folder
+/// Tries common names first, then scans for any file with an audio extension
+fn find_audio_file(folder: &Path) -> Result<PathBuf> {
+    let candidates = ["audio.mp4", "audio.m4a", "audio.wav", "audio.mp3", "audio.flac", "audio.ogg", "recording.mp4"];
+
+    for name in candidates {
+        let path = folder.join(name);
+        if path.exists() {
+            return Ok(path);
+        }
+    }
+
+    // Fallback: scan folder for any file with an audio extension
+    if let Ok(entries) = std::fs::read_dir(folder) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if let Some(ext) = path.extension() {
+                let ext = ext.to_string_lossy().to_lowercase();
+                if AUDIO_EXTENSIONS.contains(&ext.as_str()) {
+                    return Ok(path);
+                }
+            }
+        }
+    }
+
+    Err(anyhow!("No audio file found in: {}", folder.display()))
+}
+
 /// Internal function to run retranscription
 async fn run_retranscription<R: Runtime>(
     app: AppHandle<R>,
@@ -118,15 +151,7 @@ async fn run_retranscription<R: Runtime>(
     provider: Option<String>,
 ) -> Result<RetranscriptionResult> {
     let folder_path = PathBuf::from(&meeting_folder_path);
-    let audio_path = folder_path.join("audio.mp4");
-
-    // Check if audio file exists
-    if !audio_path.exists() {
-        return Err(anyhow!(
-            "Audio file not found: {}",
-            audio_path.display()
-        ));
-    }
+    let audio_path = find_audio_file(&folder_path)?;
 
     // Determine which provider to use (default to whisper)
     let use_parakeet = provider.as_deref() == Some("parakeet");
@@ -202,7 +227,33 @@ async fn run_retranscription<R: Runtime>(
     .map_err(|e| anyhow!("VAD processing failed: {}", e))?;
 
     let total_segments = speech_segments.len();
-    info!("VAD detected {} speech segments", total_segments);
+    info!("VAD detected {} speech segments (redemption_time={}ms)", total_segments, VAD_REDEMPTION_TIME_MS);
+
+    // Diagnostic: log segment duration distribution
+    if !speech_segments.is_empty() {
+        let durations_ms: Vec<f64> = speech_segments.iter()
+            .map(|s| s.end_timestamp_ms - s.start_timestamp_ms)
+            .collect();
+        let total_speech_ms: f64 = durations_ms.iter().sum();
+        let avg_duration = total_speech_ms / durations_ms.len() as f64;
+        let min_duration = durations_ms.iter().cloned().fold(f64::INFINITY, f64::min);
+        let max_duration = durations_ms.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        info!(
+            "VAD segment stats: avg={:.0}ms, min={:.0}ms, max={:.0}ms, total_speech={:.1}s/{:.1}s ({:.0}%)",
+            avg_duration, min_duration, max_duration,
+            total_speech_ms / 1000.0, duration_seconds,
+            (total_speech_ms / 1000.0 / duration_seconds) * 100.0
+        );
+        // Log first 10 segments for detailed inspection
+        for (i, seg) in speech_segments.iter().take(10).enumerate() {
+            let dur = seg.end_timestamp_ms - seg.start_timestamp_ms;
+            debug!("  Segment {}: {:.0}ms-{:.0}ms ({:.0}ms, {} samples)",
+                i, seg.start_timestamp_ms, seg.end_timestamp_ms, dur, seg.samples.len());
+        }
+        if total_segments > 10 {
+            debug!("  ... and {} more segments", total_segments - 10);
+        }
+    }
 
     if total_segments == 0 {
         warn!("No speech detected in audio");
@@ -223,43 +274,23 @@ async fn run_retranscription<R: Runtime>(
         None
     };
 
-    // Split very long segments to avoid transcription engine limits
-    // Most engines have ~30 second limits, so we split at 25 seconds to be safe
-    const MAX_SEGMENT_DURATION_MS: f64 = 25_000.0; // 25 seconds
+    // Split very long segments at silence boundaries for better transcription quality.
+    // Hard cuts at arbitrary sample positions lose words at boundaries. Instead, scan
+    // for the lowest-energy window near the target split point and cut there.
     const MAX_SEGMENT_SAMPLES: usize = 25 * 16000; // 25 seconds at 16kHz
 
     let mut processable_segments: Vec<crate::audio::vad::SpeechSegment> = Vec::new();
     for segment in &speech_segments {
-        let segment_duration_ms = segment.end_timestamp_ms - segment.start_timestamp_ms;
-        if segment_duration_ms > MAX_SEGMENT_DURATION_MS || segment.samples.len() > MAX_SEGMENT_SAMPLES {
-            // Split into smaller chunks
-            debug!("Splitting large segment ({}ms, {} samples) into smaller chunks",
-                  segment_duration_ms, segment.samples.len());
+        if segment.samples.len() > MAX_SEGMENT_SAMPLES {
+            debug!(
+                "Splitting large segment ({:.0}ms, {} samples) at silence boundaries",
+                segment.end_timestamp_ms - segment.start_timestamp_ms,
+                segment.samples.len()
+            );
 
-            let num_chunks = (segment.samples.len() + MAX_SEGMENT_SAMPLES - 1) / MAX_SEGMENT_SAMPLES;
-            let samples_per_chunk = segment.samples.len() / num_chunks;
-            let ms_per_sample = segment_duration_ms / segment.samples.len() as f64;
-
-            for chunk_idx in 0..num_chunks {
-                let start_idx = chunk_idx * samples_per_chunk;
-                let end_idx = if chunk_idx == num_chunks - 1 {
-                    segment.samples.len()
-                } else {
-                    (chunk_idx + 1) * samples_per_chunk
-                };
-
-                let chunk_samples = segment.samples[start_idx..end_idx].to_vec();
-                let chunk_start_ms = segment.start_timestamp_ms + (start_idx as f64 * ms_per_sample);
-                let chunk_end_ms = segment.start_timestamp_ms + (end_idx as f64 * ms_per_sample);
-
-                processable_segments.push(crate::audio::vad::SpeechSegment {
-                    samples: chunk_samples,
-                    start_timestamp_ms: chunk_start_ms,
-                    end_timestamp_ms: chunk_end_ms,
-                    confidence: segment.confidence,
-                });
-            }
-            debug!("Split into {} chunks", num_chunks);
+            let sub_segments = split_segment_at_silence(segment, MAX_SEGMENT_SAMPLES);
+            debug!("Split into {} sub-segments", sub_segments.len());
+            processable_segments.extend(sub_segments);
         } else {
             processable_segments.push(segment.clone());
         }
@@ -318,9 +349,17 @@ async fn run_retranscription<R: Runtime>(
         };
 
         // Skip empty transcripts
-        if !text.trim().is_empty() {
+        let trimmed = text.trim();
+        if !trimmed.is_empty() {
+            debug!(
+                "Segment {}/{}: {:.1}s, conf={:.2}, text='{}'",
+                i + 1, processable_count, segment_duration_sec, conf,
+                if trimmed.len() > 80 { &trimmed[..80] } else { trimmed }
+            );
             all_transcripts.push((text, segment.start_timestamp_ms, segment.end_timestamp_ms));
             total_confidence += conf;
+        } else {
+            debug!("Segment {}/{}: {:.1}s — empty transcription", i + 1, processable_count, segment_duration_sec);
         }
     }
 
@@ -332,8 +371,8 @@ async fn run_retranscription<R: Runtime>(
     };
 
     info!(
-        "Transcription complete: {} segments transcribed, avg confidence: {:.2}",
-        transcribed_count, avg_confidence
+        "Transcription complete: {} segments transcribed out of {}, avg confidence: {:.2}",
+        transcribed_count, processable_count, avg_confidence
     );
 
     // Check for cancellation
@@ -359,6 +398,29 @@ async fn run_retranscription<R: Runtime>(
 
     // Update the meeting's transcription language
     update_meeting_language(app_state.db_manager.pool(), &meeting_id, language.as_deref()).await?;
+
+    // Write updated transcripts.json and metadata.json to the meeting folder
+    emit_progress(&app, &meeting_id, "saving", 90, "Writing transcript files...");
+
+    if let Err(e) = write_transcripts_json(&folder_path, &segments) {
+        warn!("Failed to write transcripts.json: {}", e);
+    }
+
+    // Find audio filename for metadata
+    let audio_filename = audio_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("audio.mp4")
+        .to_string();
+
+    if let Err(e) = write_retranscription_metadata(
+        &folder_path,
+        &meeting_id,
+        duration_seconds,
+        &audio_filename,
+    ) {
+        warn!("Failed to update metadata.json: {}", e);
+    }
 
     emit_progress(&app, &meeting_id, "complete", 100, "Retranscription complete");
 
@@ -683,6 +745,168 @@ async fn update_meeting_language(
     Ok(())
 }
 
+/// Write transcripts.json to a meeting folder (atomic write with temp file)
+fn write_transcripts_json(folder: &Path, segments: &[TranscriptSegment]) -> Result<()> {
+    let transcript_path = folder.join("transcripts.json");
+    let temp_path = folder.join(".transcripts.json.tmp");
+
+    let json = serde_json::json!({
+        "version": "1.0",
+        "last_updated": chrono::Utc::now().to_rfc3339(),
+        "total_segments": segments.len(),
+        "segments": segments.iter().enumerate().map(|(i, s)| {
+            serde_json::json!({
+                "id": s.id,
+                "text": s.text,
+                "timestamp": s.timestamp,
+                "audio_start_time": s.audio_start_time,
+                "audio_end_time": s.audio_end_time,
+                "duration": s.duration,
+                "sequence_id": i
+            })
+        }).collect::<Vec<_>>()
+    });
+
+    let json_string = serde_json::to_string_pretty(&json)?;
+    std::fs::write(&temp_path, &json_string)?;
+    std::fs::rename(&temp_path, &transcript_path)?;
+
+    info!(
+        "Wrote transcripts.json with {} segments to {}",
+        segments.len(),
+        transcript_path.display()
+    );
+    Ok(())
+}
+
+/// Write or update metadata.json for retranscription (preserves existing fields, adds retranscribed_at)
+fn write_retranscription_metadata(
+    folder: &Path,
+    meeting_id: &str,
+    duration_seconds: f64,
+    audio_filename: &str,
+) -> Result<()> {
+    let metadata_path = folder.join("metadata.json");
+    let temp_path = folder.join(".metadata.json.tmp");
+    let now = chrono::Utc::now().to_rfc3339();
+
+    // Try to read existing metadata and update it
+    let json = if metadata_path.exists() {
+        let existing = std::fs::read_to_string(&metadata_path)?;
+        let mut value: serde_json::Value = serde_json::from_str(&existing)?;
+        if let Some(obj) = value.as_object_mut() {
+            obj.insert("retranscribed_at".to_string(), serde_json::json!(now));
+            obj.insert("status".to_string(), serde_json::json!("completed"));
+            obj.insert("transcript_file".to_string(), serde_json::json!("transcripts.json"));
+        }
+        value
+    } else {
+        serde_json::json!({
+            "version": "1.0",
+            "meeting_id": meeting_id,
+            "created_at": now,
+            "completed_at": now,
+            "retranscribed_at": now,
+            "duration_seconds": duration_seconds,
+            "audio_file": audio_filename,
+            "transcript_file": "transcripts.json",
+            "status": "completed",
+            "source": "retranscription"
+        })
+    };
+
+    let json_string = serde_json::to_string_pretty(&json)?;
+    std::fs::write(&temp_path, &json_string)?;
+    std::fs::rename(&temp_path, &metadata_path)?;
+
+    info!("Wrote metadata.json to {}", metadata_path.display());
+    Ok(())
+}
+
+/// Split a long speech segment at the lowest-energy (silence) point near the target size.
+///
+/// Scans for 100ms windows with minimal RMS energy within ±3 seconds of each target
+/// split point. If no clear silence is found, falls back to a 1-second overlap split
+/// to avoid cutting words at boundaries.
+fn split_segment_at_silence(
+    segment: &crate::audio::vad::SpeechSegment,
+    max_samples: usize,
+) -> Vec<crate::audio::vad::SpeechSegment> {
+    const SAMPLE_RATE: usize = 16000;
+    const ENERGY_WINDOW: usize = SAMPLE_RATE / 10; // 100ms
+    const SEARCH_RADIUS: usize = SAMPLE_RATE * 3; // ±3 seconds
+    const SILENCE_RMS_THRESHOLD: f32 = 0.02;
+    const FALLBACK_OVERLAP: usize = SAMPLE_RATE; // 1 second
+
+    let total = segment.samples.len();
+    if total <= max_samples {
+        return vec![segment.clone()];
+    }
+
+    let ms_per_sample = (segment.end_timestamp_ms - segment.start_timestamp_ms)
+        / segment.samples.len() as f64;
+    let mut result = Vec::new();
+    let mut pos = 0usize;
+
+    while pos < total {
+        let remaining = total - pos;
+        if remaining <= max_samples {
+            let chunk_samples = segment.samples[pos..].to_vec();
+            let chunk_start_ms = segment.start_timestamp_ms + (pos as f64 * ms_per_sample);
+            let chunk_end_ms = segment.end_timestamp_ms;
+            result.push(crate::audio::vad::SpeechSegment {
+                samples: chunk_samples,
+                start_timestamp_ms: chunk_start_ms,
+                end_timestamp_ms: chunk_end_ms,
+                confidence: segment.confidence,
+            });
+            break;
+        }
+
+        let target = pos + max_samples;
+        let search_start = target.saturating_sub(SEARCH_RADIUS).max(pos + SAMPLE_RATE);
+        let search_end = (target + SEARCH_RADIUS).min(total.saturating_sub(ENERGY_WINDOW));
+
+        let mut best_split = target.min(total);
+        let mut best_rms = f32::MAX;
+
+        if search_start + ENERGY_WINDOW <= search_end {
+            let mut idx = search_start;
+            while idx + ENERGY_WINDOW <= search_end {
+                let window = &segment.samples[idx..idx + ENERGY_WINDOW];
+                let rms = (window.iter().map(|s| s * s).sum::<f32>() / ENERGY_WINDOW as f32).sqrt();
+                if rms < best_rms {
+                    best_rms = rms;
+                    best_split = idx + ENERGY_WINDOW / 2;
+                }
+                idx += SAMPLE_RATE / 100; // step 10ms
+            }
+        }
+
+        let split_at = best_split;
+        let chunk_end = if best_rms > SILENCE_RMS_THRESHOLD {
+            (split_at + FALLBACK_OVERLAP).min(total)
+        } else {
+            split_at
+        };
+
+        let chunk_samples = segment.samples[pos..chunk_end].to_vec();
+        let chunk_start_ms = segment.start_timestamp_ms + (pos as f64 * ms_per_sample);
+        let chunk_end_ms = segment.start_timestamp_ms + (chunk_end as f64 * ms_per_sample);
+
+        result.push(crate::audio::vad::SpeechSegment {
+            samples: chunk_samples,
+            start_timestamp_ms: chunk_start_ms,
+            end_timestamp_ms: chunk_end_ms,
+            confidence: segment.confidence,
+        });
+
+        pos = split_at;
+    }
+
+    result
+}
+
 // Tauri commands
 
 /// Response when retranscription is started
@@ -847,7 +1071,83 @@ mod tests {
 
     #[test]
     fn test_vad_redemption_time_constant() {
-        // Ensure the constant matches live transcription settings (pipeline.rs:727)
-        assert_eq!(VAD_REDEMPTION_TIME_MS, 400);
+        // Batch processing uses 2000ms to bridge natural pauses in full-file VAD
+        assert_eq!(VAD_REDEMPTION_TIME_MS, 2000);
+    }
+
+    #[test]
+    fn test_find_audio_file_common_candidates() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // No audio file → error
+        assert!(find_audio_file(dir.path()).is_err());
+
+        // Create audio.mp4 — should be found first
+        std::fs::write(dir.path().join("audio.mp4"), b"fake").unwrap();
+        let found = find_audio_file(dir.path()).unwrap();
+        assert_eq!(found.file_name().unwrap(), "audio.mp4");
+    }
+
+    #[test]
+    fn test_find_audio_file_non_mp4_extensions() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Create audio.wav (imported as .wav, not .mp4)
+        std::fs::write(dir.path().join("audio.wav"), b"fake").unwrap();
+        let found = find_audio_file(dir.path()).unwrap();
+        assert_eq!(found.file_name().unwrap(), "audio.wav");
+    }
+
+    #[test]
+    fn test_find_audio_file_fallback_scan() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Create a file with an audio extension but non-standard name
+        std::fs::write(dir.path().join("my_recording.flac"), b"fake").unwrap();
+        // Also add a non-audio file that should be ignored
+        std::fs::write(dir.path().join("notes.txt"), b"text").unwrap();
+
+        let found = find_audio_file(dir.path()).unwrap();
+        assert_eq!(found.file_name().unwrap(), "my_recording.flac");
+    }
+
+    #[test]
+    fn test_find_audio_file_priority_order() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Create both audio.m4a and audio.mp4 — mp4 should win (listed first in candidates)
+        std::fs::write(dir.path().join("audio.m4a"), b"fake").unwrap();
+        std::fs::write(dir.path().join("audio.mp4"), b"fake").unwrap();
+        let found = find_audio_file(dir.path()).unwrap();
+        assert_eq!(found.file_name().unwrap(), "audio.mp4");
+    }
+
+    #[test]
+    fn test_find_audio_file_empty_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = find_audio_file(dir.path());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("No audio file found"));
+    }
+
+    #[test]
+    fn test_find_audio_file_nonexistent_folder() {
+        let result = find_audio_file(Path::new("/nonexistent/path/12345"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_audio_extensions_constant() {
+        // Verify all expected formats are covered
+        assert!(AUDIO_EXTENSIONS.contains(&"mp4"));
+        assert!(AUDIO_EXTENSIONS.contains(&"m4a"));
+        assert!(AUDIO_EXTENSIONS.contains(&"wav"));
+        assert!(AUDIO_EXTENSIONS.contains(&"mp3"));
+        assert!(AUDIO_EXTENSIONS.contains(&"flac"));
+        assert!(AUDIO_EXTENSIONS.contains(&"ogg"));
+        assert!(AUDIO_EXTENSIONS.contains(&"aac"));
+        assert!(AUDIO_EXTENSIONS.contains(&"wma"));
+        assert!(!AUDIO_EXTENSIONS.contains(&"txt"));
+        assert!(!AUDIO_EXTENSIONS.contains(&"pdf"));
     }
 }

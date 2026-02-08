@@ -133,6 +133,7 @@ bytes = { version = "1.9.0", features = ["serde"] }
 esaxx-rs = "0.1.10"
 symphonia = { version = "0.5.4", features = ["aac", "isomp4", "opt-simd"] }
 rand = "0.8.5"
+rayon = "1.10"
 rubato = "0.15.0"
 ringbuf = "0.4.8"
 

@@ -240,7 +240,7 @@ pub struct AudioRecoveryStatus {
 #[tauri::command]
 pub async fn recover_audio_from_checkpoints(
     meeting_folder: String,
-    sample_rate: u32
+    _sample_rate: u32
 ) -> Result<AudioRecoveryStatus, String> {
     info!("Starting audio recovery for folder: {}", meeting_folder);
 

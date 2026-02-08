@@ -536,5 +536,40 @@ mod tests {
         // Should find speech segments
         assert!(all_segments.len() >= 1, "Expected at least 1 speech segment");
     }
+
+    #[test]
+    fn test_vad_400ms_vs_2000ms_segmentation() {
+        // Demonstrates why 2000ms redemption is needed for batch processing:
+        // 400ms creates excessive fragmentation, 2000ms bridges natural pauses.
+        //
+        // Audio pattern: 60s with 5s speech / 5s silence cycles
+        // Natural pauses within speech (sentence gaps) are 500ms-1.5s
+        let audio = generate_test_audio_with_speech(60.0, 16000);
+
+        let segments_400 = get_speech_chunks(&audio, 400).expect("400ms processing failed");
+        let segments_2000 = get_speech_chunks(&audio, 2000).expect("2000ms processing failed");
+
+        println!(
+            "400ms redemption: {} segments, 2000ms redemption: {} segments",
+            segments_400.len(),
+            segments_2000.len()
+        );
+
+        // 2000ms should produce fewer or equal segments (bridges more pauses)
+        assert!(
+            segments_2000.len() <= segments_400.len(),
+            "2000ms redemption ({} segments) should not produce more segments than 400ms ({} segments)",
+            segments_2000.len(),
+            segments_400.len()
+        );
+
+        // Verify segments have reasonable durations with 2000ms
+        for (i, seg) in segments_2000.iter().enumerate() {
+            let duration_ms = seg.end_timestamp_ms - seg.start_timestamp_ms;
+            println!("2000ms segment {}: {:.0}ms duration", i, duration_ms);
+            // Each segment should be at least 250ms (min_speech_time)
+            assert!(duration_ms >= 200.0, "Segment {} too short: {:.0}ms", i, duration_ms);
+        }
+    }
 }
 

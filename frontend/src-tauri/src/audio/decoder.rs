@@ -3,6 +3,7 @@
 
 use anyhow::{anyhow, Result};
 use log::{debug, info, warn};
+use rayon::prelude::*;
 use std::path::Path;
 
 use symphonia::core::audio::SampleBuffer;
@@ -12,7 +13,11 @@ use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 
-use super::audio_processing::{audio_to_mono, resample_audio};
+use super::audio_processing::{audio_to_mono, resample, resample_audio};
+
+/// Progress callback for long-running operations
+/// Returns current progress (0-100) and a message
+pub type ProgressCallback = Box<dyn Fn(u32, &str) + Send>;
 
 /// Decoded audio data from a file
 #[derive(Debug, Clone)]
@@ -28,8 +33,17 @@ pub struct DecodedAudio {
 }
 
 impl DecodedAudio {
-    /// Convert decoded audio to Whisper-compatible format (16kHz mono f32)
+    /// Convert decoded audio to Whisper-compatible 16kHz mono f32 format.
+    ///
+    /// Performs mono conversion, normalization, and resampling. Large files
+    /// (>5 min at 48kHz) use chunked sinc resampling to keep memory bounded
+    /// while preserving audio quality for downstream VAD and transcription.
     pub fn to_whisper_format(&self) -> Vec<f32> {
+        self.to_whisper_format_with_progress(None)
+    }
+
+    /// Convert decoded audio to Whisper format with optional progress callback
+    pub fn to_whisper_format_with_progress(&self, progress_callback: Option<ProgressCallback>) -> Vec<f32> {
         // Step 1: Convert to mono if needed
         let mono_samples = if self.channels > 1 {
             info!(
@@ -49,18 +63,21 @@ impl DecodedAudio {
         // Step 2: Resample to 16kHz if needed
         const WHISPER_SAMPLE_RATE: u32 = 16000;
         if self.sample_rate != WHISPER_SAMPLE_RATE {
-            // Use fast linear resampling for large files (>5 minutes at 48kHz = 14.4M samples)
-            // The high-quality sinc resampler is too slow for retranscription of long recordings
+            // Large files are processed in chunks through the sinc resampler
+            // to keep memory bounded while preserving audio quality.
+            // Linear interpolation (fast_resample) was removed because it lacks
+            // an anti-aliasing filter, causing aliasing artifacts that make VAD
+            // miss ~99% of speech in long recordings.
             const LARGE_FILE_THRESHOLD: usize = 14_400_000;
 
             if mono_samples.len() > LARGE_FILE_THRESHOLD {
                 info!(
-                    "Fast resampling {} samples from {}Hz to {}Hz (large file mode)",
+                    "Chunked sinc resampling {} samples from {}Hz to {}Hz (large file mode)",
                     mono_samples.len(),
                     self.sample_rate,
                     WHISPER_SAMPLE_RATE
                 );
-                fast_resample(&mono_samples, self.sample_rate, WHISPER_SAMPLE_RATE)
+                chunked_resample_with_progress(&mono_samples, self.sample_rate, WHISPER_SAMPLE_RATE, progress_callback)
             } else {
                 info!(
                     "Resampling {} samples from {}Hz to {}Hz",
@@ -76,43 +93,141 @@ impl DecodedAudio {
     }
 }
 
-/// Fast linear interpolation resampling for large files
-/// Much faster than sinc resampling, good enough quality for speech transcription
-fn fast_resample(input: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
+/// Resample large audio files in fixed-size chunks through the sinc resampler.
+///
+/// Processes `input` in 60-second chunks using the high-quality sinc resampler
+/// from [`resample_audio`], concatenating the results. This avoids the memory
+/// spike of resampling the entire file at once while preserving anti-aliasing
+/// quality that is critical for downstream VAD accuracy.
+///
+/// Falls back to the single-pass sinc resampler if chunking fails.
+#[allow(dead_code)]
+fn chunked_resample(input: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
+    chunked_resample_with_progress(input, from_rate, to_rate, None)
+}
+
+/// Chunked resampling with optional progress callback.
+///
+/// Resamples `input` in parallel 60-second chunks via [`rayon`], then merges
+/// the results sequentially with a 100ms cross-fade to eliminate discontinuities
+/// at chunk boundaries. Each chunk's [`resample`] call is independent and
+/// CPU-bound, making this ideal for data parallelism.
+///
+/// Falls back to [`resample_audio`] (single-pass sinc) if any chunk fails.
+fn chunked_resample_with_progress(
+    input: &[f32],
+    from_rate: u32,
+    to_rate: u32,
+    progress_callback: Option<ProgressCallback>,
+) -> Vec<f32> {
     if input.is_empty() || from_rate == to_rate {
         return input.to_vec();
     }
 
-    let ratio = from_rate as f64 / to_rate as f64;
-    let output_len = (input.len() as f64 / ratio) as usize;
-    let mut output = Vec::with_capacity(output_len);
+    // 60 seconds of audio at the source sample rate per chunk
+    let chunk_samples = from_rate as usize * 60;
+    // 100ms overlap in the input domain to cross-fade between chunks
+    let overlap_input = from_rate as usize / 10;
+    let ratio = to_rate as f64 / from_rate as f64;
+    let overlap_output = (overlap_input as f64 * ratio) as usize;
+    let estimated_output = (input.len() as f64 * ratio) as usize + 1024;
 
-    // Log progress for very large files
-    let log_interval = output_len / 10; // Log every 10%
+    // Build overlapping chunk boundaries
+    let mut chunk_ranges: Vec<(usize, usize)> = Vec::new();
+    let mut start = 0usize;
+    while start < input.len() {
+        let end = (start + chunk_samples + overlap_input).min(input.len());
+        chunk_ranges.push((start, end));
+        start += chunk_samples;
+    }
 
-    for i in 0..output_len {
-        let src_pos = i as f64 * ratio;
-        let src_idx = src_pos as usize;
-        let frac = (src_pos - src_idx as f64) as f32;
+    let total_chunks = chunk_ranges.len();
+    info!(
+        "Parallel chunked sinc resampling: {} chunks of ~60s each with 100ms cross-fade ({} total samples)",
+        total_chunks,
+        input.len()
+    );
 
-        let sample = if src_idx + 1 < input.len() {
-            // Linear interpolation
-            input[src_idx] * (1.0 - frac) + input[src_idx + 1] * frac
-        } else if src_idx < input.len() {
-            input[src_idx]
-        } else {
-            0.0
-        };
-        output.push(sample);
+    // Resample all chunks in parallel — each is independent and CPU-bound
+    let resampled_chunks: Vec<Result<Vec<f32>>> = chunk_ranges
+        .par_iter()
+        .map(|&(chunk_start, chunk_end)| {
+            let chunk = &input[chunk_start..chunk_end];
+            resample(chunk, from_rate, to_rate)
+        })
+        .collect();
 
-        // Log progress every 10%
-        if log_interval > 0 && i > 0 && i % log_interval == 0 {
-            debug!("Resampling progress: {}%", (i * 100) / output_len);
+    // Merge sequentially with cross-fade (order-dependent, must be serial)
+    let mut output = Vec::with_capacity(estimated_output);
+    for (chunk_idx, result) in resampled_chunks.into_iter().enumerate() {
+        match result {
+            Ok(resampled) => {
+                if chunk_idx == 0 {
+                    output.extend_from_slice(&resampled);
+                } else {
+                    // Cross-fade the overlap region with the tail of the previous output
+                    let fade_len = overlap_output.min(resampled.len()).min(output.len());
+                    if fade_len > 0 {
+                        let out_start = output.len() - fade_len;
+                        for i in 0..fade_len {
+                            let t = i as f32 / fade_len as f32;
+                            output[out_start + i] =
+                                output[out_start + i] * (1.0 - t) + resampled[i] * t;
+                        }
+                        if fade_len < resampled.len() {
+                            output.extend_from_slice(&resampled[fade_len..]);
+                        }
+                    } else {
+                        output.extend_from_slice(&resampled);
+                    }
+                }
+            }
+            Err(e) => {
+                warn!(
+                    "Resampling failed on chunk {}/{}: {}, falling back to single-pass sinc resampler",
+                    chunk_idx + 1,
+                    total_chunks,
+                    e
+                );
+                return resample_audio(input, from_rate, to_rate);
+            }
+        }
+
+        if let Some(callback) = &progress_callback {
+            let progress_pct = ((chunk_idx + 1) as f64 / total_chunks as f64) * 100.0;
+            if (chunk_idx + 1) % 10 == 0 || chunk_idx + 1 == total_chunks {
+                info!(
+                    "Resampling progress: {}/{} chunks ({:.0}%)",
+                    chunk_idx + 1,
+                    total_chunks,
+                    progress_pct
+                );
+            }
+            callback(
+                progress_pct as u32,
+                &format!("Resampling audio: {:.0}%", progress_pct),
+            );
         }
     }
 
-    debug!("Fast resampling complete: {} -> {} samples", input.len(), output.len());
+    info!(
+        "Parallel chunked sinc resampling complete: {} -> {} samples",
+        input.len(),
+        output.len()
+    );
     output
+}
+
+/// Thin wrapper around the sinc resampler that returns a `Result`.
+///
+/// Used by [`chunked_resample`] to detect per-chunk failures without panicking.
+#[allow(dead_code)]
+fn resample_audio_result(
+    input: &[f32],
+    from_rate: u32,
+    to_rate: u32,
+) -> anyhow::Result<Vec<f32>> {
+    resample(input, from_rate, to_rate)
 }
 
 /// Normalize audio samples to the valid range (-1.0 to 1.0)
@@ -150,6 +265,14 @@ fn normalize_audio_samples(mut samples: Vec<f32>) -> Vec<f32> {
 
 /// Decode an audio file (MP4, M4A, WAV, etc.) to raw samples
 pub fn decode_audio_file(path: &Path) -> Result<DecodedAudio> {
+    decode_audio_file_with_progress(path, None)
+}
+
+/// Decode an audio file with optional progress callback
+pub fn decode_audio_file_with_progress(
+    path: &Path,
+    progress_callback: Option<ProgressCallback>,
+) -> Result<DecodedAudio> {
     info!("Decoding audio file: {}", path.display());
 
     // Open the file
@@ -211,6 +334,14 @@ pub fn decode_audio_file(path: &Path) -> Result<DecodedAudio> {
     let mut all_samples: Vec<f32> = Vec::new();
     let mut sample_buf: Option<SampleBuffer<f32>> = None;
 
+    // Calculate expected samples for progress tracking
+    let expected_duration = track.codec_params.n_frames
+        .map(|frames| frames as f64 / sample_rate as f64);
+    let expected_samples = expected_duration
+        .map(|dur| (dur * sample_rate as f64 * channels as f64) as usize);
+
+    let mut last_progress = 0u32;
+
     loop {
         // Get the next packet
         let packet = match format.next_packet() {
@@ -247,12 +378,26 @@ pub fn decode_audio_file(path: &Path) -> Result<DecodedAudio> {
                     buf.copy_interleaved_ref(decoded);
                     all_samples.extend_from_slice(buf.samples());
                 }
+
+                // Emit progress updates (every 10%)
+                if let (Some(callback), Some(expected)) = (&progress_callback, expected_samples) {
+                    let current_progress = ((all_samples.len() as f64 / expected as f64) * 100.0) as u32;
+                    if current_progress >= last_progress + 10 && current_progress <= 100 {
+                        last_progress = current_progress;
+                        callback(current_progress, &format!("Decoding audio: {}%", current_progress));
+                    }
+                }
             }
             Err(e) => {
                 warn!("Error decoding packet: {}", e);
                 continue;
             }
         }
+    }
+
+    // Ensure we report 100% completion
+    if let Some(callback) = &progress_callback {
+        callback(100, "Decoding complete");
     }
 
     if all_samples.is_empty() {
@@ -334,10 +479,9 @@ mod tests {
     }
 
     #[test]
-    fn test_fast_resample_same_rate() {
-        // Same rate should return identical samples
+    fn test_chunked_resample_same_rate() {
         let input = vec![0.1, 0.2, 0.3, 0.4, 0.5];
-        let result = fast_resample(&input, 16000, 16000);
+        let result = chunked_resample(&input, 16000, 16000);
         assert_eq!(result.len(), input.len());
         for (i, &sample) in result.iter().enumerate() {
             assert!((sample - input[i]).abs() < 0.001);
@@ -345,79 +489,77 @@ mod tests {
     }
 
     #[test]
-    fn test_fast_resample_empty_input() {
+    fn test_chunked_resample_empty_input() {
         let input: Vec<f32> = vec![];
-        let result = fast_resample(&input, 48000, 16000);
+        let result = chunked_resample(&input, 48000, 16000);
         assert!(result.is_empty());
     }
 
     #[test]
-    fn test_fast_resample_downsamples_correctly() {
-        // 48kHz to 16kHz = 3x downsampling
-        // Create a simple ramp signal
-        let input: Vec<f32> = (0..30).map(|i| i as f32 / 30.0).collect();
-        let result = fast_resample(&input, 48000, 16000);
+    fn test_chunked_resample_downsamples_correctly() {
+        // 48kHz to 16kHz = 3x downsampling with a 2-second signal
+        let input: Vec<f32> = (0..96000).map(|i| (i as f32 / 96000.0)).collect();
+        let result = chunked_resample(&input, 48000, 16000);
 
         // Output should be approximately 1/3 the length
-        assert_eq!(result.len(), 10);
-
-        // First sample should be close to 0
-        assert!(result[0].abs() < 0.1);
-
-        // Last sample should be close to the end of the ramp
-        assert!(result[9] > 0.8);
+        let expected_len = 96000.0 * (16000.0 / 48000.0);
+        assert!(
+            (result.len() as f64 - expected_len).abs() < 200.0,
+            "Expected ~{} samples, got {}",
+            expected_len,
+            result.len()
+        );
     }
 
     #[test]
-    fn test_fast_resample_upsamples_correctly() {
-        // 16kHz to 48kHz = 3x upsampling
-        let input: Vec<f32> = vec![0.0, 0.5, 1.0];
-        let result = fast_resample(&input, 16000, 48000);
-
-        // Output should be approximately 3x the length
-        assert_eq!(result.len(), 9);
-
-        // Should interpolate smoothly between values
-        // ratio = 16000/48000 = 0.333...
-        // For i=0: src_pos=0.0 → 0.0
-        // For i=3: src_pos=1.0 → 0.5 (at input[1])
-        // For i=6: src_pos=2.0 → 1.0 (at input[2])
-        assert!(result[0].abs() < 0.01, "First sample should be ~0.0, got {}", result[0]);
-        assert!((result[3] - 0.5).abs() < 0.01, "Sample at index 3 should be ~0.5, got {}", result[3]);
-        assert!((result[6] - 1.0).abs() < 0.01, "Sample at index 6 should be ~1.0, got {}", result[6]);
-
-        // Values should be monotonically increasing for this input
-        for i in 1..result.len() {
-            assert!(result[i] >= result[i-1] - 0.001,
-                "Should be monotonic: result[{}]={} < result[{}]={}",
-                i, result[i], i-1, result[i-1]);
-        }
-    }
-
-    #[test]
-    fn test_fast_resample_preserves_signal_range() {
-        // Ensure resampling doesn't create values outside input range
-        let input: Vec<f32> = (0..1000).map(|i| (i as f32 * 0.001).sin()).collect();
-        let result = fast_resample(&input, 44100, 16000);
+    fn test_chunked_resample_preserves_signal_range() {
+        // 1 second of sine wave at 44100Hz
+        let input: Vec<f32> = (0..44100)
+            .map(|i| (2.0 * std::f32::consts::PI * 440.0 * i as f32 / 44100.0).sin())
+            .collect();
+        let result = chunked_resample(&input, 44100, 16000);
 
         for sample in &result {
-            assert!(*sample >= -1.0 && *sample <= 1.0,
-                "Sample {} out of range [-1, 1]", sample);
+            assert!(
+                *sample >= -1.1 && *sample <= 1.1,
+                "Sample {} out of expected range",
+                sample
+            );
         }
     }
 
     #[test]
-    fn test_fast_resample_linear_interpolation_accuracy() {
-        // Test that linear interpolation works correctly
-        // Input: 0.0 at index 0, 1.0 at index 1
-        // With 2x upsampling, we expect: 0.0, 0.5, 1.0
-        let input: Vec<f32> = vec![0.0, 1.0];
-        let result = fast_resample(&input, 16000, 32000);
+    fn test_chunked_resample_matches_single_pass() {
+        // Verify chunked output is close to single-pass for small files
+        let input: Vec<f32> = (0..48000)
+            .map(|i| (2.0 * std::f32::consts::PI * 300.0 * i as f32 / 48000.0).sin() * 0.5)
+            .collect();
 
-        assert_eq!(result.len(), 4);
-        assert!((result[0] - 0.0).abs() < 0.01); // First sample
-        assert!((result[1] - 0.5).abs() < 0.01); // Interpolated
-        assert!((result[2] - 1.0).abs() < 0.01); // At index 1
+        let single_pass = resample_audio(&input, 48000, 16000);
+        let chunked = chunked_resample(&input, 48000, 16000);
+
+        // Lengths should be very close
+        let len_diff = (single_pass.len() as i64 - chunked.len() as i64).unsigned_abs();
+        assert!(
+            len_diff < 50,
+            "Length mismatch: single_pass={}, chunked={}",
+            single_pass.len(),
+            chunked.len()
+        );
+
+        // Compare overlapping samples (allow some tolerance at chunk boundaries)
+        let compare_len = single_pass.len().min(chunked.len());
+        let mut max_diff = 0.0f32;
+        for i in 0..compare_len {
+            let diff = (single_pass[i] - chunked[i]).abs();
+            max_diff = max_diff.max(diff);
+        }
+        // Chunk boundaries may introduce small discontinuities
+        assert!(
+            max_diff < 0.15,
+            "Max sample difference too large: {}",
+            max_diff
+        );
     }
 
     #[test]
@@ -451,7 +593,7 @@ mod tests {
 
     #[test]
     fn test_to_whisper_format_handles_large_file_threshold() {
-        // Test that large files use fast resampling path
+        // Test that large files use chunked sinc resampling path
         // LARGE_FILE_THRESHOLD is 14_400_000 samples
         // We'll test with a smaller sample to verify the path selection logic works
         let audio = DecodedAudio {

@@ -480,7 +480,7 @@ impl SidecarManager {
         // Send shutdown command
         if self.is_healthy() {
             let request = serde_json::json!({"type": "shutdown"}).to_string();
-            let timeout = Duration::from_secs(5);
+            let _timeout = Duration::from_secs(5);
 
             // Try to send shutdown command, but ignore errors
             // We don't use send_request to avoid incrementing counter
