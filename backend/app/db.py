@@ -78,6 +78,7 @@ class DatabaseManager:
                     audio_start_time REAL,
                     audio_end_time REAL,
                     duration REAL,
+                    speaker TEXT,
                     FOREIGN KEY (meeting_id) REFERENCES meetings(id)
                 )
             """)
@@ -95,7 +96,11 @@ class DatabaseManager:
                 cursor.execute("ALTER TABLE transcripts ADD COLUMN duration REAL")
             except sqlite3.OperationalError:
                 pass  # Column already exists
-            
+            try:
+                cursor.execute("ALTER TABLE transcripts ADD COLUMN speaker TEXT")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+
             # Create summary_processes table (keeping existing functionality)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS summary_processes (
@@ -388,20 +393,21 @@ class DatabaseManager:
 
     async def save_meeting_transcript(self, meeting_id: str, transcript: str, timestamp: str,
                                      summary: str = "", action_items: str = "", key_points: str = "",
-                                     audio_start_time: float = None, audio_end_time: float = None, duration: float = None):
-        """Save a transcript for a meeting with optional recording-relative timestamps"""
+                                     audio_start_time: float = None, audio_end_time: float = None,
+                                     duration: float = None, speaker: str = None):
+        """Save a transcript for a meeting with optional recording-relative timestamps and speaker"""
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
 
-                # Save transcript with NEW timestamp fields for playback sync
+                # Save transcript with timestamp fields and speaker for playback sync
                 cursor.execute("""
                     INSERT INTO transcripts (
                         meeting_id, transcript, timestamp, summary, action_items, key_points,
-                        audio_start_time, audio_end_time, duration
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        audio_start_time, audio_end_time, duration, speaker
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (meeting_id, transcript, timestamp, summary, action_items, key_points,
-                      audio_start_time, audio_end_time, duration))
+                      audio_start_time, audio_end_time, duration, speaker))
 
                 conn.commit()
                 return True
@@ -424,9 +430,9 @@ class DatabaseManager:
                 if not meeting:
                     return None
                 
-                # Get all transcripts for this meeting with NEW timestamp fields
+                # Get all transcripts for this meeting with timestamp fields and speaker
                 cursor = await conn.execute("""
-                    SELECT transcript, timestamp, audio_start_time, audio_end_time, duration
+                    SELECT transcript, timestamp, audio_start_time, audio_end_time, duration, speaker
                     FROM transcripts
                     WHERE meeting_id = ?
                 """, (meeting_id,))
@@ -441,10 +447,10 @@ class DatabaseManager:
                         'id': meeting_id,
                         'text': transcript[0],
                         'timestamp': transcript[1],
-                        # NEW: Recording-relative timestamps for playback sync
                         'audio_start_time': transcript[2],
                         'audio_end_time': transcript[3],
-                        'duration': transcript[4]
+                        'duration': transcript[4],
+                        'speaker': transcript[5]
                     } for transcript in transcripts]
                 }
         except Exception as e:
