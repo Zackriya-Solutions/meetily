@@ -1,6 +1,6 @@
 # Cost Estimation: Meeting Co-Pilot (Production Audit)
 
-**Date:** Feb 6, 2026
+**Date:** Feb 13, 2026
 **Status:** Estimates based on **Audit of Actual Codebase** & Production Pricing.
 
 ---
@@ -9,7 +9,7 @@
 
 Our current architecture is **highly cost-optimized** by leveraging local embeddings and Google's aggressive pricing for Gemini models. The primary costs are **Infrastructure (GCP)** and **Transcription (Deepgram/Groq)**, not LLM tokens.
 
-*   **Cost Per 1-Hour Meeting:** **~$0.04** (Standard) to **$0.30** (Premium Diarization).
+*   **Cost Per 1-Hour Meeting:** **~$0.04** (Standard) to **$0.30** (Premium Diarization), with **~$0.001–$0.005** additional optional spend for audio-enhanced notes generation.
 *   **Monthly Infrastructure Cost:** **~$100** (Fixed GCP Compute + DB).
 *   **Hidden Win:** Vector embeddings are running locally (Free), avoiding OpenAI embedding costs entirely.
 
@@ -36,6 +36,17 @@ Our current architecture is **highly cost-optimized** by leveraging local embedd
 | **Summarization** | **Gemini 2.5 Flash** | **~$0.001** | effectively free on Google's tier. |
 | **Chat / Q&A** | **Gemini 2.5 Flash** | **~$0.000** | Ultra-low cost per query. |
 | **Alternative** | GPT-4o-mini | $0.002 | Supported fallback in code. |
+
+### B2. Audio-Enhanced Notes (Gemini Multimodal)
+*Assumption: Meeting notes generation can include transcript + meeting audio.*
+
+| Mode | Extra Cost / 1-hour Meeting | Notes |
+| :--- | :--- | :--- |
+| **Transcript-only** | **Baseline** | Existing behavior, no extra audio inference path. |
+| **Compressed audio + transcript (Recommended)** | **~$0.001–$0.005** | Best quality/latency tradeoff for notes generation. |
+| **WAV + transcript** | **~$0.002–$0.010** | Similar quality, but higher transfer latency and higher processing overhead. |
+
+> **Recommendation:** Keep `recording.wav` as archival source, but use a compressed derivative (for example `recording.notes.opus`) for model ingestion by default.
 
 ### C. Web Search (RAG)
 *Assumption: Production Usage (Paid Tiers).*
@@ -100,15 +111,37 @@ We analyzed the codebase to calculate exact token loads per feature.
 | :--- | :--- | :--- |
 | **Live Meeting (1hr)** | Groq + Gemini Flash + Local Embeddings | **$0.04** |
 | **Uploaded File (1hr)** | Deepgram + Gemini Flash + Local Embeddings | **$0.27** |
+| **Audio-Enhanced Notes Add-on (1hr)** | Gemini Flash multimodal (`compressed + transcript`) | **+$0.001–$0.005** |
 
 ---
 
-## 6. Action Plan for Further Savings
+## 6. Save-Time Optimization Impact (Option 1)
+
+### 3-hour Meeting Finalization Time
+
+| Flow | Save-Time Overhead |
+| :--- | :--- |
+| **Compress after Save (current heavy path)** | **~8 to 25 min** |
+| **Parallel encode during recording (recommended)** | **~10 to 60 sec** |
+
+**Expected save-time reduction:** ~95% to 99%.
+
+---
+
+## 7. Action Plan for Further Savings
 
 1.  **Switch Upload Pipeline:** Currently, uploads might be using *both* Groq and Deepgram (Double Tax). Ensure `file_processing.py` uses Deepgram exclusively for uploads to save the $0.04 Groq fee per upload.
-2.  **Audio Compression:** Ensure the frontend sends Opus/WebM audio. Storing WAV files on GCS will bloat storage costs by 10x.
+2.  **Audio Compression (Today Plan):** Keep PCM transcription pipeline unchanged, but run parallel encoding during recording and store compressed archival audio (`recording.opus`) in GCP as primary artifact.
 3.  **Brave Search:** Implement Brave Search API integration to keep RAG costs low as search volume scales.
 4.  **Pyannote (Future Optimization):** If Deepgram becomes too expensive at scale ($0.26/hr), implement a self-hosted Pyannote service (on a cheap GPU) + Groq. This would cut the upload cost from $0.27/hr to ~$0.14/hr (50% savings), though it adds operational complexity.
+
+---
+
+## 8. Security Addendum (Audio Encryption)
+
+1. **Minimum for today:** Enable CMEK-backed encryption for GCP recording objects + strict KMS IAM.
+2. **Preferred next hardening:** Add application-level envelope encryption for recordings with decrypt-on-arrival backend streaming.
+3. **Access control:** Route sensitive audio retrieval through RBAC-protected endpoints rather than broad signed URL usage.
 
 
 <!-- 

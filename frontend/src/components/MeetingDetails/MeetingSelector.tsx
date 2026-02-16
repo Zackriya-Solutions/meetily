@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Search, Link as LinkIcon, Check, Loader2, Calendar } from 'lucide-react';
-import { useSidebar } from '@/components/Sidebar/SidebarProvider';
 import { Meeting } from '@/types';
+import { authFetch } from '@/lib/api';
 
 interface MeetingSelectorProps {
     selectedIds: string[];
@@ -9,7 +9,6 @@ interface MeetingSelectorProps {
 }
 
 export function MeetingSelector({ selectedIds, onSelectionChange }: MeetingSelectorProps) {
-    const { serverAddress } = useSidebar();
     const [meetings, setMeetings] = useState<Meeting[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [searchQuery, setSearchQuery] = useState('');
@@ -17,7 +16,7 @@ export function MeetingSelector({ selectedIds, onSelectionChange }: MeetingSelec
     useEffect(() => {
         const fetchMeetings = async () => {
             try {
-                const response = await fetch(`${serverAddress}/list-meetings`);
+                const response = await authFetch('/list-meetings');
                 if (response.ok) {
                     const data = await response.json();
                     setMeetings(data);
@@ -30,7 +29,7 @@ export function MeetingSelector({ selectedIds, onSelectionChange }: MeetingSelec
         };
 
         fetchMeetings();
-    }, [serverAddress]);
+    }, []);
 
     const filteredMeetings = meetings.filter(m =>
         (m.title || m.id).toLowerCase().includes(searchQuery.toLowerCase())

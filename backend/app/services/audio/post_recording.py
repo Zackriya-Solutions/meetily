@@ -40,6 +40,12 @@ class PostRecordingService:
     def __init__(self, storage_path: str = "./data/recordings"):
         self.storage_path = Path(storage_path)
         self.storage_type = os.getenv("STORAGE_TYPE", "local").lower()
+        self.prefer_compressed_read = (
+            os.getenv("AUDIO_PREFER_COMPRESSED_READ", "true").lower() == "true"
+        )
+        self.skip_wav_finalize_if_compressed = (
+            os.getenv("AUDIO_SKIP_WAV_FINALIZE_IF_COMPRESSED", "true").lower() == "true"
+        )
         self.delete_local_after_upload = (
             os.getenv("DELETE_LOCAL_AFTER_UPLOAD", "true").lower() == "true"
         )
@@ -78,6 +84,29 @@ class PostRecordingService:
 
         try:
             recording_dir = self.storage_path / meeting_id
+
+            if self.prefer_compressed_read and self.skip_wav_finalize_if_compressed:
+                compressed_path = await self._get_compressed_archive_path(meeting_id)
+                if compressed_path:
+                    if self.storage_type == "gcp" and self.delete_pcm_after_merge:
+                        try:
+                            await self._cleanup_gcp_chunks(meeting_id)
+                            result["local_cleaned"] = True
+                        except Exception as e:
+                            logger.warning(
+                                f"Failed to delete PCM chunks in GCS for {meeting_id}: {e}"
+                            )
+                    result["status"] = "completed"
+                    result["uploaded_to_gcp"] = self.storage_type == "gcp"
+                    result["gcp_path"] = compressed_path
+                    logger.info(
+                        f"✅ Post-recording fast path for {meeting_id}: {compressed_path} already available"
+                    )
+                    if trigger_diarization:
+                        asyncio.create_task(
+                            self._trigger_diarization(meeting_id, user_email)
+                        )
+                    return result
 
             if self.storage_type == "gcp":
                 logger.info(f"☁️ GCP mode: merging PCM in backend for {meeting_id}")
@@ -197,6 +226,29 @@ class PostRecordingService:
             result["status"] = "error"
             result["error"] = str(e)
             return result
+
+    async def _get_compressed_archive_path(self, meeting_id: str) -> Optional[str]:
+        """
+        Return compressed archive path if present.
+        """
+        candidates = [f"{meeting_id}/recording.opus", f"{meeting_id}/recording.m4a"]
+        try:
+            if self.storage_type == "gcp":
+                for path in candidates:
+                    if await StorageService.check_file_exists(path):
+                        return path
+                return None
+
+            local_dir = self.storage_path / meeting_id
+            for name, path in (
+                ("recording.opus", f"{meeting_id}/recording.opus"),
+                ("recording.m4a", f"{meeting_id}/recording.m4a"),
+            ):
+                if (local_dir / name).exists():
+                    return path
+            return None
+        except Exception:
+            return None
 
     async def _merge_gcp_chunks_to_wav(self, meeting_id: str) -> bool:
         """

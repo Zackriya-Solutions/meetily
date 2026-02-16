@@ -59,28 +59,60 @@ async def run_diarization_job(meeting_id: str, provider: str, user_email: str):
         storage_path = os.getenv("RECORDINGS_STORAGE_PATH", "./data/recordings")
         storage_type = os.getenv("STORAGE_TYPE", "local").lower()
 
+        def _looks_like_container_audio(data: bytes) -> bool:
+            """
+            Detect common container/file headers (WAV/OGG/MP3/MP4).
+            Whisper helper expects raw PCM bytes, so we skip that path for containers.
+            """
+            if not data or len(data) < 12:
+                return False
+            return (
+                data.startswith(b"RIFF")
+                or data.startswith(b"OggS")
+                or data.startswith(b"ID3")
+                or data.startswith(b"\xff\xfb")
+                or data[4:8] == b"ftyp"
+            )
+
         # 1. Get Audio URL (GCS) or local bytes
         audio_url = None
         audio_data = None
+        selected_recording_path = None
 
         if storage_type == "gcp":
             logger.info(f"☁️ Using GCS audio for {meeting_id}")
+
+            recording_candidates = [
+                f"{meeting_id}/recording.opus",
+                f"{meeting_id}/recording.m4a",
+                f"{meeting_id}/recording.wav",
+            ]
+
+            for candidate in recording_candidates:
+                if await StorageService.check_file_exists(candidate):
+                    selected_recording_path = candidate
+                    break
+
+            if not selected_recording_path:
+                raise ValueError(
+                    f"No recording artifact found in GCS for meeting {meeting_id}. "
+                    "Expected one of recording.opus / recording.m4a / recording.wav."
+                )
+
             audio_url = await StorageService.generate_signed_url(
-                f"{meeting_id}/recording.wav", 3600
+                selected_recording_path, 3600
             )
             if not audio_url:
                 raise ValueError(
-                    f"Recording WAV not found in GCS for meeting {meeting_id}. "
-                    "Check that PCM chunks uploaded and merge service is configured."
+                    f"Failed to generate signed URL for {selected_recording_path} in meeting {meeting_id}."
                 )
 
-            # Groq high-fidelity transcription still needs bytes
-            audio_data = await StorageService.download_bytes(
-                f"{meeting_id}/recording.wav"
-            )
+            # Optional bytes download: only for whisper baseline when raw PCM is available.
+            # For container formats we skip whisper baseline and use diarization segments for alignment.
+            audio_data = await StorageService.download_bytes(selected_recording_path)
             if not audio_data:
                 raise ValueError(
-                    f"Failed to download audio bytes from GCS for {meeting_id}"
+                    f"Failed to download audio bytes from GCS for {meeting_id} ({selected_recording_path})"
                 )
         else:
             # Local mode fallback
@@ -129,8 +161,16 @@ async def run_diarization_job(meeting_id: str, provider: str, user_email: str):
 
         # Step A: High-fidelity Whisper (The Words) via Groq
         # This provides the accurate text baseline that we map speaker labels onto
-        logger.info(f"💎 Running High-Fidelity Groq Whisper for {meeting_id}...")
-        whisper_segments = await diarization_service.transcribe_with_whisper(audio_data)
+        whisper_segments = []
+        if audio_data and not _looks_like_container_audio(audio_data):
+            logger.info(f"💎 Running High-Fidelity Groq Whisper for {meeting_id}...")
+            whisper_segments = await diarization_service.transcribe_with_whisper(
+                audio_data
+            )
+        else:
+            logger.info(
+                f"Skipping Groq whisper baseline for {meeting_id}; using diarization output directly for alignment."
+            )
 
         # CHECK CANCELLATION
         async with db._get_connection() as conn:

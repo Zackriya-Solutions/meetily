@@ -1,9 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from fastapi.responses import JSONResponse, StreamingResponse
-from typing import Optional
+from typing import Optional, Tuple
 import logging
 import json
 import uuid
+import os
+import asyncio
+import tempfile
+from pathlib import Path
 
 try:
     from ..deps import get_current_user
@@ -23,6 +27,7 @@ try:
     from ...services.audio.vad import SimpleVAD
     from ...services.audio.groq_client import GroqTranscriptionClient
     from ...services.chat import ChatService
+    from ...services.storage import StorageService
 except (ImportError, ValueError):
     from api.deps import get_current_user
     from schemas.user import User
@@ -41,6 +46,7 @@ except (ImportError, ValueError):
     from services.audio.vad import SimpleVAD
     from services.audio.groq_client import GroqTranscriptionClient
     from services.chat import ChatService
+    from services.storage import StorageService
 
 # Initialize services
 db = DatabaseManager()
@@ -138,6 +144,106 @@ Rules: Clear in/out scope. Explicit roles. Assess risks early. Document decision
     return templates.get(template_id, templates["standard_meeting"])
 
 
+# Override prompt set with stricter anti-redundancy and meeting-title quality rules.
+def get_template_prompt(template_id: str) -> str:
+    global_rules = """
+Global rules (apply to every template):
+1) Output valid JSON only. No markdown, no prose outside JSON.
+2) MeetingName must be specific and human-friendly from content. Never use generic names like "Live Meeting", "Untitled Meeting", "General Discussion", or "Team Sync" unless no context exists.
+3) Do not repeat the same point across SessionSummary, KeyItemsDecisions, ImmediateActionItems, NextSteps, and MeetingNotes.
+4) Action items must be unique, owner-first, concrete, and include deadline when available.
+5) MeetingNotes sections should include discussion detail (context, rationale, risks, open questions), not copy top-level bullets verbatim.
+6) If data is missing, return empty blocks [] instead of invented text.
+7) Keep output concise and factual.
+"""
+
+    templates = {
+        "standard_meeting": f"""Generate professional meeting notes as valid JSON:
+{{
+  "MeetingName": "Specific meeting title from content",
+  "People": {{"title": "Participants", "blocks": [{{"content": "Name - Role"}}]}},
+  "SessionSummary": {{"title": "Executive Summary", "blocks": [{{"content": "2-4 concise paragraphs"}}]}},
+  "KeyItemsDecisions": {{"title": "Key Decisions", "blocks": [{{"content": "Decision - rationale - owner/date"}}]}},
+  "ImmediateActionItems": {{"title": "Action Items", "blocks": [{{"content": "[Owner] will [action] by [deadline]"}}]}},
+  "NextSteps": {{"title": "Next Steps", "blocks": [{{"content": "What happens next - owner - timeline"}}]}},
+  "CriticalDeadlines": {{"title": "Deadlines", "blocks": [{{"content": "[Date] - [Deliverable] - Owner"}}]}},
+  "MeetingNotes": {{"meeting_name": "Same as MeetingName", "sections": [{{"title": "Topic", "blocks": [{{"content": "Discussion detail"}}]}}]}}
+}}
+Template-specific rules:
+- Put each decision exactly once in KeyItemsDecisions.
+- Put each action exactly once in ImmediateActionItems.
+- Do not create MeetingNotes sections named exactly "Participants", "Executive Summary", "Key Decisions", "Action Items", "Next Steps", "Deadlines".
+{global_rules}
+""",
+        "daily_standup": f"""Generate Daily Standup notes as valid JSON:
+{{
+  "MeetingName": "Team Standup - [Team/Project] - [Date]",
+  "People": {{"title": "Team Members", "blocks": [{{"content": "Name - Role"}}]}},
+  "SessionSummary": {{"title": "Overview", "blocks": [{{"content": "Progress, blockers, risks"}}]}},
+  "MeetingNotes": {{"meeting_name": "Same as MeetingName", "sections": [{{"title": "[Person] Update", "blocks": [{{"content": "✅ Done: ..."}}, {{"content": "🎯 Today: ..."}}, {{"content": "🚧 Blocked: ..."}}]}}]}},
+  "KeyItemsDecisions": {{"title": "Decisions", "blocks": [{{"content": "Decision - context"}}]}},
+  "ImmediateActionItems": {{"title": "Actions", "blocks": [{{"content": "[Owner] will [action] by [date]"}}]}},
+  "CriticalDeadlines": {{"title": "Sprint Deadlines", "blocks": [{{"content": "[Date] - [Milestone]"}}]}},
+  "NextSteps": {{"title": "Next Standup", "blocks": [{{"content": "Carry-forward items"}}]}}
+}}
+Template-specific rules:
+- One section per person whenever possible.
+- Do not duplicate the same task in both MeetingNotes and ImmediateActionItems.
+{global_rules}
+""",
+        "brainstorming": f"""Generate Brainstorming notes as valid JSON:
+{{
+  "MeetingName": "Brainstorming - [Problem/Theme]",
+  "People": {{"title": "Participants", "blocks": [{{"content": "Name - Expertise"}}]}},
+  "SessionSummary": {{"title": "Overview", "blocks": [{{"content": "Problem, method, outcomes"}}]}},
+  "MeetingNotes": {{"meeting_name": "Same as MeetingName", "sections": [{{"title": "Ideas - [Theme]", "blocks": [{{"content": "💡 Idea - owner - tradeoff"}}]}}, {{"title": "Parked Ideas", "blocks": [{{"content": "🅿️ Idea - reason"}}]}}]}},
+  "KeyItemsDecisions": {{"title": "Selected Ideas", "blocks": [{{"content": "Selected idea - why - owner"}}]}},
+  "ImmediateActionItems": {{"title": "Validation Actions", "blocks": [{{"content": "[Owner] will [test] by [date]"}}]}},
+  "CriticalDeadlines": {{"title": "Validation Deadlines", "blocks": [{{"content": "[Date] - [Milestone]"}}]}},
+  "NextSteps": {{"title": "Follow-up", "blocks": [{{"content": "Next review checkpoint"}}]}}
+}}
+Template-specific rules:
+- Keep selected vs parked ideas separated.
+- Avoid repeating identical idea descriptions in multiple sections.
+{global_rules}
+""",
+        "interview": f"""Generate Interview assessment notes as valid JSON:
+{{
+  "MeetingName": "Interview - [Candidate] - [Role]",
+  "People": {{"title": "Interview Panel", "blocks": [{{"content": "Name - Role - Focus"}}]}},
+  "SessionSummary": {{"title": "Candidate Overview", "blocks": [{{"content": "Background + overall signal"}}]}},
+  "MeetingNotes": {{"meeting_name": "Same as MeetingName", "sections": [{{"title": "Technical", "blocks": [{{"content": "Evidence-based strength/gap"}}]}}, {{"title": "Behavioral", "blocks": [{{"content": "Evidence-based strength/concern"}}]}}, {{"title": "Candidate Questions", "blocks": [{{"content": "Question - signal"}}]}}]}},
+  "KeyItemsDecisions": {{"title": "Hiring Recommendation", "blocks": [{{"content": "Recommendation - rationale"}}]}},
+  "ImmediateActionItems": {{"title": "Next Steps", "blocks": [{{"content": "[Owner] will [action] by [date]"}}]}},
+  "CriticalDeadlines": {{"title": "Timeline", "blocks": [{{"content": "[Date] - decision checkpoint"}}]}},
+  "NextSteps": {{"title": "Follow-up", "blocks": [{{"content": "References/next round/offer flow"}}]}}
+}}
+Template-specific rules:
+- Keep recommendation only in KeyItemsDecisions.
+- Use concrete evidence; avoid vague impressions.
+{global_rules}
+""",
+        "project_kickoff": f"""Generate Project Kickoff notes as valid JSON:
+{{
+  "MeetingName": "Project Kickoff - [Project/Initiative]",
+  "People": {{"title": "Team & Stakeholders", "blocks": [{{"content": "Name - Role - Responsibility"}}]}},
+  "SessionSummary": {{"title": "Project Overview", "blocks": [{{"content": "Goals, success metrics, constraints"}}]}},
+  "MeetingNotes": {{"meeting_name": "Same as MeetingName", "sections": [{{"title": "Scope", "blocks": [{{"content": "In-scope / out-of-scope details"}}]}}, {{"title": "Risks & Dependencies", "blocks": [{{"content": "Risk/dependency - impact - mitigation"}}]}}, {{"title": "Execution Plan", "blocks": [{{"content": "Phases, milestones, owners"}}]}}]}},
+  "KeyItemsDecisions": {{"title": "Decisions", "blocks": [{{"content": "Decision - rationale - owner"}}]}},
+  "ImmediateActionItems": {{"title": "Immediate Actions", "blocks": [{{"content": "[Owner] will [action] by [date]"}}]}},
+  "CriticalDeadlines": {{"title": "Milestones", "blocks": [{{"content": "[Date] - [Milestone] - Owner"}}]}},
+  "NextSteps": {{"title": "Follow-up", "blocks": [{{"content": "Next meeting/date/agenda"}}]}}
+}}
+Template-specific rules:
+- Keep scope and responsibilities explicit.
+- Do not duplicate milestone/action text across sections.
+{global_rules}
+""",
+    }
+
+    return templates.get(template_id, templates["standard_meeting"])
+
+
 def get_template_structure(template_id: str) -> dict:
     """
     Returns the base structure for each template type.
@@ -183,6 +289,58 @@ def get_template_structure(template_id: str) -> dict:
     }
 
     return template_structures.get(template_id, base_structure)
+
+
+def _normalize_text_for_dedupe(value: str) -> str:
+    return " ".join((value or "").strip().lower().split())
+
+
+def _dedupe_blocks(blocks: list) -> list:
+    seen = set()
+    result = []
+    for block in blocks or []:
+        content = (block or {}).get("content", "")
+        key = _normalize_text_for_dedupe(content)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        result.append(block)
+    return result
+
+
+def _dedupe_summary_content(summary: dict) -> dict:
+    top_level_sections = [
+        "People",
+        "SessionSummary",
+        "KeyItemsDecisions",
+        "ImmediateActionItems",
+        "NextSteps",
+        "CriticalDeadlines",
+    ]
+
+    for key in top_level_sections:
+        section = summary.get(key, {})
+        if isinstance(section, dict):
+            section["blocks"] = _dedupe_blocks(section.get("blocks", []))
+
+    notes = summary.get("MeetingNotes", {})
+    if isinstance(notes, dict):
+        merged_sections = {}
+        for section in notes.get("sections", []) or []:
+            title = (section or {}).get("title", "").strip()
+            if not title:
+                continue
+            if title not in merged_sections:
+                merged_sections[title] = {"title": title, "blocks": []}
+            merged_sections[title]["blocks"].extend((section or {}).get("blocks", []))
+
+        notes["sections"] = []
+        for title, section in merged_sections.items():
+            deduped_blocks = _dedupe_blocks(section.get("blocks", []))
+            if deduped_blocks:
+                notes["sections"].append({"title": title, "blocks": deduped_blocks})
+
+    return summary
 
 
 async def process_transcript_background(
@@ -288,24 +446,6 @@ async def process_transcript_background(
                             final_summary[key]["blocks"].extend(
                                 json_dict[key]["blocks"]
                             )
-
-                            # Also add as a new section in MeetingNotes if not already present
-                            section_exists = False
-                            for section in final_summary["MeetingNotes"]["sections"]:
-                                if section["title"] == json_dict[key]["title"]:
-                                    section["blocks"].extend(json_dict[key]["blocks"])
-                                    section_exists = True
-                                    break
-
-                            if not section_exists:
-                                final_summary["MeetingNotes"]["sections"].append(
-                                    {
-                                        "title": json_dict[key]["title"],
-                                        "blocks": json_dict[key]["blocks"].copy()
-                                        if json_dict[key]["blocks"]
-                                        else [],
-                                    }
-                                )
             except json.JSONDecodeError as e:
                 logger.error(
                     f"Failed to parse JSON chunk for {process_id}: {e}. Chunk: {json_str[:100]}..."
@@ -320,6 +460,8 @@ async def process_transcript_background(
             await db.update_meeting_name(
                 transcript.meeting_id, final_summary["MeetingName"]
             )
+
+        final_summary = _dedupe_summary_content(final_summary)
 
         # Save final result
         if all_json_data:
@@ -371,6 +513,10 @@ async def generate_notes_with_gemini_background(
     meeting_title: str,
     custom_context: str,
     user_email: str,
+    use_audio_context: bool = True,
+    audio_mode: str = "auto",
+    audio_url: str = "",
+    max_audio_minutes: int = 120,
 ):
     """
     Background task to generate notes using Gemini.
@@ -379,27 +525,282 @@ async def generate_notes_with_gemini_background(
     if custom_context:
         template_prompt += f"\n\nAdditional Context:\n{custom_context}"
 
+    def _extract_json_object(text: str) -> str:
+        if not text:
+            return "{}"
+        cleaned = text.strip()
+        if cleaned.startswith("```"):
+            cleaned = cleaned.replace("```json", "").replace("```", "").strip()
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            return cleaned
+        return cleaned[start : end + 1]
+
+    async def _maybe_create_compressed_audio(meeting_id_local: str) -> bool:
+        """
+        Create and upload meeting_id/recording.notes.opus from recording.wav if missing.
+        Returns True if compressed artifact is available after this call.
+        """
+        primary_compressed_path = f"{meeting_id_local}/recording.opus"
+        if await StorageService.check_file_exists(primary_compressed_path):
+            return True
+
+        compressed_path = f"{meeting_id_local}/recording.notes.opus"
+        if await StorageService.check_file_exists(compressed_path):
+            return True
+
+        wav_path = f"{meeting_id_local}/recording.wav"
+        wav_bytes = await StorageService.download_bytes(wav_path)
+        if not wav_bytes:
+            return False
+
+        with tempfile.TemporaryDirectory(prefix="notes-audio-") as tmpdir:
+            input_wav = Path(tmpdir) / "recording.wav"
+            output_opus = Path(tmpdir) / "recording.notes.opus"
+            input_wav.write_bytes(wav_bytes)
+
+            cmd = [
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(input_wav),
+                "-vn",
+                "-ac",
+                "1",
+                "-ar",
+                "16000",
+                "-c:a",
+                "libopus",
+                "-b:a",
+                "24k",
+                str(output_opus),
+            ]
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await proc.communicate()
+            if proc.returncode != 0 or not output_opus.exists():
+                logger.warning(
+                    "Failed to create compressed notes audio for %s: %s",
+                    meeting_id_local,
+                    stderr.decode("utf-8", errors="ignore")[:400],
+                )
+                return False
+
+            opus_bytes = output_opus.read_bytes()
+            return await StorageService.upload_bytes(
+                opus_bytes,
+                compressed_path,
+                content_type="audio/ogg",
+            )
+
+    async def _resolve_audio_asset(
+        meeting_id_local: str,
+        mode: str,
+        allow_audio: bool,
+    ) -> Tuple[Optional[str], Optional[bytes], Optional[str], Optional[int], Optional[str]]:
+        """
+        Returns (asset_path, audio_bytes, mime_type, duration_sec, selected_mode).
+        """
+        if not allow_audio:
+            return None, None, None, None, "disabled"
+
+        normalized_mode = (mode or "auto").strip().lower()
+        if normalized_mode not in {"auto", "compressed", "wav", "transcript_only"}:
+            normalized_mode = "auto"
+        if normalized_mode == "transcript_only":
+            return None, None, None, None, "transcript_only"
+
+        if audio_url.strip():
+            # URL overrides storage lookup. We do not pull remote URLs server-side.
+            return audio_url.strip(), None, "audio/url", None, "url_override"
+
+        wav_path = f"{meeting_id_local}/recording.wav"
+        primary_compressed_path = f"{meeting_id_local}/recording.opus"
+        compressed_path = f"{meeting_id_local}/recording.notes.opus"
+        ordered_modes = ["compressed", "wav"] if normalized_mode in {"auto", "compressed"} else ["wav"]
+
+        if "compressed" in ordered_modes:
+            try:
+                await _maybe_create_compressed_audio(meeting_id_local)
+            except Exception as e:
+                logger.warning("Compressed audio prep failed for %s: %s", meeting_id_local, e)
+
+        selected_path = None
+        selected_mode = None
+        selected_mime = None
+
+        for candidate in ordered_modes:
+            if candidate == "compressed":
+                if await StorageService.check_file_exists(primary_compressed_path):
+                    selected_path = primary_compressed_path
+                    selected_mode = "compressed"
+                    selected_mime = "audio/ogg"
+                    break
+                if await StorageService.check_file_exists(compressed_path):
+                    selected_path = compressed_path
+                    selected_mode = "compressed"
+                    selected_mime = "audio/ogg"
+                    break
+            if candidate == "wav" and await StorageService.check_file_exists(wav_path):
+                selected_path = wav_path
+                selected_mode = "wav"
+                selected_mime = "audio/wav"
+                break
+
+        if not selected_path:
+            return None, None, None, None, "missing"
+
+        audio_bytes = await StorageService.download_bytes(selected_path)
+        if not audio_bytes:
+            return None, None, None, None, "download_failed"
+
+        approx_duration_sec = None
+        if selected_mode == "wav":
+            # PCM 16kHz mono 16-bit ~= 32000 bytes/s payload (rough estimate)
+            approx_duration_sec = int(len(audio_bytes) / 32000)
+
+        return selected_path, audio_bytes, selected_mime, approx_duration_sec, selected_mode
+
+    async def _generate_multimodal_json(
+        transcript_text: str,
+        prompt_text: str,
+        model_name: str,
+        user_email_local: str,
+        mime_type: str,
+        audio_bytes: bytes,
+    ) -> Optional[str]:
+        api_key = await db.get_api_key("gemini", user_email=user_email_local)
+        if not api_key:
+            api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        if not api_key:
+            logger.warning("Gemini API key missing for multimodal notes generation")
+            return None
+
+        transcript_limit = int(os.getenv("NOTES_AUDIO_TRANSCRIPT_CHAR_LIMIT", "120000"))
+        compact_transcript = transcript_text[:transcript_limit]
+
+        multimodal_prompt = (
+            f"{prompt_text}\n\n"
+            "Additional instructions:\n"
+            "1) Audio is the primary source for decisions, commitments, action items, and meeting intent.\n"
+            "2) Transcript is secondary and should mainly assist with speaker mapping and entities (names/dates/terms).\n"
+            "3) Never invent facts not supported by transcript or audio.\n"
+            "4) Return valid JSON only, matching the required template shape.\n\n"
+            f"Transcript:\n{compact_transcript}"
+        )
+
+        suffix = ".opus" if mime_type == "audio/ogg" else ".wav"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_audio:
+            tmp_audio.write(audio_bytes)
+            temp_audio_path = tmp_audio.name
+
+        def _sync_generate() -> Optional[str]:
+            import google.generativeai as genai
+
+            genai.configure(api_key=api_key)
+            model = genai.GenerativeModel(model_name or "gemini-2.5-flash")
+
+            uploaded_file = genai.upload_file(path=temp_audio_path, mime_type=mime_type)
+            try:
+                response = model.generate_content(
+                    [multimodal_prompt, uploaded_file],
+                    generation_config={"response_mime_type": "application/json"},
+                )
+                return getattr(response, "text", None)
+            finally:
+                try:
+                    genai.delete_file(uploaded_file.name)
+                except Exception:
+                    pass
+
+        try:
+            return await asyncio.to_thread(_sync_generate)
+        finally:
+            try:
+                os.unlink(temp_audio_path)
+            except Exception:
+                pass
+
     try:
         # 1. Create process
         process_id = await db.create_process(meeting_id)
 
-        # 2. Call processor
-        _, all_json_data = await processor.process_transcript(
-            text=full_transcript_text,
-            model="gemini",
-            model_name="gemini-2.5-flash",
-            chunk_size=10000,  # larger chunks for notes
-            overlap=1000,
-            custom_prompt=template_prompt,
-            user_email=user_email,
-        )
+        metadata = {
+            "audio_used": False,
+            "audio_mode_requested": audio_mode or "auto",
+            "audio_mode_selected": "transcript_only",
+            "audio_source": None,
+            "audio_duration_sec": None,
+            "fallback_reason": None,
+        }
 
-        # 3. Get template-specific structure
+        all_json_data = []
+        model_name = "gemini-2.5-flash"
+
+        # 2. Try multimodal generation first (behind feature flag + request flags)
+        notes_audio_enabled = os.getenv("NOTES_AUDIO_ENABLED", "true").lower() == "true"
+        allow_audio = bool(use_audio_context) and notes_audio_enabled
+        effective_audio_mode = audio_mode or os.getenv("NOTES_AUDIO_DEFAULT_MODE", "auto")
+
+        if allow_audio:
+            try:
+                audio_source, audio_bytes, audio_mime, audio_duration_sec, selected_mode = await _resolve_audio_asset(
+                    meeting_id,
+                    effective_audio_mode,
+                    allow_audio=True,
+                )
+                metadata["audio_mode_selected"] = selected_mode
+                metadata["audio_source"] = audio_source
+                metadata["audio_duration_sec"] = audio_duration_sec
+
+                if audio_source and audio_mime == "audio/url":
+                    metadata["fallback_reason"] = "audio_url_override_not_supported_server_side"
+                elif audio_bytes and audio_mime:
+                    max_minutes = max(1, int(max_audio_minutes or 120))
+                    if audio_duration_sec and (audio_duration_sec / 60) > max_minutes:
+                        metadata["fallback_reason"] = f"audio_exceeds_max_minutes_{max_minutes}"
+                    else:
+                        multimodal_json = await _generate_multimodal_json(
+                            transcript_text=full_transcript_text,
+                            prompt_text=template_prompt,
+                            model_name=model_name,
+                            user_email_local=user_email,
+                            mime_type=audio_mime,
+                            audio_bytes=audio_bytes,
+                        )
+                        if multimodal_json:
+                            all_json_data = [_extract_json_object(multimodal_json)]
+                            metadata["audio_used"] = True
+                        else:
+                            metadata["fallback_reason"] = "multimodal_generation_failed"
+                else:
+                    metadata["fallback_reason"] = "audio_asset_unavailable"
+            except Exception as e:
+                logger.warning("Multimodal notes path failed for %s: %s", meeting_id, e)
+                metadata["fallback_reason"] = "multimodal_exception"
+
+        # 3. Transcript-only fallback
+        if not all_json_data:
+            _, all_json_data = await processor.process_transcript(
+                text=full_transcript_text,
+                model="gemini",
+                model_name=model_name,
+                chunk_size=10000,  # larger chunks for notes
+                overlap=1000,
+                custom_prompt=template_prompt,
+                user_email=user_email,
+            )
+
+        # 4. Get template-specific structure
         final_result = get_template_structure(template_id)
-        final_result["MeetingName"] = meeting_title
-        final_result["MeetingNotes"]["meeting_name"] = meeting_title
+        final_result["MeetingName"] = ""
+        final_result["MeetingNotes"]["meeting_name"] = ""
 
-        # 4. Aggregate results from all chunks
+        # 5. Aggregate results from all chunks
         for json_str in all_json_data:
             try:
                 json_dict = json.loads(json_str)
@@ -407,6 +808,8 @@ async def generate_notes_with_gemini_background(
                 # Merge logic consistent with process_transcript_background
                 for key in final_result:
                     if key == "MeetingName":
+                        if json_dict.get("MeetingName"):
+                            final_result["MeetingName"] = json_dict["MeetingName"]
                         continue
 
                     if key == "MeetingNotes" and key in json_dict:
@@ -445,35 +848,40 @@ async def generate_notes_with_gemini_background(
                             and json_dict[key]["blocks"]
                         ):
                             final_result[key]["blocks"].extend(json_dict[key]["blocks"])
-
-                            # Also add to MeetingNotes sections for visibility
-                            section_exists = False
-                            for section in final_result["MeetingNotes"]["sections"]:
-                                if section["title"] == json_dict[key]["title"]:
-                                    section["blocks"].extend(json_dict[key]["blocks"])
-                                    section_exists = True
-                                    break
-                            if not section_exists:
-                                final_result["MeetingNotes"]["sections"].append(
-                                    {
-                                        "title": json_dict[key]["title"],
-                                        "blocks": json_dict[key]["blocks"],
-                                    }
-                                )
             except Exception as e:
                 logger.error(f"Error merging chunk: {e}")
 
-        # 5. Convert final_result to Markdown
+        if not final_result["MeetingName"]:
+            final_result["MeetingName"] = meeting_title
+        if not final_result["MeetingNotes"]["meeting_name"]:
+            final_result["MeetingNotes"]["meeting_name"] = final_result["MeetingName"]
+
+        final_result = _dedupe_summary_content(final_result)
+
+        # 6. Convert final_result to Markdown
         markdown_output = generate_markdown_from_structure(final_result, template_id)
         final_result["markdown"] = markdown_output
 
-        await db.update_process(process_id, status="completed", result=final_result)
+        await db.update_process(
+            process_id,
+            status="completed",
+            result=final_result,
+            metadata=metadata,
+        )
 
     except Exception as e:
         logger.error(f"Failed to generate notes: {e}")
         # Update process to failed
         try:
-            await db.update_process(meeting_id, status="failed", error=str(e))
+            await db.update_process(
+                meeting_id,
+                status="failed",
+                error=str(e),
+                metadata={
+                    "audio_used": False,
+                    "audio_mode_selected": "failed",
+                },
+            )
         except:
             pass
 
@@ -1036,6 +1444,10 @@ async def generate_detailed_notes(
             meeting_title,
             "",
             current_user.email,
+            request.use_audio_context,
+            request.audio_mode,
+            request.audio_url,
+            request.max_audio_minutes,
         )
 
         return JSONResponse(
@@ -1071,10 +1483,18 @@ async def generate_notes_for_meeting(
         actual_meeting_id = meeting_id
         template_id = "standard_meeting"
         custom_context = ""
+        use_audio_context = os.getenv("NOTES_AUDIO_ENABLED", "true").lower() == "true"
+        audio_mode = os.getenv("NOTES_AUDIO_DEFAULT_MODE", "auto")
+        audio_url = ""
+        max_audio_minutes = 120
 
         if request:
             template_id = request.template_id or "standard_meeting"
             custom_context = request.custom_context or ""
+            use_audio_context = request.use_audio_context
+            audio_mode = request.audio_mode or audio_mode
+            audio_url = request.audio_url or ""
+            max_audio_minutes = request.max_audio_minutes or max_audio_minutes
 
         logger.info(
             f"Generating notes for meeting {actual_meeting_id} using template {template_id}"
@@ -1114,6 +1534,10 @@ async def generate_notes_for_meeting(
             meeting_title,
             custom_context,
             current_user.email,
+            use_audio_context,
+            audio_mode,
+            audio_url,
+            max_audio_minutes,
         )
 
         return JSONResponse(

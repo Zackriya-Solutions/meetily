@@ -48,6 +48,10 @@ class GenerateNotesRequest(BaseModel):
     model_name: str = "gemini-2.5-flash"
     custom_context: str = ""  # User-provided context for better note generation
     transcript: str = ""  # Optional explicit transcript text (to override DB)
+    use_audio_context: bool = True
+    audio_mode: str = "auto"  # auto | compressed | wav | transcript_only
+    audio_url: str = ""  # Optional signed/public URL override for model ingestion
+    max_audio_minutes: int = 120  # Safety cap for long recordings
 
 
 class RefineNotesRequest(BaseModel):

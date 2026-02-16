@@ -27,8 +27,9 @@ export function useMeetingOperations({
         // Trigger download
         const link = document.createElement('a');
         link.href = data.url;
-        link.download = `recording-${meeting.id}.wav`; // Suggest filename (browser might ignore for signed URLs)
-        link.target = '_blank';
+        const ext = data.format || 'wav';
+        link.download = data.filename || `recording-${meeting.id}.${ext}`;
+        link.rel = 'noopener noreferrer';
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);

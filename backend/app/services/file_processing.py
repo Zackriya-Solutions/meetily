@@ -78,6 +78,23 @@ class FileProcessor:
                 logger.error(f"❌ Audio conversion failed for {meeting_id}")
                 return
 
+            # 2.5 Build compressed canonical artifact for imported meetings
+            # Keep WAV for diarization compatibility, but prefer compressed for retrieval/use.
+            compressed_path = await self._create_compressed_from_pcm(pcm_path, meeting_id)
+            if compressed_path and compressed_path.exists():
+                try:
+                    from .storage import StorageService
+
+                    await StorageService.upload_file(
+                        str(compressed_path), f"{meeting_id}/recording.opus"
+                    )
+                    await StorageService.upload_file(
+                        str(compressed_path), f"{meeting_id}/merged_recording.opus"
+                    )
+                    logger.info(f"✅ Uploaded compressed recording for {meeting_id}")
+                except Exception as e:
+                    logger.error(f"Failed to upload compressed recording: {e}")
+
             # 2. Transcribe
             logger.info(f"📝 Transcribing {meeting_id}...")
             # Read the raw PCM data
@@ -246,6 +263,17 @@ class FileProcessor:
             except Exception as e:
                 pass
 
+            # Cleanup compressed temp path
+            try:
+                if (
+                    "compressed_path" in locals()
+                    and compressed_path
+                    and compressed_path.exists()
+                ):
+                    os.unlink(compressed_path)
+            except Exception:
+                pass
+
             # Remove the recording dir if empty (since we uploaded everything)
             try:
                 rec_dir = RECORDING_DIR / meeting_id
@@ -322,6 +350,46 @@ class FileProcessor:
             await process.communicate()
             return wav_path
         except Exception:
+            return None
+
+    async def _create_compressed_from_pcm(
+        self, pcm_path: Path, meeting_id: str
+    ) -> Optional[Path]:
+        """
+        Convert PCM to a compressed Opus artifact for faster retrieval and lower storage.
+        """
+        output_dir = RECORDING_DIR / meeting_id
+        opus_path = output_dir / "recording.opus"
+
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "s16le",
+            "-ar",
+            "16000",
+            "-ac",
+            "1",
+            "-i",
+            str(pcm_path),
+            "-c:a",
+            "libopus",
+            "-b:a",
+            "24k",
+            str(opus_path),
+        ]
+
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            )
+            _, stderr = await process.communicate()
+            if process.returncode != 0:
+                logger.error(f"FFmpeg Opus conversion failed: {stderr.decode()}")
+                return None
+            return opus_path
+        except Exception as e:
+            logger.error(f"FFmpeg Opus conversion error: {e}")
             return None
 
 

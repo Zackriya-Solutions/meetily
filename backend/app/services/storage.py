@@ -163,7 +163,9 @@ class StorageService:
 
     @staticmethod
     async def generate_signed_url(
-        path: str, expiration_seconds: int = 3600
+        path: str,
+        expiration_seconds: int = 3600,
+        download_filename: Optional[str] = None,
     ) -> Optional[str]:
         """
         Generate a temporary accessible URL for a file.
@@ -172,7 +174,7 @@ class StorageService:
         """
         if STORAGE_TYPE == "gcp":
             return await StorageService._generate_gcp_signed_url(
-                path, expiration_seconds
+                path, expiration_seconds, download_filename=download_filename
             )
         else:
             # Local dev mode: Return relative URL to be served by StaticFiles
@@ -382,7 +384,9 @@ class StorageService:
 
     @staticmethod
     async def _generate_gcp_signed_url(
-        blob_name: str, expiration: int
+        blob_name: str,
+        expiration: int,
+        download_filename: Optional[str] = None,
     ) -> Optional[str]:
         try:
             bucket = get_gcp_bucket()
@@ -395,12 +399,19 @@ class StorageService:
 
             loop = asyncio.get_running_loop()
 
-            url = await loop.run_in_executor(
-                None,
-                lambda: blob.generate_signed_url(
-                    version="v4", expiration=timedelta(seconds=expiration), method="GET"
-                ),
-            )
+            def _sign():
+                kwargs = {
+                    "version": "v4",
+                    "expiration": timedelta(seconds=expiration),
+                    "method": "GET",
+                }
+                if download_filename:
+                    kwargs["response_disposition"] = (
+                        f'attachment; filename="{download_filename}"'
+                    )
+                return blob.generate_signed_url(**kwargs)
+
+            url = await loop.run_in_executor(None, _sign)
             return url
         except Exception as e:
             logger.error(f"Signed URL generation failed: {e}")

@@ -482,42 +482,72 @@ async def get_meeting_recording_url(
         raise HTTPException(status_code=403, detail="Permission denied")
 
     try:
-        recording_path = f"{meeting_id}/recording.wav"
+        preferred_paths = [
+            (f"{meeting_id}/recording.opus", "audio/ogg"),
+            (f"{meeting_id}/recording.m4a", "audio/mp4"),
+            (f"{meeting_id}/recording.wav", "audio/wav"),
+        ]
 
-        # We need STORAGE_TYPE. It's likely in storage.py or env.
-        # Assuming it's in env.
         STORAGE_TYPE = os.getenv("STORAGE_TYPE", "local").lower()
+        selected_path = None
+        selected_mime = None
+        selected_format = None
 
-        # 1. Primary Check
-        exists = await StorageService.check_file_exists(recording_path)
+        # 1) Check configured storage first
+        for path, mime in preferred_paths:
+            if await StorageService.check_file_exists(path):
+                selected_path = path
+                selected_mime = mime
+                selected_format = path.split(".")[-1]
+                break
 
-        # 2. Fallback: If GCP missing, check Local
-        if not exists and STORAGE_TYPE == "gcp":
-            exists_local = await StorageService._check_local_exists(recording_path)
-            if exists_local:
-                return {
-                    "url": f"/audio/{meeting_id}/recording.wav",
-                    "expiration": 3600,
-                }
+        # 2) Cross-check fallback storage mode if primary mode missed
+        if not selected_path and STORAGE_TYPE == "gcp":
+            for path, mime in preferred_paths:
+                if await StorageService._check_local_exists(path):
+                    return {
+                        "url": f"/audio/{path}",
+                        "expiration": 3600,
+                        "format": path.split(".")[-1],
+                        "mime_type": mime,
+                        "filename": f"recording-{meeting_id}.{path.split('.')[-1]}",
+                    }
+        elif not selected_path and STORAGE_TYPE != "gcp":
+            for path, mime in preferred_paths:
+                if await StorageService._check_gcp_exists(path):
+                    fmt = path.split(".")[-1]
+                    url = await StorageService._generate_gcp_signed_url(
+                        path,
+                        3600,
+                        download_filename=f"recording-{meeting_id}.{fmt}",
+                    )
+                    return {
+                        "url": url,
+                        "expiration": 3600,
+                        "format": fmt,
+                        "mime_type": mime,
+                        "filename": f"recording-{meeting_id}.{fmt}",
+                    }
 
-        # 3. Fallback: If Local missing, check GCP
-        if not exists and STORAGE_TYPE != "gcp":
-            exists_gcp = await StorageService._check_gcp_exists(recording_path)
-            if exists_gcp:
-                url = await StorageService._generate_gcp_signed_url(
-                    recording_path, 3600
-                )
-                return {"url": url, "expiration": 3600}
-
-        if not exists:
+        if not selected_path:
             raise HTTPException(status_code=404, detail="Recording not found")
 
-        url = await StorageService.generate_signed_url(recording_path)
-
+        download_filename = f"recording-{meeting_id}.{selected_format}"
+        url = await StorageService.generate_signed_url(
+            selected_path,
+            3600,
+            download_filename=download_filename,
+        )
         if not url:
             raise HTTPException(status_code=404, detail="Failed to generate URL")
 
-        return {"url": url, "expiration": 3600}
+        return {
+            "url": url,
+            "expiration": 3600,
+            "format": selected_format,
+            "mime_type": selected_mime,
+            "filename": download_filename,
+        }
     except HTTPException:
         raise
     except Exception as e:

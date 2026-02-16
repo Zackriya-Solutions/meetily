@@ -16,6 +16,7 @@ import aiofiles
 import logging
 import os
 import time
+import tempfile
 from pathlib import Path
 from typing import Optional, Dict, List
 from datetime import datetime
@@ -53,6 +54,10 @@ class AudioRecorder:
         self.storage_type = os.getenv("STORAGE_TYPE", "local").lower()
         self.chunk_prefix = os.getenv("AUDIO_CHUNK_PREFIX", "pcm_chunks")
         self.chunk_duration_seconds = chunk_duration_seconds
+        self.parallel_encoding_enabled = (
+            os.getenv("AUDIO_PARALLEL_ENCODING_ENABLED", "true").lower() == "true"
+        )
+        self.archive_format = os.getenv("AUDIO_ARCHIVE_FORMAT", "opus").lower()
 
         # Recording state
         self.is_recording = False
@@ -81,6 +86,9 @@ class AudioRecorder:
 
         # NEW: Lock to serialize background saves and prevent race conditions
         self._lock = asyncio.Lock()
+        self.encoder_process: Optional[asyncio.subprocess.Process] = None
+        self.encoder_output_path: Optional[Path] = None
+        self.encoder_failed = False
 
         # Feature flag check
         self.enabled = os.getenv("ENABLE_AUDIO_RECORDING", "true").lower() == "true"
@@ -126,6 +134,11 @@ class AudioRecorder:
             self.chunk_index = 0
             self.current_chunk_buffer = bytearray()
             self.chunks_metadata = []
+            self.encoder_failed = False
+
+            # Start parallel compressed archival encoder (does not impact PCM/STT path)
+            if self.parallel_encoding_enabled:
+                await self._start_parallel_encoder()
 
             logger.info(f"🎙️ Audio recording started for meeting {self.meeting_id}")
             logger.info(f"   Storage path: {self.storage_path}")
@@ -147,6 +160,11 @@ class AudioRecorder:
             return None
 
         try:
+            # Feed raw PCM into the long-running archive encoder.
+            # This keeps post-save latency low because encoding is done during recording.
+            if self.parallel_encoding_enabled:
+                await self._feed_parallel_encoder(audio_data)
+
             # Synchronous extension: no await here ensures no race during addition
             self.current_chunk_buffer.extend(audio_data)
 
@@ -251,6 +269,8 @@ class AudioRecorder:
             if self.current_chunk_buffer:
                 await self._save_current_chunk()
 
+            compressed_uploaded = await self._finalize_parallel_encoder()
+
             recording_metadata = {
                 "meeting_id": self.meeting_id,
                 "recording_start": datetime.fromtimestamp(
@@ -271,6 +291,14 @@ class AudioRecorder:
                     "format": "PCM",
                 },
                 "chunks": self.chunks_metadata,
+                "compressed_archive": {
+                    "enabled": self.parallel_encoding_enabled,
+                    "format": self.archive_format,
+                    "local_path": str(self.encoder_output_path)
+                    if self.encoder_output_path
+                    else None,
+                    "uploaded": compressed_uploaded,
+                },
             }
 
             import json
@@ -303,6 +331,167 @@ class AudioRecorder:
         except Exception as e:
             logger.error(f"Error stopping audio recording: {e}")
             return {"status": "error", "error": str(e), "meeting_id": self.meeting_id}
+
+    async def _start_parallel_encoder(self):
+        """
+        Start an ffmpeg process that continuously converts PCM stream -> compressed archive.
+        """
+        try:
+            ext = "opus" if self.archive_format == "opus" else "m4a"
+            if self.storage_type == "gcp":
+                output_dir = Path(tempfile.gettempdir()) / "meeting-archives"
+            else:
+                output_dir = self.storage_path
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+            self.encoder_output_path = output_dir / f"recording.{ext}"
+
+            if ext == "opus":
+                cmd = [
+                    "ffmpeg",
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-f",
+                    "s16le",
+                    "-ar",
+                    "16000",
+                    "-ac",
+                    "1",
+                    "-i",
+                    "pipe:0",
+                    "-c:a",
+                    "libopus",
+                    "-b:a",
+                    "24k",
+                    str(self.encoder_output_path),
+                ]
+            else:
+                cmd = [
+                    "ffmpeg",
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-f",
+                    "s16le",
+                    "-ar",
+                    "16000",
+                    "-ac",
+                    "1",
+                    "-i",
+                    "pipe:0",
+                    "-c:a",
+                    "aac",
+                    "-b:a",
+                    "48k",
+                    str(self.encoder_output_path),
+                ]
+
+            self.encoder_process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            logger.info(
+                f"🎧 Parallel archive encoder started for {self.meeting_id}: {self.encoder_output_path}"
+            )
+        except Exception as e:
+            logger.warning(
+                f"Failed to start parallel archive encoder for {self.meeting_id}: {e}"
+            )
+            self.encoder_failed = True
+            self.encoder_process = None
+            self.encoder_output_path = None
+
+    async def _feed_parallel_encoder(self, audio_data: bytes):
+        """
+        Stream PCM bytes to the encoder process.
+        """
+        if self.encoder_failed or not self.encoder_process or not self.encoder_process.stdin:
+            return
+        try:
+            self.encoder_process.stdin.write(audio_data)
+            transport = getattr(self.encoder_process.stdin, "transport", None)
+            if transport and transport.get_write_buffer_size() > 256_000:
+                await self.encoder_process.stdin.drain()
+        except Exception as e:
+            logger.warning(
+                f"Parallel archive encoder write failed for {self.meeting_id}: {e}"
+            )
+            self.encoder_failed = True
+
+    async def _finalize_parallel_encoder(self) -> bool:
+        """
+        Close encoder input, wait for file finalization, and upload compressed artifact.
+        """
+        if not self.parallel_encoding_enabled:
+            return False
+        if self.encoder_failed or not self.encoder_process:
+            return False
+
+        uploaded = False
+        try:
+            if self.encoder_process.stdin:
+                self.encoder_process.stdin.close()
+
+            try:
+                await asyncio.wait_for(self.encoder_process.wait(), timeout=60)
+            except asyncio.TimeoutError:
+                self.encoder_process.kill()
+                await self.encoder_process.wait()
+                logger.warning(f"Parallel encoder timeout for {self.meeting_id}")
+                return False
+
+            if self.encoder_process.returncode != 0:
+                stderr = b""
+                if self.encoder_process.stderr:
+                    stderr = await self.encoder_process.stderr.read()
+                logger.warning(
+                    "Parallel encoder exited non-zero for %s: %s",
+                    self.meeting_id,
+                    stderr.decode("utf-8", errors="ignore")[:400],
+                )
+                return False
+
+            if not self.encoder_output_path or not self.encoder_output_path.exists():
+                return False
+
+            try:
+                from ..storage import StorageService
+            except (ImportError, ValueError):
+                from services.storage import StorageService
+
+            ext = self.encoder_output_path.suffix.lower().lstrip(".")
+            destination = f"{self.meeting_id}/recording.{ext}"
+            uploaded = await StorageService.upload_file(
+                str(self.encoder_output_path), destination
+            )
+            if uploaded:
+                logger.info(
+                    f"⬆️ Uploaded compressed archive for {self.meeting_id}: {destination}"
+                )
+        except Exception as e:
+            logger.warning(
+                f"Failed finalizing/uploading compressed archive for {self.meeting_id}: {e}"
+            )
+            uploaded = False
+        finally:
+            # Keep local file in local mode; remove temp file for GCP mode
+            try:
+                if (
+                    self.storage_type == "gcp"
+                    and self.encoder_output_path
+                    and self.encoder_output_path.exists()
+                ):
+                    self.encoder_output_path.unlink()
+            except Exception:
+                pass
+            self.encoder_process = None
+
+        return uploaded
 
     @staticmethod
     async def merge_chunks(
