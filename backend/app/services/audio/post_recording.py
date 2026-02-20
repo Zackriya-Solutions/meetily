@@ -233,6 +233,18 @@ class PostRecordingService:
         """
         candidates = [f"{meeting_id}/recording.opus", f"{meeting_id}/recording.m4a"]
         try:
+            # If PCM chunks exist, force full merge path to ensure resumed sessions
+            # are represented in the final recording artifact.
+            if self.storage_type == "gcp":
+                prefix = f"{meeting_id}/{self.chunk_prefix}/"
+                files = await StorageService.list_files(prefix)
+                if any(f.endswith(".pcm") for f in files):
+                    return None
+            else:
+                local_dir = self.storage_path / meeting_id
+                if local_dir.exists() and any(local_dir.glob("chunk_*.pcm")):
+                    return None
+
             if self.storage_type == "gcp":
                 for path in candidates:
                     if await StorageService.check_file_exists(path):

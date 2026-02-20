@@ -49,6 +49,92 @@ logger = logging.getLogger(__name__)
 # Track active streaming sessions
 streaming_managers = {}
 active_connections = {}
+session_cleanup_tasks = {}
+session_context = {}
+
+RESUME_GRACE_SECONDS = int(os.getenv("STREAMING_RESUME_GRACE_SECONDS", "45"))
+
+
+def _cancel_pending_cleanup(session_id: str):
+    task = session_cleanup_tasks.pop(session_id, None)
+    if task and not task.done():
+        task.cancel()
+
+
+async def _finalize_session(
+    session_id: str, flush: bool = True, process_audio: bool = True
+):
+    """
+    Finalize recorder + manager for a session.
+    Safe to call multiple times; no-op if already cleaned.
+    """
+    if active_connections.get(session_id, 0) > 0:
+        return
+
+    ctx = session_context.get(session_id, {})
+    recorder_key = ctx.get("recorder_key") or session_id
+    user_email = ctx.get("user_email")
+    mgr = streaming_managers.get(session_id)
+    if flush and mgr:
+        try:
+            await mgr.force_flush()
+        except Exception as e:
+            logger.error(f"Force flush failed for session {session_id}: {e}")
+
+    try:
+        await stop_recorder(recorder_key)
+        if process_audio:
+            post_service = get_post_recording_service()
+            asyncio.create_task(
+                post_service.finalize_recording(
+                    recorder_key,
+                    trigger_diarization=False,
+                    user_email=user_email,
+                )
+            )
+            logger.info(
+                f"[Streaming] Scheduled post-recording processing for {recorder_key}"
+            )
+        else:
+            logger.info(
+                f"[Streaming] Recorder closed for {recorder_key} (post-processing deferred until save)."
+            )
+    except Exception as e:
+        logger.warning(f"[Streaming] Recorder finalize failed for {recorder_key}: {e}")
+
+    if mgr:
+        try:
+            mgr.cleanup()
+        except Exception:
+            pass
+        streaming_managers.pop(session_id, None)
+
+    active_connections.pop(session_id, None)
+    session_context.pop(session_id, None)
+    _cancel_pending_cleanup(session_id)
+
+
+def _schedule_deferred_cleanup(session_id: str):
+    _cancel_pending_cleanup(session_id)
+
+    async def _cleanup_after_grace():
+        try:
+            await asyncio.sleep(RESUME_GRACE_SECONDS)
+            if active_connections.get(session_id, 0) <= 0:
+                logger.info(
+                    f"[Streaming] Resume grace expired for {session_id}; finalizing session."
+                )
+                await _finalize_session(
+                    session_id, flush=False, process_audio=False
+                )
+        except asyncio.CancelledError:
+            return
+        except Exception as e:
+            logger.error(f"[Streaming] Deferred cleanup failed for {session_id}: {e}")
+        finally:
+            session_cleanup_tasks.pop(session_id, None)
+
+    session_cleanup_tasks[session_id] = asyncio.create_task(_cleanup_after_grace())
 
 
 @router.websocket("/ws/streaming-audio")
@@ -72,23 +158,25 @@ async def websocket_streaming_audio(
     if session_id and session_id in streaming_managers:
         manager = streaming_managers[session_id]
         is_resume = True
+        _cancel_pending_cleanup(session_id)
         logger.info(f"[Streaming] 🔄 Resuming session {session_id}")
     else:
         # Create new session
         session_id = str(uuid.uuid4()) if not session_id else session_id
         is_resume = False
+    active_meeting_id = meeting_id or session_id
 
     # Audio recorder setup
     audio_recorder = None
     enable_recording = os.getenv("ENABLE_AUDIO_RECORDING", "true").lower() == "true"
 
     logger.info(
-        f"[Streaming] Audio setup: enable_recording={enable_recording}, meeting_id={meeting_id}, session_id={session_id}"
+        f"[Streaming] Audio setup: enable_recording={enable_recording}, meeting_id={meeting_id}, session_id={session_id}, active_meeting_id={active_meeting_id}"
     )
 
     if enable_recording:
         try:
-            recorder_key = meeting_id or session_id
+            recorder_key = active_meeting_id
             logger.info(
                 f"[Streaming] Attempting to start recorder for key: {recorder_key}"
             )
@@ -124,23 +212,6 @@ async def websocket_streaming_audio(
                 await websocket.close()
                 return
 
-            # Ensure meeting exists in DB for RBAC visibility
-            try:
-                # Use provided meeting_id or fallback to session_id
-                # If meeting_id was provided, it might already exist, but save_meeting handles upsert/ignore
-                active_id = meeting_id or session_id
-                await db.save_meeting(
-                    meeting_id=active_id,
-                    title=f"Live Meeting {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}",
-                    owner_id=user_email if user_email else "anonymous",
-                    workspace_id="default",
-                )
-                logger.info(
-                    f"[Streaming] Ensured meeting record exists for {active_id}"
-                )
-            except Exception as e:
-                logger.error(f"[Streaming] Failed to create meeting record: {e}")
-
             manager = StreamingTranscriptionManager(groq_api_key)
             streaming_managers[session_id] = manager
             logger.info(f"[Streaming] ✅ Session {session_id} started (HYBRID mode)")
@@ -149,6 +220,11 @@ async def websocket_streaming_audio(
     if session_id not in active_connections:
         active_connections[session_id] = 0
     active_connections[session_id] += 1
+    session_context[session_id] = {
+        "meeting_id": active_meeting_id,
+        "recorder_key": active_meeting_id,
+        "user_email": user_email,
+    }
 
     # Heartbeat Setup
     last_heartbeat = time.time()
@@ -193,13 +269,16 @@ async def websocket_streaming_audio(
             pass
 
     async def on_final(data):
+        event_ts = datetime.utcnow().isoformat()
+
+        # WebSocket delivery must not be blocked by DB persistence.
         try:
             response = {
                 "type": "final",
                 "text": data["text"],
                 "confidence": data["confidence"],
                 "reason": data.get("reason", "unknown"),
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": event_ts,
                 "audio_start_time": data.get("audio_start_time"),
                 "audio_end_time": data.get("audio_end_time"),
                 "duration": data.get("duration"),
@@ -208,8 +287,11 @@ async def websocket_streaming_audio(
                 response["original_text"] = data["original_text"]
                 response["translated"] = data.get("translated", False)
             await websocket.send_json(response)
-        except Exception:
-            pass
+        except Exception as ws_e:
+            logger.error(f"Failed to send final transcript over websocket: {ws_e}")
+
+        # Do not persist live transcript segments on streaming path.
+        # Transcript persistence is handled by explicit save-transcript flow.
 
     async def on_error(message: str, code: Optional[str] = None):
         try:
@@ -261,6 +343,7 @@ async def websocket_streaming_audio(
             logger.error(f"[Streaming] Audio worker crashed: {e}")
 
     worker_task = asyncio.create_task(audio_worker())
+    explicit_stop = False
 
     try:
         while True:
@@ -281,6 +364,12 @@ async def websocket_streaming_audio(
                         last_heartbeat = time.time()
                         await websocket.send_json({"type": "pong"})
                         continue
+                    if data.get("type") == "stop":
+                        logger.info(
+                            f"[Streaming] Received explicit stop for session {session_id}"
+                        )
+                        explicit_stop = True
+                        break
                 except:
                     pass
 
@@ -310,38 +399,6 @@ async def websocket_streaming_audio(
     finally:
         monitor_task.cancel()
 
-        # Force flush on disconnect
-        if session_id in streaming_managers:
-            try:
-                mgr = streaming_managers[session_id]
-                flush_result = await mgr.force_flush()
-                if flush_result:
-                    try:
-                        await on_final(flush_result)
-                    except:
-                        pass
-
-                    # Also explicitly save this flush segment to DB
-                    if meeting_id:
-                        try:
-                            async with db._get_connection() as conn:
-                                await conn.execute(
-                                    """
-                                    INSERT INTO transcript_segments (
-                                        meeting_id, transcript, timestamp, source, alignment_state, audio_start_time
-                                    ) VALUES ($1, $2, $3, 'live', 'CONFIDENT', $4)
-                                """,
-                                    meeting_id,
-                                    flush_result["text"],
-                                    datetime.utcnow(),
-                                    mgr.speech_start_time,
-                                )
-                        except Exception as db_e:
-                            logger.error(f"Failed to save flush segment to DB: {db_e}")
-
-            except Exception as e:
-                logger.error(f"Force flush failed: {e}")
-
         # Cleanup queues and workers
         await audio_queue.put(None)
         try:
@@ -349,40 +406,19 @@ async def websocket_streaming_audio(
         except:
             pass
 
-        # Recorder cleanup
-        if audio_recorder:
-            try:
-                recorder_key = meeting_id or session_id
-                await stop_recorder(recorder_key)
-                try:
-                    post_service = get_post_recording_service()
-                    asyncio.create_task(
-                        post_service.finalize_recording(
-                            recorder_key,
-                            trigger_diarization=False,
-                            user_email=user_email,
-                        )
-                    )
-                    logger.info(
-                        f"[Streaming] Scheduled post-recording processing for {recorder_key}"
-                    )
-                except Exception as post_e:
-                    logger.warning(
-                        f"[Streaming] Post-recording service unavailable: {post_e}"
-                    )
-            except:
-                pass
-
-        # Connection tracking cleanup
+        # Connection tracking cleanup / deferred finalize for resume support
         if session_id in active_connections:
             active_connections[session_id] -= 1
             if active_connections[session_id] <= 0:
-                if session_id in streaming_managers:
-                    # Clean up the manager instance
-                    mgr = streaming_managers[session_id]
-                    mgr.cleanup()
-                    del streaming_managers[session_id]
-                del active_connections[session_id]
+                if explicit_stop:
+                    await _finalize_session(
+                        session_id, flush=True, process_audio=True
+                    )
+                else:
+                    logger.info(
+                        f"[Streaming] Session {session_id} disconnected; waiting {RESUME_GRACE_SECONDS}s for resume before finalize."
+                    )
+                    _schedule_deferred_cleanup(session_id)
 
 
 import tempfile
@@ -483,9 +519,9 @@ async def get_meeting_recording_url(
 
     try:
         preferred_paths = [
+            (f"{meeting_id}/recording.wav", "audio/wav"),
             (f"{meeting_id}/recording.opus", "audio/ogg"),
             (f"{meeting_id}/recording.m4a", "audio/mp4"),
-            (f"{meeting_id}/recording.wav", "audio/wav"),
         ]
 
         STORAGE_TYPE = os.getenv("STORAGE_TYPE", "local").lower()

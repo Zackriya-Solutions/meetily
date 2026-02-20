@@ -114,6 +114,9 @@ export default function Home() {
   const [pendingRecoveryId, setPendingRecoveryId] = useState<string | null>(null);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [isRestoredSession, setIsRestoredSession] = useState(false);
+  const [resumeStartSignal, setResumeStartSignal] = useState(0);
+  const [recordingElapsedSeconds, setRecordingElapsedSeconds] = useState(0);
+  const [audioTimelineOffsetSeconds, setAudioTimelineOffsetSeconds] = useState(0);
 
   useEffect(() => {
     const checkRecoveries = async () => {
@@ -127,12 +130,13 @@ export default function Home() {
           console.log('[Recovery] Found fresh backup (< 5 mins), auto-restoring...');
           setMeetingTitle(latest.title);
           setTranscripts(latest.transcripts);
-          setPendingRecoveryId(latest.meetingId);
+          const recoveredId = latest.sessionId || latest.meetingId;
+          setPendingRecoveryId(recoveredId);
           setIsRestoredSession(true);
 
           // Don't set 'recovery' ID to avoid blocking recording controls
           // Just treat it as loaded state ready to append
-          setCurrentSessionId(latest.sessionId || null);
+          setCurrentSessionId(recoveredId);
 
           toast.success('Session Restored', {
             description: 'Your meeting context has been automatically restored.'
@@ -157,39 +161,11 @@ export default function Home() {
     setMeetingTitle(data.title);
     setTranscripts(data.transcripts);
     setCurrentMeeting({ id: 'recovery', title: data.title });
-    setPendingRecoveryId(data.meetingId);
-    setCurrentSessionId(data.sessionId || null);
+    const recoveredId = data.sessionId || data.meetingId;
+    setPendingRecoveryId(recoveredId);
+    setCurrentSessionId(recoveredId);
     toast.success('Restored unsaved meeting', { description: 'Please try saving again.' });
   };
-
-  // Auto-save effect
-  useEffect(() => {
-    if (!isRecording || transcripts.length === 0) return;
-
-    const intervalId = setInterval(async () => {
-      console.log('[AutoSave] Saving recovery backup...');
-      const recoveryId = pendingRecoveryId || `recovery-${Date.now()}`;
-      const defaultTemplate = localStorage.getItem('selectedTemplate') || 'standard_meeting';
-
-      try {
-        await recoveryService.savePendingTranscript({
-          meetingId: recoveryId,
-          title: meetingTitle || 'Untitled Meeting',
-          transcripts: transcripts,
-          timestamp: Date.now(),
-          templateId: defaultTemplate,
-          sessionId: currentSessionId
-        });
-        if (!pendingRecoveryId) {
-          setPendingRecoveryId(recoveryId);
-        }
-      } catch (err) {
-        console.warn('[AutoSave] Failed to save backup:', err);
-      }
-    }, 30000); // Every 30 seconds
-
-    return () => clearInterval(intervalId);
-  }, [isRecording, transcripts, meetingTitle, pendingRecoveryId]);
 
   // Catch Me Up feature state
   const [isCatchUpOpen, setIsCatchUpOpen] = useState(false);
@@ -211,6 +187,10 @@ export default function Home() {
 
   // Ref to avoid stale closure issues with transcripts
   const transcriptsRef = useRef<Transcript[]>(transcripts);
+  const meetingTitleRef = useRef<string>(meetingTitle);
+  const currentSessionIdRef = useRef<string | null>(currentSessionId);
+  const pendingRecoveryIdRef = useRef<string | null>(pendingRecoveryId);
+  const audioTimelineOffsetRef = useRef<number>(audioTimelineOffsetSeconds);
 
   const isUserAtBottomRef = useRef<boolean>(true);
 
@@ -221,6 +201,148 @@ export default function Home() {
   useEffect(() => {
     transcriptsRef.current = transcripts;
   }, [transcripts]);
+  useEffect(() => {
+    meetingTitleRef.current = meetingTitle;
+  }, [meetingTitle]);
+  useEffect(() => {
+    currentSessionIdRef.current = currentSessionId;
+  }, [currentSessionId]);
+  useEffect(() => {
+    pendingRecoveryIdRef.current = pendingRecoveryId;
+  }, [pendingRecoveryId]);
+  useEffect(() => {
+    audioTimelineOffsetRef.current = audioTimelineOffsetSeconds;
+  }, [audioTimelineOffsetSeconds]);
+
+  const saveRecoverySnapshot = useCallback(async () => {
+    const latestTranscripts = transcriptsRef.current;
+    if (!latestTranscripts || latestTranscripts.length === 0) return;
+
+    const recoveryId = currentSessionIdRef.current || pendingRecoveryIdRef.current || `recovery-${Date.now()}`;
+    const defaultTemplate = localStorage.getItem('selectedTemplate') || 'standard_meeting';
+
+    await recoveryService.savePendingTranscript({
+      meetingId: recoveryId,
+      title: meetingTitleRef.current || 'Untitled Meeting',
+      transcripts: latestTranscripts,
+      timestamp: Date.now(),
+      templateId: defaultTemplate,
+      sessionId: currentSessionIdRef.current
+    });
+
+    if (!pendingRecoveryIdRef.current) {
+      pendingRecoveryIdRef.current = recoveryId;
+      setPendingRecoveryId(recoveryId);
+    }
+  }, []);
+
+  // Auto-save effect (stable timer; does not reset on each transcript append)
+  useEffect(() => {
+    if (!isRecording) return;
+
+    const intervalId = setInterval(async () => {
+      console.log('[AutoSave] Saving recovery backup...');
+      try {
+        await saveRecoverySnapshot();
+      } catch (err) {
+        console.warn('[AutoSave] Failed to save backup:', err);
+      }
+    }, 30000);
+
+    return () => clearInterval(intervalId);
+  }, [isRecording, saveRecoverySnapshot]);
+
+  // Save shortly after transcript updates while recording.
+  useEffect(() => {
+    if (!isRecording || transcripts.length === 0) return;
+
+    const timeoutId = setTimeout(() => {
+      saveRecoverySnapshot().catch((err) => {
+        console.warn('[AutoSave] Failed to save transcript-change snapshot:', err);
+      });
+    }, 1500);
+
+    return () => clearTimeout(timeoutId);
+  }, [isRecording, transcripts.length, saveRecoverySnapshot]);
+
+  // Last-chance snapshot before reload/tab close.
+  useEffect(() => {
+    if (!isRecording) return;
+
+    const handleBeforeUnload = () => {
+      saveRecoverySnapshot().catch(() => {});
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    window.addEventListener('pagehide', handleBeforeUnload);
+
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      window.removeEventListener('pagehide', handleBeforeUnload);
+    };
+  }, [isRecording, saveRecoverySnapshot]);
+
+  const parseTranscriptTimestampMs = useCallback((timestamp?: string): number | null => {
+    if (!timestamp) return null;
+
+    // Handle HH:MM:SS local-style strings
+    if (/^\d{2}:\d{2}:\d{2}$/.test(timestamp)) {
+      const [hours, minutes, seconds] = timestamp.split(':').map(Number);
+      const now = new Date();
+      const parsed = new Date(
+        now.getFullYear(),
+        now.getMonth(),
+        now.getDate(),
+        hours,
+        minutes,
+        seconds,
+        0
+      );
+      return parsed.getTime();
+    }
+
+    const parsed = new Date(timestamp).getTime();
+    return Number.isNaN(parsed) ? null : parsed;
+  }, []);
+
+  const getTranscriptElapsedSeconds = useCallback((items: Transcript[]): number => {
+    if (!items.length) return 0;
+
+    const timestampMs = items
+      .map((t) => parseTranscriptTimestampMs(t.timestamp))
+      .filter((t): t is number => t !== null)
+      .sort((a, b) => a - b);
+
+    if (timestampMs.length >= 2) {
+      const elapsed = Math.floor((timestampMs[timestampMs.length - 1] - timestampMs[0]) / 1000);
+      if (elapsed > 0) return elapsed;
+    }
+
+    const maxAudioEnd = items.reduce((max, t) => {
+      const end = t.audio_end_time ?? t.audio_start_time ?? 0;
+      return end > max ? end : max;
+    }, 0);
+
+    return Math.floor(maxAudioEnd);
+  }, [parseTranscriptTimestampMs]);
+
+  // Keep elapsed duration in sync while recording, including silent intervals.
+  useEffect(() => {
+    if (!isRecording || isPaused) return;
+
+    const intervalId = setInterval(() => {
+      setRecordingElapsedSeconds((prev) => prev + 1);
+    }, 1000);
+
+    return () => clearInterval(intervalId);
+  }, [isRecording, isPaused]);
+
+  // Keep a reasonable baseline when loading recovered transcripts before resuming.
+  useEffect(() => {
+    if (isRecording) return;
+    const inferred = getTranscriptElapsedSeconds(transcripts);
+    setRecordingElapsedSeconds((prev) => (inferred > prev ? inferred : prev));
+  }, [transcripts, isRecording, getTranscriptElapsedSeconds]);
 
   // Smart auto-scroll: Track user scroll position
   useEffect(() => {
@@ -361,6 +483,10 @@ export default function Home() {
   // Update sidebar recording state
   useEffect(() => {
     setSidebarIsRecording(isRecording);
+    return () => {
+      // Prevent stale sidebar "recording" UI if Home unmounts mid-transition.
+      setSidebarIsRecording(false);
+    };
   }, [isRecording, setSidebarIsRecording]);
 
   // Handle receiving transcript updates from RecordingControls
@@ -472,10 +598,20 @@ export default function Home() {
       // Update state
       console.log('Setting recording state to true');
       setIsRecording(true);
+      setIsPaused(false);
+
+      const inferredElapsed = Math.max(
+        recordingElapsedSeconds,
+        getTranscriptElapsedSeconds(transcripts)
+      );
 
       // If this is a restored session or we have existing transcripts, we are RESUMING
       // We must ensure new transcripts don't collide with old ones
       if (transcripts.length > 0) {
+        // Ensure earliest resumed transcript chunks use the resumed timeline.
+        audioTimelineOffsetRef.current = inferredElapsed;
+        setRecordingElapsedSeconds(inferredElapsed);
+        setAudioTimelineOffsetSeconds(inferredElapsed);
         if (currentSessionId && !pendingRecoveryId) {
           console.log('[Recording] Resuming existing session with ID:', currentSessionId);
           setIsRestoredSession(true); // Keep strictly true to indicate continuation
@@ -490,6 +626,8 @@ export default function Home() {
         }
       } else {
         setTranscripts([]); // Clear previous transcripts only if starting fresh
+        setRecordingElapsedSeconds(0);
+        setAudioTimelineOffsetSeconds(0);
       }
 
       setIsMeetingActive(true);
@@ -562,6 +700,7 @@ export default function Home() {
           })),
           folder_path: null,
           template_id: defaultTemplate,
+          meeting_id: currentSessionId || pendingRecoveryId || undefined,
           session_id: currentSessionId,
         }),
         preventLogout: true
@@ -610,15 +749,13 @@ export default function Home() {
         Analytics.trackPageView('meeting_details');
       }, 1500);
 
-      setMeetings([{ id: meetingId, title: meetingTitle || 'Web Audio Meeting' }, ...meetings]);
-
     } catch (error) {
       console.error('❌ [Web Audio] Failed to save meeting:', error);
 
       if (error instanceof AuthError) {
         // Save to recovery
         const freshTranscripts = transcriptsRef.current;
-        const recoveryId = pendingRecoveryId || `recovery-${Date.now()}`;
+        const recoveryId = currentSessionId || pendingRecoveryId || `recovery-${Date.now()}`;
         const defaultTemplate = localStorage.getItem('selectedTemplate') || 'standard_meeting';
 
         await recoveryService.savePendingTranscript({
@@ -646,6 +783,8 @@ export default function Home() {
       setIsProcessingTranscript(false);
       setIsRecordingDisabled(false);
       setIsStopping(false);
+      setIsMeetingActive(false);
+      setSidebarIsRecording(false);
     }
   };
 
@@ -654,6 +793,8 @@ export default function Home() {
     setIsRecording(false);
     setIsPaused(false);
     setIsRecordingDisabled(false);
+    setIsMeetingActive(false);
+    setSidebarIsRecording(false);
 
     if (success) {
       await handleWebAudioRecordingStop();
@@ -668,13 +809,22 @@ export default function Home() {
       is_partial: update.is_partial
     });
 
+    const adjustedAudioStart =
+      typeof update.audio_start_time === 'number'
+        ? update.audio_start_time + audioTimelineOffsetRef.current
+        : undefined;
+    const adjustedAudioEnd =
+      typeof update.audio_end_time === 'number'
+        ? update.audio_end_time + audioTimelineOffsetRef.current
+        : undefined;
+
     const newTranscript = {
       id: update.sequence_id ? update.sequence_id.toString() : Date.now().toString(),
       text: update.text,
       timestamp: update.timestamp,
       sequence_id: update.sequence_id || 0,
-      audio_start_time: update.audio_start_time,
-      audio_end_time: update.audio_end_time,
+      audio_start_time: adjustedAudioStart,
+      audio_end_time: adjustedAudioEnd,
       duration: update.duration
     };
 
@@ -1044,26 +1194,15 @@ export default function Home() {
   // Handle Catch Me Up - get quick summary of meeting so far
   // Get meeting duration in minutes for time range validation
   const getMeetingDurationMinutes = useCallback(() => {
-    if (!transcripts.length) return 0;
-
-    // Try to use audio_start_time if available on transcripts
-    const withTime = transcripts.filter(t => t.audio_start_time !== undefined && t.audio_start_time > 0);
-
-    if (withTime.length >= 2) {
-      const firstTime = withTime[0].audio_start_time!;
-      const lastTime = withTime[withTime.length - 1].audio_start_time!;
-      const duration = Math.ceil((lastTime - firstTime) / 60);
-      if (duration > 0) return duration;
-    }
-
-    // Fallback: estimate based on transcript count
-    // Streaming sends transcripts roughly every ~8-10 seconds
-    const estimatedSeconds = transcripts.length * 8;
-    return Math.max(1, Math.ceil(estimatedSeconds / 60));
-  }, [transcripts]);
+    const elapsedSeconds = Math.max(
+      recordingElapsedSeconds,
+      getTranscriptElapsedSeconds(transcripts)
+    );
+    return Math.ceil(elapsedSeconds / 60);
+  }, [transcripts, recordingElapsedSeconds, getTranscriptElapsedSeconds]);
 
   const handleCatchUp = useCallback(async (minutes: number | null = null) => {
-    if (!transcripts.length) {
+    if (!transcripts.length && minutes === null) {
       toast.error("No transcript yet to catch up on");
       return;
     }
@@ -1077,31 +1216,14 @@ export default function Home() {
     try {
       // Filter transcripts by time range if specified
       let filteredTranscripts = transcripts;
+      const nowMs = Date.now();
+      const windowStartMs = minutes !== null ? nowMs - (minutes * 60 * 1000) : null;
 
-      if (minutes !== null && transcripts.length > 0) {
-        // Check if transcripts have audio_start_time
-        const hasTimestamps = transcripts.some(t => t.audio_start_time && t.audio_start_time > 0);
-
-        if (hasTimestamps) {
-          // Use audio_start_time filtering
-          const lastTranscriptTime = transcripts[transcripts.length - 1].audio_start_time || 0;
-          const cutoffTime = lastTranscriptTime - (minutes * 60);
-          filteredTranscripts = transcripts.filter(t =>
-            (t.audio_start_time || 0) >= cutoffTime
-          );
-        } else {
-          // Fallback: use index-based filtering
-          // Estimate: ~8 seconds per transcript
-          const transcriptsPerMinute = 60 / 8; // ~7.5 transcripts/min
-          const targetCount = Math.ceil(minutes * transcriptsPerMinute);
-          const startIndex = Math.max(0, transcripts.length - targetCount);
-          filteredTranscripts = transcripts.slice(startIndex);
-        }
-
-        if (filteredTranscripts.length === 0) {
-          // If no transcripts in range, use all
-          filteredTranscripts = transcripts;
-        }
+      if (minutes !== null && windowStartMs !== null && transcripts.length > 0) {
+        filteredTranscripts = transcripts.filter((t) => {
+          const ts = parseTranscriptTimestampMs(t.timestamp);
+          return ts !== null && ts >= windowStartMs;
+        });
       }
 
       // Safety limit: only take last 1000 transcripts to avoid payload too large errors
@@ -1110,21 +1232,25 @@ export default function Home() {
         filteredTranscripts = filteredTranscripts.slice(-1000);
       }
 
-      const transcriptTexts = filteredTranscripts.map(t => t.text);
+      const transcriptEntries = filteredTranscripts.map((t) => ({
+        text: t.text,
+        timestamp: t.timestamp,
+        audio_start_time: t.audio_start_time
+      }));
 
       // Optimization: Limit the number of transcripts sent to prevent payload size issues
       // 1000 transcripts is roughly 1.5 - 2 hours of meeting data
       const MAX_CATCHUP_TRANSCRIPTS = 1000;
-      const limitedTranscriptTexts = transcriptTexts.length > MAX_CATCHUP_TRANSCRIPTS
-        ? transcriptTexts.slice(-MAX_CATCHUP_TRANSCRIPTS)
-        : transcriptTexts;
+      const limitedTranscriptEntries = transcriptEntries.length > MAX_CATCHUP_TRANSCRIPTS
+        ? transcriptEntries.slice(-MAX_CATCHUP_TRANSCRIPTS)
+        : transcriptEntries;
 
-      if (transcriptTexts.length > MAX_CATCHUP_TRANSCRIPTS) {
-        console.warn(`[CatchUp] Truncating ${transcriptTexts.length} transcripts to latest ${MAX_CATCHUP_TRANSCRIPTS} to prevent payload size issues.`);
+      if (transcriptEntries.length > MAX_CATCHUP_TRANSCRIPTS) {
+        console.warn(`[CatchUp] Truncating ${transcriptEntries.length} transcripts to latest ${MAX_CATCHUP_TRANSCRIPTS} to prevent payload size issues.`);
       }
 
       const timeLabel = minutes ? `last ${minutes} minutes` : 'entire meeting';
-      console.log(`[CatchUp] Summarizing ${timeLabel}: ${limitedTranscriptTexts.length} transcripts`);
+      console.log(`[CatchUp] Summarizing ${timeLabel}: ${limitedTranscriptEntries.length} transcripts`);
 
       // The catch-up endpoint currently only supports gemini and groq
       const supportedProviders = ['gemini', 'groq'];
@@ -1140,14 +1266,28 @@ export default function Home() {
       const response = await authFetch('/catch-up', {
         method: 'POST',
         body: JSON.stringify({
-          transcripts: limitedTranscriptTexts,
+          transcripts: limitedTranscriptEntries,
           model: provider,
-          model_name: modelName
+          model_name: modelName,
+          window_minutes: minutes,
+          window_start_iso: windowStartMs ? new Date(windowStartMs).toISOString() : null,
+          window_end_iso: new Date(nowMs).toISOString(),
+          meeting_elapsed_seconds: Math.max(
+            recordingElapsedSeconds,
+            getTranscriptElapsedSeconds(transcripts)
+          )
         })
       });
 
       if (!response.ok) {
         throw new Error(`Failed to get catch-up: ${response.statusText}`);
+      }
+
+      const contentType = response.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        const data = await response.json();
+        setCatchUpSummary(data.summary || data.error || 'No catch-up available for this window.');
+        return;
       }
 
       // Stream the response
@@ -1175,7 +1315,7 @@ export default function Home() {
     } finally {
       setIsCatchUpLoading(false);
     }
-  }, [transcripts, serverAddress]);
+  }, [transcripts, parseTranscriptTimestampMs, modelConfig, recordingElapsedSeconds, getTranscriptElapsedSeconds]);
 
 
   const handleGenerateSummary = useCallback(async () => {
@@ -1510,6 +1650,7 @@ export default function Home() {
                   transcripts={transcripts}
                   isRecording={isRecording}
                   isPaused={isPaused}
+                  activeDuration={recordingElapsedSeconds}
                   isProcessing={isProcessingStop}
                   isStopping={isStopping}
                   enableStreaming={isRecording}
@@ -1557,9 +1698,18 @@ export default function Home() {
                       isParentProcessing={isProcessingStop}
                       selectedDevices={selectedDevices}
                       meetingName={meetingTitle}
-                      onSessionIdReceived={setCurrentSessionId}
+                      onSessionIdReceived={(sessionId) => {
+                        setCurrentSessionId(sessionId);
+                        // Upgrade temporary recovery ids once backend confirms live session id.
+                        setPendingRecoveryId((prev) => {
+                          if (!prev) return prev;
+                          if (prev === sessionId) return prev;
+                          return prev.startsWith('recovery-') ? sessionId : prev;
+                        });
+                      }}
                       initialSessionId={currentSessionId}
                       onPauseChange={setIsPaused}
+                      startSignal={resumeStartSignal}
                     />
                   </div>
                 </div>
@@ -1585,7 +1735,11 @@ export default function Home() {
                   </div>
                   <div className="h-8 w-px bg-amber-200 mx-2"></div>
                   <Button
-                    onClick={() => handleRecordingStart()}
+                    onClick={() => {
+                      // Reveal controls and trigger actual websocket/audio start.
+                      setPendingRecoveryId(null);
+                      setResumeStartSignal((v) => v + 1);
+                    }}
                     className="bg-blue-600 hover:bg-blue-700 text-white rounded-full px-6"
                   >
                     Resume Meeting

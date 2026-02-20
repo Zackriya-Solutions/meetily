@@ -1,17 +1,17 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { ArrowLeft, Settings2, Mic, Database as DatabaseIcon, SparkleIcon, Key } from 'lucide-react';
+import { ArrowLeft, Settings2, Mic, Database as DatabaseIcon, SparkleIcon, Key, Calendar } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { TranscriptSettings, TranscriptModelProps } from '@/components/TranscriptSettings';
 import { RecordingSettings } from '@/components/RecordingSettings';
 import { PreferenceSettings } from '@/components/PreferenceSettings';
 import { SummaryModelSettings } from '@/components/SummaryModelSettings';
 import { PersonalKeysSettings } from '@/components/PersonalKeysSettings';
-import { apiUrl } from '@/lib/config';
+import { CalendarIntegrationSettings } from '@/components/CalendarIntegrationSettings';
 import { authFetch } from '@/lib/api';
 
-type SettingsTab = 'general' | 'recording' | 'Transcriptionmodels' | 'summaryModels' | 'personalKeys';
+type SettingsTab = 'general' | 'recording' | 'Transcriptionmodels' | 'summaryModels' | 'personalKeys' | 'calendar';
 
 export default function SettingsPage() {
   const router = useRouter();
@@ -27,7 +27,8 @@ export default function SettingsPage() {
     { id: 'recording' as const, label: 'Recordings', icon: <Mic className="w-4 h-4" /> },
     { id: 'Transcriptionmodels' as const, label: 'Transcription', icon: <DatabaseIcon className="w-4 h-4" /> },
     { id: 'summaryModels' as const, label: 'Summary', icon: <SparkleIcon className="w-4 h-4" /> },
-    { id: 'personalKeys' as const, label: 'Personal Keys', icon: <Key className="w-4 h-4" /> }
+    { id: 'personalKeys' as const, label: 'Personal Keys', icon: <Key className="w-4 h-4" /> },
+    { id: 'calendar' as const, label: 'Calendar', icon: <Calendar className="w-4 h-4" /> }
   ];
 
   // Load saved transcript configuration on mount
@@ -51,23 +52,6 @@ export default function SettingsPage() {
     };
     loadTranscriptConfig();
   }, []);
-
-  // Handle configuration save
-  const handleSaveConfig = async (config: TranscriptModelProps) => {
-    try {
-      console.log('[SettingsPage] Saving transcript config:', config);
-      const response = await authFetch('/save-transcript-config', {
-        method: 'POST',
-        // headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(config)
-      });
-
-      if (!response.ok) throw new Error('Failed to save config');
-      console.log('[SettingsPage] ✅ Successfully saved transcript config');
-    } catch (error) {
-      console.error('[SettingsPage] ❌ Failed to save transcript config:', error);
-    }
-  };
 
   return (
     <div className="h-screen bg-gray-50 flex flex-col">
@@ -121,6 +105,7 @@ export default function SettingsPage() {
               )}
               {activeTab === 'summaryModels' && <SummaryModelSettings />}
               {activeTab === 'personalKeys' && <PersonalKeysSettings />}
+              {activeTab === 'calendar' && <CalendarIntegrationSettings />}
             </div>
           </div>
         </div>

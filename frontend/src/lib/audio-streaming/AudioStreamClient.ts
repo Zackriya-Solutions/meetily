@@ -32,8 +32,10 @@ export class AudioStreamClient {
   private maxReconnectAttempts: number = 5;
   private audioQueue: ArrayBuffer[] = []; // Changed to ArrayBuffer for combined data
   private isReconnecting: boolean = false;
+  private intentionalClose: boolean = false;
   private sessionId: string | null = null;
   private userEmail: string | null = null;
+  private meetingId: string | null = null;
   private recordingStartTime: number = 0; // AudioContext.currentTime at recording start
   private heartbeatInterval: NodeJS.Timeout | null = null;
 
@@ -44,14 +46,21 @@ export class AudioStreamClient {
   /**
    * Start streaming audio to backend
    */
-  async start(callbacks: StreamingCallbacks, userEmail?: string, sessionId?: string): Promise<void> {
+  async start(
+    callbacks: StreamingCallbacks,
+    userEmail?: string,
+    sessionId?: string,
+    meetingId?: string
+  ): Promise<void> {
     if (this.isStreaming) return;
 
     this.callbacks = callbacks;
     this.reconnectAttempts = 0;
     this.audioQueue = []; // Clear queue on fresh start
+    this.intentionalClose = false;
     this.sessionId = sessionId || null; // Use provided sessionId if available
     this.userEmail = userEmail || null;
+    this.meetingId = meetingId || null;
     this.recordingStartTime = 0; // Will be set after AudioContext creation
 
     try {
@@ -176,6 +185,9 @@ export class AudioStreamClient {
       if (this.userEmail) {
         url += (url.includes('?') ? '&' : '?') + `user_email=${encodeURIComponent(this.userEmail)}`;
       }
+      if (this.meetingId) {
+        url += (url.includes('?') ? '&' : '?') + `meeting_id=${encodeURIComponent(this.meetingId)}`;
+      }
         
       this.websocket = new WebSocket(url);
       this.websocket.binaryType = 'arraybuffer';
@@ -227,12 +239,13 @@ export class AudioStreamClient {
 
       this.websocket.onclose = (event) => {
         console.log(`[AudioStream] WebSocket closed: ${event.code}`);
-        // If we were streaming and didn't close intentionally, try to reconnect
-        if (this.isStreaming && !event.wasClean) {
+        // If we were streaming and didn't close intentionally, try to reconnect.
+        if (this.isStreaming && !this.intentionalClose && !event.wasClean) {
              this.connectWithRetry().catch(() => {
                  this.stop(); // Give up if retry fails
              });
         }
+        this.callbacks.onDisconnected?.();
       };
 
       this.websocket.onerror = (err) => {
@@ -247,6 +260,7 @@ export class AudioStreamClient {
    */
   stop(): void {
     console.log('[AudioStream] Stopping...');
+    this.intentionalClose = true;
     this.isStreaming = false;
     this.stopHeartbeat();
     this.cleanup();
@@ -293,7 +307,16 @@ export class AudioStreamClient {
 
     // Close WebSocket
     if (this.websocket) {
-      this.websocket.close();
+      try {
+        if (this.websocket.readyState === WebSocket.OPEN) {
+          this.websocket.send(JSON.stringify({ type: 'stop' }));
+          this.websocket.close(1000, 'client-stop');
+        } else {
+          this.websocket.close();
+        }
+      } catch {
+        this.websocket.close();
+      }
       this.websocket = null;
     }
   }

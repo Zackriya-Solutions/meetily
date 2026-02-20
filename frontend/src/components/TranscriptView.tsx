@@ -33,6 +33,7 @@ interface TranscriptViewProps {
   transcripts: Transcript[];
   isRecording?: boolean;
   isPaused?: boolean; // Is recording paused (affects UI indicators)
+  activeDuration?: number; // Total active duration in seconds
   isProcessing?: boolean; // Is processing/finalizing transcription (hides "Listening..." indicator)
   isStopping?: boolean; // Is recording being stopped (provides immediate UI feedback)
   enableStreaming?: boolean; // Enable streaming effect for live transcription UX
@@ -192,6 +193,7 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({
   transcripts,
   isRecording = false,
   isPaused = false,
+  activeDuration,
   isProcessing = false,
   isStopping = false,
   enableStreaming = false,
@@ -312,7 +314,11 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({
       <AnimatePresence>
         {isRecording && (
           <div className="sticky top-4 z-10 bg-white pb-2">
-            <RecordingStatusBar isPaused={isPaused} isRecording={isRecording} />
+            <RecordingStatusBar
+              isPaused={isPaused}
+              isRecording={isRecording}
+              activeDuration={activeDuration}
+            />
           </div>
         )}
       </AnimatePresence>

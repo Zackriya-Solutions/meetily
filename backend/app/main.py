@@ -24,6 +24,7 @@ try:
         audio,
         diarization,
         settings,
+        calendar,
         admin,
         feedback,
     )
@@ -35,6 +36,7 @@ except ImportError:
         audio,
         diarization,
         settings,
+        calendar,
         admin,
         feedback,
     )
@@ -69,6 +71,7 @@ app.include_router(chat.router, tags=["Chat"])
 app.include_router(audio.router, tags=["Audio"])
 app.include_router(diarization.router, tags=["Diarization"])
 app.include_router(settings.router, tags=["Settings"])
+app.include_router(calendar.router, tags=["Calendar"])
 app.include_router(admin.router, tags=["Admin"])
 app.include_router(feedback.router, prefix="/feedback", tags=["Feedback"])
 

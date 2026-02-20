@@ -98,10 +98,14 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
         const meetingsData = await response.json();
         console.log('[SidebarProvider] Fetched meetings:', meetingsData);
 
-        const transformedMeetings = meetingsData.map((meeting: any) => ({
-          id: meeting.id,
-          title: meeting.title
-        }));
+        const transformedMeetings: CurrentMeeting[] = Array.from(
+          new Map<string, CurrentMeeting>(
+            meetingsData.map((meeting: any) => [
+              meeting.id,
+              { id: meeting.id, title: meeting.title } as CurrentMeeting
+            ])
+          ).values()
+        );
         setMeetings(transformedMeetings);
         Analytics.trackBackendConnection(true);
       } catch (error) {

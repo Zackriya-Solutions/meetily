@@ -1260,7 +1260,8 @@ async def save_transcript(
     current_user: User = Depends(get_current_user),
 ):
     """Save transcript segments manually (from frontend)"""
-    meeting_id = data.session_id or str(uuid.uuid4())
+    meeting_id = data.meeting_id or data.session_id or str(uuid.uuid4())
+    source_session_id = data.session_id if data.session_id else None
 
     try:
         # Check if meeting exists
@@ -1275,6 +1276,34 @@ async def save_transcript(
                 title=data.meeting_title,
                 owner_id=current_user.email,
             )
+
+        # Consolidate transcripts from source session meeting into canonical meeting_id.
+        if source_session_id and source_session_id != meeting_id:
+            try:
+                async with db._get_connection() as conn:
+                    await conn.execute(
+                        """
+                        UPDATE transcript_segments
+                        SET meeting_id = $1
+                        WHERE meeting_id = $2
+                    """,
+                        meeting_id,
+                        source_session_id,
+                    )
+                    await conn.execute(
+                        """
+                        DELETE FROM meetings
+                        WHERE id = $1
+                    """,
+                        source_session_id,
+                    )
+                logger.info(
+                    f"✅ Consolidated source session meeting {source_session_id} into {meeting_id}"
+                )
+            except Exception as merge_error:
+                logger.warning(
+                    f"Could not consolidate meeting {source_session_id} into {meeting_id}: {merge_error}"
+                )
 
         # Save segments (batch)
         await db.save_meeting_transcripts_batch(meeting_id, data.transcripts)

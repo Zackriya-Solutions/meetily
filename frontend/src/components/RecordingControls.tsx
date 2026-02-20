@@ -30,6 +30,7 @@ interface RecordingControlsProps {
   onSessionIdReceived?: (sessionId: string) => void;
   initialSessionId?: string | null;
   onPauseChange?: (paused: boolean) => void;
+  startSignal?: number;
 }
 
 export const RecordingControls: React.FC<RecordingControlsProps> = ({
@@ -44,7 +45,8 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
   isParentProcessing,
   onSessionIdReceived,
   initialSessionId,
-  onPauseChange
+  onPauseChange,
+  startSignal
 }) => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
@@ -57,6 +59,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
 
   // Real-time streaming audio client
   const audioClientRef = useRef<AudioStreamClient | null>(null);
+  const lastStartSignalRef = useRef<number | undefined>(undefined);
 
   // Debug: Log when component mounts
   useEffect(() => {
@@ -73,6 +76,23 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
         audioClientRef.current.stop();
         audioClientRef.current = null;
       }
+    };
+  }, []);
+
+  // Extra safety: force-stop on tab close/reload to avoid orphan live streams.
+  useEffect(() => {
+    const forceStopOnUnload = () => {
+      if (audioClientRef.current) {
+        audioClientRef.current.stop();
+        audioClientRef.current = null;
+      }
+    };
+
+    window.addEventListener('beforeunload', forceStopOnUnload);
+    window.addEventListener('pagehide', forceStopOnUnload);
+    return () => {
+      window.removeEventListener('beforeunload', forceStopOnUnload);
+      window.removeEventListener('pagehide', forceStopOnUnload);
     };
   }, []);
 
@@ -102,6 +122,16 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
       // Create new streaming audio client (uses Groq Whisper)
       const client = new AudioStreamClient(wsUrl);
       audioClientRef.current = client;
+      const stableSessionId =
+        initialSessionId ||
+        (typeof crypto !== 'undefined' && 'randomUUID' in crypto
+          ? crypto.randomUUID()
+          : `session-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`);
+
+      // Persist session immediately so recovery/save paths have one canonical id.
+      if (!initialSessionId && onSessionIdReceived) {
+        onSessionIdReceived(stableSessionId);
+      }
 
       await client.start({
         onConnected: (sessionId) => {
@@ -149,7 +179,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
         onDisconnected: () => {
           console.log('🔌 Streaming disconnected');
         }
-      }, session?.user?.email || undefined, initialSessionId || undefined);
+      }, session?.user?.email || undefined, stableSessionId, stableSessionId);
 
       console.log('✅ Real-time streaming started');
 
@@ -188,7 +218,18 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
     } finally {
       setIsStarting(false);
     }
-  }, [onRecordingStart, onTranscriptionError, onTranscriptReceived, isStarting]);
+  }, [onRecordingStart, onTranscriptionError, onTranscriptReceived, isStarting, initialSessionId, onSessionIdReceived, session?.user?.email]);
+
+  // External start trigger (used by recovery resume action).
+  useEffect(() => {
+    if (startSignal === undefined) return;
+    if (lastStartSignalRef.current === startSignal) return;
+    lastStartSignalRef.current = startSignal;
+    if (startSignal <= 0) return;
+    if (isStarting || isStopping) return;
+    if (audioClientRef.current?.isActive()) return;
+    handleStartRecording();
+  }, [startSignal, isStarting, isStopping, handleStartRecording]);
 
   const handleStopRecording = useCallback(async () => {
     if (!isRecording || isStarting || isStopping) {

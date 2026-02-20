@@ -1045,6 +1045,218 @@ class DatabaseManager:
             )
             return val if val else ""
 
+    async def save_calendar_oauth_state(
+        self, state: str, user_email: str, code_verifier: str, expires_at: datetime
+    ):
+        async with self._get_connection() as conn:
+            await conn.execute(
+                """
+                INSERT INTO calendar_oauth_states (state, user_email, code_verifier, expires_at, created_at)
+                VALUES ($1, $2, $3, $4, $5)
+            """,
+                state,
+                user_email,
+                code_verifier,
+                expires_at,
+                datetime.utcnow(),
+            )
+
+    async def consume_calendar_oauth_state(self, state: str) -> Optional[Dict]:
+        async with self._get_connection() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow(
+                    """
+                    SELECT state, user_email, code_verifier, expires_at
+                    FROM calendar_oauth_states
+                    WHERE state = $1
+                """,
+                    state,
+                )
+                if not row:
+                    return None
+
+                await conn.execute(
+                    "DELETE FROM calendar_oauth_states WHERE state = $1", state
+                )
+
+                if row["expires_at"] and row["expires_at"] < datetime.utcnow():
+                    return None
+
+                return {
+                    "state": row["state"],
+                    "user_email": row["user_email"],
+                    "code_verifier": row["code_verifier"],
+                }
+
+    async def upsert_calendar_integration(
+        self,
+        user_email: str,
+        provider: str,
+        external_account_email: str,
+        scopes: List[str],
+        access_token: str,
+        refresh_token: str,
+        token_expires_at: Optional[datetime] = None,
+    ):
+        encrypted_access_token = encrypt_key(access_token)
+        encrypted_refresh_token = encrypt_key(refresh_token)
+        now = datetime.utcnow()
+
+        async with self._get_connection() as conn:
+            await conn.execute(
+                """
+                INSERT INTO calendar_integrations (
+                    user_email, provider, external_account_email, scopes,
+                    access_token, refresh_token, token_expires_at, is_active, connected_at, updated_at
+                )
+                VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, TRUE, $8, $8)
+                ON CONFLICT (user_email, provider) DO UPDATE SET
+                    external_account_email = EXCLUDED.external_account_email,
+                    scopes = EXCLUDED.scopes,
+                    access_token = EXCLUDED.access_token,
+                    refresh_token = EXCLUDED.refresh_token,
+                    token_expires_at = EXCLUDED.token_expires_at,
+                    is_active = TRUE,
+                    connected_at = EXCLUDED.connected_at,
+                    updated_at = EXCLUDED.updated_at
+            """,
+                user_email,
+                provider,
+                external_account_email,
+                json.dumps(scopes),
+                encrypted_access_token,
+                encrypted_refresh_token,
+                token_expires_at,
+                now,
+            )
+
+    async def disconnect_calendar_integration(self, user_email: str, provider: str):
+        async with self._get_connection() as conn:
+            await conn.execute(
+                """
+                UPDATE calendar_integrations
+                SET is_active = FALSE,
+                    access_token = '',
+                    refresh_token = '',
+                    token_expires_at = NULL,
+                    updated_at = $3
+                WHERE user_email = $1 AND provider = $2
+            """,
+                user_email,
+                provider,
+                datetime.utcnow(),
+            )
+
+    async def get_calendar_integration(self, user_email: str, provider: str) -> Dict:
+        async with self._get_connection() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT provider, external_account_email, scopes, is_active, connected_at
+                FROM calendar_integrations
+                WHERE user_email = $1 AND provider = $2
+            """,
+                user_email,
+                provider,
+            )
+
+            if not row:
+                return {
+                    "provider": provider,
+                    "connected": False,
+                    "account_email": None,
+                    "connected_at": None,
+                    "scopes": [],
+                    "can_writeback": False,
+                }
+
+            raw_scopes = row["scopes"] or []
+            scopes = json.loads(raw_scopes) if isinstance(raw_scopes, str) else raw_scopes
+            can_writeback = "https://www.googleapis.com/auth/calendar.events" in scopes
+
+            return {
+                "provider": row["provider"],
+                "connected": bool(row["is_active"]),
+                "account_email": row["external_account_email"],
+                "connected_at": row["connected_at"].isoformat()
+                if row["connected_at"]
+                else None,
+                "scopes": scopes,
+                "can_writeback": can_writeback,
+            }
+
+    async def get_calendar_automation_settings(self, user_email: str) -> Dict:
+        defaults = {
+            "reminders_enabled": True,
+            "attendee_reminders_enabled": False,
+            "reminder_offset_minutes": 2,
+            "recap_enabled": True,
+            "writeback_enabled": False,
+            "audio_summary_policy": "high_impact_only",
+        }
+
+        async with self._get_connection() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT reminders_enabled, attendee_reminders_enabled, reminder_offset_minutes,
+                       recap_enabled, writeback_enabled, audio_summary_policy
+                FROM calendar_automation_settings
+                WHERE user_email = $1
+            """,
+                user_email,
+            )
+            if not row:
+                return defaults
+            return {
+                "reminders_enabled": row["reminders_enabled"],
+                "attendee_reminders_enabled": row["attendee_reminders_enabled"],
+                "reminder_offset_minutes": row["reminder_offset_minutes"],
+                "recap_enabled": row["recap_enabled"],
+                "writeback_enabled": row["writeback_enabled"],
+                "audio_summary_policy": row["audio_summary_policy"],
+            }
+
+    async def upsert_calendar_automation_settings(
+        self, user_email: str, settings: Dict
+    ) -> Dict:
+        now = datetime.utcnow()
+        async with self._get_connection() as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO calendar_automation_settings (
+                    user_email, reminders_enabled, attendee_reminders_enabled,
+                    reminder_offset_minutes, recap_enabled, writeback_enabled,
+                    audio_summary_policy, updated_at
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                ON CONFLICT (user_email) DO UPDATE SET
+                    reminders_enabled = EXCLUDED.reminders_enabled,
+                    attendee_reminders_enabled = EXCLUDED.attendee_reminders_enabled,
+                    reminder_offset_minutes = EXCLUDED.reminder_offset_minutes,
+                    recap_enabled = EXCLUDED.recap_enabled,
+                    writeback_enabled = EXCLUDED.writeback_enabled,
+                    audio_summary_policy = EXCLUDED.audio_summary_policy,
+                    updated_at = EXCLUDED.updated_at
+                RETURNING reminders_enabled, attendee_reminders_enabled, reminder_offset_minutes,
+                          recap_enabled, writeback_enabled, audio_summary_policy
+            """,
+                user_email,
+                settings["reminders_enabled"],
+                settings["attendee_reminders_enabled"],
+                settings["reminder_offset_minutes"],
+                settings["recap_enabled"],
+                settings["writeback_enabled"],
+                settings["audio_summary_policy"],
+                now,
+            )
+            return {
+                "reminders_enabled": row["reminders_enabled"],
+                "attendee_reminders_enabled": row["attendee_reminders_enabled"],
+                "reminder_offset_minutes": row["reminder_offset_minutes"],
+                "recap_enabled": row["recap_enabled"],
+                "writeback_enabled": row["writeback_enabled"],
+                "audio_summary_policy": row["audio_summary_policy"],
+            }
+
     async def search_transcripts(self, query: str):
         """Search through meeting transcripts for the given query"""
         if not query or query.strip() == "":

@@ -17,6 +17,7 @@ import logging
 import os
 import time
 import tempfile
+import json
 from pathlib import Path
 from typing import Optional, Dict, List
 from datetime import datetime
@@ -131,7 +132,7 @@ class AudioRecorder:
             self.is_recording = True
             self.recording_start_time = time.time()
             self.chunk_start_time = self.recording_start_time
-            self.chunk_index = 0
+            self.chunk_index = await self._get_next_chunk_index()
             self.current_chunk_buffer = bytearray()
             self.chunks_metadata = []
             self.encoder_failed = False
@@ -143,6 +144,7 @@ class AudioRecorder:
             logger.info(f"🎙️ Audio recording started for meeting {self.meeting_id}")
             logger.info(f"   Storage path: {self.storage_path}")
             logger.info(f"   Chunk duration: {self.chunk_duration_seconds}s")
+            logger.info(f"   Next chunk index: {self.chunk_index}")
 
             return True
 
@@ -150,6 +152,87 @@ class AudioRecorder:
             logger.error(f"Failed to start audio recording: {e}")
             self.is_recording = False
             return False
+
+    async def _get_next_chunk_index(self) -> int:
+        """
+        Determine next chunk index by scanning existing chunks.
+        Prevents overwrite when a meeting is resumed.
+        """
+        try:
+            if self.storage_type == "gcp":
+                try:
+                    from ..storage import StorageService
+                except (ImportError, ValueError):
+                    from services.storage import StorageService
+
+                prefix = f"{self.meeting_id}/{self.chunk_prefix}/"
+                files: List[str] = []
+                last_error: Optional[Exception] = None
+
+                # GCS listing can fail transiently; retry before defaulting to 0.
+                for _ in range(3):
+                    try:
+                        files = await StorageService.list_files(prefix)
+                        last_error = None
+                        break
+                    except Exception as e:
+                        last_error = e
+                        await asyncio.sleep(0.2)
+
+                if last_error:
+                    raise last_error
+
+                indices = []
+                for path in files:
+                    name = path.split("/")[-1]
+                    if name.startswith("chunk_") and name.endswith(".pcm"):
+                        try:
+                            idx = int(name.replace("chunk_", "").replace(".pcm", ""))
+                            indices.append(idx)
+                        except ValueError:
+                            continue
+
+                if indices:
+                    return max(indices) + 1
+
+                # Fallback: derive last index from metadata when chunk listing is empty.
+                # This protects resumed meetings from overwriting chunk_00000.
+                metadata_path = f"{self.meeting_id}/{self.chunk_prefix}/metadata.json"
+                metadata_bytes = await StorageService.download_bytes(metadata_path)
+                if metadata_bytes:
+                    try:
+                        metadata = json.loads(metadata_bytes.decode("utf-8"))
+                        chunks = metadata.get("chunks", []) or []
+                        meta_indices = [
+                            int(c.get("chunk_index"))
+                            for c in chunks
+                            if isinstance(c, dict) and c.get("chunk_index") is not None
+                        ]
+                        if meta_indices:
+                            return max(meta_indices) + 1
+                    except Exception:
+                        pass
+
+                return 0
+
+            if not self.storage_path.exists():
+                return 0
+
+            indices = []
+            for chunk_path in self.storage_path.glob("chunk_*.pcm"):
+                name = chunk_path.name
+                try:
+                    idx = int(name.replace("chunk_", "").replace(".pcm", ""))
+                    indices.append(idx)
+                except ValueError:
+                    continue
+
+            return (max(indices) + 1) if indices else 0
+        except Exception as e:
+            logger.warning(
+                f"Failed to determine next chunk index for {self.meeting_id}: {e}"
+            )
+            return 0
 
     async def add_chunk(self, audio_data: bytes) -> Optional[str]:
         """
@@ -210,6 +293,14 @@ class AudioRecorder:
                     except (ImportError, ValueError):
                         from services.storage import StorageService
 
+                    # Guard against overwrite if resume index recovery was wrong.
+                    while await StorageService.check_file_exists(chunk_rel_path):
+                        self.chunk_index += 1
+                        chunk_filename = f"chunk_{self.chunk_index:05d}.pcm"
+                        chunk_rel_path = (
+                            f"{self.meeting_id}/{self.chunk_prefix}/{chunk_filename}"
+                        )
+
                     success = await StorageService.upload_bytes(
                         data, chunk_rel_path, content_type="application/octet-stream"
                     )
@@ -217,6 +308,14 @@ class AudioRecorder:
                         raise RuntimeError("Failed to upload chunk to GCS")
                 else:
                     chunk_path = self.storage_path / chunk_filename
+                    # Guard against overwrite in local mode as well.
+                    while chunk_path.exists():
+                        self.chunk_index += 1
+                        chunk_filename = f"chunk_{self.chunk_index:05d}.pcm"
+                        chunk_rel_path = (
+                            f"{self.meeting_id}/{self.chunk_prefix}/{chunk_filename}"
+                        )
+                        chunk_path = self.storage_path / chunk_filename
                     async with aiofiles.open(chunk_path, "wb") as f:
                         await f.write(data)
 
