@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Union
 
 
 class ChatRequest(BaseModel):
@@ -15,9 +15,13 @@ class ChatRequest(BaseModel):
 class CatchUpRequest(BaseModel):
     """Request model for catch-up summary"""
 
-    transcripts: List[str]  # Current transcripts as list of strings
+    transcripts: List[Union[str, Dict[str, object]]]  # Supports plain text or rich transcript entries
     model: str = "gemini"
     model_name: str = "gemini-2.5-flash"
+    window_minutes: Optional[int] = None
+    window_start_iso: Optional[str] = None
+    window_end_iso: Optional[str] = None
+    meeting_elapsed_seconds: Optional[int] = None
 
 
 class SearchContextRequest(BaseModel):

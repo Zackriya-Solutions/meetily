@@ -103,9 +103,43 @@ async def catch_up(
             f"Catch-up request received with {len(request.transcripts)} transcripts"
         )
 
-        full_text = "\n".join(request.transcripts)
+        normalized_lines = []
+        for item in request.transcripts:
+            if isinstance(item, str):
+                text = item.strip()
+                if text:
+                    normalized_lines.append(text)
+                continue
+
+            if isinstance(item, dict):
+                text = str(item.get("text", "")).strip()
+                if not text:
+                    continue
+                timestamp = item.get("timestamp")
+                if timestamp:
+                    normalized_lines.append(f"[{timestamp}] {text}")
+                else:
+                    normalized_lines.append(text)
+
+        full_text = "\n".join(normalized_lines)
+
+        window_label = (
+            f"last {request.window_minutes} minutes"
+            if request.window_minutes
+            else "entire meeting"
+        )
 
         if not full_text or len(full_text.strip()) < 10:
+            if request.window_minutes:
+                return JSONResponse(
+                    status_code=200,
+                    content={
+                        "summary": (
+                            f"• In the {window_label}, there was little or no spoken discussion.\n"
+                            f"• This window includes silence as requested."
+                        )
+                    },
+                )
             return JSONResponse(
                 status_code=400,
                 content={"error": "Not enough transcript content to summarize yet."},
@@ -113,7 +147,16 @@ async def catch_up(
 
         catch_up_prompt = f"""You are a meeting assistant. A participant just joined late or zoned out and needs a quick catch-up.
 
-Based on the meeting transcript below, provide a BRIEF bulleted summary of:
+Requested catch-up window: {window_label}
+Window start: {request.window_start_iso or "unknown"}
+Window end: {request.window_end_iso or "unknown"}
+Meeting elapsed time (seconds): {request.meeting_elapsed_seconds if request.meeting_elapsed_seconds is not None else "unknown"}
+
+Important:
+• The requested time window is based on real elapsed meeting time (wall-clock), including silence.
+• If the transcript content in this window is sparse due to silence, explicitly say that.
+
+Based on the meeting transcript content inside this window, provide a BRIEF bulleted summary of:
 • Key topics discussed
 • Important decisions made
 • Action items mentioned

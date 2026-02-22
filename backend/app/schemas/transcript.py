@@ -9,6 +9,7 @@ class SaveTranscriptRequest(BaseModel):
     folder_path: Optional[str] = None
     template_id: Optional[str] = "standard_meeting"
     session_id: Optional[str] = None  # NEW: For linking audio recording
+    meeting_id: Optional[str] = None  # Preferred canonical meeting id
 
 
 class SaveModelConfigRequest(BaseModel):

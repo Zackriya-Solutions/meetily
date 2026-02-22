@@ -16,14 +16,17 @@ export const RecordingStatusBar: React.FC<RecordingStatusBarProps> = ({ isPaused
 
   // Sync with backend duration when it changes (handles refresh/navigation)
   useEffect(() => {
-    if (activeDuration !== null) {
+    if (typeof activeDuration === 'number') {
       // Round to nearest second to avoid decimal issues
-      setDisplaySeconds(Math.floor(activeDuration || 0));
+      setDisplaySeconds(Math.floor(activeDuration));
     }
   }, [activeDuration]);
 
   // Live timer that increments every second when recording and not paused
   useEffect(() => {
+    // If parent provides a duration, trust it as source of truth
+    if (typeof activeDuration === 'number') return;
+
     // Stop timer if not recording or if paused
     if (!isRecording || isPaused) return;
 
@@ -32,7 +35,7 @@ export const RecordingStatusBar: React.FC<RecordingStatusBarProps> = ({ isPaused
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [isRecording, isPaused]);
+  }, [isRecording, isPaused, activeDuration]);
 
   const formatDuration = (seconds: number): string => {
     const mins = Math.floor(seconds / 60);
