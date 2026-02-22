@@ -14,6 +14,7 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger(__name__)
+calendar_scheduler = None
 
 # Import Routers
 try:
@@ -74,6 +75,31 @@ app.include_router(settings.router, tags=["Settings"])
 app.include_router(calendar.router, tags=["Calendar"])
 app.include_router(admin.router, tags=["Admin"])
 app.include_router(feedback.router, prefix="/feedback", tags=["Feedback"])
+
+
+@app.on_event("startup")
+async def startup_event():
+    global calendar_scheduler
+    try:
+        from app.services.calendar.reminder_scheduler import CalendarReminderScheduler
+    except ImportError:
+        from services.calendar.reminder_scheduler import CalendarReminderScheduler
+
+    if os.getenv("CALENDAR_REMINDER_AUTOMATION_ENABLED", "true").lower() != "true":
+        logger.info("[CalendarReminder] Automation disabled by env")
+        return
+
+    calendar_scheduler = CalendarReminderScheduler()
+    calendar_scheduler.start()
+    logger.info("[CalendarReminder] Automation worker initialized")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    global calendar_scheduler
+    if calendar_scheduler:
+        await calendar_scheduler.stop()
+        calendar_scheduler = None
 
 
 @app.get("/health")

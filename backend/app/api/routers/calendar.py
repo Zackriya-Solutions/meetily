@@ -11,9 +11,11 @@ try:
         CalendarAutomationSettingsRequest,
         CalendarConnectRequest,
         CalendarDisconnectRequest,
+        CalendarReminderEmailRequest,
     )
     from ...schemas.user import User
     from ...services.calendar.google_oauth import GoogleCalendarOAuthService
+    from ...services.calendar.reminder_email import CalendarReminderEmailService
 except (ImportError, ValueError):
     from api.deps import get_current_user
     from db import DatabaseManager
@@ -21,15 +23,18 @@ except (ImportError, ValueError):
         CalendarAutomationSettingsRequest,
         CalendarConnectRequest,
         CalendarDisconnectRequest,
+        CalendarReminderEmailRequest,
     )
     from schemas.user import User
     from services.calendar.google_oauth import GoogleCalendarOAuthService
+    from services.calendar.reminder_email import CalendarReminderEmailService
 
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/calendar")
 db = DatabaseManager()
 oauth_service = GoogleCalendarOAuthService(db=db)
+reminder_email_service = CalendarReminderEmailService()
 
 
 @router.get("/status")
@@ -50,11 +55,6 @@ async def update_calendar_settings(
     if request.reminder_offset_minutes < 1 or request.reminder_offset_minutes > 30:
         raise HTTPException(
             status_code=400, detail="reminder_offset_minutes must be between 1 and 30"
-        )
-    if request.audio_summary_policy not in {"high_impact_only", "always", "never"}:
-        raise HTTPException(
-            status_code=400,
-            detail="audio_summary_policy must be one of: high_impact_only, always, never",
         )
 
     settings = await db.upsert_calendar_automation_settings(
@@ -90,6 +90,45 @@ async def disconnect_calendar(
         raise HTTPException(status_code=400, detail="Only google provider is supported")
     await db.disconnect_calendar_integration(current_user.email, provider=request.provider)
     return {"status": "success"}
+
+
+@router.post("/reminders/send")
+async def send_calendar_reminder_email(
+    request: CalendarReminderEmailRequest,
+    current_user: User = Depends(get_current_user),
+):
+    settings = await db.get_calendar_automation_settings(current_user.email)
+    if not settings.get("reminders_enabled", True):
+        raise HTTPException(status_code=400, detail="Calendar reminders are disabled")
+
+    include_attendees = (
+        request.include_attendees
+        if request.include_attendees is not None
+        else settings.get("attendee_reminders_enabled", False)
+    )
+
+    if include_attendees and not request.attendees:
+        raise HTTPException(
+            status_code=400,
+            detail="attendees list is required when include_attendees is true",
+        )
+
+    try:
+        result = await reminder_email_service.send_pre_meeting_reminder(
+            host_email=current_user.email,
+            meeting_title=request.meeting_title,
+            meeting_start_iso=request.meeting_start_iso,
+            meeting_link=request.meeting_link,
+            start_meeting_url=request.start_meeting_url,
+            attendees=request.attendees or [],
+            include_attendees=include_attendees,
+        )
+        return {"status": "success", **result}
+    except ValueError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to send reminder email: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to send reminder email: {str(e)}")
 
 
 @router.get("/google/callback")

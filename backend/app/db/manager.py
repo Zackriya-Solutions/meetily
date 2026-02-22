@@ -1191,14 +1191,13 @@ class DatabaseManager:
             "reminder_offset_minutes": 2,
             "recap_enabled": True,
             "writeback_enabled": False,
-            "audio_summary_policy": "high_impact_only",
         }
 
         async with self._get_connection() as conn:
             row = await conn.fetchrow(
                 """
                 SELECT reminders_enabled, attendee_reminders_enabled, reminder_offset_minutes,
-                       recap_enabled, writeback_enabled, audio_summary_policy
+                       recap_enabled, writeback_enabled
                 FROM calendar_automation_settings
                 WHERE user_email = $1
             """,
@@ -1212,7 +1211,6 @@ class DatabaseManager:
                 "reminder_offset_minutes": row["reminder_offset_minutes"],
                 "recap_enabled": row["recap_enabled"],
                 "writeback_enabled": row["writeback_enabled"],
-                "audio_summary_policy": row["audio_summary_policy"],
             }
 
     async def upsert_calendar_automation_settings(
@@ -1224,20 +1222,18 @@ class DatabaseManager:
                 """
                 INSERT INTO calendar_automation_settings (
                     user_email, reminders_enabled, attendee_reminders_enabled,
-                    reminder_offset_minutes, recap_enabled, writeback_enabled,
-                    audio_summary_policy, updated_at
+                    reminder_offset_minutes, recap_enabled, writeback_enabled, updated_at
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
                 ON CONFLICT (user_email) DO UPDATE SET
                     reminders_enabled = EXCLUDED.reminders_enabled,
                     attendee_reminders_enabled = EXCLUDED.attendee_reminders_enabled,
                     reminder_offset_minutes = EXCLUDED.reminder_offset_minutes,
                     recap_enabled = EXCLUDED.recap_enabled,
                     writeback_enabled = EXCLUDED.writeback_enabled,
-                    audio_summary_policy = EXCLUDED.audio_summary_policy,
                     updated_at = EXCLUDED.updated_at
                 RETURNING reminders_enabled, attendee_reminders_enabled, reminder_offset_minutes,
-                          recap_enabled, writeback_enabled, audio_summary_policy
+                          recap_enabled, writeback_enabled
             """,
                 user_email,
                 settings["reminders_enabled"],
@@ -1245,7 +1241,6 @@ class DatabaseManager:
                 settings["reminder_offset_minutes"],
                 settings["recap_enabled"],
                 settings["writeback_enabled"],
-                settings["audio_summary_policy"],
                 now,
             )
             return {
@@ -1254,8 +1249,191 @@ class DatabaseManager:
                 "reminder_offset_minutes": row["reminder_offset_minutes"],
                 "recap_enabled": row["recap_enabled"],
                 "writeback_enabled": row["writeback_enabled"],
-                "audio_summary_policy": row["audio_summary_policy"],
             }
+
+    async def get_active_calendar_integrations(self, provider: str = "google") -> List[Dict]:
+        async with self._get_connection() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT user_email, provider, external_account_email, scopes,
+                       access_token, refresh_token, token_expires_at, is_active
+                FROM calendar_integrations
+                WHERE provider = $1 AND is_active = TRUE
+            """,
+                provider,
+            )
+
+            integrations = []
+            for row in rows:
+                raw_scopes = row["scopes"] or []
+                scopes = (
+                    json.loads(raw_scopes)
+                    if isinstance(raw_scopes, str)
+                    else raw_scopes
+                )
+                integrations.append(
+                    {
+                        "user_email": row["user_email"],
+                        "provider": row["provider"],
+                        "external_account_email": row["external_account_email"],
+                        "scopes": scopes,
+                        "access_token": decrypt_key(row["access_token"]),
+                        "refresh_token": decrypt_key(row["refresh_token"]),
+                        "token_expires_at": row["token_expires_at"],
+                    }
+                )
+            return integrations
+
+    async def update_calendar_access_token(
+        self,
+        user_email: str,
+        provider: str,
+        access_token: str,
+        token_expires_at: Optional[datetime],
+    ):
+        encrypted_access_token = encrypt_key(access_token)
+        async with self._get_connection() as conn:
+            await conn.execute(
+                """
+                UPDATE calendar_integrations
+                SET access_token = $3,
+                    token_expires_at = $4,
+                    updated_at = $5
+                WHERE user_email = $1 AND provider = $2
+            """,
+                user_email,
+                provider,
+                encrypted_access_token,
+                token_expires_at,
+                datetime.utcnow(),
+            )
+
+    async def upsert_calendar_events(
+        self,
+        user_email: str,
+        provider: str,
+        events: List[Dict],
+    ):
+        if not events:
+            return
+
+        now = datetime.utcnow()
+        async with self._get_connection() as conn:
+            for event in events:
+                await conn.execute(
+                    """
+                    DELETE FROM calendar_events
+                    WHERE user_email = $1
+                      AND provider = $2
+                      AND event_id = $3
+                      AND start_time <> $4
+                """,
+                    user_email,
+                    provider,
+                    event["event_id"],
+                    event["start_time"],
+                )
+                await conn.execute(
+                    """
+                    INSERT INTO calendar_events (
+                        user_email, provider, event_id, meeting_title, meeting_link,
+                        organizer_email, attendee_emails, start_time, end_time, updated_at
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10)
+                    ON CONFLICT (user_email, provider, event_id, start_time) DO UPDATE SET
+                        meeting_title = EXCLUDED.meeting_title,
+                        meeting_link = EXCLUDED.meeting_link,
+                        organizer_email = EXCLUDED.organizer_email,
+                        attendee_emails = EXCLUDED.attendee_emails,
+                        end_time = EXCLUDED.end_time,
+                        updated_at = EXCLUDED.updated_at
+                """,
+                    user_email,
+                    provider,
+                    event["event_id"],
+                    event["meeting_title"],
+                    event.get("meeting_link"),
+                    event.get("organizer_email"),
+                    json.dumps(event.get("attendee_emails", [])),
+                    event["start_time"],
+                    event.get("end_time"),
+                    now,
+                )
+
+    async def get_due_calendar_reminders(self) -> List[Dict]:
+        async with self._get_connection() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT e.user_email, e.provider, e.event_id, e.meeting_title, e.meeting_link,
+                       e.attendee_emails, e.start_time,
+                       COALESCE(s.attendee_reminders_enabled, FALSE) AS attendee_reminders_enabled
+                FROM calendar_events e
+                LEFT JOIN calendar_automation_settings s
+                  ON s.user_email = e.user_email
+                LEFT JOIN calendar_reminder_deliveries d
+                  ON d.user_email = e.user_email
+                 AND d.provider = e.provider
+                 AND d.event_id = e.event_id
+                 AND d.event_start_time = e.start_time
+                WHERE COALESCE(s.reminders_enabled, TRUE) = TRUE
+                  AND d.event_id IS NULL
+                  AND e.start_time >= (NOW() - INTERVAL '4 hours')
+                  AND e.start_time <= (NOW() + INTERVAL '24 hours')
+                  AND (
+                      e.start_time - make_interval(mins => COALESCE(s.reminder_offset_minutes, 2))
+                  ) <= NOW()
+                ORDER BY e.start_time ASC
+            """
+            )
+
+            reminders = []
+            for row in rows:
+                attendees_raw = row["attendee_emails"] or []
+                attendees = (
+                    json.loads(attendees_raw)
+                    if isinstance(attendees_raw, str)
+                    else attendees_raw
+                )
+                reminders.append(
+                    {
+                        "user_email": row["user_email"],
+                        "provider": row["provider"],
+                        "event_id": row["event_id"],
+                        "meeting_title": row["meeting_title"],
+                        "meeting_link": row["meeting_link"],
+                        "attendees": attendees,
+                        "start_time": row["start_time"],
+                        "attendee_reminders_enabled": row[
+                            "attendee_reminders_enabled"
+                        ],
+                    }
+                )
+            return reminders
+
+    async def mark_calendar_reminder_sent(
+        self,
+        user_email: str,
+        provider: str,
+        event_id: str,
+        event_start_time: datetime,
+        recipients: List[str],
+    ):
+        async with self._get_connection() as conn:
+            await conn.execute(
+                """
+                INSERT INTO calendar_reminder_deliveries (
+                    user_email, provider, event_id, event_start_time, sent_at, recipients
+                )
+                VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+                ON CONFLICT (user_email, provider, event_id, event_start_time) DO NOTHING
+            """,
+                user_email,
+                provider,
+                event_id,
+                event_start_time,
+                datetime.utcnow(),
+                json.dumps(recipients),
+            )
 
     async def search_transcripts(self, query: str):
         """Search through meeting transcripts for the given query"""

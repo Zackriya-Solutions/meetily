@@ -120,6 +120,13 @@ export default function Home() {
 
   useEffect(() => {
     const checkRecoveries = async () => {
+      if (typeof window !== 'undefined') {
+        const launchParams = new URLSearchParams(window.location.search);
+        if (launchParams.get('autoStart') === 'true') {
+          return;
+        }
+      }
+
       const pending = await recoveryService.getAllPendingTranscripts();
       if (pending.length > 0) {
         const latest = pending[0];
@@ -648,10 +655,23 @@ export default function Home() {
     const checkAutoStartRecording = async () => {
       if (typeof window !== 'undefined') {
         const shouldAutoStart = sessionStorage.getItem('autoStartRecording');
-        if (shouldAutoStart === 'true' && !isRecording && !isMeetingActive) {
-          console.log('Auto-starting recording from navigation...');
+        const urlParams = new URLSearchParams(window.location.search);
+        const shouldAutoStartFromUrl = urlParams.get('autoStart') === 'true';
+
+        if ((shouldAutoStart === 'true' || shouldAutoStartFromUrl) && !isRecording && !isMeetingActive) {
+          console.log('Auto-starting recording from navigation/new-tab launch...');
           sessionStorage.removeItem('autoStartRecording'); // Clear the flag
-          handleRecordingStart();
+          if (shouldAutoStartFromUrl) {
+            urlParams.delete('autoStart');
+            urlParams.delete('source');
+            const nextQuery = urlParams.toString();
+            window.history.replaceState(
+              {},
+              '',
+              `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ''}`
+            );
+          }
+          setResumeStartSignal((v) => v + 1);
         }
       }
     };

@@ -32,7 +32,5 @@ CREATE TABLE IF NOT EXISTS calendar_automation_settings (
     reminder_offset_minutes INTEGER NOT NULL DEFAULT 2,
     recap_enabled BOOLEAN NOT NULL DEFAULT TRUE,
     writeback_enabled BOOLEAN NOT NULL DEFAULT FALSE,
-    audio_summary_policy TEXT NOT NULL DEFAULT 'high_impact_only',
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-

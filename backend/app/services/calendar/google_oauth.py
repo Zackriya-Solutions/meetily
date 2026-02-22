@@ -135,3 +135,26 @@ class GoogleCalendarOAuthService:
             "redirect_url": self._get_frontend_settings_url(),
         }
 
+    async def refresh_access_token(self, refresh_token: str) -> Dict[str, str]:
+        client_id = self._required_env("CALENDAR_GOOGLE_CLIENT_ID")
+        client_secret = self._required_env("CALENDAR_GOOGLE_CLIENT_SECRET")
+
+        form_data = {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "refresh_token": refresh_token,
+            "grant_type": "refresh_token",
+        }
+
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            response = await client.post(self.TOKEN_URL, data=form_data)
+            response.raise_for_status()
+            data = response.json()
+
+        expires_in = int(data.get("expires_in", 3600))
+        token_expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
+
+        return {
+            "access_token": data.get("access_token", ""),
+            "token_expires_at": token_expires_at,
+        }

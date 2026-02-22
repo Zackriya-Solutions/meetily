@@ -21,7 +21,6 @@ type CalendarAutomationSettings = {
   reminder_offset_minutes: number;
   recap_enabled: boolean;
   writeback_enabled: boolean;
-  audio_summary_policy: "high_impact_only" | "always" | "never";
 };
 
 const DEFAULT_SETTINGS: CalendarAutomationSettings = {
@@ -30,12 +29,13 @@ const DEFAULT_SETTINGS: CalendarAutomationSettings = {
   reminder_offset_minutes: 2,
   recap_enabled: true,
   writeback_enabled: false,
-  audio_summary_policy: "high_impact_only",
 };
 
 export function CalendarIntegrationSettings() {
   const [loading, setLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSendingTest, setIsSendingTest] = useState(false);
+  const [testMeetingTitle, setTestMeetingTitle] = useState("Calendar Reminder Test");
   const [status, setStatus] = useState<CalendarStatus | null>(null);
   const [settings, setSettings] = useState<CalendarAutomationSettings>(DEFAULT_SETTINGS);
 
@@ -134,6 +134,30 @@ export function CalendarIntegrationSettings() {
       toast.error("Failed to save settings");
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handleSendTestReminder = async () => {
+    try {
+      setIsSendingTest(true);
+      const response = await authFetch("/api/calendar/reminders/send", {
+        method: "POST",
+        body: JSON.stringify({
+          meeting_title: testMeetingTitle || "Calendar Reminder Test",
+          meeting_start_iso: new Date(Date.now() + 2 * 60 * 1000).toISOString(),
+          include_attendees: false,
+        }),
+      });
+      if (!response.ok) {
+        const detail = await response.text();
+        throw new Error(detail || "Failed to send reminder");
+      }
+      toast.success("Reminder email sent to your host email");
+    } catch (error) {
+      console.error("Failed to send test reminder:", error);
+      toast.error("Failed to send test reminder email");
+    } finally {
+      setIsSendingTest(false);
     }
   };
 
@@ -247,27 +271,6 @@ export function CalendarIntegrationSettings() {
           />
         </div>
 
-        <div>
-          <label htmlFor="audio-summary-policy" className="block text-sm font-medium text-gray-900 mb-2">
-            Audio Summary Policy
-          </label>
-          <select
-            id="audio-summary-policy"
-            value={settings.audio_summary_policy}
-            onChange={(e) =>
-              setSettings((prev) => ({
-                ...prev,
-                audio_summary_policy: e.target.value as CalendarAutomationSettings["audio_summary_policy"],
-              }))
-            }
-            className="w-full max-w-sm px-3 py-2 border border-gray-300 rounded-md text-sm bg-white"
-          >
-            <option value="high_impact_only">High-impact meetings only</option>
-            <option value="always">Always use audio enhancement</option>
-            <option value="never">Never use audio enhancement</option>
-          </select>
-        </div>
-
         <div className="pt-2">
           <button
             onClick={handleSave}
@@ -278,7 +281,36 @@ export function CalendarIntegrationSettings() {
           </button>
         </div>
       </div>
+
+      <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm space-y-4">
+        <div>
+          <p className="font-medium text-gray-900">Reminder Email Test</p>
+          <p className="text-sm text-gray-600">
+            Sends a reminder email with a Start Meeting button to your host email.
+          </p>
+        </div>
+        <div>
+          <label htmlFor="calendar-test-title" className="block text-sm font-medium text-gray-900 mb-2">
+            Meeting Title
+          </label>
+          <input
+            id="calendar-test-title"
+            type="text"
+            value={testMeetingTitle}
+            onChange={(e) => setTestMeetingTitle(e.target.value)}
+            className="w-full max-w-md px-3 py-2 border border-gray-300 rounded-md text-sm"
+          />
+        </div>
+        <div>
+          <button
+            onClick={handleSendTestReminder}
+            disabled={isSendingTest}
+            className="px-4 py-2 rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+          >
+            {isSendingTest ? "Sending..." : "Send Test Reminder Email"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
-

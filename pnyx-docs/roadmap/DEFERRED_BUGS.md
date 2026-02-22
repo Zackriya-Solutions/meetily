@@ -47,3 +47,39 @@ This file tracks high-impact bugs that are confirmed but intentionally deferred.
 3. Add strict single-meeting session lock and finalize idempotency guard.
 4. Add backend diagnostics endpoint to inspect chunk inventory vs merged output.
 
+## BUG-NOTES-CTX-001: Notes generation not using calendar context deeply enough
+
+- Status: Deferred
+- Priority: High
+- Reported: 2026-02-20
+- Area: Notes Generation / Calendar Integration / Prompt Quality
+
+### Symptoms
+
+- Generated notes often ignore useful calendar context (agenda, attendee roles, meeting purpose, recurrence history).
+- Notes quality is weaker for planning/decision meetings where pre-meeting context exists in calendar metadata.
+- Action items/decisions can be less grounded because expected outcomes are not inferred from event context.
+
+### Impact
+
+- Lower notes quality and weaker structure for context-heavy meetings.
+- Missed opportunity to improve summary relevance despite available calendar integration.
+- Reduced confidence in AI-generated notes for stakeholders.
+
+### Current Understanding
+
+- Calendar sync/reminder pipeline is active, but notes generation prompt/context assembly does not yet consistently include enriched event metadata.
+- No dedicated ranking/selection logic exists to decide which calendar fields should influence note generation most.
+
+### Temporary Workaround
+
+- Add manual context in meeting title/custom prompt before generating notes.
+- Use stronger templates for meetings with known agenda/decision focus.
+
+### Deferred Fix Plan (When Resumed)
+
+1. Build a calendar context pack for notes generation (title, agenda/description, organizer, attendees, meeting link, recurrence info, prior meeting references).
+2. Add context-aware prompt builder that injects meeting-type expectations (planning, interview, status, decision review).
+3. Add role-aware extraction for actions/decisions (map likely owners from organizer/attendees).
+4. Add evaluation set comparing notes quality with/without calendar context.
+5. Add feature flags and fallback behavior when calendar data is missing/low quality.
