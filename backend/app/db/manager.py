@@ -1435,6 +1435,258 @@ class DatabaseManager:
                 json.dumps(recipients),
             )
 
+    async def upsert_recording_session(
+        self,
+        session_id: str,
+        user_email: str,
+        meeting_id: str,
+        status: str = "recording",
+        metadata: Optional[Dict] = None,
+    ) -> Dict:
+        now = datetime.utcnow()
+        async with self._get_connection() as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO recording_sessions (
+                    session_id, user_email, meeting_id, status, started_at,
+                    last_heartbeat_at, metadata, created_at, updated_at
+                )
+                VALUES ($1, $2, $3, $4, $5, $5, $6::jsonb, $5, $5)
+                ON CONFLICT (session_id) DO UPDATE SET
+                    user_email = EXCLUDED.user_email,
+                    meeting_id = EXCLUDED.meeting_id,
+                    status = EXCLUDED.status,
+                    last_heartbeat_at = EXCLUDED.last_heartbeat_at,
+                    metadata = recording_sessions.metadata || EXCLUDED.metadata,
+                    updated_at = EXCLUDED.updated_at
+                RETURNING session_id, user_email, meeting_id, status, started_at, updated_at
+            """,
+                session_id,
+                user_email,
+                meeting_id,
+                status,
+                now,
+                json.dumps(metadata or {}),
+            )
+            return dict(row) if row else {}
+
+    async def touch_recording_session_heartbeat(self, session_id: str):
+        async with self._get_connection() as conn:
+            await conn.execute(
+                """
+                UPDATE recording_sessions
+                SET last_heartbeat_at = $2, updated_at = $2
+                WHERE session_id = $1
+            """,
+                session_id,
+                datetime.utcnow(),
+            )
+
+    async def transition_recording_session_status(
+        self,
+        session_id: str,
+        from_statuses: List[str],
+        to_status: str,
+        error_code: Optional[str] = None,
+        error_message: Optional[str] = None,
+    ) -> bool:
+        now = datetime.utcnow()
+        async with self._get_connection() as conn:
+            result = await conn.execute(
+                """
+                UPDATE recording_sessions
+                SET status = $3,
+                    error_code = COALESCE($4, error_code),
+                    error_message = COALESCE($5, error_message),
+                    stop_requested_at = CASE
+                        WHEN $3 = 'stopping_requested' THEN COALESCE(stop_requested_at, $6)
+                        ELSE stop_requested_at
+                    END,
+                    stopped_at = CASE
+                        WHEN $3 IN ('uploading_chunks', 'finalizing', 'postprocessing', 'completed', 'failed')
+                        THEN COALESCE(stopped_at, $6)
+                        ELSE stopped_at
+                    END,
+                    finalized_at = CASE
+                        WHEN $3 = 'completed' THEN COALESCE(finalized_at, $6)
+                        ELSE finalized_at
+                    END,
+                    updated_at = $6
+                WHERE session_id = $1
+                  AND status = ANY($2::text[])
+            """,
+                session_id,
+                from_statuses,
+                to_status,
+                error_code,
+                error_message,
+                now,
+            )
+            return result != "UPDATE 0"
+
+    async def get_recording_session(self, session_id: str) -> Optional[Dict]:
+        async with self._get_connection() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT session_id, user_email, meeting_id, status, started_at, stop_requested_at,
+                       stopped_at, finalized_at, expected_chunk_count, finalized_chunk_count,
+                       dropped_chunk_count, idempotency_finalize_key, last_heartbeat_at,
+                       error_code, error_message, metadata, created_at, updated_at
+                FROM recording_sessions
+                WHERE session_id = $1
+            """,
+                session_id,
+            )
+            return dict(row) if row else None
+
+    async def upsert_recording_chunk(
+        self,
+        session_id: str,
+        chunk_index: int,
+        byte_size: int,
+        checksum: Optional[str] = None,
+        storage_path: Optional[str] = None,
+        upload_status: str = "pending",
+    ):
+        now = datetime.utcnow()
+        async with self._get_connection() as conn:
+            await conn.execute(
+                """
+                INSERT INTO recording_chunks (
+                    session_id, chunk_index, byte_size, checksum, storage_path,
+                    upload_status, created_at, updated_at
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+                ON CONFLICT (session_id, chunk_index) DO UPDATE SET
+                    byte_size = EXCLUDED.byte_size,
+                    checksum = COALESCE(EXCLUDED.checksum, recording_chunks.checksum),
+                    storage_path = COALESCE(EXCLUDED.storage_path, recording_chunks.storage_path),
+                    upload_status = EXCLUDED.upload_status,
+                    uploaded_at = CASE
+                        WHEN EXCLUDED.upload_status = 'uploaded' THEN COALESCE(recording_chunks.uploaded_at, $7)
+                        ELSE recording_chunks.uploaded_at
+                    END,
+                    updated_at = $7
+            """,
+                session_id,
+                chunk_index,
+                byte_size,
+                checksum,
+                storage_path,
+                upload_status,
+                now,
+            )
+
+    async def get_recording_chunk(self, session_id: str, chunk_index: int) -> Optional[Dict]:
+        async with self._get_connection() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT session_id, chunk_index, byte_size, checksum, storage_path,
+                       upload_status, created_at, uploaded_at, updated_at
+                FROM recording_chunks
+                WHERE session_id = $1 AND chunk_index = $2
+            """,
+                session_id,
+                chunk_index,
+            )
+            return dict(row) if row else None
+
+    async def get_recording_chunk_stats(self, session_id: str) -> Dict:
+        async with self._get_connection() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT
+                    COUNT(*)::int AS total,
+                    COUNT(*) FILTER (WHERE upload_status = 'uploaded')::int AS uploaded,
+                    COUNT(*) FILTER (WHERE upload_status = 'pending')::int AS pending,
+                    COUNT(*) FILTER (WHERE upload_status = 'failed')::int AS failed
+                FROM recording_chunks
+                WHERE session_id = $1
+            """,
+                session_id,
+            )
+            return dict(row) if row else {
+                "total": 0,
+                "uploaded": 0,
+                "pending": 0,
+                "failed": 0,
+            }
+
+    async def update_recording_session_counters(
+        self,
+        session_id: str,
+        expected_chunk_count: Optional[int] = None,
+        finalized_chunk_count: Optional[int] = None,
+        dropped_chunk_delta: int = 0,
+    ):
+        async with self._get_connection() as conn:
+            await conn.execute(
+                """
+                UPDATE recording_sessions
+                SET expected_chunk_count = COALESCE($2, expected_chunk_count),
+                    finalized_chunk_count = COALESCE($3, finalized_chunk_count),
+                    dropped_chunk_count = dropped_chunk_count + $4,
+                    updated_at = $5
+                WHERE session_id = $1
+            """,
+                session_id,
+                expected_chunk_count,
+                finalized_chunk_count,
+                dropped_chunk_delta,
+                datetime.utcnow(),
+            )
+
+    async def get_stale_recording_sessions(
+        self, statuses: List[str], stale_after_minutes: int = 10, limit: int = 100
+    ) -> List[Dict]:
+        async with self._get_connection() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT session_id, user_email, meeting_id, status, started_at, stop_requested_at,
+                       stopped_at, finalized_at, expected_chunk_count, finalized_chunk_count,
+                       dropped_chunk_count, idempotency_finalize_key, last_heartbeat_at,
+                       error_code, error_message, metadata, created_at, updated_at
+                FROM recording_sessions
+                WHERE status = ANY($1::text[])
+                  AND updated_at <= (NOW() - make_interval(mins => $2))
+                ORDER BY updated_at ASC
+                LIMIT $3
+            """,
+                statuses,
+                stale_after_minutes,
+                limit,
+            )
+            return [dict(r) for r in rows]
+
+    async def set_recording_finalize_key(self, session_id: str, finalize_key: str):
+        async with self._get_connection() as conn:
+            await conn.execute(
+                """
+                UPDATE recording_sessions
+                SET idempotency_finalize_key = $2, updated_at = $3
+                WHERE session_id = $1
+            """,
+                session_id,
+                finalize_key,
+                datetime.utcnow(),
+            )
+
+    async def merge_recording_session_metadata(
+        self, session_id: str, metadata_patch: Dict
+    ):
+        async with self._get_connection() as conn:
+            await conn.execute(
+                """
+                UPDATE recording_sessions
+                SET metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb,
+                    updated_at = $3
+                WHERE session_id = $1
+            """,
+                session_id,
+                json.dumps(metadata_patch or {}),
+                datetime.utcnow(),
+            )
+
     async def search_transcripts(self, query: str):
         """Search through meeting transcripts for the given query"""
         if not query or query.strip() == "":

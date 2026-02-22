@@ -83,3 +83,40 @@ This file tracks high-impact bugs that are confirmed but intentionally deferred.
 3. Add role-aware extraction for actions/decisions (map likely owners from organizer/attendees).
 4. Add evaluation set comparing notes quality with/without calendar context.
 5. Add feature flags and fallback behavior when calendar data is missing/low quality.
+
+## BUG-TEST-AUTO-001: Audio + AI regression coverage is too manual
+
+- Status: Deferred
+- Priority: High
+- Reported: 2026-02-22
+- Area: QA / Audio Pipeline / AI Endpoints / Reliability
+
+### Symptoms
+
+- End-to-end validation depends on manual speaking and repetitive UI testing.
+- Critical flows (recording, websocket streaming, stop/finalize, ask-ai, catch-up, notes) are not covered by deterministic automated suites.
+- Regressions are discovered late and inconsistently.
+
+### Impact
+
+- Slow release velocity and high QA effort for each audio/AI change.
+- Increased chance of shipping regressions in recording durability/finalization.
+- Poor confidence in pipeline changes across phases.
+
+### Current Understanding
+
+- Architecture now supports better automation (session state machine, celery tasks, pipeline status endpoints), but a full automated harness is still not implemented.
+- A plan exists in `pnyx-docs/roadmap/AUDIO_TEST_AUTOMATION_PLAN.md`.
+
+### Temporary Workaround
+
+- Use one short smoke scenario per branch (record -> stop -> finalize -> ask-ai -> catch-up).
+- Inspect worker/backend logs and `/sessions/{session_id}/pipeline-status` for each test run.
+
+### Deferred Fix Plan (When Resumed)
+
+1. Build backend integration harness using prerecorded audio fixtures.
+2. Add websocket chunk simulation tests for stop/finalize/reconnect paths.
+3. Add mocked-provider tests for Groq/Gemini/Deepgram behavior in CI.
+4. Add Playwright smoke tests for start/stop + ask-ai + catch-up UI flows.
+5. Add nightly real-provider smoke suite and regression snapshots.

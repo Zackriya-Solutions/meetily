@@ -34,10 +34,13 @@ export class AudioStreamClient {
   private isReconnecting: boolean = false;
   private intentionalClose: boolean = false;
   private sessionId: string | null = null;
-  private userEmail: string | null = null;
   private meetingId: string | null = null;
+  private authToken: string | null = null;
   private recordingStartTime: number = 0; // AudioContext.currentTime at recording start
   private heartbeatInterval: NodeJS.Timeout | null = null;
+  private maxBufferedChunks: number = 500;
+  private pendingStopResolve: (() => void) | null = null;
+  private pendingStopReject: ((reason?: unknown) => void) | null = null;
 
   constructor(
     private wsUrlOverride: string = wsUrl
@@ -48,9 +51,9 @@ export class AudioStreamClient {
    */
   async start(
     callbacks: StreamingCallbacks,
-    userEmail?: string,
     sessionId?: string,
-    meetingId?: string
+    meetingId?: string,
+    authToken?: string
   ): Promise<void> {
     if (this.isStreaming) return;
 
@@ -59,8 +62,8 @@ export class AudioStreamClient {
     this.audioQueue = []; // Clear queue on fresh start
     this.intentionalClose = false;
     this.sessionId = sessionId || null; // Use provided sessionId if available
-    this.userEmail = userEmail || null;
     this.meetingId = meetingId || null;
+    this.authToken = authToken || null;
     this.recordingStartTime = 0; // Will be set after AudioContext creation
 
     try {
@@ -123,6 +126,9 @@ export class AudioStreamClient {
           this.websocket.send(combined);
         } else {
           // If disconnected, buffer the audio
+          if (this.audioQueue.length >= this.maxBufferedChunks) {
+            this.audioQueue.shift();
+          }
           this.audioQueue.push(combined);
 
           if (this.audioQueue.length % 50 === 0) {
@@ -182,11 +188,11 @@ export class AudioStreamClient {
         ? `${this.wsUrlOverride}?session_id=${this.sessionId}`
         : this.wsUrlOverride;
         
-      if (this.userEmail) {
-        url += (url.includes('?') ? '&' : '?') + `user_email=${encodeURIComponent(this.userEmail)}`;
-      }
       if (this.meetingId) {
         url += (url.includes('?') ? '&' : '?') + `meeting_id=${encodeURIComponent(this.meetingId)}`;
+      }
+      if (this.authToken) {
+        url += (url.includes('?') ? '&' : '?') + `auth_token=${encodeURIComponent(this.authToken)}`;
       }
         
       this.websocket = new WebSocket(url);
@@ -231,6 +237,11 @@ export class AudioStreamClient {
               } : undefined
             );
           }
+          else if (data.type === 'stop_ack') {
+            this.pendingStopResolve?.();
+            this.pendingStopResolve = null;
+            this.pendingStopReject = null;
+          }
           else if (data.type === 'error') this.callbacks.onError?.(new Error(data.message), data.code);
         } catch (e) {
           console.error('Parse error', e);
@@ -242,7 +253,7 @@ export class AudioStreamClient {
         // If we were streaming and didn't close intentionally, try to reconnect.
         if (this.isStreaming && !this.intentionalClose && !event.wasClean) {
              this.connectWithRetry().catch(() => {
-                 this.stop(); // Give up if retry fails
+                 void this.stop(); // Give up if retry fails
              });
         }
         this.callbacks.onDisconnected?.();
@@ -258,12 +269,12 @@ export class AudioStreamClient {
   /**
    * Stop streaming
    */
-  stop(): void {
+  async stop(): Promise<void> {
     console.log('[AudioStream] Stopping...');
     this.intentionalClose = true;
     this.isStreaming = false;
     this.stopHeartbeat();
-    this.cleanup();
+    await this.cleanup();
     console.log('[AudioStream] ✅ Stopped');
   }
 
@@ -286,7 +297,7 @@ export class AudioStreamClient {
   /**
    * Cleanup all resources
    */
-  private cleanup(): void {
+  private async cleanup(): Promise<void> {
     // Stop audio worklet
     if (this.audioWorklet) {
       this.audioWorklet.disconnect();
@@ -309,7 +320,15 @@ export class AudioStreamClient {
     if (this.websocket) {
       try {
         if (this.websocket.readyState === WebSocket.OPEN) {
+          const ackPromise = new Promise<void>((resolve, reject) => {
+            this.pendingStopResolve = resolve;
+            this.pendingStopReject = reject;
+          });
           this.websocket.send(JSON.stringify({ type: 'stop' }));
+          await Promise.race([
+            ackPromise,
+            new Promise<void>((resolve) => setTimeout(resolve, 1500))
+          ]);
           this.websocket.close(1000, 'client-stop');
         } else {
           this.websocket.close();
@@ -319,6 +338,8 @@ export class AudioStreamClient {
       }
       this.websocket = null;
     }
+    this.pendingStopResolve = null;
+    this.pendingStopReject = null;
   }
 
   /**

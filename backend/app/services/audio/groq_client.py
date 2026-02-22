@@ -129,7 +129,11 @@ class GroqTranscriptionClient:
                 text = translation.text.strip()
                 detected_lang = getattr(translation, 'language', 'auto')
 
-                logger.info(f"✅ Translated to English: '{text[:70]}...'")
+                logger.info(
+                    "✅ Translated to English (chars=%s, source_language=%s)",
+                    len(text),
+                    detected_lang,
+                )
 
                 return {
                     "text": text,
@@ -154,7 +158,11 @@ class GroqTranscriptionClient:
                 text = transcription.text.strip()
                 detected_language = getattr(transcription, 'language', 'unknown')
 
-                logger.info(f"🔍 Transcribed: {detected_language} → '{text[:50]}...'")
+                logger.info(
+                    "🔍 Transcribed audio (detected_language=%s, chars=%s)",
+                    detected_language,
+                    len(text),
+                )
 
                 return {
                     "text": text,

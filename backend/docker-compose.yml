@@ -11,6 +11,18 @@ version: '3.8'
 # - Monitor logs for audio drop warnings during operation
 
 services:
+  redis:
+    image: redis:7-alpine
+    container_name: meeting-copilot-redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    command: [ "redis-server", "--appendonly", "yes" ]
+    volumes:
+      - meeting_redis_data:/data
+    profiles:
+      - celery
+
   # Meeting Summarizer Python App (Windows/Linux)
   meeting-copilot-backend:
     build:
@@ -42,6 +54,9 @@ services:
       - AUDIO_MERGE_SERVICE_URL=${AUDIO_MERGE_SERVICE_URL}
       - DELETE_PCM_AFTER_MERGE=${DELETE_PCM_AFTER_MERGE:-true}
       - AUDIO_CHUNK_PREFIX=${AUDIO_CHUNK_PREFIX:-pcm_chunks}
+      - AUDIO_CELERY_ENABLED=${AUDIO_CELERY_ENABLED:-false}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
 
     # Add extra host for Docker Desktop compatibility
     extra_hosts:
@@ -81,6 +96,36 @@ services:
     # Exclude from macOS profile
     profiles:
       - default
+
+  celery-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.app
+    image: meeting-copilot-backend:latest
+    container_name: meeting-copilot-celery-worker
+    restart: unless-stopped
+    command: [ "celery", "-A", "celery_app:celery_app", "worker", "-l", "INFO", "-Q", "celery" ]
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app
+      - DATABASE_URL=${DATABASE_URL}
+      - STORAGE_TYPE=${STORAGE_TYPE}
+      - GCP_BUCKET_NAME=${GCP_BUCKET_NAME}
+      - GOOGLE_APPLICATION_CREDENTIALS=${GOOGLE_APPLICATION_CREDENTIALS:-/app/gcp-service-account.json}
+      - AUDIO_CELERY_ENABLED=${AUDIO_CELERY_ENABLED:-true}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./app:/app
+      - ./data:/app/data
+      - ${GOOGLE_APPLICATION_CREDENTIALS_FILE:-./gcp-service-account.json}:/app/gcp-service-account.json:ro
+      - ${LOCAL_ENV_FILE:-./.env}:/app/.env:ro
+    depends_on:
+      - redis
+    profiles:
+      - celery
 
   # Meeting Summarizer Python App (macOS)
   meeting-copilot-backend-macos:
@@ -165,6 +210,8 @@ services:
 # Named volumes for persistent data
 volumes:
   meeting_app_logs:
+    driver: local
+  meeting_redis_data:
     driver: local
 
 # Networks (optional)
