@@ -11,6 +11,7 @@ try:
     from ...db import DatabaseManager
     from ...core.rbac import RBAC
     from ...services.chat import ChatService
+    from ...services.gemini_client import stream_content_text_async
 except (ImportError, ValueError):
     from api.deps import get_current_user
     from schemas.user import User
@@ -18,6 +19,7 @@ except (ImportError, ValueError):
     from db import DatabaseManager
     from core.rbac import RBAC
     from services.chat import ChatService
+    from services.gemini_client import stream_content_text_async
 
 # Initialize services
 db = DatabaseManager()
@@ -220,10 +222,6 @@ Quick Catch-Up Summary:"""
                         yield "Error: Gemini API key not configured"
                         return
 
-                    import google.generativeai as genai
-
-                    genai.configure(api_key=api_key)
-
                     model_name = request.model_name
                     if not model_name.startswith("gemini-"):
                         model_name = (
@@ -232,12 +230,12 @@ Quick Catch-Up Summary:"""
                             else model_name
                         )
 
-                    model = genai.GenerativeModel(model_name)
-                    # Use async generation for non-blocking streaming
-                    response = await model.generate_content_async(catch_up_prompt, stream=True)
-                    async for chunk in response:
-                        if chunk.text:
-                            yield chunk.text
+                    async for chunk_text in stream_content_text_async(
+                        api_key=api_key,
+                        model=model_name,
+                        contents=catch_up_prompt,
+                    ):
+                        yield chunk_text
             except Exception as e:
                 logger.error(f"Error generating catch-up: {e}")
                 yield f"Error: {str(e)}"

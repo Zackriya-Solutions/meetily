@@ -15,6 +15,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 calendar_scheduler = None
+audio_reconciler = None
 
 # Import Routers
 try:
@@ -79,7 +80,7 @@ app.include_router(feedback.router, prefix="/feedback", tags=["Feedback"])
 
 @app.on_event("startup")
 async def startup_event():
-    global calendar_scheduler
+    global calendar_scheduler, audio_reconciler
     try:
         from app.services.calendar.reminder_scheduler import CalendarReminderScheduler
     except ImportError:
@@ -93,13 +94,25 @@ async def startup_event():
     calendar_scheduler.start()
     logger.info("[CalendarReminder] Automation worker initialized")
 
+    if os.getenv("AUDIO_SESSION_RECONCILER_ENABLED", "true").lower() == "true":
+        try:
+            from app.services.audio.session_reconciler import AudioSessionReconciler
+        except ImportError:
+            from services.audio.session_reconciler import AudioSessionReconciler
+        audio_reconciler = AudioSessionReconciler()
+        audio_reconciler.start()
+        logger.info("[AudioReconciler] Session reconciler initialized")
+
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    global calendar_scheduler
+    global calendar_scheduler, audio_reconciler
     if calendar_scheduler:
         await calendar_scheduler.stop()
         calendar_scheduler = None
+    if audio_reconciler:
+        await audio_reconciler.stop()
+        audio_reconciler = None
 
 
 @app.get("/health")

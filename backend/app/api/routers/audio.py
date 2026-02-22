@@ -17,6 +17,7 @@ import os
 import struct
 import json
 import asyncio
+import re
 from datetime import datetime
 from pathlib import Path
 import aiofiles
@@ -26,18 +27,22 @@ try:
     from ...schemas.user import User
     from ...db import DatabaseManager
     from ...core.rbac import RBAC
+    from ...core.security import verify_google_token
     from ...services.audio.manager import StreamingTranscriptionManager
     from ...services.audio.recorder import get_or_create_recorder, stop_recorder
     from ...services.audio.post_recording import get_post_recording_service
+    from ...services.audio.pipeline_state import get_audio_pipeline_state_service
     from ...services.storage import StorageService
 except (ImportError, ValueError):
     from api.deps import get_current_user
     from schemas.user import User
     from db import DatabaseManager
     from core.rbac import RBAC
+    from core.security import verify_google_token
     from services.audio.manager import StreamingTranscriptionManager
     from services.audio.recorder import get_or_create_recorder, stop_recorder
     from services.audio.post_recording import get_post_recording_service
+    from services.audio.pipeline_state import get_audio_pipeline_state_service
     from services.storage import StorageService
 
 db = DatabaseManager()
@@ -51,8 +56,24 @@ streaming_managers = {}
 active_connections = {}
 session_cleanup_tasks = {}
 session_context = {}
+session_finalize_locks = {}
+session_finalized = set()
 
 RESUME_GRACE_SECONDS = int(os.getenv("STREAMING_RESUME_GRACE_SECONDS", "45"))
+STREAMING_AUDIO_QUEUE_MAX_CHUNKS = int(
+    os.getenv("STREAMING_AUDIO_QUEUE_MAX_CHUNKS", "256")
+)
+STREAMING_AUDIO_DROP_POLICY = os.getenv(
+    "STREAMING_AUDIO_DROP_POLICY", "drop_oldest"
+).lower()
+SAFE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+CHUNK_FILENAME_PATTERN = re.compile(r"chunk_(\d+)\.pcm$")
+AUDIO_CELERY_ENABLED = os.getenv("AUDIO_CELERY_ENABLED", "false").lower() == "true"
+CHUNK_UPLOAD_VIA_CELERY = (
+    os.getenv("AUDIO_CHUNK_UPLOAD_VIA_CELERY", "false").lower() == "true"
+)
+
+state_service = get_audio_pipeline_state_service()
 
 
 def _cancel_pending_cleanup(session_id: str):
@@ -68,50 +89,130 @@ async def _finalize_session(
     Finalize recorder + manager for a session.
     Safe to call multiple times; no-op if already cleaned.
     """
-    if active_connections.get(session_id, 0) > 0:
-        return
+    lock = session_finalize_locks.setdefault(session_id, asyncio.Lock())
+    async with lock:
+        if session_id in session_finalized:
+            return
+        if active_connections.get(session_id, 0) > 0:
+            return
 
-    ctx = session_context.get(session_id, {})
-    recorder_key = ctx.get("recorder_key") or session_id
-    user_email = ctx.get("user_email")
-    mgr = streaming_managers.get(session_id)
-    if flush and mgr:
+        ctx = session_context.get(session_id, {})
+        recorder_key = ctx.get("recorder_key") or session_id
+        user_email = ctx.get("user_email")
+        mgr = streaming_managers.get(session_id)
+        if flush and mgr:
+            try:
+                await mgr.force_flush()
+            except Exception as e:
+                logger.error(f"Force flush failed for session {session_id}: {e}")
+
         try:
-            await mgr.force_flush()
-        except Exception as e:
-            logger.error(f"Force flush failed for session {session_id}: {e}")
-
-    try:
-        await stop_recorder(recorder_key)
-        if process_audio:
-            post_service = get_post_recording_service()
-            asyncio.create_task(
-                post_service.finalize_recording(
-                    recorder_key,
-                    trigger_diarization=False,
-                    user_email=user_email,
+            recorder_metadata = await stop_recorder(recorder_key)
+            if recorder_metadata and isinstance(recorder_metadata, dict):
+                chunks = recorder_metadata.get("chunks", []) or []
+                for ch in chunks:
+                    try:
+                        chunk_index = ch.get("chunk_index")
+                        storage_path = ch.get("storage_path")
+                        size_bytes = int(ch.get("size_bytes") or 0)
+                        if chunk_index is None or not storage_path:
+                            continue
+                        upload_status = (
+                            "pending"
+                            if (AUDIO_CELERY_ENABLED and CHUNK_UPLOAD_VIA_CELERY)
+                            else "uploaded"
+                        )
+                        await db.upsert_recording_chunk(
+                            session_id=session_id,
+                            chunk_index=int(chunk_index),
+                            byte_size=size_bytes,
+                            storage_path=storage_path,
+                            upload_status=upload_status,
+                        )
+                        if AUDIO_CELERY_ENABLED and CHUNK_UPLOAD_VIA_CELERY:
+                            try:
+                                try:
+                                    from ...tasks.audio_pipeline import (
+                                        enqueue_upload_chunk_task,
+                                    )
+                                except (ImportError, ValueError):
+                                    from tasks.audio_pipeline import (
+                                        enqueue_upload_chunk_task,
+                                    )
+                                enqueue_upload_chunk_task(
+                                    session_id=session_id,
+                                    chunk_index=int(chunk_index),
+                                    storage_path=storage_path,
+                                    byte_size=size_bytes,
+                                )
+                            except Exception:
+                                pass
+                    except Exception:
+                        continue
+            if process_audio:
+                post_service = get_post_recording_service()
+                asyncio.create_task(
+                    post_service.finalize_recording(
+                        recorder_key,
+                        trigger_diarization=False,
+                        user_email=user_email,
+                    )
                 )
+                logger.info(
+                    f"[Streaming] Scheduled post-recording processing for {recorder_key}"
+                )
+            else:
+                logger.info(
+                    f"[Streaming] Recorder closed for {recorder_key} (post-processing deferred until save)."
+                )
+        except Exception as e:
+            logger.warning(
+                f"[Streaming] Recorder finalize failed for {recorder_key}: {e}"
             )
-            logger.info(
-                f"[Streaming] Scheduled post-recording processing for {recorder_key}"
-            )
-        else:
-            logger.info(
-                f"[Streaming] Recorder closed for {recorder_key} (post-processing deferred until save)."
-            )
-    except Exception as e:
-        logger.warning(f"[Streaming] Recorder finalize failed for {recorder_key}: {e}")
 
-    if mgr:
+        if mgr:
+            try:
+                mgr.cleanup()
+            except Exception:
+                pass
+            streaming_managers.pop(session_id, None)
+
+        active_connections.pop(session_id, None)
+        session_context.pop(session_id, None)
+        session_finalized.add(session_id)
+        _cancel_pending_cleanup(session_id)
         try:
-            mgr.cleanup()
+            if process_audio:
+                await state_service.transition(session_id, "completed")
+            else:
+                await state_service.transition(session_id, "uploading_chunks")
         except Exception:
             pass
-        streaming_managers.pop(session_id, None)
 
-    active_connections.pop(session_id, None)
-    session_context.pop(session_id, None)
-    _cancel_pending_cleanup(session_id)
+
+def _is_safe_identifier(value: str) -> bool:
+    if not value:
+        return False
+    try:
+        uuid.UUID(value)
+        return True
+    except Exception:
+        return bool(SAFE_ID_PATTERN.match(value))
+
+
+async def _authenticate_websocket(auth_token: Optional[str]) -> Optional[User]:
+    if not auth_token:
+        return None
+    payload = await verify_google_token(auth_token)
+    email = payload.get("email")
+    if not email:
+        raise HTTPException(status_code=401, detail="Token missing email")
+    if not email.endswith("@appointy.com"):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Access restricted to @appointy.com users (found {email})",
+        )
+    return User(email=email, name=payload.get("name"), picture=payload.get("picture"))
 
 
 def _schedule_deferred_cleanup(session_id: str):
@@ -124,9 +225,33 @@ def _schedule_deferred_cleanup(session_id: str):
                 logger.info(
                     f"[Streaming] Resume grace expired for {session_id}; finalizing session."
                 )
-                await _finalize_session(
-                    session_id, flush=False, process_audio=False
-                )
+                if AUDIO_CELERY_ENABLED:
+                    await _finalize_session(session_id, flush=False, process_audio=False)
+                    try:
+                        try:
+                            from ...tasks.audio_pipeline import (
+                                enqueue_finalize_session_task,
+                            )
+                        except (ImportError, ValueError):
+                            from tasks.audio_pipeline import enqueue_finalize_session_task
+
+                        await state_service.transition(session_id, "finalizing")
+                        task_id = enqueue_finalize_session_task(session_id)
+                        await state_service.db.merge_recording_session_metadata(
+                            session_id,
+                            {
+                                "finalize_task_id": task_id,
+                                "finalize_enqueued": True,
+                            },
+                        )
+                    except Exception as enqueue_err:
+                        logger.error(
+                            "[Streaming] Deferred finalize enqueue failed for %s: %s",
+                            session_id,
+                            enqueue_err,
+                        )
+                else:
+                    await _finalize_session(session_id, flush=False, process_audio=True)
         except asyncio.CancelledError:
             return
         except Exception as e:
@@ -141,14 +266,31 @@ def _schedule_deferred_cleanup(session_id: str):
 async def websocket_streaming_audio(
     websocket: WebSocket,
     session_id: Optional[str] = None,
-    user_email: Optional[str] = None,
     meeting_id: Optional[str] = None,
+    auth_token: Optional[str] = None,
 ):
     """
     Real-time streaming transcription with Groq Whisper Large v3.
     Includes heartbeat and force-flush on disconnect.
     """
+    try:
+        current_user = await _authenticate_websocket(auth_token)
+        if not current_user:
+            await websocket.close(code=1008, reason="Authentication required")
+            return
+    except Exception:
+        await websocket.close(code=1008, reason="Authentication failed")
+        return
+
+    if session_id and not _is_safe_identifier(session_id):
+        await websocket.close(code=1008, reason="Invalid session id")
+        return
+    if meeting_id and not _is_safe_identifier(meeting_id):
+        await websocket.close(code=1008, reason="Invalid meeting id")
+        return
+
     await websocket.accept()
+    user_email = current_user.email
 
     # Initialize manager to avoid unbound errors
     manager = None
@@ -156,6 +298,13 @@ async def websocket_streaming_audio(
     # Check if resuming session
     is_resume = False
     if session_id and session_id in streaming_managers:
+        existing_ctx = session_context.get(session_id)
+        if existing_ctx and existing_ctx.get("user_email") != user_email:
+            await websocket.send_json(
+                {"type": "error", "code": "SESSION_FORBIDDEN", "message": "Forbidden"}
+            )
+            await websocket.close(code=1008)
+            return
         manager = streaming_managers[session_id]
         is_resume = True
         _cancel_pending_cleanup(session_id)
@@ -163,8 +312,43 @@ async def websocket_streaming_audio(
     else:
         # Create new session
         session_id = str(uuid.uuid4()) if not session_id else session_id
+        session_finalized.discard(session_id)
         is_resume = False
     active_meeting_id = meeting_id or session_id
+    if active_meeting_id and not _is_safe_identifier(active_meeting_id):
+        await websocket.send_json(
+            {
+                "type": "error",
+                "code": "INVALID_MEETING_ID",
+                "message": "Invalid meeting id",
+            }
+        )
+        await websocket.close(code=1008)
+        return
+    if meeting_id:
+        try:
+            existing_meeting = await db.get_meeting(active_meeting_id)
+            if existing_meeting and not await rbac.can(current_user, "edit", active_meeting_id):
+                await websocket.send_json(
+                    {
+                        "type": "error",
+                        "code": "MEETING_FORBIDDEN",
+                        "message": "Permission denied for meeting",
+                    }
+                )
+                await websocket.close(code=1008)
+                return
+        except Exception as authz_err:
+            logger.error(f"[Streaming] Meeting authorization failed: {authz_err}")
+            await websocket.send_json(
+                {
+                    "type": "error",
+                    "code": "MEETING_AUTH_ERROR",
+                    "message": "Failed meeting authorization",
+                }
+            )
+            await websocket.close(code=1011)
+            return
 
     # Audio recorder setup
     audio_recorder = None
@@ -209,12 +393,26 @@ async def websocket_streaming_audio(
                         "message": "Groq API key required. Please add your Groq API key in Settings → Personal Keys.",
                     }
                 )
+                try:
+                    await stop_recorder(recorder_key)
+                except Exception:
+                    pass
                 await websocket.close()
                 return
 
             manager = StreamingTranscriptionManager(groq_api_key)
             streaming_managers[session_id] = manager
             logger.info(f"[Streaming] ✅ Session {session_id} started (HYBRID mode)")
+
+    try:
+        await state_service.ensure_session(
+            session_id=session_id,
+            user_email=user_email,
+            meeting_id=active_meeting_id,
+            metadata={"mode": "streaming_ws", "celery_enabled": AUDIO_CELERY_ENABLED},
+        )
+    except Exception as state_err:
+        logger.warning("[Streaming] Failed to initialize session state: %s", state_err)
 
     # Register active connection
     if session_id not in active_connections:
@@ -308,7 +506,8 @@ async def websocket_streaming_audio(
             pass
 
     # Audio Queue
-    audio_queue = asyncio.Queue()
+    audio_queue = asyncio.Queue(maxsize=STREAMING_AUDIO_QUEUE_MAX_CHUNKS)
+    dropped_audio_chunks = 0
 
     async def audio_worker():
         try:
@@ -362,12 +561,23 @@ async def websocket_streaming_audio(
                     data = json.loads(message["text"])
                     if data.get("type") == "ping":
                         last_heartbeat = time.time()
+                        try:
+                            await state_service.db.touch_recording_session_heartbeat(
+                                session_id
+                            )
+                        except Exception:
+                            pass
                         await websocket.send_json({"type": "pong"})
                         continue
                     if data.get("type") == "stop":
                         logger.info(
                             f"[Streaming] Received explicit stop for session {session_id}"
                         )
+                        try:
+                            await state_service.mark_stop_requested(session_id)
+                        except Exception:
+                            pass
+                        await websocket.send_json({"type": "stop_ack"})
                         explicit_stop = True
                         break
                 except:
@@ -387,9 +597,93 @@ async def websocket_streaming_audio(
                         audio_chunk = message_bytes
 
                 if audio_recorder:
-                    await audio_recorder.add_chunk(audio_chunk)
-
-                await audio_queue.put((audio_chunk, timestamp))
+                    saved_chunk_path = await audio_recorder.add_chunk(audio_chunk)
+                    if saved_chunk_path:
+                        chunk_name = saved_chunk_path.split("/")[-1]
+                        idx_match = CHUNK_FILENAME_PATTERN.match(chunk_name)
+                        chunk_index = int(idx_match.group(1)) if idx_match else None
+                        if chunk_index is not None:
+                            upload_status = (
+                                "pending"
+                                if (AUDIO_CELERY_ENABLED and CHUNK_UPLOAD_VIA_CELERY)
+                                else "uploaded"
+                            )
+                            try:
+                                await db.upsert_recording_chunk(
+                                    session_id=session_id,
+                                    chunk_index=chunk_index,
+                                    byte_size=len(audio_chunk),
+                                    storage_path=saved_chunk_path,
+                                    upload_status=upload_status,
+                                )
+                                if AUDIO_CELERY_ENABLED and CHUNK_UPLOAD_VIA_CELERY:
+                                    try:
+                                        try:
+                                            from ...tasks.audio_pipeline import (
+                                                enqueue_upload_chunk_task,
+                                            )
+                                        except (ImportError, ValueError):
+                                            from tasks.audio_pipeline import (
+                                                enqueue_upload_chunk_task,
+                                            )
+                                        upload_task_id = enqueue_upload_chunk_task(
+                                            session_id=session_id,
+                                            chunk_index=chunk_index,
+                                            storage_path=saved_chunk_path,
+                                            byte_size=len(audio_chunk),
+                                        )
+                                        await state_service.db.merge_recording_session_metadata(
+                                            session_id,
+                                            {
+                                                "last_chunk_upload_task_id": upload_task_id,
+                                                "chunk_upload_enqueued": True,
+                                            },
+                                        )
+                                    except Exception as upload_enqueue_err:
+                                        logger.error(
+                                            "[Streaming] Failed to enqueue chunk upload for %s#%s: %s",
+                                            session_id,
+                                            chunk_index,
+                                            upload_enqueue_err,
+                                        )
+                            except Exception as chunk_track_err:
+                                logger.warning(
+                                    "[Streaming] Failed tracking chunk %s for session %s: %s",
+                                    chunk_name,
+                                    session_id,
+                                    chunk_track_err,
+                                )
+                try:
+                    audio_queue.put_nowait((audio_chunk, timestamp))
+                except asyncio.QueueFull:
+                    dropped_audio_chunks += 1
+                    if STREAMING_AUDIO_DROP_POLICY == "drop_oldest":
+                        try:
+                            _ = audio_queue.get_nowait()
+                            audio_queue.task_done()
+                        except asyncio.QueueEmpty:
+                            pass
+                        try:
+                            audio_queue.put_nowait((audio_chunk, timestamp))
+                        except asyncio.QueueFull:
+                            pass
+                    else:
+                        await on_error(
+                            "Audio backlog is too high. Please check connection quality.",
+                            code="AUDIO_BACKPRESSURE",
+                        )
+                    if dropped_audio_chunks % 25 == 0:
+                        logger.warning(
+                            "[Streaming] Dropped %s audio chunks for session %s due to backpressure",
+                            dropped_audio_chunks,
+                            session_id,
+                        )
+                        try:
+                            await state_service.db.update_recording_session_counters(
+                                session_id=session_id, dropped_chunk_delta=25
+                            )
+                        except Exception:
+                            pass
 
     except WebSocketDisconnect:
         logger.info(f"[Streaming] Session {session_id} disconnected by client")
@@ -410,10 +704,48 @@ async def websocket_streaming_audio(
         if session_id in active_connections:
             active_connections[session_id] -= 1
             if active_connections[session_id] <= 0:
-                if explicit_stop:
-                    await _finalize_session(
-                        session_id, flush=True, process_audio=True
+                try:
+                    stats = await db.get_recording_chunk_stats(session_id)
+                    await db.update_recording_session_counters(
+                        session_id=session_id,
+                        expected_chunk_count=stats.get("total", 0),
+                        finalized_chunk_count=stats.get("uploaded", 0),
                     )
+                except Exception:
+                    pass
+                if explicit_stop:
+                    if AUDIO_CELERY_ENABLED:
+                        await _finalize_session(
+                            session_id, flush=True, process_audio=False
+                        )
+                        try:
+                            try:
+                                from ...tasks.audio_pipeline import (
+                                    enqueue_finalize_session_task,
+                                )
+                            except (ImportError, ValueError):
+                                from tasks.audio_pipeline import (
+                                    enqueue_finalize_session_task,
+                                )
+                            await state_service.transition(session_id, "finalizing")
+                            task_id = enqueue_finalize_session_task(session_id)
+                            await state_service.db.merge_recording_session_metadata(
+                                session_id,
+                                {
+                                    "finalize_task_id": task_id,
+                                    "finalize_enqueued": True,
+                                },
+                            )
+                        except Exception as enqueue_err:
+                            logger.error(
+                                "[Streaming] Failed enqueueing celery finalize for %s: %s",
+                                session_id,
+                                enqueue_err,
+                            )
+                    else:
+                        await _finalize_session(
+                            session_id, flush=True, process_audio=True
+                        )
                 else:
                     logger.info(
                         f"[Streaming] Session {session_id} disconnected; waiting {RESUME_GRACE_SECONDS}s for resume before finalize."
@@ -589,3 +921,97 @@ async def get_meeting_recording_url(
     except Exception as e:
         logger.error(f"Failed to get recording URL: {e}")
         raise HTTPException(status_code=500, detail="Failed to generate recording URL")
+
+
+@router.get("/sessions/{session_id}/pipeline-status")
+async def get_pipeline_session_status(
+    session_id: str, current_user: User = Depends(get_current_user)
+):
+    if not _is_safe_identifier(session_id):
+        raise HTTPException(status_code=400, detail="Invalid session id")
+
+    session = await db.get_recording_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # Owner can always inspect; otherwise fallback to meeting-level view permission.
+    if session.get("user_email") != current_user.email:
+        meeting_id = session.get("meeting_id")
+        if not meeting_id or not await rbac.can(current_user, "view", meeting_id):
+            raise HTTPException(status_code=403, detail="Permission denied")
+
+    chunk_stats = await db.get_recording_chunk_stats(session_id)
+
+    return {
+        "session_id": session["session_id"],
+        "meeting_id": session.get("meeting_id"),
+        "status": session.get("status"),
+        "started_at": session.get("started_at"),
+        "stop_requested_at": session.get("stop_requested_at"),
+        "stopped_at": session.get("stopped_at"),
+        "finalized_at": session.get("finalized_at"),
+        "expected_chunk_count": session.get("expected_chunk_count", 0),
+        "finalized_chunk_count": session.get("finalized_chunk_count", 0),
+        "dropped_chunk_count": session.get("dropped_chunk_count", 0),
+        "idempotency_finalize_key": session.get("idempotency_finalize_key"),
+        "error_code": session.get("error_code"),
+        "error_message": session.get("error_message"),
+        "metadata": session.get("metadata") or {},
+        "chunk_stats": chunk_stats,
+        "updated_at": session.get("updated_at"),
+    }
+
+
+@router.post("/sessions/{session_id}/retry-finalize")
+async def retry_pipeline_finalize(
+    session_id: str, current_user: User = Depends(get_current_user)
+):
+    if not _is_safe_identifier(session_id):
+        raise HTTPException(status_code=400, detail="Invalid session id")
+
+    session = await db.get_recording_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if session.get("user_email") != current_user.email:
+        meeting_id = session.get("meeting_id")
+        if not meeting_id or not await rbac.can(current_user, "edit", meeting_id):
+            raise HTTPException(status_code=403, detail="Permission denied")
+
+    if not AUDIO_CELERY_ENABLED:
+        raise HTTPException(
+            status_code=400, detail="Celery pipeline is disabled in this environment"
+        )
+
+    try:
+        try:
+            from ...tasks.audio_pipeline import enqueue_finalize_session_task
+        except (ImportError, ValueError):
+            from tasks.audio_pipeline import enqueue_finalize_session_task
+
+        await state_service.transition(session_id, "finalizing")
+        task_id = enqueue_finalize_session_task(session_id)
+        await state_service.db.merge_recording_session_metadata(
+            session_id, {"finalize_task_id": task_id, "finalize_enqueued": True}
+        )
+        return {"session_id": session_id, "enqueued": True, "task_id": task_id}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to enqueue finalize: {exc}")
+
+
+@router.post("/sessions/reconcile")
+async def reconcile_pipeline_sessions(current_user: User = Depends(get_current_user)):
+    if current_user.email != "gagan@appointy.com":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    try:
+        try:
+            from ...services.audio.session_reconciler import AudioSessionReconciler
+        except (ImportError, ValueError):
+            from services.audio.session_reconciler import AudioSessionReconciler
+
+        reconciler = AudioSessionReconciler()
+        await reconciler.reconcile_once()
+        return {"status": "ok"}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Reconcile failed: {exc}")

@@ -17,9 +17,11 @@ from pydantic_ai.providers.anthropic import AnthropicProvider
 try:
     from ..db import DatabaseManager
     from ..schemas.summary import SummaryResponse
+    from .gemini_client import generate_content_text_async
 except (ImportError, ValueError):
     from db import DatabaseManager
     from schemas.summary import SummaryResponse
+    from services.gemini_client import generate_content_text_async
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -146,12 +148,9 @@ class TranscriptService:
                         "Gemini API key not found. Set GEMINI_API_KEY environment variable."
                     )
 
-                import google.generativeai as genai
-
-                genai.configure(api_key=api_key)
                 # Use gemini-2.5-flash for speed and large context (Default)
                 model_name = model_name or "gemini-2.5-flash"
-                llm = genai.GenerativeModel(model_name)
+                llm = model_name
                 logger.info(f"Using Gemini model: {model_name}")
             else:
                 logger.error(f"Unsupported model provider requested: {model}")
@@ -257,13 +256,13 @@ class TranscriptService:
                             """
 
                             # Use Gemini for structured output
-                            response = await llm.generate_content_async(
-                                prompt,
-                                generation_config={
-                                    "response_mime_type": "application/json"
-                                },
+                            response_text = await generate_content_text_async(
+                                api_key=api_key,
+                                model=llm,
+                                contents=prompt,
+                                config={"response_mime_type": "application/json"},
                             )
-                            chunk_summary_json = self._clean_json(response.text)
+                            chunk_summary_json = self._clean_json(response_text)
                             all_json_data.append(chunk_summary_json)
                             logger.info(
                                 f"Successfully generated Gemini summary for chunk {i + 1}."

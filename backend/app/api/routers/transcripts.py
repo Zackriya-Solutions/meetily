@@ -27,6 +27,7 @@ try:
     from ...services.audio.vad import SimpleVAD
     from ...services.audio.groq_client import GroqTranscriptionClient
     from ...services.chat import ChatService
+    from ...services.gemini_client import generate_content_with_file_sync
     from ...services.storage import StorageService
 except (ImportError, ValueError):
     from api.deps import get_current_user
@@ -46,6 +47,7 @@ except (ImportError, ValueError):
     from services.audio.vad import SimpleVAD
     from services.audio.groq_client import GroqTranscriptionClient
     from services.chat import ChatService
+    from services.gemini_client import generate_content_with_file_sync
     from services.storage import StorageService
 
 # Initialize services
@@ -699,23 +701,14 @@ async def generate_notes_with_gemini_background(
             temp_audio_path = tmp_audio.name
 
         def _sync_generate() -> Optional[str]:
-            import google.generativeai as genai
-
-            genai.configure(api_key=api_key)
-            model = genai.GenerativeModel(model_name or "gemini-2.5-flash")
-
-            uploaded_file = genai.upload_file(path=temp_audio_path, mime_type=mime_type)
-            try:
-                response = model.generate_content(
-                    [multimodal_prompt, uploaded_file],
-                    generation_config={"response_mime_type": "application/json"},
-                )
-                return getattr(response, "text", None)
-            finally:
-                try:
-                    genai.delete_file(uploaded_file.name)
-                except Exception:
-                    pass
+            return generate_content_with_file_sync(
+                api_key=api_key,
+                model=model_name or "gemini-2.5-flash",
+                prompt=multimodal_prompt,
+                file_path=temp_audio_path,
+                mime_type=mime_type,
+                config={"response_mime_type": "application/json"},
+            )
 
         try:
             return await asyncio.to_thread(_sync_generate)

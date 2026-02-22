@@ -1,31 +1,33 @@
 pydantic-ai==0.2.15
 pydantic==2.11.5
-pandas==2.2.3
-devtools==0.12.2
+# pandas==2.2.3  # optional: currently unused in backend runtime
+# devtools==0.12.2  # optional: currently unused
 python-dotenv==1.1.0
 fastapi==0.115.9
 uvicorn[standard]==0.34.0
 websockets==14.1
 python-multipart==0.0.20
-aiosqlite==0.21.0
-ollama==0.5.2
+# aiosqlite==0.21.0  # optional: not used in active backend flow
+# ollama==0.5.2  # optional: ollama path is currently disabled/commented
 aiohttp==3.10.11
 aiofiles==24.1.0
-google-generativeai>=0.8.3
+google-genai>=1.0.0
 groq>=0.15.0
 indic-transliteration==2.3.75
 
 numpy>=1.24.3
-duckduckgo-search>=6.0.0
+# duckduckgo-search>=6.0.0  # optional: currently unused
 sentence-transformers>=2.2.0
 trafilatura>=1.6.0
 httpx>=0.25.0
 google-search-results>=2.4.0
 python-jose[cryptography]>=3.3.0
-torch
-torchaudio
+# torch  # optional: only needed for Silero fallback, current path uses TenVAD
+# torchaudio  # optional: currently unused
 ten-vad
 asyncpg==0.29.0
 psycopg2-binary==2.9.9
 google-cloud-storage>=2.14.0
-tavily-python>=0.3.0
+# tavily-python>=0.3.0  # optional: currently unused
+celery>=5.4.0
+redis>=5.0.0

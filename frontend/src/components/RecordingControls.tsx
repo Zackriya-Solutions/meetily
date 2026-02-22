@@ -73,7 +73,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
     return () => {
       if (audioClientRef.current) {
         console.log('🧹 [RecordingControls] Unmounting - cleaning up audio client');
-        audioClientRef.current.stop();
+        void audioClientRef.current.stop();
         audioClientRef.current = null;
       }
     };
@@ -83,7 +83,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
   useEffect(() => {
     const forceStopOnUnload = () => {
       if (audioClientRef.current) {
-        audioClientRef.current.stop();
+        void audioClientRef.current.stop();
         audioClientRef.current = null;
       }
     };
@@ -179,7 +179,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
         onDisconnected: () => {
           console.log('🔌 Streaming disconnected');
         }
-      }, session?.user?.email || undefined, stableSessionId, stableSessionId);
+      }, stableSessionId, stableSessionId, (session as any)?.idToken || undefined);
 
       console.log('✅ Real-time streaming started');
 
@@ -244,7 +244,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
 
     try {
       // Stop the streaming audio client
-      audioClientRef.current?.stop();
+      await audioClientRef.current?.stop();
       audioClientRef.current = null;
       console.log('✅ Streaming stopped');
 

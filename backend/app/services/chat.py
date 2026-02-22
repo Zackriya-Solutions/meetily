@@ -8,15 +8,24 @@ from dotenv import load_dotenv
 from openai import AsyncOpenAI
 from groq import AsyncGroq
 from anthropic import AsyncAnthropic
-import google.generativeai as genai
 # from ollama import AsyncClient
 
 try:
     from ..db import DatabaseManager
     from ..schemas.summary import SummaryResponse
+    from .gemini_client import (
+        generate_content_text_async,
+        generate_content_text_sync,
+        stream_content_text_async,
+    )
 except (ImportError, ValueError):
     from db import DatabaseManager
     from schemas.summary import SummaryResponse
+    from services.gemini_client import (
+        generate_content_text_async,
+        generate_content_text_sync,
+        stream_content_text_async,
+    )
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -52,9 +61,6 @@ class ChatService:
             if not api_key:
                 return question
 
-            genai.configure(api_key=api_key)
-            model = genai.GenerativeModel("gemini-2.5-flash")
-
             # Format recent history (last 3 turns is usually enough for context)
             recent_history = history[-6:] if len(history) > 6 else history
             history_text = ""
@@ -89,8 +95,13 @@ Last User Question: "{question}"
 
 Search Query:"""
 
-            response = await model.generate_content_async(prompt)
-            reformulated = response.text.strip()
+            reformulated = (
+                await generate_content_text_async(
+                    api_key=api_key,
+                    model="gemini-2.5-flash",
+                    contents=prompt,
+                )
+            ).strip()
 
             # Sanity check: if result is too long or empty, fallback
             if not reformulated or len(reformulated) > len(question) * 4:
@@ -120,9 +131,6 @@ Search Query:"""
             if not api_key:
                 return False  # Default to no search if we can't classify
 
-            genai.configure(api_key=api_key)
-            model = genai.GenerativeModel("gemini-2.5-flash")
-
             classifier_prompt = f"""You are a classifier. Determine if this question requires REAL-TIME WEB SEARCH or can be answered from meeting context.
 
 Question: "{question}"
@@ -133,9 +141,13 @@ Answer ONLY "SEARCH" or "MEETING":
 - "SEARCH" if question asks about: weather, current events, latest news, stock prices, real-time data, or anything NOT in meeting notes
 - "MEETING" if question can be answered from meeting discussion, action items, decisions, or participants"""
 
-            response = model.generate_content(classifier_prompt)
-
-            answer = response.text.strip().upper()
+            answer = (
+                generate_content_text_sync(
+                    api_key=api_key,
+                    model="gemini-2.5-flash",
+                    contents=classifier_prompt,
+                )
+            ).strip().upper()
             needs_search = "SEARCH" in answer
             logger.info(
                 f"Web search classifier: '{answer}' -> needs_web_search={needs_search}"
@@ -301,9 +313,6 @@ Answer ONLY "SEARCH" or "MEETING":
             if not api_key:
                 return "❌ Gemini API key not configured."
 
-            genai.configure(api_key=api_key)
-            model = genai.GenerativeModel("gemini-2.5-flash")
-
             # Format sources for context
             sources_text = ""
             for i, src in enumerate(sources, 1):
@@ -329,24 +338,18 @@ Instructions:
 
 Format: Provide a direct answer followed by supporting details without inline citations."""
 
-            from google.generativeai.types import HarmCategory, HarmBlockThreshold
-
-            response = await model.generate_content_async(
-                prompt,
-                generation_config=genai.GenerationConfig(
-                    temperature=0.3,  # Lower for more factual
-                    max_output_tokens=2048,
-                ),
-                safety_settings={
-                    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-                    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-                    HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
-                    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+            response_text = await generate_content_text_async(
+                api_key=api_key,
+                model="gemini-2.5-flash",
+                contents=prompt,
+                config={
+                    "temperature": 0.3,
+                    "max_output_tokens": 2048,
                 },
             )
 
-            if response and response.text:
-                return f"**🔍 Web Research Results:**\n\n{response.text}"
+            if response_text:
+                return f"**🔍 Web Research Results:**\n\n{response_text}"
             else:
                 return "Failed to generate summary from sources."
 
@@ -699,34 +702,28 @@ USER QUESTION: {question}
                 if not api_key:
                     raise ValueError("Gemini API key not found")
 
-                genai.configure(api_key=api_key)
-
                 generation_config = {
                     "temperature": 0.7,
                     "top_p": 0.95,
                     "top_k": 64,
                     "max_output_tokens": 8192,
+                    "system_instruction": system_prompt,
                 }
 
-                gen_model = genai.GenerativeModel(
-                    model_name=model_name,
-                    generation_config=generation_config,
-                    system_instruction=system_prompt,
-                )
-
-                chat_session = gen_model.start_chat(history=[])
-                response = chat_session.send_message(question, stream=True)
-
-                async def stream_gemini(response_iterator):
+                async def stream_gemini():
                     try:
-                        for chunk in response_iterator:
-                            if hasattr(chunk, "text") and chunk.text:
-                                yield chunk.text
+                        async for chunk_text in stream_content_text_async(
+                            api_key=api_key,
+                            model=model_name,
+                            contents=question,
+                            config=generation_config,
+                        ):
+                            yield chunk_text
                     except Exception as e:
                         logger.error(f"Gemini streaming error: {e}", exc_info=True)
                         yield f"\n\nError during Gemini response: {str(e)}"
 
-                return response_wrapper(stream_gemini(response))
+                return response_wrapper(stream_gemini())
 
             else:
                 raise ValueError(f"Unsupported chat model: {model}")
@@ -845,20 +842,16 @@ USER QUESTION: {question}
                 if not api_key:
                     raise ValueError("Gemini API key not found")
 
-                genai.configure(api_key=api_key)
-                gen_model = genai.GenerativeModel(
-                    model_name=model_name,
-                    system_instruction=system_prompt,
-                )
+                async def stream_gemini():
+                    async for chunk_text in stream_content_text_async(
+                        api_key=api_key,
+                        model=model_name,
+                        contents=user_query,
+                        config={"system_instruction": system_prompt},
+                    ):
+                        yield chunk_text
 
-                response = await gen_model.generate_content_async(user_query, stream=True)
-
-                async def stream_gemini(response_iterator):
-                    async for chunk in response_iterator:
-                        if chunk.text:
-                            yield chunk.text
-
-                return stream_gemini(response)
+                return stream_gemini()
 
             else:
                 raise ValueError(f"Unsupported model: {model}")
