@@ -18,6 +18,10 @@ import logging
 import os
 import json
 import aiofiles
+import io
+import re
+import wave
+import shutil
 from pathlib import Path
 from typing import Optional, Dict, List, Tuple
 from datetime import datetime
@@ -97,19 +101,403 @@ class DiarizationService:
 
         # Alignment engine (3-tier logic)
         self.alignment_engine = AlignmentEngine()
+        self.deepgram_parallel_enabled = (
+            os.getenv("DEEPGRAM_PARALLEL_DIARIZATION_ENABLED", "true").lower()
+            == "true"
+        )
+        self.deepgram_parallel_chunk_minutes = float(
+            os.getenv("DEEPGRAM_PARALLEL_CHUNK_MINUTES", "10")
+        )
+        self.deepgram_parallel_overlap_seconds = float(
+            os.getenv("DEEPGRAM_PARALLEL_OVERLAP_SECONDS", "30")
+        )
+        self.deepgram_parallel_concurrency = int(
+            os.getenv("DEEPGRAM_PARALLEL_CONCURRENCY", "8")
+        )
+        self.deepgram_parallel_similarity_threshold = float(
+            os.getenv("DEEPGRAM_PARALLEL_SPEAKER_SIMILARITY_THRESHOLD", "0.08")
+        )
 
         logger.info(
             f"DiarizationService initialized (provider={provider}, enabled={self.enabled})"
         )
 
-    async def transcribe_with_whisper(self, audio_data: bytes) -> List[Dict]:
+    @staticmethod
+    def _tokenize_text(text: str) -> set:
+        cleaned = re.sub(r"[^a-zA-Z0-9\s]", " ", (text or "").lower())
+        return {w for w in cleaned.split() if len(w) > 2}
+
+    @staticmethod
+    def _jaccard_similarity(tokens_a: set, tokens_b: set) -> float:
+        if not tokens_a or not tokens_b:
+            return 0.0
+        union = len(tokens_a | tokens_b)
+        if union == 0:
+            return 0.0
+        return len(tokens_a & tokens_b) / union
+
+    @staticmethod
+    def _build_overlap_text(
+        segment_dicts: List[Dict], overlap_start: float, overlap_end: float, speaker: str
+    ) -> str:
+        parts = []
+        for seg in segment_dicts:
+            if seg["speaker"] != speaker:
+                continue
+            if seg["end_time"] <= overlap_start or seg["start_time"] >= overlap_end:
+                continue
+            parts.append(seg.get("text", ""))
+        return " ".join(parts).strip()
+
+    def _split_wav_for_parallel(
+        self, wav_data: bytes, chunk_minutes: float, overlap_seconds: float
+    ) -> List[Tuple[int, float, float, bytes]]:
+        """
+        Split WAV bytes into overlapping WAV chunks for parallel diarization.
+        Returns tuples: (chunk_index, start_sec, end_sec, chunk_wav_bytes).
+        """
+        with wave.open(io.BytesIO(wav_data), "rb") as wav_reader:
+            nchannels = wav_reader.getnchannels()
+            sampwidth = wav_reader.getsampwidth()
+            framerate = wav_reader.getframerate()
+            total_frames = wav_reader.getnframes()
+            pcm_frames = wav_reader.readframes(total_frames)
+
+        bytes_per_frame = nchannels * sampwidth
+        chunk_seconds = max(60.0, chunk_minutes * 60.0)
+        step_seconds = max(1.0, chunk_seconds - max(0.0, overlap_seconds))
+        total_seconds = total_frames / float(framerate) if framerate else 0.0
+
+        chunks: List[Tuple[int, float, float, bytes]] = []
+        chunk_index = 0
+        start_sec = 0.0
+        while start_sec < total_seconds:
+            end_sec = min(total_seconds, start_sec + chunk_seconds)
+            start_frame = int(start_sec * framerate)
+            end_frame = int(end_sec * framerate)
+            if end_frame <= start_frame:
+                break
+
+            start_byte = start_frame * bytes_per_frame
+            end_byte = end_frame * bytes_per_frame
+            chunk_pcm = pcm_frames[start_byte:end_byte]
+
+            chunk_io = io.BytesIO()
+            with wave.open(chunk_io, "wb") as chunk_writer:
+                chunk_writer.setnchannels(nchannels)
+                chunk_writer.setsampwidth(sampwidth)
+                chunk_writer.setframerate(framerate)
+                chunk_writer.writeframes(chunk_pcm)
+
+            chunks.append((chunk_index, start_sec, end_sec, chunk_io.getvalue()))
+            chunk_index += 1
+            start_sec += step_seconds
+
+        return chunks
+
+    @staticmethod
+    def _looks_like_audio_container(audio_data: bytes) -> bool:
+        if not audio_data or len(audio_data) < 12:
+            return False
+        return (
+            audio_data.startswith(b"RIFF")
+            or audio_data.startswith(b"OggS")
+            or audio_data.startswith(b"ID3")
+            or audio_data.startswith(b"\xff\xfb")
+            or audio_data[4:8] == b"ftyp"
+        )
+
+    async def _decode_container_to_wav_with_ffmpeg(
+        self, audio_data: bytes, meeting_id: str
+    ) -> bytes:
+        if not shutil.which("ffmpeg"):
+            raise RuntimeError(
+                "ffmpeg not found in PATH; cannot decode compressed audio container"
+            )
+
+        cmd = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            "pipe:0",
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            "-f",
+            "wav",
+            "pipe:1",
+        ]
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await process.communicate(input=audio_data)
+        if process.returncode != 0:
+            err_text = (stderr or b"").decode("utf-8", errors="ignore")[:400]
+            raise RuntimeError(f"ffmpeg decode failed: {err_text}")
+        if not stdout or not stdout.startswith(b"RIFF"):
+            raise RuntimeError("ffmpeg decode produced invalid WAV output")
+
+        logger.info(
+            "📦 Decoded compressed container to WAV for %s (%0.2f MB -> %0.2f MB)",
+            meeting_id,
+            len(audio_data) / (1024 * 1024),
+            len(stdout) / (1024 * 1024),
+        )
+        return stdout
+
+    async def ensure_wav_audio(self, audio_data: bytes, meeting_id: str) -> bytes:
+        """
+        Normalize arbitrary audio bytes into 16k mono WAV for stable diarization.
+        - WAV container: pass through
+        - Other known containers (opus/ogg/mp3/m4a): decode via ffmpeg
+        - Raw PCM fallback: wrap as WAV
+        """
+        if not audio_data:
+            raise ValueError("No audio bytes provided for WAV normalization")
+
+        if audio_data.startswith(b"RIFF"):
+            logger.info("📦 Audio is already WAV format")
+            return audio_data
+
+        if self._looks_like_audio_container(audio_data):
+            return await self._decode_container_to_wav_with_ffmpeg(
+                audio_data, meeting_id
+            )
+
+        logger.info("📦 Treating audio as raw PCM and converting to WAV")
+        return AudioRecorder.convert_pcm_to_wav(audio_data)
+
+    def _stitch_parallel_segments(
+        self,
+        chunk_results: List[Tuple[int, float, float, List[SpeakerSegment]]],
+    ) -> List[Dict]:
+        stitched: List[Dict] = []
+        for chunk_index, chunk_start, _, segments in sorted(
+            chunk_results, key=lambda x: x[0]
+        ):
+            for seg in segments:
+                stitched.append(
+                    {
+                        "speaker": seg.speaker,
+                        "local_speaker": seg.speaker,
+                        "chunk_index": chunk_index,
+                        "start_time": seg.start_time + chunk_start,
+                        "end_time": seg.end_time + chunk_start,
+                        "text": seg.text,
+                        "confidence": seg.confidence,
+                        "word_count": seg.word_count,
+                    }
+                )
+
+        stitched.sort(key=lambda s: s["start_time"])
+        deduped: List[Dict] = []
+        last_end = -1.0
+        for seg in stitched:
+            start = seg["start_time"]
+            end = seg["end_time"]
+            if end <= last_end:
+                continue
+            if start < last_end:
+                seg["start_time"] = last_end
+            if seg["end_time"] - seg["start_time"] < 0.05:
+                continue
+            deduped.append(seg)
+            last_end = seg["end_time"]
+
+        return deduped
+
+    def _reconcile_parallel_chunk_speakers(
+        self,
+        stitched_segments: List[Dict],
+        overlap_seconds: float,
+        similarity_threshold: float,
+    ) -> List[Dict]:
+        by_chunk: Dict[int, List[Dict]] = {}
+        for seg in stitched_segments:
+            by_chunk.setdefault(seg["chunk_index"], []).append(seg)
+
+        chunk_indices = sorted(by_chunk.keys())
+        if not chunk_indices:
+            return stitched_segments
+
+        chunk_local_to_global: Dict[Tuple[int, str], str] = {}
+        next_global_speaker_id = 0
+
+        first_chunk = chunk_indices[0]
+        for local_speaker in sorted(
+            {s["local_speaker"] for s in by_chunk.get(first_chunk, [])}
+        ):
+            chunk_local_to_global[(first_chunk, local_speaker)] = (
+                f"Speaker {next_global_speaker_id}"
+            )
+            next_global_speaker_id += 1
+
+        for index in range(1, len(chunk_indices)):
+            current_chunk = chunk_indices[index]
+            previous_chunk = chunk_indices[index - 1]
+            current_segments = by_chunk.get(current_chunk, [])
+            previous_segments = by_chunk.get(previous_chunk, [])
+
+            if not current_segments:
+                continue
+
+            current_chunk_start = min(s["start_time"] for s in current_segments)
+            overlap_start = max(0.0, current_chunk_start - overlap_seconds)
+            overlap_end = current_chunk_start + overlap_seconds
+            used_globals = set()
+
+            for current_local in sorted({s["local_speaker"] for s in current_segments}):
+                current_text = self._build_overlap_text(
+                    current_segments, overlap_start, overlap_end, current_local
+                )
+                current_tokens = self._tokenize_text(current_text)
+
+                best_global = None
+                best_score = 0.0
+                for previous_local in sorted(
+                    {s["local_speaker"] for s in previous_segments}
+                ):
+                    previous_global = chunk_local_to_global.get(
+                        (previous_chunk, previous_local)
+                    )
+                    if not previous_global or previous_global in used_globals:
+                        continue
+
+                    previous_text = self._build_overlap_text(
+                        previous_segments, overlap_start, overlap_end, previous_local
+                    )
+                    previous_tokens = self._tokenize_text(previous_text)
+                    score = self._jaccard_similarity(current_tokens, previous_tokens)
+                    if score > best_score:
+                        best_score = score
+                        best_global = previous_global
+
+                if best_global and best_score >= similarity_threshold:
+                    global_speaker = best_global
+                else:
+                    global_speaker = f"Speaker {next_global_speaker_id}"
+                    next_global_speaker_id += 1
+
+                used_globals.add(global_speaker)
+                chunk_local_to_global[(current_chunk, current_local)] = global_speaker
+
+        reconciled: List[Dict] = []
+        for seg in stitched_segments:
+            global_speaker = chunk_local_to_global.get(
+                (seg["chunk_index"], seg["local_speaker"]), seg["speaker"]
+            )
+            reconciled.append({**seg, "speaker": global_speaker})
+        return reconciled
+
+    async def _diarize_with_deepgram_parallel(
+        self,
+        wav_data: bytes,
+        meeting_id: str,
+        api_key: str,
+    ) -> List[SpeakerSegment]:
+        chunks = self._split_wav_for_parallel(
+            wav_data=wav_data,
+            chunk_minutes=self.deepgram_parallel_chunk_minutes,
+            overlap_seconds=self.deepgram_parallel_overlap_seconds,
+        )
+        if len(chunks) <= 1:
+            return await self._diarize_with_deepgram(
+                audio_data=wav_data,
+                meeting_id=meeting_id,
+                api_key=api_key,
+                audio_url=None,
+            )
+
+        logger.info(
+            "🚀 Parallel diarization: chunks=%s chunk_minutes=%.1f overlap=%.1fs concurrency=%s",
+            len(chunks),
+            self.deepgram_parallel_chunk_minutes,
+            self.deepgram_parallel_overlap_seconds,
+            self.deepgram_parallel_concurrency,
+        )
+
+        semaphore = asyncio.Semaphore(max(1, self.deepgram_parallel_concurrency))
+
+        async def run_chunk(chunk: Tuple[int, float, float, bytes]):
+            chunk_index, start_sec, end_sec, chunk_wav = chunk
+            async with semaphore:
+                segments = await self._diarize_with_deepgram(
+                    audio_data=chunk_wav,
+                    meeting_id=f"{meeting_id}-chunk-{chunk_index}",
+                    api_key=api_key,
+                    audio_url=None,
+                )
+                return chunk_index, start_sec, end_sec, segments
+
+        chunk_results = await asyncio.gather(*(run_chunk(chunk) for chunk in chunks))
+        stitched = self._stitch_parallel_segments(chunk_results)
+        reconciled = self._reconcile_parallel_chunk_speakers(
+            stitched_segments=stitched,
+            overlap_seconds=self.deepgram_parallel_overlap_seconds,
+            similarity_threshold=self.deepgram_parallel_similarity_threshold,
+        )
+
+        return [
+            SpeakerSegment(
+                speaker=seg["speaker"],
+                start_time=seg["start_time"],
+                end_time=seg["end_time"],
+                text=seg.get("text", ""),
+                confidence=seg.get("confidence", 1.0),
+                word_count=seg.get("word_count", 0),
+            )
+            for seg in reconciled
+        ]
+
+    async def _get_groq_api_key(self, user_email: str = None) -> Optional[str]:
+        """
+        Resolve Groq API key for diarization transcription.
+        Priority: 1) User-specific key from DB, 2) Environment, 3) cached instance key.
+        """
+        if user_email:
+            try:
+                try:
+                    from ...db import DatabaseManager
+                except (ImportError, ValueError):
+                    from db import DatabaseManager
+
+                db = DatabaseManager()
+                db_key = await db.get_api_key("groq", user_email=user_email)
+                if db_key:
+                    return db_key
+            except Exception as e:
+                logger.warning(f"Failed to get Groq key from database: {e}")
+
+        env_key = os.getenv("GROQ_API_KEY")
+        if env_key:
+            return env_key
+
+        return self.groq_api_key
+
+    async def transcribe_with_whisper(
+        self, audio_data: bytes, user_email: str = None
+    ) -> List[Dict]:
         """
         Run high-fidelity Whisper transcription on the full meeting audio.
         Returns segments for alignment.
         """
-        if not self.groq:
-            logger.error("No Groq API key provided for high-fidelity transcription")
+        resolved_groq_key = await self._get_groq_api_key(user_email)
+        if not resolved_groq_key:
+            logger.error(
+                "No Groq API key available for high-fidelity transcription (user=%s)",
+                user_email,
+            )
             return []
+
+        if self.groq is None or self.groq_api_key != resolved_groq_key:
+            self.groq_api_key = resolved_groq_key
+            self.groq = GroqTranscriptionClient(self.groq_api_key)
 
         logger.info("💎 Running Gold Standard Whisper transcription...")
         result = await self.groq.transcribe_full_audio(audio_data)
@@ -145,7 +533,10 @@ class DiarizationService:
         # Fall back to database lookup if user_email provided
         if user_email:
             try:
-                from ..db import DatabaseManager
+                try:
+                    from ...db import DatabaseManager
+                except (ImportError, ValueError):
+                    from db import DatabaseManager
 
                 db = DatabaseManager()
                 db_key = await db.get_api_key(provider, user_email=user_email)
@@ -272,25 +663,38 @@ class DiarizationService:
                     error="No audio data found for this meeting. Ensure recording was enabled.",
                 )
 
-            # Step 2: Convert to WAV (bytes path only)
+            # Step 2: Normalize audio to WAV (bytes path only)
             wav_data = None
             if audio_data:
-                is_wav = audio_data.startswith(b"RIFF")
-
-                if is_wav:
-                    wav_data = audio_data
-                    logger.info("📦 Audio is already WAV format")
-                else:
-                    wav_data = AudioRecorder.convert_pcm_to_wav(audio_data)
-                    logger.info("📦 Converted PCM to WAV")
-
+                wav_data = await self.ensure_wav_audio(audio_data, meeting_id)
                 logger.info(f"📦 Audio prepared: {len(wav_data)} bytes")
 
             # Step 3: Send to diarization API
             if provider == "deepgram":
-                segments = await self._diarize_with_deepgram(
-                    wav_data, meeting_id, api_key, audio_url=audio_url
-                )
+                if audio_url:
+                    segments = await self._diarize_with_deepgram(
+                        wav_data, meeting_id, api_key, audio_url=audio_url
+                    )
+                elif self.deepgram_parallel_enabled and wav_data:
+                    try:
+                        segments = await self._diarize_with_deepgram_parallel(
+                            wav_data=wav_data,
+                            meeting_id=meeting_id,
+                            api_key=api_key,
+                        )
+                    except Exception as parallel_error:
+                        logger.warning(
+                            "Parallel Deepgram diarization failed for %s, falling back to single pass: %s",
+                            meeting_id,
+                            parallel_error,
+                        )
+                        segments = await self._diarize_with_deepgram(
+                            wav_data, meeting_id, api_key, audio_url=audio_url
+                        )
+                else:
+                    segments = await self._diarize_with_deepgram(
+                        wav_data, meeting_id, api_key, audio_url=audio_url
+                    )
             elif provider == "assemblyai":
                 segments = await self._diarize_with_assemblyai(
                     wav_data, meeting_id, api_key, audio_url=audio_url

@@ -9,6 +9,7 @@ import { useState } from 'react';
 import { toast } from 'sonner';
 import { authFetch } from '@/lib/api';
 import { Loader2 } from 'lucide-react';
+import type { DiarizationProgress } from '@/hooks/useDiarization';
 
 interface TranscriptPanelProps {
   transcripts: Transcript[];
@@ -21,6 +22,8 @@ interface TranscriptPanelProps {
   onStopDiarize?: () => void; // NEW
   diarizationStatus?: string;
   isDiarizing?: boolean;
+  diarizationProgress?: DiarizationProgress | null;
+  diarizationWaitEstimate?: string | null;
   speakerMap?: { [label: string]: string };
   meetingId?: string; // Add meetingId
   onTranscriptsUpdate?: (transcripts: Transcript[]) => void; // Add update handler
@@ -37,6 +40,8 @@ export function TranscriptPanel({
   onStopDiarize,
   diarizationStatus,
   isDiarizing,
+  diarizationProgress,
+  diarizationWaitEstimate,
   speakerMap,
   meetingId,
   onTranscriptsUpdate
@@ -122,6 +127,8 @@ export function TranscriptPanel({
           onStopDiarize={onStopDiarize}
           diarizationStatus={diarizationStatus}
           isDiarizing={isDiarizing}
+          diarizationProgress={diarizationProgress}
+          diarizationWaitEstimate={diarizationWaitEstimate}
           isRecording={isRecording}
         />
       </div>

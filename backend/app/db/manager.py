@@ -1687,6 +1687,106 @@ class DatabaseManager:
                 datetime.utcnow(),
             )
 
+    async def reset_diarization_chunk_jobs(self, meeting_id: str):
+        async with self._get_connection() as conn:
+            await conn.execute(
+                "DELETE FROM diarization_chunk_jobs WHERE meeting_id = $1",
+                meeting_id,
+            )
+
+    async def upsert_diarization_chunk_job(
+        self,
+        meeting_id: str,
+        chunk_index: int,
+        status: str,
+        start_sec: float,
+        end_sec: float,
+        task_id: Optional[str] = None,
+        segment_count: int = 0,
+        error_message: Optional[str] = None,
+        result_json: Optional[Dict] = None,
+    ):
+        now = datetime.utcnow()
+        started_at = now if status == "processing" else None
+        completed_at = now if status in ("completed", "failed") else None
+        async with self._get_connection() as conn:
+            await conn.execute(
+                """
+                INSERT INTO diarization_chunk_jobs (
+                    meeting_id, chunk_index, status, task_id, start_sec, end_sec, duration_sec,
+                    segment_count, error_message, result_json, started_at, completed_at, created_at, updated_at
+                )
+                VALUES (
+                    $1, $2, $3, $4,
+                    $5::double precision,
+                    $6::double precision,
+                    GREATEST(($6::double precision - $5::double precision), 0::double precision),
+                    $7, $8, $9::jsonb, $10, $11, $12, $12
+                )
+                ON CONFLICT (meeting_id, chunk_index) DO UPDATE SET
+                    status = EXCLUDED.status,
+                    task_id = COALESCE(EXCLUDED.task_id, diarization_chunk_jobs.task_id),
+                    start_sec = EXCLUDED.start_sec,
+                    end_sec = EXCLUDED.end_sec,
+                    duration_sec = EXCLUDED.duration_sec,
+                    segment_count = EXCLUDED.segment_count,
+                    error_message = EXCLUDED.error_message,
+                    result_json = COALESCE(EXCLUDED.result_json, diarization_chunk_jobs.result_json),
+                    started_at = COALESCE(EXCLUDED.started_at, diarization_chunk_jobs.started_at),
+                    completed_at = COALESCE(EXCLUDED.completed_at, diarization_chunk_jobs.completed_at),
+                    updated_at = EXCLUDED.updated_at
+                """,
+                meeting_id,
+                chunk_index,
+                status,
+                task_id,
+                float(start_sec),
+                float(end_sec),
+                int(segment_count or 0),
+                error_message,
+                json.dumps(result_json) if result_json is not None else None,
+                started_at,
+                completed_at,
+                now,
+            )
+
+    async def list_diarization_chunk_jobs(self, meeting_id: str) -> List[Dict]:
+        async with self._get_connection() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT meeting_id, chunk_index, status, task_id, start_sec, end_sec, duration_sec,
+                       segment_count, error_message, result_json, started_at, completed_at, created_at, updated_at
+                FROM diarization_chunk_jobs
+                WHERE meeting_id = $1
+                ORDER BY chunk_index
+                """,
+                meeting_id,
+            )
+            return [dict(r) for r in rows]
+
+    async def get_diarization_chunk_stats(self, meeting_id: str) -> Dict:
+        async with self._get_connection() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT
+                    COUNT(*)::int AS total,
+                    COUNT(*) FILTER (WHERE status = 'pending')::int AS pending,
+                    COUNT(*) FILTER (WHERE status = 'processing')::int AS processing,
+                    COUNT(*) FILTER (WHERE status = 'completed')::int AS completed,
+                    COUNT(*) FILTER (WHERE status = 'failed')::int AS failed
+                FROM diarization_chunk_jobs
+                WHERE meeting_id = $1
+                """,
+                meeting_id,
+            )
+            return dict(row) if row else {
+                "total": 0,
+                "pending": 0,
+                "processing": 0,
+                "completed": 0,
+                "failed": 0,
+            }
+
     async def search_transcripts(self, query: str):
         """Search through meeting transcripts for the given query"""
         if not query or query.strip() == "":

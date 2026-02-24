@@ -120,3 +120,38 @@ This file tracks high-impact bugs that are confirmed but intentionally deferred.
 3. Add mocked-provider tests for Groq/Gemini/Deepgram behavior in CI.
 4. Add Playwright smoke tests for start/stop + ask-ai + catch-up UI flows.
 5. Add nightly real-provider smoke suite and regression snapshots.
+
+## BUG-DIARIZATION-COST-001: Groq parallel baseline can exhaust free-tier ASPH limits
+
+- Status: Deferred
+- Priority: High
+- Reported: 2026-02-23
+- Area: Diarization / Transcription / Cost Control
+
+### Symptoms
+
+- Diarization jobs fail with Groq `429 rate_limit_exceeded` even when Deepgram succeeds.
+- Failures increase for long meetings when Groq baseline and diarization are run concurrently.
+
+### Impact
+
+- User-facing diarization failures on free/on-demand Groq tier.
+- Unpredictable completion time due to retry windows.
+
+### Current Understanding
+
+- Groq free-tier ASPH quota is the bottleneck.
+- Parallel orchestration consumes hourly audio budget faster and triggers 429s.
+- Sequential mode is now the default to reduce burst quota usage.
+
+### Current Behavior
+
+- `GROQ_PARALLEL_WITH_DIARIZATION_ENABLED=false` by default (sequential).
+- Parallel mode remains available behind this flag for paid/higher-limit tiers.
+
+### Deferred Fix Plan (When Resumed)
+
+1. Add dynamic concurrency/rate-limit controller based on recent 429s.
+2. Auto-fallback to sequential mode after quota warnings.
+3. Add provider-budget aware queueing and retry scheduling.
+4. Re-enable parallel mode as default only for paid quota profiles.
