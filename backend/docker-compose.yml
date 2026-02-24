@@ -76,7 +76,7 @@ services:
 
     # Health check
     healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:5167/get-meetings" ]
+      test: [ "CMD", "curl", "-f", "http://localhost:5167/docs" ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -172,7 +172,7 @@ services:
 
     # Health check
     healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:5167/get-meetings" ]
+      test: [ "CMD", "curl", "-f", "http://localhost:5167/docs" ]
       interval: 30s
       timeout: 10s
       retries: 3

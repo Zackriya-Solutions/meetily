@@ -52,6 +52,7 @@ class GenerateNotesRequest(BaseModel):
     audio_mode: str = "auto"  # auto | compressed | wav | transcript_only
     audio_url: str = ""  # Optional signed/public URL override for model ingestion
     max_audio_minutes: int = 120  # Safety cap for long recordings
+    prefer_diarized_transcript: bool = True
 
 
 class RefineNotesRequest(BaseModel):

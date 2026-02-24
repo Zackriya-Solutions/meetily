@@ -1,13 +1,20 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { Transcript, Summary } from '@/types';
 import { ModelConfig } from '@/components/ModelSettingsModal';
-import { CurrentMeeting, useSidebar } from '@/components/Sidebar/SidebarProvider';
+import { useSidebar } from '@/components/Sidebar/SidebarProvider';
 import { toast } from 'sonner';
-import { apiUrl } from '@/lib/config';
 import { authFetch } from '@/lib/api';
 import Analytics from '@/lib/analytics';
 
 type SummaryStatus = 'idle' | 'processing' | 'summarizing' | 'regenerating' | 'completed' | 'error';
+type NotesGenerationInfo = {
+  transcript_source?: string | null;
+  audio_used?: boolean | null;
+  agenda_used?: boolean | null;
+  prompt_version?: string | null;
+  diarized_available?: boolean;
+  recommend_regenerate_with_diarized?: boolean;
+};
 
 interface UseSummaryGenerationProps {
   meeting: any;
@@ -18,6 +25,7 @@ interface UseSummaryGenerationProps {
   onMeetingUpdated?: () => Promise<void>;
   updateMeetingTitle: (title: string) => void;
   setAiSummary: (summary: Summary | null) => void;
+  initialNotesGenerationInfo?: NotesGenerationInfo | null;
 }
 
 export function useSummaryGeneration({
@@ -29,12 +37,21 @@ export function useSummaryGeneration({
   onMeetingUpdated,
   updateMeetingTitle,
   setAiSummary,
+  initialNotesGenerationInfo,
 }: UseSummaryGenerationProps) {
   const [summaryStatus, setSummaryStatus] = useState<SummaryStatus>('idle');
   const [summaryError, setSummaryError] = useState<string | null>(null);
-  const [originalTranscript, setOriginalTranscript] = useState<string>('');
+  const [notesGenerationInfo, setNotesGenerationInfo] = useState<NotesGenerationInfo | null>(
+    initialNotesGenerationInfo || null
+  );
 
   const { startSummaryPolling } = useSidebar();
+
+  useEffect(() => {
+    if (initialNotesGenerationInfo) {
+      setNotesGenerationInfo(initialNotesGenerationInfo);
+    }
+  }, [initialNotesGenerationInfo]);
 
   // Helper to get status message
   const getSummaryStatusMessage = useCallback((status: SummaryStatus) => {
@@ -56,28 +73,18 @@ export function useSummaryGeneration({
 
   // Unified summary processing logic
   const processSummary = useCallback(async ({
-    transcriptText,
     customPrompt = '',
     isRegeneration = false,
+    preferDiarizedTranscript = true,
   }: {
-    transcriptText: string;
     customPrompt?: string;
     isRegeneration?: boolean;
+    preferDiarizedTranscript?: boolean;
   }) => {
       setSummaryStatus(isRegeneration ? 'regenerating' : 'processing');
       setSummaryError(null);
 
-      const serverAddress = apiUrl;
-
       try {
-        if (!transcriptText.trim()) {
-          throw new Error('No transcript text available. Please add some text first.');
-        }
-
-        if (!isRegeneration) {
-          setOriginalTranscript(transcriptText);
-        }
-
         console.log('Generating notes with Gemini using template:', selectedTemplate);
 
         // Use the new /meetings/{id}/generate-notes endpoint which uses Gemini
@@ -90,7 +97,7 @@ export function useSummaryGeneration({
             model: 'gemini',
             model_name: 'gemini-2.5-flash',
             custom_context: customPrompt || '',  // Add context from user input
-            transcript: transcriptText, // Pass the explicit transcript text (with speakers)
+            prefer_diarized_transcript: preferDiarizedTranscript,
           })
         });
 
@@ -134,6 +141,9 @@ export function useSummaryGeneration({
         // Handle successful completion
         if (pollingResult.status === 'completed' && pollingResult.data) {
           console.log('✅ Summary generation completed:', pollingResult.data);
+          if (pollingResult.notes_generation) {
+            setNotesGenerationInfo(pollingResult.notes_generation);
+          }
 
           // Update meeting title if available
           const meetingName = pollingResult.data.MeetingName || pollingResult.meetingName;
@@ -287,8 +297,7 @@ export function useSummaryGeneration({
     onMeetingUpdated,
   ]);
 
-  // Public API: Generate summary from transcripts
-  // ALWAYS uses Gemini for best quality notes generation
+  // Public API: Generate summary from backend-selected transcript source.
   const handleGenerateSummary = useCallback(async (customPrompt: string = '') => {
     // Check if model config is still loading
     if (isModelConfigLoading) {
@@ -314,31 +323,31 @@ export function useSummaryGeneration({
       template: selectedTemplate
     });
 
-    const fullTranscript = transcripts.map(t => {
-      const speakerPrefix = t.speaker ? `[${t.speaker}]: ` : '';
-      return `${speakerPrefix}${t.text}`;
-    }).join('\n');
-    await processSummary({ transcriptText: fullTranscript, customPrompt });
+    await processSummary({ customPrompt, preferDiarizedTranscript: true });
   }, [transcripts, processSummary, isModelConfigLoading, selectedTemplate]);
 
-  // Public API: Regenerate summary from original transcript
+  // Public API: Regenerate summary (same source preference as initial generation)
   const handleRegenerateSummary = useCallback(async () => {
-    if (!originalTranscript.trim()) {
-      console.error('No original transcript available for regeneration');
-      return;
-    }
-
     await processSummary({
-      transcriptText: originalTranscript,
-      isRegeneration: true
+      isRegeneration: true,
+      preferDiarizedTranscript: true,
     });
-  }, [originalTranscript, processSummary]);
+  }, [processSummary]);
+
+  const handleRegenerateWithDiarized = useCallback(async () => {
+    await processSummary({
+      isRegeneration: true,
+      preferDiarizedTranscript: true,
+    });
+  }, [processSummary]);
 
   return {
     summaryStatus,
     summaryError,
     handleGenerateSummary,
     handleRegenerateSummary,
+    handleRegenerateWithDiarized,
+    notesGenerationInfo,
     getSummaryStatusMessage,
   };
 }

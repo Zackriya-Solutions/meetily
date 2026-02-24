@@ -38,6 +38,7 @@ export class AudioStreamClient {
   private authToken: string | null = null;
   private recordingStartTime: number = 0; // AudioContext.currentTime at recording start
   private heartbeatInterval: NodeJS.Timeout | null = null;
+  private reconnectInFlight: Promise<void> | null = null;
   private maxBufferedChunks: number = 500;
   private pendingStopResolve: (() => void) | null = null;
   private pendingStopReject: ((reason?: unknown) => void) | null = null;
@@ -195,17 +196,19 @@ export class AudioStreamClient {
         url += (url.includes('?') ? '&' : '?') + `auth_token=${encodeURIComponent(this.authToken)}`;
       }
         
-      this.websocket = new WebSocket(url);
-      this.websocket.binaryType = 'arraybuffer';
+      const ws = new WebSocket(url);
+      ws.binaryType = 'arraybuffer';
+      this.websocket = ws;
 
       const timeout = setTimeout(() => {
-        if (this.websocket?.readyState !== WebSocket.OPEN) {
-          this.websocket?.close();
+        if (this.websocket === ws && ws.readyState !== WebSocket.OPEN) {
+          ws.close();
           reject(new Error('Timeout'));
         }
       }, 5000);
 
-      this.websocket.onopen = () => {
+      ws.onopen = () => {
+        if (this.websocket !== ws) return;
         clearTimeout(timeout);
         console.log('[AudioStream] WebSocket connected');
         
@@ -215,7 +218,8 @@ export class AudioStreamClient {
         resolve();
       };
 
-      this.websocket.onmessage = (event) => {
+      ws.onmessage = (event) => {
+        if (this.websocket !== ws) return;
         try {
           const data = JSON.parse(event.data);
           
@@ -248,18 +252,31 @@ export class AudioStreamClient {
         }
       };
 
-      this.websocket.onclose = (event) => {
+      ws.onclose = (event) => {
+        if (this.websocket !== ws) return;
         console.log(`[AudioStream] WebSocket closed: ${event.code}`);
+        this.websocket = null;
+
         // If we were streaming and didn't close intentionally, try to reconnect.
-        if (this.isStreaming && !this.intentionalClose && !event.wasClean) {
-             this.connectWithRetry().catch(() => {
-                 void this.stop(); // Give up if retry fails
-             });
+        // Some browsers may mark closes as "clean" for server-initiated heartbeat shutdowns.
+        const shouldReconnect =
+          this.isStreaming &&
+          !this.intentionalClose &&
+          (event.code === 1000 || event.code === 1006 || event.code === 1008 || !event.wasClean);
+        if (shouldReconnect && !this.reconnectInFlight) {
+          this.reconnectInFlight = this.connectWithRetry()
+            .catch(() => {
+              void this.stop(); // Give up if retry fails
+            })
+            .finally(() => {
+              this.reconnectInFlight = null;
+            });
         }
         this.callbacks.onDisconnected?.();
       };
 
-      this.websocket.onerror = (err) => {
+      ws.onerror = (err) => {
+        if (this.websocket !== ws) return;
         // Just log, onclose will handle logic
         console.error('[AudioStream] WS Error:', err);
       };
@@ -282,7 +299,11 @@ export class AudioStreamClient {
     this.stopHeartbeat();
     this.heartbeatInterval = setInterval(() => {
       if (this.websocket?.readyState === WebSocket.OPEN) {
-        this.websocket.send(JSON.stringify({ type: 'ping' }));
+        try {
+          this.websocket.send(JSON.stringify({ type: 'ping' }));
+        } catch (error) {
+          console.warn('[AudioStream] Heartbeat send failed:', error);
+        }
       }
     }, 5000);
   }

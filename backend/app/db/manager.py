@@ -278,7 +278,7 @@ class DatabaseManager:
         async with self._get_connection() as conn:
             row = await conn.fetchrow(
                 """
-                SELECT meeting_id, status, result, error, start_time, end_time
+                SELECT meeting_id, status, result, error, start_time, end_time, metadata
                 FROM summary_processes 
                 WHERE meeting_id = $1
                 ORDER BY start_time DESC
@@ -294,6 +294,11 @@ class DatabaseManager:
                 if isinstance(data.get("result"), str):
                     try:
                         data["result"] = json.loads(data["result"])
+                    except:
+                        pass
+                if isinstance(data.get("metadata"), str):
+                    try:
+                        data["metadata"] = json.loads(data["metadata"])
                     except:
                         pass
                 return data
@@ -1337,12 +1342,13 @@ class DatabaseManager:
                     """
                     INSERT INTO calendar_events (
                         user_email, provider, event_id, meeting_title, meeting_link,
-                        organizer_email, attendee_emails, start_time, end_time, updated_at
+                        agenda_description, organizer_email, attendee_emails, start_time, end_time, updated_at
                     )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11)
                     ON CONFLICT (user_email, provider, event_id, start_time) DO UPDATE SET
                         meeting_title = EXCLUDED.meeting_title,
                         meeting_link = EXCLUDED.meeting_link,
+                        agenda_description = EXCLUDED.agenda_description,
                         organizer_email = EXCLUDED.organizer_email,
                         attendee_emails = EXCLUDED.attendee_emails,
                         end_time = EXCLUDED.end_time,
@@ -1353,6 +1359,7 @@ class DatabaseManager:
                     event["event_id"],
                     event["meeting_title"],
                     event.get("meeting_link"),
+                    event.get("agenda_description"),
                     event.get("organizer_email"),
                     json.dumps(event.get("attendee_emails", [])),
                     event["start_time"],
@@ -1365,6 +1372,7 @@ class DatabaseManager:
             rows = await conn.fetch(
                 """
                 SELECT e.user_email, e.provider, e.event_id, e.meeting_title, e.meeting_link,
+                       e.agenda_description,
                        e.attendee_emails, e.start_time,
                        COALESCE(s.attendee_reminders_enabled, FALSE) AS attendee_reminders_enabled
                 FROM calendar_events e
@@ -1377,6 +1385,7 @@ class DatabaseManager:
                  AND d.event_start_time = e.start_time
                 WHERE COALESCE(s.reminders_enabled, TRUE) = TRUE
                   AND d.event_id IS NULL
+                  AND jsonb_array_length(COALESCE(e.attendee_emails, '[]'::jsonb)) > 1
                   AND e.start_time >= (NOW() - INTERVAL '4 hours')
                   AND e.start_time <= (NOW() + INTERVAL '24 hours')
                   AND (
@@ -1401,6 +1410,7 @@ class DatabaseManager:
                         "event_id": row["event_id"],
                         "meeting_title": row["meeting_title"],
                         "meeting_link": row["meeting_link"],
+                        "agenda_description": row["agenda_description"],
                         "attendees": attendees,
                         "start_time": row["start_time"],
                         "attendee_reminders_enabled": row[
@@ -1409,6 +1419,107 @@ class DatabaseManager:
                     }
                 )
             return reminders
+
+    async def get_active_calendar_integration_for_user(
+        self, user_email: str, provider: str = "google"
+    ) -> Optional[Dict]:
+        async with self._get_connection() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT user_email, provider, external_account_email, scopes,
+                       access_token, refresh_token, token_expires_at
+                FROM calendar_integrations
+                WHERE user_email = $1 AND provider = $2 AND is_active = TRUE
+            """,
+                user_email,
+                provider,
+            )
+            if not row:
+                return None
+
+            raw_scopes = row["scopes"] or []
+            scopes = json.loads(raw_scopes) if isinstance(raw_scopes, str) else raw_scopes
+            return {
+                "user_email": row["user_email"],
+                "provider": row["provider"],
+                "external_account_email": row["external_account_email"],
+                "scopes": scopes,
+                "access_token": decrypt_key(row["access_token"]),
+                "refresh_token": decrypt_key(row["refresh_token"]),
+                "token_expires_at": row["token_expires_at"],
+            }
+
+    async def get_calendar_event_context_for_meeting(
+        self, meeting_id: str, user_email: str, provider: str = "google"
+    ) -> Optional[Dict]:
+        async with self._get_connection() as conn:
+            meeting = await conn.fetchrow(
+                """
+                SELECT title, created_at
+                FROM meetings
+                WHERE id = $1
+            """,
+                meeting_id,
+            )
+            if not meeting:
+                return None
+
+            # Primary match: similar title + close start time window.
+            row = await conn.fetchrow(
+                """
+                SELECT event_id, meeting_title, meeting_link, agenda_description,
+                       attendee_emails, start_time, end_time
+                FROM calendar_events
+                WHERE user_email = $1
+                  AND provider = $2
+                  AND (
+                      LOWER(meeting_title) = LOWER($3)
+                      OR LOWER(meeting_title) LIKE LOWER($3) || '%'
+                      OR LOWER($3) LIKE LOWER(meeting_title) || '%'
+                  )
+                  AND start_time BETWEEN ($4 - INTERVAL '12 hours') AND ($4 + INTERVAL '12 hours')
+                ORDER BY ABS(EXTRACT(EPOCH FROM (start_time - $4))) ASC
+                LIMIT 1
+            """,
+                user_email,
+                provider,
+                meeting["title"] or "",
+                meeting["created_at"],
+            )
+
+            # Fallback: nearest event around meeting start (if title drifted/renamed).
+            if not row:
+                row = await conn.fetchrow(
+                    """
+                    SELECT event_id, meeting_title, meeting_link, agenda_description,
+                           attendee_emails, start_time, end_time
+                    FROM calendar_events
+                    WHERE user_email = $1
+                      AND provider = $2
+                      AND start_time BETWEEN ($3 - INTERVAL '3 hours') AND ($3 + INTERVAL '3 hours')
+                    ORDER BY ABS(EXTRACT(EPOCH FROM (start_time - $3))) ASC
+                    LIMIT 1
+                """,
+                    user_email,
+                    provider,
+                    meeting["created_at"],
+                )
+
+            if not row:
+                return None
+
+            attendees_raw = row["attendee_emails"] or []
+            attendees = json.loads(attendees_raw) if isinstance(attendees_raw, str) else attendees_raw
+            return {
+                "event_id": row["event_id"],
+                "meeting_title": row["meeting_title"],
+                "meeting_link": row["meeting_link"],
+                "agenda_description": row["agenda_description"],
+                "attendees": attendees,
+                "start_time": row["start_time"],
+                "end_time": row["end_time"],
+                "meeting_created_at": meeting["created_at"],
+            }
 
     async def mark_calendar_reminder_sent(
         self,

@@ -72,6 +72,7 @@ AUDIO_CELERY_ENABLED = os.getenv("AUDIO_CELERY_ENABLED", "false").lower() == "tr
 CHUNK_UPLOAD_VIA_CELERY = (
     os.getenv("AUDIO_CHUNK_UPLOAD_VIA_CELERY", "false").lower() == "true"
 )
+STORAGE_TYPE = os.getenv("STORAGE_TYPE", "local").lower()
 
 state_service = get_audio_pipeline_state_service()
 
@@ -117,11 +118,12 @@ async def _finalize_session(
                         size_bytes = int(ch.get("size_bytes") or 0)
                         if chunk_index is None or not storage_path:
                             continue
-                        upload_status = (
-                            "pending"
-                            if (AUDIO_CELERY_ENABLED and CHUNK_UPLOAD_VIA_CELERY)
-                            else "uploaded"
+                        should_enqueue_chunk_upload = (
+                            AUDIO_CELERY_ENABLED
+                            and CHUNK_UPLOAD_VIA_CELERY
+                            and STORAGE_TYPE != "gcp"
                         )
+                        upload_status = "pending" if should_enqueue_chunk_upload else "uploaded"
                         await db.upsert_recording_chunk(
                             session_id=session_id,
                             chunk_index=int(chunk_index),
@@ -129,7 +131,7 @@ async def _finalize_session(
                             storage_path=storage_path,
                             upload_status=upload_status,
                         )
-                        if AUDIO_CELERY_ENABLED and CHUNK_UPLOAD_VIA_CELERY:
+                        if should_enqueue_chunk_upload:
                             try:
                                 try:
                                     from ...tasks.audio_pipeline import (
@@ -380,17 +382,18 @@ async def websocket_streaming_audio(
 
         if not is_resume:
             groq_api_key = (
-                await db.get_user_api_key(user_email, "groq") if user_email else None
-            )
+                (await db.get_api_key("groq", user_email=user_email)) if user_email else ""
+            ) or os.getenv("GROQ_API_KEY", "")
+            groq_api_key = groq_api_key.strip()
             if not groq_api_key:
                 logger.warning(
-                    f"[Streaming] No personal Groq API key for user: {user_email}"
+                    f"[Streaming] No Groq API key resolved for user: {user_email}"
                 )
                 await websocket.send_json(
                     {
                         "type": "error",
                         "code": "GROQ_KEY_REQUIRED",
-                        "message": "Groq API key required. Please add your Groq API key in Settings → Personal Keys.",
+                        "message": "Groq API key required. Add it in Settings → Personal Keys (or admin model settings).",
                     }
                 )
                 try:
@@ -424,9 +427,31 @@ async def websocket_streaming_audio(
         "user_email": user_email,
     }
 
-    # Heartbeat Setup
+    # Heartbeat setup (configurable with safe default).
+    # Keep this above common browser timer-throttling windows to avoid false disconnects.
     last_heartbeat = time.time()
-    HEARTBEAT_TIMEOUT = 15.0  # seconds
+    HEARTBEAT_TIMEOUT = float(os.getenv("STREAMING_HEARTBEAT_TIMEOUT_SECONDS", "60"))
+    HEARTBEAT_DB_UPDATE_INTERVAL = float(
+        os.getenv("STREAMING_HEARTBEAT_DB_UPDATE_SECONDS", "10")
+    )
+    HEARTBEAT_DB_UPDATE_TIMEOUT = float(
+        os.getenv("STREAMING_HEARTBEAT_DB_UPDATE_TIMEOUT_SECONDS", "0.25")
+    )
+    last_heartbeat_db_touch = 0.0
+
+    async def _touch_session_heartbeat_best_effort():
+        nonlocal last_heartbeat_db_touch
+        now = time.time()
+        if (now - last_heartbeat_db_touch) < HEARTBEAT_DB_UPDATE_INTERVAL:
+            return
+        last_heartbeat_db_touch = now
+        try:
+            await asyncio.wait_for(
+                state_service.db.touch_recording_session_heartbeat(session_id),
+                timeout=HEARTBEAT_DB_UPDATE_TIMEOUT,
+            )
+        except Exception:
+            pass
 
     async def heartbeat_monitor():
         try:
@@ -556,17 +581,16 @@ async def websocket_streaming_audio(
                 )
                 break
 
+            if message.get("type") == "websocket.disconnect":
+                logger.info(f"[Streaming] Session {session_id} received disconnect frame")
+                break
+
             if "text" in message:
                 try:
                     data = json.loads(message["text"])
                     if data.get("type") == "ping":
                         last_heartbeat = time.time()
-                        try:
-                            await state_service.db.touch_recording_session_heartbeat(
-                                session_id
-                            )
-                        except Exception:
-                            pass
+                        await _touch_session_heartbeat_best_effort()
                         await websocket.send_json({"type": "pong"})
                         continue
                     if data.get("type") == "stop":
@@ -584,6 +608,9 @@ async def websocket_streaming_audio(
                     pass
 
             if "bytes" in message:
+                last_heartbeat = time.time()
+                await _touch_session_heartbeat_best_effort()
+
                 message_bytes = message["bytes"]
                 timestamp = None
                 audio_chunk = message_bytes
@@ -603,11 +630,12 @@ async def websocket_streaming_audio(
                         idx_match = CHUNK_FILENAME_PATTERN.match(chunk_name)
                         chunk_index = int(idx_match.group(1)) if idx_match else None
                         if chunk_index is not None:
-                            upload_status = (
-                                "pending"
-                                if (AUDIO_CELERY_ENABLED and CHUNK_UPLOAD_VIA_CELERY)
-                                else "uploaded"
+                            should_enqueue_chunk_upload = (
+                                AUDIO_CELERY_ENABLED
+                                and CHUNK_UPLOAD_VIA_CELERY
+                                and STORAGE_TYPE != "gcp"
                             )
+                            upload_status = "pending" if should_enqueue_chunk_upload else "uploaded"
                             try:
                                 await db.upsert_recording_chunk(
                                     session_id=session_id,
@@ -616,7 +644,7 @@ async def websocket_streaming_audio(
                                     storage_path=saved_chunk_path,
                                     upload_status=upload_status,
                                 )
-                                if AUDIO_CELERY_ENABLED and CHUNK_UPLOAD_VIA_CELERY:
+                                if should_enqueue_chunk_upload:
                                     try:
                                         try:
                                             from ...tasks.audio_pipeline import (

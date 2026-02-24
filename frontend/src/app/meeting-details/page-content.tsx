@@ -24,12 +24,14 @@ import { useRouter } from 'next/navigation';
 export default function PageContent({
   meeting,
   summaryData,
+  notesGenerationInfo,
   shouldAutoGenerate = false,
   onAutoGenerateComplete,
   onMeetingUpdated
 }: {
   meeting: any;
   summaryData: Summary | null;
+  notesGenerationInfo?: any;
   shouldAutoGenerate?: boolean;
   onAutoGenerateComplete?: () => void;
   onMeetingUpdated?: () => Promise<void>;
@@ -66,6 +68,7 @@ export default function PageContent({
     onMeetingUpdated,
     updateMeetingTitle: meetingData.updateMeetingTitle,
     setAiSummary: meetingData.setAiSummary,
+    initialNotesGenerationInfo: notesGenerationInfo,
   });
 
   const copyOperations = useCopyOperations({
@@ -244,6 +247,8 @@ export default function PageContent({
           onDirtyChange={meetingData.setIsSummaryDirty}
           summaryError={summaryGeneration.summaryError}
           onRegenerateSummary={summaryGeneration.handleRegenerateSummary}
+          onRegenerateWithDiarized={summaryGeneration.handleRegenerateWithDiarized}
+          notesGenerationInfo={summaryGeneration.notesGenerationInfo}
           getSummaryStatusMessage={summaryGeneration.getSummaryStatusMessage}
           availableTemplates={templates.availableTemplates}
           selectedTemplate={templates.selectedTemplate}

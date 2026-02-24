@@ -7,6 +7,7 @@ import uuid
 import os
 import asyncio
 import tempfile
+import re
 from pathlib import Path
 
 try:
@@ -29,6 +30,8 @@ try:
     from ...services.chat import ChatService
     from ...services.gemini_client import generate_content_with_file_sync
     from ...services.storage import StorageService
+    from ...services.calendar.google_oauth import GoogleCalendarOAuthService
+    from ...services.calendar.reminder_email import CalendarReminderEmailService
 except (ImportError, ValueError):
     from api.deps import get_current_user
     from schemas.user import User
@@ -49,6 +52,8 @@ except (ImportError, ValueError):
     from services.chat import ChatService
     from services.gemini_client import generate_content_with_file_sync
     from services.storage import StorageService
+    from services.calendar.google_oauth import GoogleCalendarOAuthService
+    from services.calendar.reminder_email import CalendarReminderEmailService
 
 # Initialize services
 db = DatabaseManager()
@@ -57,6 +62,7 @@ processor = SummarizationService()
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+DIARIZED_SOURCES = {"diarized", "diarization"}
 
 
 # --- Meeting Templates with Optimized Prompts ---
@@ -345,6 +351,59 @@ def _dedupe_summary_content(summary: dict) -> dict:
     return summary
 
 
+def _build_transcript_text_from_version_content(content: list) -> str:
+    lines = []
+    for segment in content or []:
+        if not isinstance(segment, dict):
+            continue
+        text = (segment.get("text") or segment.get("transcript") or "").strip()
+        if not text:
+            continue
+        speaker = (segment.get("speaker") or "").strip()
+        lines.append(f"[{speaker}]: {text}" if speaker else text)
+    return "\n".join(lines).strip()
+
+
+async def _resolve_notes_transcript(
+    meeting_id: str,
+    prefer_diarized: bool,
+    explicit_transcript: str = "",
+) -> Tuple[str, str, bool]:
+    """
+    Resolve transcript text for notes generation.
+    Returns: (transcript_text, source_label, diarized_available)
+    """
+    explicit = (explicit_transcript or "").strip()
+    if explicit:
+        versions = await db.get_transcript_versions(meeting_id)
+        diarized_available = any(
+            ((v.get("source") or "").lower() in DIARIZED_SOURCES) for v in versions
+        )
+        return explicit, "provided", diarized_available
+
+    versions = await db.get_transcript_versions(meeting_id)
+    diarized_version = next(
+        (v for v in versions if (v.get("source") or "").lower() in DIARIZED_SOURCES), None
+    )
+    diarized_available = diarized_version is not None
+
+    if prefer_diarized and diarized_version:
+        content = await db.get_transcript_version_content(
+            meeting_id, diarized_version["version_num"]
+        )
+        text = _build_transcript_text_from_version_content(content or [])
+        if text:
+            return text, "diarized", True
+
+    meeting_data = await db.get_meeting(meeting_id)
+    transcripts = (meeting_data or {}).get("transcripts") or []
+    live_text = "\n".join([(t.get("text") or "").strip() for t in transcripts]).strip()
+    if live_text:
+        return live_text, "live", diarized_available
+
+    return "", "missing", diarized_available
+
+
 async def process_transcript_background(
     process_id: str,
     transcript: TranscriptRequest,
@@ -511,6 +570,7 @@ async def process_transcript_background(
 async def generate_notes_with_gemini_background(
     meeting_id: str,
     full_transcript_text: str,
+    transcript_source: str,
     template_id: str,
     meeting_title: str,
     custom_context: str,
@@ -524,8 +584,49 @@ async def generate_notes_with_gemini_background(
     Background task to generate notes using Gemini.
     """
     template_prompt = get_template_prompt(template_id)
+    calendar_event_context = None
+
+    def _clean_calendar_text(value: str) -> str:
+        if not value:
+            return ""
+        no_html = re.sub(r"<[^>]+>", " ", value)
+        return re.sub(r"\s+", " ", no_html).strip()
+
+    try:
+        calendar_event_context = await db.get_calendar_event_context_for_meeting(
+            meeting_id=meeting_id,
+            user_email=user_email,
+            provider="google",
+        )
+    except Exception as e:
+        logger.warning("Failed to fetch calendar context for %s: %s", meeting_id, e)
+
+    calendar_context_lines = []
+    if calendar_event_context:
+        agenda_text = _clean_calendar_text(
+            calendar_event_context.get("agenda_description") or ""
+        )
+        attendees = calendar_event_context.get("attendees") or []
+        if calendar_event_context.get("meeting_title"):
+            calendar_context_lines.append(
+                f"- Calendar title: {calendar_event_context['meeting_title']}"
+            )
+        if calendar_event_context.get("start_time"):
+            calendar_context_lines.append(
+                f"- Scheduled start (UTC): {calendar_event_context['start_time']}"
+            )
+        if calendar_event_context.get("meeting_link"):
+            calendar_context_lines.append(
+                f"- Meeting link: {calendar_event_context['meeting_link']}"
+            )
+        calendar_context_lines.append(f"- Attendee count: {len(attendees)}")
+        if agenda_text:
+            calendar_context_lines.append(f"- Agenda/description: {agenda_text}")
+
     if custom_context:
         template_prompt += f"\n\nAdditional Context:\n{custom_context}"
+    if calendar_context_lines:
+        template_prompt += "\n\nCalendar Context:\n" + "\n".join(calendar_context_lines)
 
     def _extract_json_object(text: str) -> str:
         if not text:
@@ -729,6 +830,9 @@ async def generate_notes_with_gemini_background(
             "audio_source": None,
             "audio_duration_sec": None,
             "fallback_reason": None,
+            "notes_transcript_source": transcript_source,
+            "notes_agenda_used": bool(calendar_context_lines),
+            "notes_prompt_version": "v1",
         }
 
         all_json_data = []
@@ -861,6 +965,40 @@ async def generate_notes_with_gemini_background(
             result=final_result,
             metadata=metadata,
         )
+
+        # 7. Calendar post-processing hooks: recap email + optional writeback.
+        try:
+            if calendar_event_context:
+                settings = await db.get_calendar_automation_settings(user_email)
+                attendees = calendar_event_context.get("attendees") or []
+                is_proper_meeting = len(attendees) > 1
+
+                if settings.get("recap_enabled", True) and is_proper_meeting:
+                    recap_service = CalendarReminderEmailService()
+                    await recap_service.send_post_meeting_recap(
+                        host_email=user_email,
+                        meeting_title=final_result.get("MeetingName", meeting_title),
+                        notes_markdown=markdown_output,
+                        meeting_link=calendar_event_context.get("meeting_link"),
+                        attendees=attendees,
+                        include_attendees=bool(
+                            settings.get("attendee_reminders_enabled", False)
+                        ),
+                    )
+
+                if settings.get("writeback_enabled", False):
+                    oauth_service = GoogleCalendarOAuthService(db=db)
+                    await oauth_service.writeback_notes_to_event(
+                        user_email=user_email,
+                        event_id=calendar_event_context["event_id"],
+                        notes_markdown=markdown_output,
+                    )
+        except Exception as post_hook_error:
+            logger.error(
+                "Calendar post-processing failed for %s: %s",
+                meeting_id,
+                post_hook_error,
+            )
 
     except Exception as e:
         logger.error(f"Failed to generate notes: {e}")
@@ -1327,6 +1465,29 @@ async def save_transcript(
 
         # Trigger post-recording processing (merge, upload to GCP, cleanup) in background
         try:
+            # Avoid premature finalize while WS session is still active.
+            # In celery/session-pipeline mode, recording finalization is handled by the
+            # audio pipeline state machine after stop/resume-grace.
+            skip_post_finalize = False
+            if data.session_id:
+                session = await db.get_recording_session(data.session_id)
+                if session and session.get("status") in {
+                    "recording",
+                    "stopping_requested",
+                    "uploading_chunks",
+                    "finalizing",
+                    "postprocessing",
+                }:
+                    skip_post_finalize = True
+                    logger.info(
+                        "Skipping save-transcript finalize for active session %s (status=%s)",
+                        data.session_id,
+                        session.get("status"),
+                    )
+
+            if skip_post_finalize:
+                return {"message": "Transcript saved successfully", "meeting_id": meeting_id}
+
             try:
                 from ...services.audio.post_recording import get_post_recording_service
             except (ImportError, ValueError):
@@ -1373,6 +1534,11 @@ async def get_summary(meeting_id: str, current_user: User = Depends(get_current_
 
         status = result.get("status", "unknown").lower()
 
+        versions = await db.get_transcript_versions(meeting_id)
+        diarized_available = any(
+            ((v.get("source") or "").lower() in DIARIZED_SOURCES) for v in versions
+        )
+
         # Parse result data if available
         summary_data = None
         if result.get("result"):
@@ -1391,6 +1557,11 @@ async def get_summary(meeting_id: str, current_user: User = Depends(get_current_
 
         # Transform summary data into frontend format if available
         transformed_data = {}
+        metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+        notes_transcript_source = metadata.get("notes_transcript_source")
+        recommend_regenerate_with_diarized = bool(
+            diarized_available and notes_transcript_source and notes_transcript_source != "diarized"
+        )
         if isinstance(summary_data, dict) and status == "completed":
             transformed_data["MeetingName"] = summary_data.get("MeetingName", "")
             if "markdown" in summary_data:
@@ -1417,6 +1588,14 @@ async def get_summary(meeting_id: str, current_user: User = Depends(get_current_
                 "end": result.get("end_time").isoformat()
                 if result.get("end_time")
                 else None,
+                "notes_generation": {
+                    "transcript_source": notes_transcript_source,
+                    "audio_used": metadata.get("audio_used"),
+                    "agenda_used": metadata.get("notes_agenda_used"),
+                    "prompt_version": metadata.get("notes_prompt_version"),
+                    "diarized_available": diarized_available,
+                    "recommend_regenerate_with_diarized": recommend_regenerate_with_diarized,
+                },
             }
         )
 
@@ -1442,19 +1621,18 @@ async def generate_detailed_notes(
             f"Generating detailed notes for meeting {request.meeting_id} using template {request.template_id}"
         )
 
-        # 1. Fetch meeting transcripts from the database
-        meeting_data = await db.get_meeting(request.meeting_id)
-        if not meeting_data or not meeting_data.get("transcripts"):
-            raise HTTPException(
-                status_code=404, detail="Meeting or transcripts not found."
-            )
-
-        transcripts = meeting_data["transcripts"]
-        full_transcript_text = "\n".join([t["text"] for t in transcripts])
+        full_transcript_text, transcript_source, _ = await _resolve_notes_transcript(
+            meeting_id=request.meeting_id,
+            prefer_diarized=request.prefer_diarized_transcript,
+            explicit_transcript=request.transcript,
+        )
 
         if not full_transcript_text.strip():
             raise HTTPException(status_code=400, detail="Transcript text is empty.")
 
+        meeting_data = await db.get_meeting(request.meeting_id)
+        if not meeting_data:
+            raise HTTPException(status_code=404, detail="Meeting not found.")
         meeting_title = meeting_data.get("title", "Untitled Meeting")
 
         # 2. Start background processing (non-blocking)
@@ -1462,6 +1640,7 @@ async def generate_detailed_notes(
             generate_notes_with_gemini_background,
             request.meeting_id,
             full_transcript_text,
+            transcript_source,
             request.template_id,
             meeting_title,
             "",
@@ -1517,34 +1696,29 @@ async def generate_notes_for_meeting(
             audio_mode = request.audio_mode or audio_mode
             audio_url = request.audio_url or ""
             max_audio_minutes = request.max_audio_minutes or max_audio_minutes
+            prefer_diarized_transcript = request.prefer_diarized_transcript
+            explicit_transcript = request.transcript or ""
+        else:
+            prefer_diarized_transcript = True
+            explicit_transcript = ""
 
         logger.info(
             f"Generating notes for meeting {actual_meeting_id} using template {template_id}"
         )
 
-        # 1. Fetch meeting transcripts
-        # Check if transcript is provided in request (e.g. from frontend with specific version/edits)
-        if request and request.transcript and request.transcript.strip():
-            logger.info(f"Using provided transcript text for meeting {actual_meeting_id}")
-            full_transcript_text = request.transcript
-            # We still need meeting title
-            meeting_data = await db.get_meeting(actual_meeting_id)
-            meeting_title = meeting_data.get("title", "Untitled Meeting") if meeting_data else "Untitled Meeting"
-        else:
-            # Fallback to fetching from DB
-            meeting_data = await db.get_meeting(actual_meeting_id)
-            if not meeting_data or not meeting_data.get("transcripts"):
-                raise HTTPException(
-                    status_code=404, detail="Meeting or transcripts not found."
-                )
-
-            transcripts = meeting_data["transcripts"]
-            # Default joining without speaker labels (historical behavior)
-            full_transcript_text = "\n".join([t["text"] for t in transcripts])
+        # 1. Resolve transcript source (prefer diarized when available)
+        full_transcript_text, transcript_source, _ = await _resolve_notes_transcript(
+            meeting_id=actual_meeting_id,
+            prefer_diarized=prefer_diarized_transcript,
+            explicit_transcript=explicit_transcript,
+        )
 
         if not full_transcript_text.strip():
             raise HTTPException(status_code=400, detail="Transcript text is empty.")
 
+        meeting_data = await db.get_meeting(actual_meeting_id)
+        if not meeting_data:
+            raise HTTPException(status_code=404, detail="Meeting not found.")
         meeting_title = meeting_data.get("title", "Untitled Meeting")
 
         # 2. Start background processing (non-blocking)
@@ -1552,6 +1726,7 @@ async def generate_notes_for_meeting(
             generate_notes_with_gemini_background,
             actual_meeting_id,
             full_transcript_text,
+            transcript_source,
             template_id,
             meeting_title,
             custom_context,

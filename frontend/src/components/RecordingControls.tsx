@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useState, useEffect, useRef } from 'react';
-import { useSession } from 'next-auth/react';
+import { useSession, getSession } from 'next-auth/react';
 import { Square, Mic, AlertCircle, X, Pause, Play } from 'lucide-react';
 import { SummaryResponse } from '@/types/summary';
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -55,7 +55,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
   const [deviceError, setDeviceError] = useState<{ title: string, message: string } | null>(null);
   const [sessionError, setSessionError] = useState<boolean>(false);
   const [showApiKeyDialog, setShowApiKeyDialog] = useState(false);
-  const { data: session } = useSession();
+  const { data: session, status: sessionStatus } = useSession();
 
   // Real-time streaming audio client
   const audioClientRef = useRef<AudioStreamClient | null>(null);
@@ -133,6 +133,12 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
         onSessionIdReceived(stableSessionId);
       }
 
+      const latestSession = session?.idToken ? session : await getSession();
+      const authToken = (latestSession as any)?.idToken as string | undefined;
+      if (!authToken) {
+        throw new Error('Authentication is still initializing. Please try again in a moment.');
+      }
+
       await client.start({
         onConnected: (sessionId) => {
           console.log('✅ Connected to streaming service, session:', sessionId);
@@ -179,7 +185,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
         onDisconnected: () => {
           console.log('🔌 Streaming disconnected');
         }
-      }, stableSessionId, stableSessionId, (session as any)?.idToken || undefined);
+      }, stableSessionId, stableSessionId, authToken);
 
       console.log('✅ Real-time streaming started');
 
@@ -218,18 +224,19 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
     } finally {
       setIsStarting(false);
     }
-  }, [onRecordingStart, onTranscriptionError, onTranscriptReceived, isStarting, initialSessionId, onSessionIdReceived, session?.user?.email]);
+  }, [onRecordingStart, onTranscriptionError, onTranscriptReceived, isStarting, initialSessionId, onSessionIdReceived, session?.idToken]);
 
   // External start trigger (used by recovery resume action).
   useEffect(() => {
     if (startSignal === undefined) return;
-    if (lastStartSignalRef.current === startSignal) return;
-    lastStartSignalRef.current = startSignal;
     if (startSignal <= 0) return;
     if (isStarting || isStopping) return;
     if (audioClientRef.current?.isActive()) return;
+    if (sessionStatus !== 'authenticated') return;
+    if (lastStartSignalRef.current === startSignal) return;
+    lastStartSignalRef.current = startSignal;
     handleStartRecording();
-  }, [startSignal, isStarting, isStopping, handleStartRecording]);
+  }, [startSignal, isStarting, isStopping, sessionStatus, handleStartRecording]);
 
   const handleStopRecording = useCallback(async () => {
     if (!isRecording || isStarting || isStopping) {

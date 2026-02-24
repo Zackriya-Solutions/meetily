@@ -97,6 +97,8 @@ class StreamingTranscriptionManager:
         self.last_chunk_timestamp = (
             0.0  # Track last client timestamp for monotonicity validation
         )
+        self.last_raw_client_timestamp: Optional[float] = None
+        self.client_timestamp_offset = 0.0
         self.speech_start_time = (
             0.0  # Start time of current speech segment (client time)
         )
@@ -135,6 +137,10 @@ class StreamingTranscriptionManager:
             on_final: Callback for final transcripts
             on_error: Callback for error messages
         """
+        # Calculate chunk duration early so timestamp normalization can use it.
+        # 16kHz, 16-bit (2 bytes) = 32000 bytes/sec
+        chunk_duration = len(audio_data) / 32000.0
+
         # Use client timestamp as source of truth (prevents network jitter)
         if client_timestamp is None:
             # Fallback: estimate based on session start (legacy mode)
@@ -145,27 +151,40 @@ class StreamingTranscriptionManager:
                 "No client_timestamp provided, falling back to server time (not recommended)"
             )
         else:
-            timestamp = client_timestamp
+            raw_timestamp = client_timestamp
 
-            # Validate monotonicity (catch client clock issues)
+            # Handle websocket reconnect / AudioContext reset:
+            # if client timestamp jumps backwards, shift by an offset so timeline stays continuous.
             if (
-                hasattr(self, "last_chunk_timestamp")
-                and timestamp < self.last_chunk_timestamp
+                self.last_raw_client_timestamp is not None
+                and raw_timestamp + 0.05 < self.last_raw_client_timestamp
             ):
+                proposed_offset = (self.last_chunk_timestamp + chunk_duration) - raw_timestamp
+                if proposed_offset > self.client_timestamp_offset:
+                    self.client_timestamp_offset = proposed_offset
+                logger.info(
+                    "Client timestamp reset detected: raw %.3fs -> %.3fs, applying offset %.3fs",
+                    self.last_raw_client_timestamp,
+                    raw_timestamp,
+                    self.client_timestamp_offset,
+                )
+
+            timestamp = raw_timestamp + self.client_timestamp_offset
+
+            # Final monotonic guard for any residual jitter.
+            if timestamp < self.last_chunk_timestamp:
                 logger.warning(
                     f"Non-monotonic timestamp detected: {timestamp:.3f}s < {self.last_chunk_timestamp:.3f}s. "
                     f"Adjusting to prevent time travel."
                 )
-                timestamp = self.last_chunk_timestamp + 0.1
+                timestamp = self.last_chunk_timestamp + min(max(chunk_duration, 0.02), 0.1)
 
+            self.last_raw_client_timestamp = raw_timestamp
             self.last_chunk_timestamp = timestamp
 
         # Track processing time for performance monitoring
         start_time = time.time()
 
-        # Calculate chunk duration: samples / sample_rate
-        # 16kHz, 16-bit (2 bytes) = 32000 bytes/sec
-        chunk_duration = len(audio_data) / 32000.0
         current_end_time = timestamp + chunk_duration
 
         # Convert bytes to numpy array

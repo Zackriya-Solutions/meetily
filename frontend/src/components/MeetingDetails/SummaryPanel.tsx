@@ -43,6 +43,12 @@ interface SummaryPanelProps {
   onDirtyChange: (isDirty: boolean) => void;
   summaryError: string | null;
   onRegenerateSummary: () => Promise<void>;
+  onRegenerateWithDiarized?: () => Promise<void>;
+  notesGenerationInfo?: {
+    transcript_source?: string | null;
+    diarized_available?: boolean;
+    recommend_regenerate_with_diarized?: boolean;
+  } | null;
   getSummaryStatusMessage: (status: 'idle' | 'processing' | 'summarizing' | 'regenerating' | 'completed' | 'error') => string;
   availableTemplates: Array<{ id: string, name: string, description: string }>;
   selectedTemplate: string;
@@ -77,6 +83,8 @@ export function SummaryPanel({
   onDirtyChange,
   summaryError,
   onRegenerateSummary,
+  onRegenerateWithDiarized,
+  notesGenerationInfo,
   getSummaryStatusMessage,
   availableTemplates,
   selectedTemplate,
@@ -166,6 +174,20 @@ export function SummaryPanel({
               hasSummary={!!aiSummary}
             />
           </div>
+        </div>
+      )}
+
+      {aiSummary && !isSummaryLoading && notesGenerationInfo?.recommend_regenerate_with_diarized && (
+        <div className="mx-6 mt-4 p-3 rounded-lg border border-amber-200 bg-amber-50 flex items-center justify-between gap-3">
+          <p className="text-sm text-amber-900">
+            Speaker-aware transcript is available. Regenerating with diarized transcript can improve notes quality.
+          </p>
+          <button
+            onClick={() => onRegenerateWithDiarized?.()}
+            className="px-3 py-1.5 rounded-md bg-amber-600 text-white text-sm hover:bg-amber-700"
+          >
+            Regenerate with diarized
+          </button>
         </div>
       )}
 

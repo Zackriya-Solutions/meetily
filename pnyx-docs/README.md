@@ -41,6 +41,7 @@ Detailed technical specifications for specific features.
 *   **[Diarization](./features/DIARIZATION_PLAN.md)** - Speaker identification strategy
 *   **[VAD Integration](./features/TEN_VAD_INTEGRATION_PLAN.md)** - Voice Activity Detection
 *   **[Meeting Notes](./features/MEETING_NOTES_GENERATION.md)** - AI Note Generation
+*   **[Notes Grounding Rework](./features/NOTES_GROUNDING_REWORK_PLAN.md)** - Simpler grounding + diarized regeneration strategy
 *   **[Catch Me Up](./features/CATCH_ME_UP.md)** - Real-time summaries
 *   **[Chat Interface](./features/CHAT_BASED_NOTE_INTERFACE.md)** - Dynamic AI refinement of notes
 *   **[Cross-Meeting Search](./features/CROSS_MEETING_SEARCH.md)** - Vector search deep dive

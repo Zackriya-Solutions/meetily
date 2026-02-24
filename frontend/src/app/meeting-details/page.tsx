@@ -15,6 +15,14 @@ interface MeetingDetailsResponse {
   updated_at: string;
   transcripts: Transcript[];
 }
+interface NotesGenerationInfo {
+  transcript_source?: string | null;
+  audio_used?: boolean | null;
+  agenda_used?: boolean | null;
+  prompt_version?: string | null;
+  diarized_available?: boolean;
+  recommend_regenerate_with_diarized?: boolean;
+}
 
 function MeetingDetailsContent() {
   const searchParams = useSearchParams();
@@ -23,6 +31,7 @@ function MeetingDetailsContent() {
   const router = useRouter();
   const [meetingDetails, setMeetingDetails] = useState<MeetingDetailsResponse | null>(null);
   const [meetingSummary, setMeetingSummary] = useState<Summary | null>(null);
+  const [notesGenerationInfo, setNotesGenerationInfo] = useState<NotesGenerationInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [shouldAutoGenerate, setShouldAutoGenerate] = useState<boolean>(false);
@@ -112,11 +121,13 @@ function MeetingDetailsContent() {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
       const summary = await response.json();
+      setNotesGenerationInfo(summary.notes_generation || null);
       console.log('🔍 FETCH SUMMARY: Received data:', summary);
 
       if (summary.status === 'error' || summary.error || summary.status === 'idle') {
         console.warn('⚠️ FETCH SUMMARY: Summary state is incomplete:', summary.status);
         setMeetingSummary(null);
+        setNotesGenerationInfo(summary.notes_generation || null);
         return;
       }
 
@@ -186,6 +197,7 @@ function MeetingDetailsContent() {
     } catch (error) {
       console.error('❌ FETCH SUMMARY Error:', error);
       setMeetingSummary(null);
+      setNotesGenerationInfo(null);
     }
   }, [meetingId, serverAddress]);
 
@@ -280,6 +292,7 @@ function MeetingDetailsContent() {
   return <PageContent
     meeting={meetingDetails}
     summaryData={meetingSummary}
+    notesGenerationInfo={notesGenerationInfo}
     shouldAutoGenerate={shouldAutoGenerate}
     onAutoGenerateComplete={() => setShouldAutoGenerate(false)}
     onMeetingUpdated={handleMeetingUpdated}

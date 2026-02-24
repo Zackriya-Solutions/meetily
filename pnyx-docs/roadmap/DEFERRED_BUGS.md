@@ -155,3 +155,155 @@ This file tracks high-impact bugs that are confirmed but intentionally deferred.
 2. Auto-fallback to sequential mode after quota warnings.
 3. Add provider-budget aware queueing and retry scheduling.
 4. Re-enable parallel mode as default only for paid quota profiles.
+
+## BUG-CALENDAR-WEBHOOK-001: Calendar sync and reminder eligibility should be webhook-driven and attendee-aware
+
+- Status: Deferred
+- Priority: High
+- Reported: 2026-02-24
+- Area: Calendar Integration / Reminder Scheduling / Reliability
+
+### Symptoms
+
+- Reminder timing depends on polling loop (`CALENDAR_REMINDER_LOOP_SECONDS`) and can be late under load.
+- Event updates close to meeting start (reschedule, attendee changes, cancellation) can be missed until next poll cycle.
+- Reminders do not yet fully account for attendee response states (`declined`, `needsAction`, etc.).
+
+### Impact
+
+- Increased risk of wrong-time reminders.
+- Possible reminder emails to declined or non-confirmed participants.
+- More API cost from frequent polling than necessary.
+
+### Current Understanding
+
+- Current implementation is poll-based with periodic Google Calendar `events.list`.
+- Calendar metadata already includes attendees/agenda and supports reminder dedupe.
+- Missing pieces are push-triggered sync and stricter recipient eligibility logic.
+
+### Deferred Fix Plan (Webhook + Better Scheduler)
+
+1. Add Google Calendar push channels (`events.watch`) per active integration.
+2. Store webhook channel metadata in DB and auto-renew before expiry.
+3. On webhook notification, enqueue incremental sync using `syncToken` instead of full polling window.
+4. Keep polling as fallback safety net (lower frequency, e.g. every 5-10 min).
+5. Update reminder recipient filtering using attendee `responseStatus`.
+6. Add observability for webhook health, sync lag, and reminder skip reasons.
+
+### Proposed Data Model Changes
+
+Add table `calendar_watch_channels`:
+
+- `user_email` (TEXT, PK part)
+- `provider` (TEXT, PK part, default `google`)
+- `resource_id` (TEXT)
+- `channel_id` (TEXT, unique)
+- `channel_token` (TEXT, secret verifier)
+- `expiration_at` (TIMESTAMP)
+- `sync_token` (TEXT, nullable)
+- `watch_status` (TEXT: `active|expired|stopped|error`)
+- `last_notification_at` (TIMESTAMP, nullable)
+- `last_sync_at` (TIMESTAMP, nullable)
+- `last_error` (TEXT, nullable)
+
+Add/extend event attendee payload fields in `calendar_events`:
+
+- Keep `attendee_emails` for fast filters.
+- Add `attendee_statuses` JSONB map: `{ "person@x.com": "accepted|tentative|declined|needsAction" }`.
+
+### Proposed Backend Endpoints
+
+1. `POST /api/calendar/google/webhook`
+- Handles `X-Goog-*` notifications.
+- Validate `channel_id`, `resource_id`, and shared `channel_token`.
+- Do not trust request body (Google webhook has headers-only notification).
+- Enqueue user/provider incremental sync job.
+
+2. `POST /internal/calendar/watch/renew`
+- Background task endpoint for renewing expiring channels.
+- Recreates channel and stops old one when needed.
+
+3. Optional admin diagnostics:
+- `GET /api/calendar/debug/watch-status` for channel state/lag.
+
+### Incremental Sync Strategy
+
+1. Initial sync:
+- Use `events.list` with time window and persist latest `nextSyncToken`.
+
+2. Notification-driven sync:
+- On webhook, call `events.list` with stored `syncToken`.
+- Apply deltas (create/update/delete/cancelled).
+- Persist new `nextSyncToken`.
+
+3. Token invalidation (`410 Gone`):
+- Clear `syncToken`.
+- Run bounded full resync for near-future window.
+- Store fresh `nextSyncToken`.
+
+### Reminder Eligibility Rules (Decline-aware)
+
+Host reminder:
+
+- Always send to host if meeting is considered a real meeting.
+
+Attendee reminders (`attendee_reminders_enabled=true`):
+
+- Include only attendees where `responseStatus` in `accepted|tentative`.
+- Exclude `declined`.
+- Exclude `needsAction` by default (can be made configurable later).
+- Exclude organizer/host email and duplicates.
+
+Real meeting rule refinement:
+
+- Current: attendee count > 1.
+- Proposed: `eligible_participant_count >= 2` where eligible excludes declined.
+
+### Scheduler Improvements
+
+1. Convert scheduler to hybrid mode:
+- Push-first (webhook-triggered sync jobs).
+- Poll fallback every N minutes for missed notifications and channel expiry checks.
+
+2. Add lease/lock for multi-instance safety:
+- Prevent duplicate reminder sends across replicas.
+- Keep DB dedupe row as final safeguard.
+
+3. Add jitter and backoff:
+- Avoid thundering herd on mass notifications.
+
+### Security Requirements
+
+1. Verify `X-Goog-Channel-ID`, `X-Goog-Resource-ID`, and a secret channel token.
+2. Use HTTPS-only webhook endpoint.
+3. Restrict webhook route from standard auth middleware and verify via channel secrets instead.
+4. Audit-log every notification with channel/user mapping.
+
+### Rollout Plan
+
+1. Phase A (non-breaking):
+- Add tables/fields and webhook endpoint.
+- Keep existing poll flow as primary.
+
+2. Phase B:
+- Enable webhook-triggered incremental sync behind feature flag.
+- Keep poll fallback active.
+
+3. Phase C:
+- Enable attendee-status based reminder filtering.
+- Track skip metrics and compare delivery quality.
+
+4. Phase D:
+- Reduce polling frequency after webhook stability is proven.
+
+### Testing Plan
+
+1. Unit tests:
+- Header validation, channel token verification, attendee eligibility filter.
+
+2. Integration tests:
+- Simulated webhook -> incremental sync -> due reminder selection.
+- `410 Gone` sync-token reset path.
+
+3. E2E test:
+- Event create/update/decline in Google Calendar and verify reminder recipients/timing.

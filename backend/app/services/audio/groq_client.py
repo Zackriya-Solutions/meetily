@@ -112,20 +112,56 @@ class GroqTranscriptionClient:
 
             wav_buffer.seek(0)
 
-            # TRANSLATION MODE: Convert any language directly to English
-            # This avoids Urdu script and provides clean English output
-            if translate_to_english:
-                logger.debug(f"🔄 Using Whisper TRANSLATION mode (direct to English)")
+            streaming_model = os.getenv("GROQ_STREAMING_MODEL", "whisper-large-v3-turbo")
+            translation_model = os.getenv("GROQ_TRANSLATION_MODEL", "whisper-large-v3")
 
-                # Use the translations endpoint instead of transcriptions
-                # This translates Hindi/Urdu/any language directly to English
-                translation = self.client.audio.translations.create(
-                    file=("audio.wav", wav_buffer.read()),
-                    model="whisper-large-v3",
-                    response_format="verbose_json",
-                    temperature=0.0
-                    # No language param - auto-detect source, output is always English
-                )
+            # TRANSLATION MODE: Convert any language directly to English (only for supported models)
+            if translate_to_english:
+                logger.debug("🔄 Using Whisper TRANSLATION mode (direct to English)")
+
+                # Turbo supports transcriptions but not translations.
+                # Use a known translation-capable model by default.
+                selected_translation_model = translation_model
+                if selected_translation_model == "whisper-large-v3-turbo":
+                    selected_translation_model = "whisper-large-v3"
+
+                try:
+                    translation = self.client.audio.translations.create(
+                        file=("audio.wav", wav_buffer.read()),
+                        model=selected_translation_model,
+                        response_format="verbose_json",
+                        temperature=0.0,
+                    )
+                except Exception as translate_err:
+                    err_msg = str(translate_err)
+                    if "does not support `translate`" not in err_msg:
+                        raise
+
+                    # Graceful fallback to plain transcription when translation is unsupported.
+                    logger.warning(
+                        "Model '%s' does not support translate; falling back to transcription model '%s'.",
+                        selected_translation_model,
+                        streaming_model,
+                    )
+                    wav_buffer.seek(0)
+                    transcription = self.client.audio.transcriptions.create(
+                        file=("audio.wav", wav_buffer.read()),
+                        model=streaming_model,
+                        language=None,
+                        prompt=prompt or "This is a business meeting.",
+                        response_format="verbose_json",
+                        temperature=0.0,
+                    )
+
+                    text = transcription.text.strip()
+                    detected_language = getattr(transcription, "language", "unknown")
+                    return {
+                        "text": text,
+                        "confidence": 1.0,
+                        "language": detected_language,
+                        "translated": False,
+                        "source_language": detected_language,
+                    }
 
                 text = translation.text.strip()
                 detected_lang = getattr(translation, 'language', 'auto')
@@ -149,7 +185,7 @@ class GroqTranscriptionClient:
                 wav_buffer.seek(0)
                 transcription = self.client.audio.transcriptions.create(
                     file=("audio.wav", wav_buffer.read()),
-                    model="whisper-large-v3",
+                    model=streaming_model,
                     language=None,  # Auto-detect
                     prompt=prompt or "This is a business meeting.",
                     response_format="verbose_json",

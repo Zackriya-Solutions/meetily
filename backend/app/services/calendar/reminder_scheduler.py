@@ -124,6 +124,7 @@ class CalendarReminderScheduler:
                     "event_id": item.get("id"),
                     "meeting_title": item.get("summary") or "Untitled Calendar Meeting",
                     "meeting_link": self._extract_meeting_link(item),
+                    "agenda_description": item.get("description"),
                     "organizer_email": organizer_email,
                     "attendee_emails": attendee_emails,
                     "start_time": start_time,

@@ -1,9 +1,10 @@
 import base64
 import hashlib
 import os
+import re
 import secrets
 from datetime import datetime, timedelta
-from typing import Dict
+from typing import Dict, Optional
 from urllib.parse import urlencode
 
 import httpx
@@ -158,3 +159,110 @@ class GoogleCalendarOAuthService:
             "access_token": data.get("access_token", ""),
             "token_expires_at": token_expires_at,
         }
+
+    async def _authorized_request(
+        self,
+        method: str,
+        url: str,
+        user_email: str,
+        integration: Dict,
+        json_body: Optional[Dict] = None,
+    ) -> httpx.Response:
+        access_token = integration.get("access_token", "")
+        refresh_token = integration.get("refresh_token", "")
+        provider = integration.get("provider", "google")
+
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            response = await client.request(
+                method,
+                url,
+                headers={"Authorization": f"Bearer {access_token}"},
+                json=json_body,
+            )
+
+            if response.status_code == 401 and refresh_token:
+                refreshed = await self.refresh_access_token(refresh_token)
+                access_token = refreshed["access_token"]
+                await self.db.update_calendar_access_token(
+                    user_email=user_email,
+                    provider=provider,
+                    access_token=access_token,
+                    token_expires_at=refreshed["token_expires_at"],
+                )
+                response = await client.request(
+                    method,
+                    url,
+                    headers={"Authorization": f"Bearer {access_token}"},
+                    json=json_body,
+                )
+
+        response.raise_for_status()
+        return response
+
+    @staticmethod
+    def _build_writeback_description(existing_description: str, notes_markdown: str) -> str:
+        marker_start = "<!-- PNYX_NOTES_START -->"
+        marker_end = "<!-- PNYX_NOTES_END -->"
+        safe_existing = existing_description or ""
+        without_old_block = re.sub(
+            rf"{re.escape(marker_start)}.*?{re.escape(marker_end)}\n?",
+            "",
+            safe_existing,
+            flags=re.DOTALL,
+        ).rstrip()
+
+        notes_excerpt = (notes_markdown or "").strip()
+        if len(notes_excerpt) > 3500:
+            notes_excerpt = notes_excerpt[:3500].rstrip() + "\n\n[...truncated by Pnyx]"
+
+        pnyx_block = (
+            f"{marker_start}\n"
+            "## Pnyx Meeting Notes\n\n"
+            f"{notes_excerpt}\n"
+            f"{marker_end}"
+        )
+
+        if without_old_block:
+            return f"{without_old_block}\n\n{pnyx_block}"
+        return pnyx_block
+
+    async def writeback_notes_to_event(
+        self,
+        user_email: str,
+        event_id: str,
+        notes_markdown: str,
+    ) -> Dict[str, str]:
+        integration = await self.db.get_active_calendar_integration_for_user(
+            user_email=user_email, provider="google"
+        )
+        if not integration:
+            raise ValueError("No active Google Calendar integration found")
+
+        scopes = integration.get("scopes", []) or []
+        if self.WRITE_SCOPE not in scopes:
+            raise ValueError("Google Calendar write scope not granted")
+
+        event_url = (
+            "https://www.googleapis.com/calendar/v3/calendars/primary/events/"
+            f"{event_id}"
+        )
+        get_response = await self._authorized_request(
+            method="GET",
+            url=event_url,
+            user_email=user_email,
+            integration=integration,
+        )
+        event_payload = get_response.json() or {}
+        current_description = event_payload.get("description", "")
+        updated_description = self._build_writeback_description(
+            current_description, notes_markdown
+        )
+
+        await self._authorized_request(
+            method="PATCH",
+            url=event_url,
+            user_email=user_email,
+            integration=integration,
+            json_body={"description": updated_description},
+        )
+        return {"status": "ok", "event_id": event_id}
