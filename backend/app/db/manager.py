@@ -1744,7 +1744,7 @@ class DatabaseManager:
                 float(end_sec),
                 int(segment_count or 0),
                 error_message,
-                result_json if result_json is not None else None,
+                json.dumps(result_json) if result_json is not None else None,
                 started_at,
                 completed_at,
                 now,

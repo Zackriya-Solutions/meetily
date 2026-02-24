@@ -30,13 +30,13 @@ export function TranscriptButtonGroup({
   diarizationStatus,
   isDiarizing,
   isRecording,
-  diarizationProgress,
-  diarizationWaitEstimate
+  diarizationProgress: _diarizationProgress,
+  diarizationWaitEstimate: _diarizationWaitEstimate
 }: TranscriptButtonGroupProps) {
   const isProcessing = diarizationStatus === 'processing' || isDiarizing;
 
   return (
-    <div className="flex items-center justify-between w-full gap-3">
+    <div className="flex items-start justify-between w-full gap-3">
       <div className="flex flex-col gap-1 min-w-0">
         <div className="flex gap-2">
         {onDiarize && (
@@ -63,53 +63,46 @@ export function TranscriptButtonGroup({
           </Button>
         )}
         </div>
+      </div>
+
+      <div className="flex flex-col items-end gap-1">
+        <ButtonGroup >
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              Analytics.trackButtonClick('copy_transcript', 'meeting_details');
+              onCopyTranscript();
+            }}
+            disabled={transcriptCount === 0}
+            title={transcriptCount === 0 ? 'No transcript available' : 'Copy Transcript'}
+          >
+            <Copy className="h-4 w-4 lg:mr-2" />
+            <span className="hidden lg:inline">Copy</span>
+          </Button>
+
+          <Button
+            size="sm"
+            variant="outline"
+            className="xl:px-4"
+            onClick={() => {
+              Analytics.trackButtonClick('download_recording', 'meeting_details');
+              onDownloadRecording();
+            }}
+            title="Download Audio File"
+          >
+            <Download className="h-4 w-4 lg:mr-2" />
+            <span className="hidden lg:inline">Download Recording</span>
+          </Button>
+        </ButtonGroup>
+
         {isProcessing && (
-          <div className="flex items-center gap-2 text-xs text-slate-600 truncate">
+          <div className="flex items-center gap-2 text-xs text-slate-600">
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            {diarizationProgress && diarizationProgress.total_chunks > 0 ? (
-              <span className="truncate">
-                Identifying speakers... {diarizationProgress.processed_chunks}/{diarizationProgress.total_chunks} chunks
-                {typeof diarizationProgress.percent_complete === 'number' ? ` (${Math.round(diarizationProgress.percent_complete)}%)` : ''}
-                {diarizationWaitEstimate ? ` • ${diarizationWaitEstimate}` : ''}
-              </span>
-            ) : (
-              <span className="truncate">
-                Identifying speakers... {diarizationWaitEstimate || 'Usually takes about 2-4 mins'}
-              </span>
-            )}
+            <span>Diarization in progress. Usually takes 3-5 minutes.</span>
           </div>
         )}
       </div>
-
-      <ButtonGroup >
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => {
-            Analytics.trackButtonClick('copy_transcript', 'meeting_details');
-            onCopyTranscript();
-          }}
-          disabled={transcriptCount === 0}
-          title={transcriptCount === 0 ? 'No transcript available' : 'Copy Transcript'}
-        >
-          <Copy className="h-4 w-4 lg:mr-2" />
-          <span className="hidden lg:inline">Copy</span>
-        </Button>
-
-        <Button
-          size="sm"
-          variant="outline"
-          className="xl:px-4"
-          onClick={() => {
-            Analytics.trackButtonClick('download_recording', 'meeting_details');
-            onDownloadRecording();
-          }}
-          title="Download Audio File"
-        >
-          <Download className="h-4 w-4 lg:mr-2" />
-          <span className="hidden lg:inline">Download Recording</span>
-        </Button>
-      </ButtonGroup>
     </div>
   );
 }
