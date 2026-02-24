@@ -1,7 +1,65 @@
 # Audio + AI Test Automation Plan
 
-**Status:** PLANNED  
+**Status:** IN PROGRESS  
 **Objective:** Remove manual speaking/testing for recording, transcription, diarization, Ask AI, and Catch-up flows.
+
+## Current Implementation Progress
+
+- Phase A started.
+- Added backend pytest scaffold (`backend/tests`, `backend/pytest.ini`, `backend/requirements-dev.txt`).
+- Added initial integration tests for:
+  - health endpoint
+  - chat streaming endpoint (`/chat-meeting`) with mocked chat service and RBAC
+  - catch-up endpoint (`/catch-up`) with mocked Gemini stream
+- Added additional integration tests for:
+  - websocket streaming control flow (connect/ping/stop ack via router-level websocket simulation)
+  - recording URL selection flow (`/meetings/{meeting_id}/recording-url`) with WAV preference assertion
+  - notes generation kickoff (`/meetings/{meeting_id}/generate-notes`) with mocked background task
+- Added reliability-focused integration tests for:
+  - finalize idempotency (`_finalize_session` double-call safety)
+  - backpressure path execution in websocket flow
+  - reconciler endpoint access control (admin-only guard)
+- Added live HTTP-level E2E tests (skipped by default unless enabled):
+  - websocket connect/ping/stop against running backend
+  - upload endpoint against running backend
+- Added frontend Playwright smoke scaffold:
+  - `frontend/playwright.config.ts`
+  - `frontend/tests/e2e/smoke.spec.ts`
+- Current backend local result: `10 passed, 2 skipped`.
+
+## Run Commands
+
+Backend local (fast mocked suite):
+
+```bash
+cd backend
+pytest -q tests/integration
+```
+
+Backend live HTTP E2E (requires running backend + valid auth token):
+
+```bash
+cd backend
+RUN_HTTP_E2E=true \
+BACKEND_BASE_URL=http://localhost:5167 \
+TEST_AUTH_BEARER=<google_jwt_token> \
+pytest -q tests/integration/test_audio_http_e2e_live.py
+```
+
+Frontend Playwright smoke (requires frontend running on 3118):
+
+```bash
+cd frontend
+npm install
+npx playwright install
+npm run test:e2e
+```
+
+Docker option for backend tests:
+
+```bash
+docker exec -it meeting-copilot-backend bash -lc "cd /app && pytest -q tests/integration"
+```
 
 ---
 

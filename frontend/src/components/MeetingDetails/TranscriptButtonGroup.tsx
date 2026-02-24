@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { ButtonGroup } from '@/components/ui/button-group';
 import { Copy, Download, Users, Loader2 } from 'lucide-react';
 import Analytics from '@/lib/analytics';
+import type { DiarizationProgress } from '@/hooks/useDiarization';
 
 
 interface TranscriptButtonGroupProps {
@@ -15,6 +16,8 @@ interface TranscriptButtonGroupProps {
   diarizationStatus?: string;
   isDiarizing?: boolean;
   isRecording?: boolean;
+  diarizationProgress?: DiarizationProgress | null;
+  diarizationWaitEstimate?: string | null;
 }
 
 
@@ -26,13 +29,16 @@ export function TranscriptButtonGroup({
   onStopDiarize,
   diarizationStatus,
   isDiarizing,
-  isRecording
+  isRecording,
+  diarizationProgress,
+  diarizationWaitEstimate
 }: TranscriptButtonGroupProps) {
   const isProcessing = diarizationStatus === 'processing' || isDiarizing;
 
   return (
-    <div className="flex items-center justify-between w-full">
-      <div className="flex gap-2">
+    <div className="flex items-center justify-between w-full gap-3">
+      <div className="flex flex-col gap-1 min-w-0">
+        <div className="flex gap-2">
         {onDiarize && (
           <Button
             size="sm"
@@ -56,9 +62,26 @@ export function TranscriptButtonGroup({
             </span>
           </Button>
         )}
+        </div>
+        {isProcessing && (
+          <div className="flex items-center gap-2 text-xs text-slate-600 truncate">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            {diarizationProgress && diarizationProgress.total_chunks > 0 ? (
+              <span className="truncate">
+                Identifying speakers... {diarizationProgress.processed_chunks}/{diarizationProgress.total_chunks} chunks
+                {typeof diarizationProgress.percent_complete === 'number' ? ` (${Math.round(diarizationProgress.percent_complete)}%)` : ''}
+                {diarizationWaitEstimate ? ` • ${diarizationWaitEstimate}` : ''}
+              </span>
+            ) : (
+              <span className="truncate">
+                Identifying speakers... {diarizationWaitEstimate || 'Usually takes about 2-4 mins'}
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
-      <ButtonGroup>
+      <ButtonGroup >
         <Button
           variant="outline"
           size="sm"

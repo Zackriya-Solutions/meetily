@@ -14,12 +14,12 @@ export const config = {
   // HTTP API base URL
   apiUrl: isDevelopment 
     ? 'http://localhost:5167'
-    : (process.env.NEXT_PUBLIC_BACKEND_URL || 'https://meet.digest.lat'),
+    : (process.env.NEXT_PUBLIC_BACKEND_URL || 'https://meet.pnyx.com'),
   
   // WebSocket URL for real-time streaming
   wsUrl: isDevelopment
     ? 'ws://localhost:5167/ws/streaming-audio'
-    : (process.env.NEXT_PUBLIC_WS_URL || 'wss://meet.digest.lat/ws/streaming-audio'),
+    : (process.env.NEXT_PUBLIC_WS_URL || 'wss://meet.pnyx.com/ws/streaming-audio'),
   
   // Debug mode - enables extra logging
   debug: isDevelopment,

@@ -212,6 +212,8 @@ export default function PageContent({
           onStopDiarize={diarization.stopDiarization}
           diarizationStatus={diarization.status?.status}
           isDiarizing={diarization.isDiarizing}
+          diarizationProgress={diarization.progress}
+          diarizationWaitEstimate={diarization.waitEstimateText}
           speakerMap={speakerMap}
           meetingId={meeting.id}
           onTranscriptsUpdate={meetingData.setTranscripts}

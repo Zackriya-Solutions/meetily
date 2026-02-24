@@ -113,6 +113,13 @@ We analyzed the codebase to calculate exact token loads per feature.
 | **Uploaded File (1hr)** | Deepgram + Gemini Flash + Local Embeddings | **$0.27** |
 | **Audio-Enhanced Notes Add-on (1hr)** | Gemini Flash multimodal (`compressed + transcript`) | **+$0.001–$0.005** |
 
+### Groq Parallel Baseline (Feature-Flagged)
+
+- **Flag:** `GROQ_PARALLEL_WITH_DIARIZATION_ENABLED`
+- **Default:** `false` (sequential Groq + diarization to protect free-tier ASPH limits)
+- **Enable when:** Paid Groq tier (or higher quota) is active.
+- **Tradeoff:** Better wall-clock latency, but much higher burst quota usage and increased `429 rate_limit_exceeded` risk on free/on-demand limits.
+
 ---
 
 ## 6. Save-Time Optimization Impact (Option 1)
@@ -134,6 +141,7 @@ We analyzed the codebase to calculate exact token loads per feature.
 2.  **Audio Compression (Today Plan):** Keep PCM transcription pipeline unchanged, but run parallel encoding during recording and store compressed archival audio (`recording.opus`) in GCP as primary artifact.
 3.  **Brave Search:** Implement Brave Search API integration to keep RAG costs low as search volume scales.
 4.  **Pyannote (Future Optimization):** If Deepgram becomes too expensive at scale ($0.26/hr), implement a self-hosted Pyannote service (on a cheap GPU) + Groq. This would cut the upload cost from $0.27/hr to ~$0.14/hr (50% savings), though it adds operational complexity.
+5.  **Groq Parallel Mode (Paid Only):** Keep sequential mode as default for free-tier stability; enable `GROQ_PARALLEL_WITH_DIARIZATION_ENABLED=true` only when ASPH limits and budget can absorb parallel burst traffic.
 
 ---
 

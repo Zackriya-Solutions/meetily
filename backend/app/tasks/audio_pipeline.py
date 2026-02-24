@@ -1,24 +1,51 @@
 import asyncio
 import logging
 import uuid
+import json
 from typing import Optional
 import os
 from pathlib import Path
 
-from celery import shared_task
+from celery import shared_task, group
 
 try:
     from ..db import DatabaseManager
     from ..services.audio.post_recording import get_post_recording_service
     from ..services.audio.pipeline_state import get_audio_pipeline_state_service
+    from ..services.audio.diarization import DiarizationService
     from ..services.storage import StorageService
 except (ImportError, ValueError):
     from db import DatabaseManager
     from services.audio.post_recording import get_post_recording_service
     from services.audio.pipeline_state import get_audio_pipeline_state_service
+    from services.audio.diarization import DiarizationService
     from services.storage import StorageService
 
 logger = logging.getLogger(__name__)
+
+
+def enqueue_diarization_chunk_group(
+    meeting_id: str,
+    provider: str,
+    api_key: str,
+    chunk_jobs: list[dict],
+):
+    """
+    Enqueue a Celery group for per-chunk diarization processing.
+    """
+    sigs = [
+        diarization_process_chunk_task.s(
+            meeting_id=meeting_id,
+            provider=provider,
+            api_key=api_key,
+            chunk_index=job["chunk_index"],
+            chunk_file_path=job["chunk_file_path"],
+            start_sec=float(job["start_sec"]),
+            end_sec=float(job["end_sec"]),
+        )
+        for job in chunk_jobs
+    ]
+    return group(sigs).apply_async()
 
 
 def enqueue_finalize_session_task(session_id: str) -> str:
@@ -49,6 +76,119 @@ def enqueue_upload_chunk_task(
         checksum=checksum,
     )
     return str(result.id)
+
+
+@shared_task(
+    bind=True,
+    name="diarization.process_chunk",
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_jitter=True,
+    max_retries=3,
+)
+def diarization_process_chunk_task(
+    self,
+    meeting_id: str,
+    provider: str,
+    api_key: str,
+    chunk_index: int,
+    chunk_file_path: str,
+    start_sec: float,
+    end_sec: float,
+):
+    asyncio.run(
+        _diarization_process_chunk_async(
+            task_id=str(self.request.id),
+            meeting_id=meeting_id,
+            provider=provider,
+            api_key=api_key,
+            chunk_index=chunk_index,
+            chunk_file_path=chunk_file_path,
+            start_sec=start_sec,
+            end_sec=end_sec,
+        )
+    )
+
+
+async def _diarization_process_chunk_async(
+    task_id: str,
+    meeting_id: str,
+    provider: str,
+    api_key: str,
+    chunk_index: int,
+    chunk_file_path: str,
+    start_sec: float,
+    end_sec: float,
+):
+    db = DatabaseManager()
+    await db.upsert_diarization_chunk_job(
+        meeting_id=meeting_id,
+        chunk_index=chunk_index,
+        status="processing",
+        start_sec=start_sec,
+        end_sec=end_sec,
+        task_id=task_id,
+    )
+
+    try:
+        chunk_path = Path(chunk_file_path)
+        if not chunk_path.exists():
+            raise FileNotFoundError(f"Chunk file missing: {chunk_file_path}")
+
+        audio_data = chunk_path.read_bytes()
+        service = DiarizationService(provider=provider)
+        segments = await service._diarize_with_deepgram(
+            audio_data=audio_data,
+            meeting_id=f"{meeting_id}-chunk-{chunk_index}",
+            api_key=api_key,
+            audio_url=None,
+        )
+        payload = [
+            {
+                "speaker": s.speaker,
+                "start_time": s.start_time,
+                "end_time": s.end_time,
+                "text": s.text,
+                "confidence": s.confidence,
+                "word_count": s.word_count,
+            }
+            for s in segments
+        ]
+        await db.upsert_diarization_chunk_job(
+            meeting_id=meeting_id,
+            chunk_index=chunk_index,
+            status="completed",
+            start_sec=start_sec,
+            end_sec=end_sec,
+            task_id=task_id,
+            segment_count=len(payload),
+            result_json={"segments": payload},
+        )
+        return {
+            "meeting_id": meeting_id,
+            "chunk_index": chunk_index,
+            "start_sec": start_sec,
+            "end_sec": end_sec,
+            "status": "completed",
+            "segment_count": len(payload),
+        }
+    except Exception as exc:
+        await db.upsert_diarization_chunk_job(
+            meeting_id=meeting_id,
+            chunk_index=chunk_index,
+            status="failed",
+            start_sec=start_sec,
+            end_sec=end_sec,
+            task_id=task_id,
+            error_message=str(exc),
+        )
+        logger.error(
+            "[DiarizationChunk] Failed meeting=%s chunk=%s: %s",
+            meeting_id,
+            chunk_index,
+            exc,
+        )
+        raise
 
 
 @shared_task(

@@ -8,7 +8,9 @@
         "build": "next build",
         "export": "next export",
         "start": "next start -p 3118",
-        "lint": "next lint"
+        "lint": "next lint",
+        "test:e2e": "playwright test",
+        "test:e2e:ui": "playwright test --ui"
     },
     "dependencies": {
         "@blocknote/core": "0.36.0",
@@ -60,6 +62,7 @@
     },
     "devDependencies": {
         "@tailwindcss/typography": "^0.5.15",
+        "@playwright/test": "^1.54.2",
         "@types/node": "^20",
         "@types/react": "^18.3.18",
         "@types/react-dom": "^18.3.5",
