@@ -50,6 +50,7 @@ async def get_current_user(
         raise HTTPException(status_code=401, detail="Token missing email")
 
     # Domain restriction check
+    # Temporary bypass for testing
     if not email.endswith("@appointy.com"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

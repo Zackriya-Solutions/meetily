@@ -1769,6 +1769,47 @@ class DatabaseManager:
             )
             return [dict(r) for r in rows]
 
+    async def list_recording_sessions_since(
+        self,
+        started_after: datetime,
+        user_email: Optional[str] = None,
+        limit: int = 500,
+    ) -> List[Dict]:
+        async with self._get_connection() as conn:
+            if user_email:
+                rows = await conn.fetch(
+                    """
+                    SELECT session_id, user_email, meeting_id, status, started_at, stop_requested_at,
+                           stopped_at, finalized_at, expected_chunk_count, finalized_chunk_count,
+                           dropped_chunk_count, idempotency_finalize_key, last_heartbeat_at,
+                           error_code, error_message, metadata, created_at, updated_at
+                    FROM recording_sessions
+                    WHERE started_at >= $1
+                      AND user_email = $2
+                    ORDER BY started_at DESC
+                    LIMIT $3
+                """,
+                    started_after,
+                    user_email,
+                    limit,
+                )
+            else:
+                rows = await conn.fetch(
+                    """
+                    SELECT session_id, user_email, meeting_id, status, started_at, stop_requested_at,
+                           stopped_at, finalized_at, expected_chunk_count, finalized_chunk_count,
+                           dropped_chunk_count, idempotency_finalize_key, last_heartbeat_at,
+                           error_code, error_message, metadata, created_at, updated_at
+                    FROM recording_sessions
+                    WHERE started_at >= $1
+                    ORDER BY started_at DESC
+                    LIMIT $2
+                """,
+                    started_after,
+                    limit,
+                )
+            return [dict(r) for r in rows]
+
     async def set_recording_finalize_key(self, session_id: str, finalize_key: str):
         async with self._get_connection() as conn:
             await conn.execute(

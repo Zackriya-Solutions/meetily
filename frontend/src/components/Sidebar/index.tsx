@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
-import { ChevronDown, ChevronRight, File, Settings, ChevronLeftCircle, ChevronRightCircle, Calendar, StickyNote, Home, Trash2, Mic, Square, Plus, Search, Pencil, LogOut, Upload, MessageSquare } from 'lucide-react';
+import { ChevronDown, ChevronRight, File, Settings, ChevronLeftCircle, ChevronRightCircle, Calendar, StickyNote, Home, Trash2, Mic, Square, Plus, Search, Pencil, LogOut, Upload, MessageSquare, Activity } from 'lucide-react';
 import { signOut } from 'next-auth/react';
 import { authFetch } from '@/lib/api';
 import { useRouter, usePathname } from 'next/navigation';
@@ -420,6 +420,7 @@ const Sidebar: React.FC = () => {
     const isHomePage = pathname === '/';
     const isMeetingPage = pathname?.includes('/meeting-details');
     const isSettingsPage = pathname === '/settings';
+    const isSloPage = pathname === '/streaming-slo';
 
     return (
       <TooltipProvider>
@@ -505,6 +506,21 @@ const Sidebar: React.FC = () => {
             </TooltipTrigger>
             <TooltipContent side="right">
               <p>Feedback</p>
+            </TooltipContent>
+          </Tooltip>
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={() => router.push('/streaming-slo')}
+                className={`p-2 rounded-lg transition-colors duration-150 ${isSloPage ? 'bg-gray-100' : 'hover:bg-gray-100'
+                  }`}
+              >
+                <Activity className="w-5 h-5 text-gray-600" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right">
+              <p>Streaming SLO</p>
             </TooltipContent>
           </Tooltip>
 
@@ -800,6 +816,14 @@ const Sidebar: React.FC = () => {
               <MessageSquare className="w-4 h-4 mr-2" />
               <span>Feedback</span>
             </button>
+            <button
+              onClick={() => router.push('/streaming-slo')}
+              className="w-full flex items-center justify-center px-3 py-1.5 mt-1 mb-1 text-sm font-medium text-gray-700 bg-gray-200 hover:bg-gray-300 rounded-lg transition-colors shadow-sm"
+            >
+              <Activity className="w-4 h-4 mr-2" />
+              <span>Streaming SLO</span>
+            </button>
+
             <button
               onClick={() => signOut()}
               className="w-full flex items-center justify-center px-3 py-1.5 mt-1 mb-1 text-sm font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-lg transition-colors shadow-sm"

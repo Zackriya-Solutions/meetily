@@ -31,3 +31,5 @@ google-cloud-storage>=2.14.0
 # tavily-python>=0.3.0  # optional: currently unused
 celery>=5.4.0
 redis>=5.0.0
+intervaltree>=3.1.0
+Levenshtein>=0.25.0

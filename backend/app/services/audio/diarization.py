@@ -123,18 +123,29 @@ class DiarizationService:
         )
 
     @staticmethod
-    def _tokenize_text(text: str) -> set:
-        cleaned = re.sub(r"[^a-zA-Z0-9\s]", " ", (text or "").lower())
-        return {w for w in cleaned.split() if len(w) > 2}
-
-    @staticmethod
-    def _jaccard_similarity(tokens_a: set, tokens_b: set) -> float:
-        if not tokens_a or not tokens_b:
+    def _text_similarity(text_a: str, text_b: str) -> float:
+        """
+        Calculate text similarity using Levenshtein ratio.
+        Fallbacks to Jaccard token similarity if Levenshtein is unavailable.
+        """
+        if not text_a or not text_b:
             return 0.0
-        union = len(tokens_a | tokens_b)
-        if union == 0:
-            return 0.0
-        return len(tokens_a & tokens_b) / union
+            
+        try:
+            from Levenshtein import ratio
+            return ratio(text_a.lower().strip(), text_b.lower().strip())
+        except ImportError:
+            # Fallback to Jaccard
+            def _tokenize(t):
+                cleaned = re.sub(r"[^a-zA-Z0-9\s]", " ", (t or "").lower())
+                return {w for w in cleaned.split() if len(w) > 2}
+            
+            tokens_a = _tokenize(text_a)
+            tokens_b = _tokenize(text_b)
+            if not tokens_a or not tokens_b:
+                return 0.0
+            union = len(tokens_a | tokens_b)
+            return len(tokens_a & tokens_b) / union if union > 0 else 0.0
 
     @staticmethod
     def _build_overlap_text(
@@ -160,13 +171,21 @@ class DiarizationService:
             nchannels = wav_reader.getnchannels()
             sampwidth = wav_reader.getsampwidth()
             framerate = wav_reader.getframerate()
-            total_frames = wav_reader.getnframes()
-            pcm_frames = wav_reader.readframes(total_frames)
+            # Trust the actual data bytes, not the header nframes (often placeholder 0x7FFFFFFF from pipe)
+            pcm_frames = wav_reader.readframes(2**31 - 1) 
 
+        total_bytes = len(pcm_frames)
         bytes_per_frame = nchannels * sampwidth
+        total_frames = total_bytes // bytes_per_frame
+        
         chunk_seconds = max(60.0, chunk_minutes * 60.0)
         step_seconds = max(1.0, chunk_seconds - max(0.0, overlap_seconds))
         total_seconds = total_frames / float(framerate) if framerate else 0.0
+
+        logger.info(
+            "📏 Parallel split: total_duration=%.2fs total_frames=%d bytes=%d chunk_sec=%.1f",
+            total_seconds, total_frames, total_bytes, chunk_seconds
+        )
 
         chunks: List[Tuple[int, float, float, bytes]] = []
         chunk_index = 0
@@ -191,6 +210,10 @@ class DiarizationService:
 
             chunks.append((chunk_index, start_sec, end_sec, chunk_io.getvalue()))
             chunk_index += 1
+            
+            # Avoid infinite loop if step is 0 or end reached
+            if end_sec >= total_seconds:
+                break
             start_sec += step_seconds
 
         return chunks
@@ -356,7 +379,6 @@ class DiarizationService:
                 current_text = self._build_overlap_text(
                     current_segments, overlap_start, overlap_end, current_local
                 )
-                current_tokens = self._tokenize_text(current_text)
 
                 best_global = None
                 best_score = 0.0
@@ -372,8 +394,7 @@ class DiarizationService:
                     previous_text = self._build_overlap_text(
                         previous_segments, overlap_start, overlap_end, previous_local
                     )
-                    previous_tokens = self._tokenize_text(previous_text)
-                    score = self._jaccard_similarity(current_tokens, previous_tokens)
+                    score = self._text_similarity(current_text, previous_text)
                     if score > best_score:
                         best_score = score
                         best_global = previous_global
@@ -411,7 +432,6 @@ class DiarizationService:
                 audio_data=wav_data,
                 meeting_id=meeting_id,
                 api_key=api_key,
-                audio_url=None,
             )
 
         logger.info(
@@ -431,7 +451,6 @@ class DiarizationService:
                     audio_data=chunk_wav,
                     meeting_id=f"{meeting_id}-chunk-{chunk_index}",
                     api_key=api_key,
-                    audio_url=None,
                 )
                 return chunk_index, start_sec, end_sec, segments
 
@@ -560,7 +579,6 @@ class DiarizationService:
         storage_path: str = "./data/recordings",
         provider: str = None,
         audio_data: bytes = None,
-        audio_url: str = None,
         user_email: str = None,
     ) -> DiarizationResult:
         """
@@ -613,10 +631,8 @@ class DiarizationService:
                 f"🎯 Starting diarization for meeting {meeting_id} with {provider}"
             )
 
-            # Step 1: Get Audio Data (or URL)
-            if audio_url:
-                logger.info("📎 Using audio URL for diarization (no local download)")
-            elif audio_data is None:
+            # Step 1: Get Audio Data
+            if audio_data is None:
                 # Try to find existing merged files first (Imported)
                 recording_dir = Path(storage_path) / meeting_id
                 merged_pcm = recording_dir / "merged_recording.pcm"
@@ -640,7 +656,7 @@ class DiarizationService:
                     )
 
             # If still no audio, check for any chunks and try harder
-            if not audio_data and not audio_url:
+            if not audio_data:
                 recording_dir = Path(storage_path) / meeting_id
                 if recording_dir.exists():
                     chunks = list(recording_dir.glob("chunk_*.pcm"))
@@ -652,7 +668,7 @@ class DiarizationService:
                             meeting_id, storage_path
                         )
 
-            if not audio_data and not audio_url:
+            if not audio_data:
                 return DiarizationResult(
                     status="failed",
                     meeting_id=meeting_id,
@@ -671,11 +687,10 @@ class DiarizationService:
 
             # Step 3: Send to diarization API
             if provider == "deepgram":
-                if audio_url:
-                    segments = await self._diarize_with_deepgram(
-                        wav_data, meeting_id, api_key, audio_url=audio_url
-                    )
-                elif self.deepgram_parallel_enabled and wav_data:
+                # Prefer sending decoded WAV bytes directly over a signed URL.
+                # The URL often points to a compressed container (m4a/opus) which
+                # can cause Deepgram to timeout, whereas we already have decoded WAV.
+                if self.deepgram_parallel_enabled and wav_data:
                     try:
                         segments = await self._diarize_with_deepgram_parallel(
                             wav_data=wav_data,
@@ -689,11 +704,11 @@ class DiarizationService:
                             parallel_error,
                         )
                         segments = await self._diarize_with_deepgram(
-                            wav_data, meeting_id, api_key, audio_url=audio_url
+                            wav_data, meeting_id, api_key
                         )
                 else:
                     segments = await self._diarize_with_deepgram(
-                        wav_data, meeting_id, api_key, audio_url=audio_url
+                        wav_data, meeting_id, api_key
                     )
             elif provider == "assemblyai":
                 segments = await self._diarize_with_assemblyai(
@@ -739,18 +754,19 @@ class DiarizationService:
 
     async def _diarize_with_deepgram(
         self,
-        audio_data: Optional[bytes],
+        audio_data: bytes,
         meeting_id: str,
         api_key: str,
-        audio_url: Optional[str] = None,
     ) -> List[SpeakerSegment]:
         """
-        Send audio to Deepgram for diarization.
+        Send audio bytes to Deepgram for diarization.
 
         Uses Deepgram Nova-2 model with diarization enabled.
 
         Args:
-            audio_data: WAV audio bytes
+            audio_data: WAV/MP3/OGG audio bytes
+            meeting_id: For logging
+            api_key: Deepgram API key
 
         Returns:
             List of SpeakerSegment objects
@@ -761,56 +777,30 @@ class DiarizationService:
 
         # Determine content type based on header
         content_type = "audio/wav"
-        if audio_data:
-            if audio_data.startswith(b"ID3") or audio_data.startswith(b"\xff\xfb"):
-                content_type = "audio/mp3"
-            elif audio_data.startswith(b"OggS"):
-                content_type = "audio/ogg"
-
-        # Helper to create an IPv4-only transport (fixes Docker/network issues)
-        def _get_transport_ipv4():
-            import httpcore
-
-            return httpx.AsyncHTTPTransport(local_address="0.0.0.0")
+        if audio_data.startswith(b"ID3") or audio_data.startswith(b"\xff\xfb"):
+            content_type = "audio/mp3"
+        elif audio_data.startswith(b"OggS"):
+            content_type = "audio/ogg"
 
         for attempt in range(max_retries):
             try:
-                # Use transport explicitly to force IPv4 if needed, or rely on standard client
-                async with httpx.AsyncClient(
-                    timeout=300.0, transport=_get_transport_ipv4()
-                ) as client:
-                    if audio_url:
-                        response = await client.post(
-                            self.deepgram_url,
-                            headers={
-                                "Authorization": f"Token {api_key}",
-                                "Content-Type": "application/json",
-                            },
-                            params={
-                                "model": "nova-2",
-                                "diarize": "true",
-                                "punctuate": "true",
-                                "utterances": "true",
-                                "smart_format": "false",
-                            },
-                            json={"url": audio_url},
-                        )
-                    else:
-                        response = await client.post(
-                            self.deepgram_url,
-                            headers={
-                                "Authorization": f"Token {api_key}",
-                                "Content-Type": content_type,
-                            },
-                            params={
-                                "model": "nova-2",
-                                "diarize": "true",
-                                "punctuate": "true",
-                                "utterances": "true",
-                                "smart_format": "false",
-                            },
-                            content=audio_data,
-                        )
+                # Use standard client
+                async with httpx.AsyncClient(timeout=300.0) as client:
+                    response = await client.post(
+                        self.deepgram_url,
+                        headers={
+                            "Authorization": f"Token {api_key}",
+                            "Content-Type": content_type,
+                        },
+                        params={
+                            "model": "nova-2",
+                            "diarize": "true",
+                            "punctuate": "true",
+                            "utterances": "true",
+                            "smart_format": "false",
+                        },
+                        content=audio_data,
+                    )
 
                     if response.status_code != 200:
                         error_text = response.text
@@ -833,12 +823,10 @@ class DiarizationService:
                     # QUALITY TRANSCRIPTION: Prefer 'utterances' for natural punctuation,
                     # fallback to 'words' reconstruction for 100% completeness.
                     utterances = result.get("results", {}).get("utterances", [])
-                    words = (
-                        result.get("results", {})
-                        .get("channels", [{}])[0]
-                        .get("alternatives", [{}])[0]
-                        .get("words", [])
-                    )
+                    
+                    channels = result.get("results", {}).get("channels", [])
+                    alternatives = channels[0].get("alternatives", []) if channels else []
+                    words = alternatives[0].get("words", []) if alternatives else []
 
                     if not words and not utterances:
                         logger.warning(

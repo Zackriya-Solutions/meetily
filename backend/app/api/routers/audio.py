@@ -9,7 +9,7 @@ from fastapi import (
     Form,
     BackgroundTasks,
 )
-from typing import Optional
+from typing import Optional, Dict, Any, List
 import uuid
 import logging
 import time
@@ -18,9 +18,11 @@ import struct
 import json
 import asyncio
 import re
-from datetime import datetime
+from collections import deque
+from datetime import datetime, timedelta
 from pathlib import Path
 import aiofiles
+import httpx
 
 try:
     from ..deps import get_current_user
@@ -58,6 +60,7 @@ session_cleanup_tasks = {}
 session_context = {}
 session_finalize_locks = {}
 session_finalized = set()
+session_runtime_stats = {}
 
 RESUME_GRACE_SECONDS = int(os.getenv("STREAMING_RESUME_GRACE_SECONDS", "45"))
 STREAMING_AUDIO_QUEUE_MAX_CHUNKS = int(
@@ -73,8 +76,257 @@ CHUNK_UPLOAD_VIA_CELERY = (
     os.getenv("AUDIO_CHUNK_UPLOAD_VIA_CELERY", "false").lower() == "true"
 )
 STORAGE_TYPE = os.getenv("STORAGE_TYPE", "local").lower()
+STREAMING_METRICS_LOG_INTERVAL_SECONDS = int(
+    os.getenv("STREAMING_METRICS_LOG_INTERVAL_SECONDS", "30")
+)
+STREAMING_RECONNECT_STORM_WINDOW_SECONDS = int(
+    os.getenv("STREAMING_RECONNECT_STORM_WINDOW_SECONDS", "120")
+)
+STREAMING_RECONNECT_STORM_THRESHOLD = int(
+    os.getenv("STREAMING_RECONNECT_STORM_THRESHOLD", "6")
+)
+STREAMING_BACKPRESSURE_CLOSE_AFTER_DROPS = int(
+    os.getenv("STREAMING_BACKPRESSURE_CLOSE_AFTER_DROPS", "300")
+)
+STREAMING_ALERT_HISTORY_LIMIT = int(
+    os.getenv("STREAMING_ALERT_HISTORY_LIMIT", "100")
+)
+STREAMING_ALERT_COOLDOWN_SECONDS = int(
+    os.getenv("STREAMING_ALERT_COOLDOWN_SECONDS", "45")
+)
+STREAMING_ALERT_WEBHOOK_URL = os.getenv("STREAMING_ALERT_WEBHOOK_URL", "").strip()
+STREAMING_ALERT_WEBHOOK_TIMEOUT_SECONDS = float(
+    os.getenv("STREAMING_ALERT_WEBHOOK_TIMEOUT_SECONDS", "3.0")
+)
+STREAMING_SLO_DEFAULT_LOOKBACK_HOURS = int(
+    os.getenv("STREAMING_SLO_DEFAULT_LOOKBACK_HOURS", "24")
+)
+STREAMING_SLO_TARGET_SECONDS = float(os.getenv("STREAMING_SLO_TARGET_SECONDS", "8.0"))
+STREAMING_SLO_MAX_SECONDS = float(os.getenv("STREAMING_SLO_MAX_SECONDS", "10.0"))
 
 state_service = get_audio_pipeline_state_service()
+
+
+def _ensure_runtime_stats(session_id: str) -> Dict[str, Any]:
+    stats = session_runtime_stats.get(session_id)
+    if not stats:
+        stats = {
+            "created_at": datetime.utcnow().isoformat(),
+            "connection_count": 0,
+            "resume_count": 0,
+            "resume_events": deque(maxlen=50),
+            "reconnect_storm_detected": False,
+            "messages_received": 0,
+            "audio_frames_received": 0,
+            "dropped_audio_chunks": 0,
+            "consecutive_dropped_audio_chunks": 0,
+            "max_audio_queue_depth": 0,
+            "backpressure_close_triggered": False,
+            "last_disconnect_at": None,
+            "last_update_at": datetime.utcnow().isoformat(),
+            "last_warning": None,
+            "alert_history": deque(maxlen=STREAMING_ALERT_HISTORY_LIMIT),
+            "alert_counts": {},
+            "alert_last_emitted_at": {},
+        }
+        session_runtime_stats[session_id] = stats
+    return stats
+
+
+def _sanitize_runtime_for_json(runtime: Dict[str, Any]) -> Dict[str, Any]:
+    payload: Dict[str, Any] = dict(runtime or {})
+    if isinstance(payload.get("resume_events"), deque):
+        payload["recent_resume_events_count"] = len(payload["resume_events"])
+        payload.pop("resume_events", None)
+    if isinstance(payload.get("alert_history"), deque):
+        payload["alert_history"] = list(payload["alert_history"])
+    return payload
+
+
+def _normalize_metadata(session_row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not session_row:
+        return {}
+    metadata = session_row.get("metadata")
+    if metadata is None:
+        return {}
+    if isinstance(metadata, dict):
+        return metadata
+    if isinstance(metadata, str):
+        try:
+            parsed = json.loads(metadata)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _build_streaming_slo_snapshot(
+    runtime_stats: Optional[Dict[str, Any]],
+    manager_stats: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    runtime = runtime_stats or {}
+    manager = manager_stats or {}
+    avg_finalize_latency = manager.get("avg_segment_finalize_latency_seconds")
+    first_stable_latency = manager.get("first_stable_emit_latency_seconds")
+    stable_segments = int(manager.get("stable_segments") or 0)
+    volatile_segments = int(manager.get("volatile_segments") or 0)
+    corrections = int(manager.get("correction_events") or 0)
+    drifts = int(manager.get("semantic_drift_events") or 0)
+    correction_rate = (
+        float(corrections) / float(stable_segments + volatile_segments)
+        if (stable_segments + volatile_segments) > 0
+        else 0.0
+    )
+    drift_rate = (
+        float(drifts) / float(stable_segments)
+        if stable_segments > 0
+        else 0.0
+    )
+    return {
+        "captured_at": datetime.utcnow().isoformat(),
+        "first_stable_emit_latency_seconds": first_stable_latency,
+        "avg_segment_finalize_latency_seconds": avg_finalize_latency,
+        "slo_target_seconds": STREAMING_SLO_TARGET_SECONDS,
+        "slo_max_seconds": STREAMING_SLO_MAX_SECONDS,
+        "stable_segments": stable_segments,
+        "volatile_segments": volatile_segments,
+        "correction_events": corrections,
+        "semantic_drift_events": drifts,
+        "correction_rate": round(correction_rate, 4),
+        "drift_rate": round(drift_rate, 4),
+        "dropped_audio_chunks": int(runtime.get("dropped_audio_chunks") or 0),
+        "max_audio_queue_depth": int(runtime.get("max_audio_queue_depth") or 0),
+        "reconnect_storm_detected": bool(runtime.get("reconnect_storm_detected", False)),
+        "backpressure_close_triggered": bool(
+            runtime.get("backpressure_close_triggered", False)
+        ),
+        "health": {
+            "latency_degraded": bool(
+                (avg_finalize_latency is not None and avg_finalize_latency > STREAMING_SLO_MAX_SECONDS)
+                or (first_stable_latency is not None and first_stable_latency > STREAMING_SLO_MAX_SECONDS)
+            ),
+            "stability_degraded": bool(
+                correction_rate > 0.25
+                or drift_rate > 0.30
+                or volatile_segments > stable_segments
+            ),
+            "transport_degraded": bool(
+                bool(runtime.get("reconnect_storm_detected", False))
+                or bool(runtime.get("backpressure_close_triggered", False))
+            ),
+        },
+    }
+
+
+async def _persist_runtime_snapshot(
+    session_id: str,
+    runtime_stats: Optional[Dict[str, Any]],
+    manager_stats: Optional[Dict[str, Any]],
+) -> None:
+    try:
+        runtime_payload = _sanitize_runtime_for_json(runtime_stats or {})
+        slo_snapshot = _build_streaming_slo_snapshot(runtime_stats, manager_stats)
+        await state_service.db.merge_recording_session_metadata(
+            session_id,
+            {
+                "streaming_runtime": runtime_payload,
+                "streaming_slo": slo_snapshot,
+            },
+        )
+    except Exception as exc:
+        logger.debug("[Streaming] Failed persisting runtime snapshot for %s: %s", session_id, exc)
+
+
+async def _route_streaming_alert(alert_event: Dict[str, Any]) -> None:
+    if not STREAMING_ALERT_WEBHOOK_URL:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=STREAMING_ALERT_WEBHOOK_TIMEOUT_SECONDS) as client:
+            await client.post(STREAMING_ALERT_WEBHOOK_URL, json=alert_event)
+    except Exception as exc:
+        logger.warning("[StreamingAlert] Webhook route failed: %s", exc)
+
+
+async def _emit_streaming_alert(
+    session_id: str,
+    alert_type: str,
+    severity: str,
+    message: str,
+    details: Optional[Dict[str, Any]] = None,
+) -> None:
+    stats = _ensure_runtime_stats(session_id)
+    now_ts = time.time()
+    last_emit_map: Dict[str, float] = stats.setdefault("alert_last_emitted_at", {})
+    last_ts = float(last_emit_map.get(alert_type) or 0.0)
+    if (now_ts - last_ts) < STREAMING_ALERT_COOLDOWN_SECONDS:
+        return
+
+    event = {
+        "type": alert_type,
+        "severity": severity,
+        "message": message,
+        "timestamp": datetime.utcnow().isoformat(),
+        "session_id": session_id,
+        "meeting_id": (session_context.get(session_id) or {}).get("meeting_id"),
+        "user_email": (session_context.get(session_id) or {}).get("user_email"),
+        "details": details or {},
+    }
+    last_emit_map[alert_type] = now_ts
+    stats["last_warning"] = message
+    stats["alert_history"].append(event)
+    alert_counts = stats.setdefault("alert_counts", {})
+    alert_counts[alert_type] = int(alert_counts.get(alert_type, 0)) + 1
+    stats["last_update_at"] = datetime.utcnow().isoformat()
+
+    logger.warning("[StreamingAlert] %s", event)
+
+    try:
+        session_row = await db.get_recording_session(session_id)
+        metadata = _normalize_metadata(session_row)
+        alerts = metadata.get("streaming_alerts")
+        if not isinstance(alerts, list):
+            alerts = []
+        alerts.append(event)
+        alerts = alerts[-STREAMING_ALERT_HISTORY_LIMIT:]
+        await state_service.db.merge_recording_session_metadata(
+            session_id,
+            {
+                "streaming_alerts": alerts,
+                "streaming_alert_counts": alert_counts,
+                "last_streaming_alert_at": event["timestamp"],
+            },
+        )
+    except Exception as exc:
+        logger.debug("[Streaming] Failed to persist alert for %s: %s", session_id, exc)
+
+    await _route_streaming_alert(event)
+
+
+def _mark_runtime_resume(session_id: str) -> bool:
+    now = time.time()
+    stats = _ensure_runtime_stats(session_id)
+    stats["resume_count"] += 1
+    resume_events = stats["resume_events"]
+    resume_events.append(now)
+    window_start = now - STREAMING_RECONNECT_STORM_WINDOW_SECONDS
+    while resume_events and resume_events[0] < window_start:
+        resume_events.popleft()
+    if len(resume_events) >= STREAMING_RECONNECT_STORM_THRESHOLD:
+        stats["reconnect_storm_detected"] = True
+        stats["last_warning"] = (
+            f"Reconnect storm: {len(resume_events)} resumes in "
+            f"{STREAMING_RECONNECT_STORM_WINDOW_SECONDS}s"
+        )
+        logger.warning(
+            "[Streaming] Reconnect storm detected for %s: %s resumes in %ss",
+            session_id,
+            len(resume_events),
+            STREAMING_RECONNECT_STORM_WINDOW_SECONDS,
+        )
+        stats["last_update_at"] = datetime.utcnow().isoformat()
+        return True
+    stats["last_update_at"] = datetime.utcnow().isoformat()
+    return False
 
 
 def _cancel_pending_cleanup(session_id: str):
@@ -101,6 +353,7 @@ async def _finalize_session(
         recorder_key = ctx.get("recorder_key") or session_id
         user_email = ctx.get("user_email")
         mgr = streaming_managers.get(session_id)
+        runtime_snapshot = session_runtime_stats.get(session_id, {})
         if flush and mgr:
             try:
                 await mgr.force_flush()
@@ -172,6 +425,13 @@ async def _finalize_session(
                 f"[Streaming] Recorder finalize failed for {recorder_key}: {e}"
             )
 
+        manager_stats = mgr.get_stats() if mgr else {}
+        await _persist_runtime_snapshot(
+            session_id=session_id,
+            runtime_stats=runtime_snapshot,
+            manager_stats=manager_stats,
+        )
+
         if mgr:
             try:
                 mgr.cleanup()
@@ -181,6 +441,7 @@ async def _finalize_session(
 
         active_connections.pop(session_id, None)
         session_context.pop(session_id, None)
+        session_runtime_stats.pop(session_id, None)
         session_finalized.add(session_id)
         _cancel_pending_cleanup(session_id)
         try:
@@ -310,6 +571,20 @@ async def websocket_streaming_audio(
         manager = streaming_managers[session_id]
         is_resume = True
         _cancel_pending_cleanup(session_id)
+        reconnect_storm = _mark_runtime_resume(session_id)
+        if reconnect_storm:
+            asyncio.create_task(
+                _emit_streaming_alert(
+                    session_id=session_id,
+                    alert_type="reconnect_storm",
+                    severity="warning",
+                    message=(
+                        f"Reconnect storm detected: >= {STREAMING_RECONNECT_STORM_THRESHOLD} "
+                        f"resumes in {STREAMING_RECONNECT_STORM_WINDOW_SECONDS}s"
+                    ),
+                    details={"resume_count_window": STREAMING_RECONNECT_STORM_THRESHOLD},
+                )
+            )
         logger.info(f"[Streaming] 🔄 Resuming session {session_id}")
     else:
         # Create new session
@@ -421,6 +696,9 @@ async def websocket_streaming_audio(
     if session_id not in active_connections:
         active_connections[session_id] = 0
     active_connections[session_id] += 1
+    runtime_stats = _ensure_runtime_stats(session_id)
+    runtime_stats["connection_count"] = active_connections[session_id]
+    runtime_stats["last_update_at"] = datetime.utcnow().isoformat()
     session_context[session_id] = {
         "meeting_id": active_meeting_id,
         "recorder_key": active_meeting_id,
@@ -505,7 +783,15 @@ async def websocket_streaming_audio(
                 "audio_start_time": data.get("audio_start_time"),
                 "audio_end_time": data.get("audio_end_time"),
                 "duration": data.get("duration"),
+                "stability_score": data.get("stability_score"),
+                "stability_class": data.get("stability_class", "stable"),
+                "segment_finalize_latency_seconds": data.get(
+                    "segment_finalize_latency_seconds"
+                ),
+                "boundary_score": data.get("boundary_score"),
             }
+            if data.get("stability_breakdown"):
+                response["stability_breakdown"] = data.get("stability_breakdown")
             if data.get("original_text"):
                 response["original_text"] = data["original_text"]
                 response["translated"] = data.get("translated", False)
@@ -552,6 +838,9 @@ async def websocket_streaming_audio(
                     # Ensure manager is available
                     current_mgr = manager or streaming_managers.get(session_id)
                     if current_mgr:
+                        runtime_stats["max_audio_queue_depth"] = max(
+                            runtime_stats.get("max_audio_queue_depth", 0), audio_queue.qsize()
+                        )
                         await current_mgr.process_audio_chunk(
                             audio_data=chunk,
                             client_timestamp=ts,
@@ -568,6 +857,91 @@ async def websocket_streaming_audio(
 
     worker_task = asyncio.create_task(audio_worker())
     explicit_stop = False
+    last_snapshot_persist_at = 0.0
+
+    async def metrics_monitor():
+        nonlocal last_snapshot_persist_at
+        try:
+            while True:
+                await asyncio.sleep(STREAMING_METRICS_LOG_INTERVAL_SECONDS)
+                current_mgr = manager or streaming_managers.get(session_id)
+                mgr_stats = current_mgr.get_stats() if current_mgr else {}
+                runtime_stats["connection_count"] = active_connections.get(session_id, 0)
+                runtime_stats["queue_depth"] = audio_queue.qsize()
+                runtime_stats["last_update_at"] = datetime.utcnow().isoformat()
+                avg_finalize_latency = mgr_stats.get("avg_segment_finalize_latency_seconds")
+                first_emit_latency = mgr_stats.get("first_stable_emit_latency_seconds")
+                stable_segments = int(mgr_stats.get("stable_segments") or 0)
+                volatile_segments = int(mgr_stats.get("volatile_segments") or 0)
+                corrections = int(mgr_stats.get("correction_events") or 0)
+                correction_rate = (
+                    float(corrections) / float(stable_segments + volatile_segments)
+                    if (stable_segments + volatile_segments) > 0
+                    else 0.0
+                )
+                logger.info(
+                    "[StreamingMetrics] session=%s conn=%s queue=%s dropped=%s resumes=%s storm=%s stable=%s volatile=%s drift=%s corrections=%s",
+                    session_id,
+                    runtime_stats.get("connection_count", 0),
+                    runtime_stats.get("queue_depth", 0),
+                    runtime_stats.get("dropped_audio_chunks", 0),
+                    runtime_stats.get("resume_count", 0),
+                    runtime_stats.get("reconnect_storm_detected", False),
+                    mgr_stats.get("stable_segments"),
+                    mgr_stats.get("volatile_segments"),
+                    mgr_stats.get("semantic_drift_events"),
+                    mgr_stats.get("correction_events"),
+                )
+                if avg_finalize_latency is not None and avg_finalize_latency > STREAMING_SLO_MAX_SECONDS:
+                    await _emit_streaming_alert(
+                        session_id=session_id,
+                        alert_type="slo_finalize_latency",
+                        severity="warning",
+                        message=(
+                            f"Average segment finalization latency {avg_finalize_latency:.2f}s "
+                            f"exceeds {STREAMING_SLO_MAX_SECONDS:.1f}s"
+                        ),
+                        details={"avg_segment_finalize_latency_seconds": avg_finalize_latency},
+                    )
+                if first_emit_latency is not None and first_emit_latency > STREAMING_SLO_MAX_SECONDS:
+                    await _emit_streaming_alert(
+                        session_id=session_id,
+                        alert_type="slo_first_emit_latency",
+                        severity="warning",
+                        message=(
+                            f"First stable segment latency {first_emit_latency:.2f}s "
+                            f"exceeds {STREAMING_SLO_MAX_SECONDS:.1f}s"
+                        ),
+                        details={"first_stable_emit_latency_seconds": first_emit_latency},
+                    )
+                if (stable_segments + volatile_segments) >= 8 and correction_rate > 0.25:
+                    await _emit_streaming_alert(
+                        session_id=session_id,
+                        alert_type="transcript_instability",
+                        severity="warning",
+                        message=(
+                            f"Transcript instability detected (correction_rate={correction_rate:.2f})"
+                        ),
+                        details={
+                            "correction_rate": correction_rate,
+                            "stable_segments": stable_segments,
+                            "volatile_segments": volatile_segments,
+                        },
+                    )
+                now_ts = time.time()
+                if (now_ts - last_snapshot_persist_at) >= 60:
+                    await _persist_runtime_snapshot(
+                        session_id=session_id,
+                        runtime_stats=runtime_stats,
+                        manager_stats=mgr_stats,
+                    )
+                    last_snapshot_persist_at = now_ts
+        except asyncio.CancelledError:
+            return
+        except Exception as e:
+            logger.debug("[Streaming] metrics monitor ended for %s: %s", session_id, e)
+
+    metrics_task = asyncio.create_task(metrics_monitor())
 
     try:
         while True:
@@ -610,6 +984,8 @@ async def websocket_streaming_audio(
             if "bytes" in message:
                 last_heartbeat = time.time()
                 await _touch_session_heartbeat_best_effort()
+                runtime_stats["messages_received"] = runtime_stats.get("messages_received", 0) + 1
+                runtime_stats["audio_frames_received"] = runtime_stats.get("audio_frames_received", 0) + 1
 
                 message_bytes = message["bytes"]
                 timestamp = None
@@ -683,8 +1059,16 @@ async def websocket_streaming_audio(
                                 )
                 try:
                     audio_queue.put_nowait((audio_chunk, timestamp))
+                    runtime_stats["consecutive_dropped_audio_chunks"] = 0
+                    runtime_stats["max_audio_queue_depth"] = max(
+                        runtime_stats.get("max_audio_queue_depth", 0), audio_queue.qsize()
+                    )
                 except asyncio.QueueFull:
                     dropped_audio_chunks += 1
+                    runtime_stats["dropped_audio_chunks"] = dropped_audio_chunks
+                    runtime_stats["consecutive_dropped_audio_chunks"] = (
+                        runtime_stats.get("consecutive_dropped_audio_chunks", 0) + 1
+                    )
                     if STREAMING_AUDIO_DROP_POLICY == "drop_oldest":
                         try:
                             _ = audio_queue.get_nowait()
@@ -700,6 +1084,39 @@ async def websocket_streaming_audio(
                             "Audio backlog is too high. Please check connection quality.",
                             code="AUDIO_BACKPRESSURE",
                         )
+                    if (
+                        STREAMING_BACKPRESSURE_CLOSE_AFTER_DROPS > 0
+                        and runtime_stats.get("consecutive_dropped_audio_chunks", 0)
+                        >= STREAMING_BACKPRESSURE_CLOSE_AFTER_DROPS
+                    ):
+                        runtime_stats["backpressure_close_triggered"] = True
+                        runtime_stats["last_warning"] = (
+                            "Consecutive dropped chunks exceeded threshold"
+                        )
+                        await on_error(
+                            "Connection unstable: too many dropped audio chunks. Please rejoin the meeting.",
+                            code="AUDIO_BACKPRESSURE_HARD_LIMIT",
+                        )
+                        logger.warning(
+                            "[Streaming] Closing %s due to sustained backpressure (consecutive_drops=%s)",
+                            session_id,
+                            runtime_stats.get("consecutive_dropped_audio_chunks", 0),
+                        )
+                        await _emit_streaming_alert(
+                            session_id=session_id,
+                            alert_type="backpressure_hard_limit",
+                            severity="critical",
+                            message=(
+                                "Session closed due to sustained backpressure and dropped audio chunks."
+                            ),
+                            details={
+                                "consecutive_dropped_audio_chunks": runtime_stats.get(
+                                    "consecutive_dropped_audio_chunks", 0
+                                ),
+                                "drop_threshold": STREAMING_BACKPRESSURE_CLOSE_AFTER_DROPS,
+                            },
+                        )
+                        break
                     if dropped_audio_chunks % 25 == 0:
                         logger.warning(
                             "[Streaming] Dropped %s audio chunks for session %s due to backpressure",
@@ -720,6 +1137,9 @@ async def websocket_streaming_audio(
 
     finally:
         monitor_task.cancel()
+        metrics_task.cancel()
+        runtime_stats["last_disconnect_at"] = datetime.utcnow().isoformat()
+        runtime_stats["last_update_at"] = datetime.utcnow().isoformat()
 
         # Cleanup queues and workers
         await audio_queue.put(None)
@@ -987,6 +1407,134 @@ async def get_pipeline_session_status(
         "metadata": session.get("metadata") or {},
         "chunk_stats": chunk_stats,
         "updated_at": session.get("updated_at"),
+    }
+
+
+@router.get("/sessions/{session_id}/streaming-health")
+async def get_streaming_session_health(
+    session_id: str, current_user: User = Depends(get_current_user)
+):
+    if not _is_safe_identifier(session_id):
+        raise HTTPException(status_code=400, detail="Invalid session id")
+
+    session = await db.get_recording_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if session.get("user_email") != current_user.email:
+        meeting_id = session.get("meeting_id")
+        if not meeting_id or not await rbac.can(current_user, "view", meeting_id):
+            raise HTTPException(status_code=403, detail="Permission denied")
+
+    runtime = _sanitize_runtime_for_json(session_runtime_stats.get(session_id, {}))
+
+    mgr = streaming_managers.get(session_id)
+    manager_stats = mgr.get_stats() if mgr else {}
+
+    return {
+        "session_id": session_id,
+        "meeting_id": session.get("meeting_id"),
+        "session_status": session.get("status"),
+        "active_connections": active_connections.get(session_id, 0),
+        "runtime": runtime,
+        "manager_stats": manager_stats,
+    }
+
+
+@router.get("/streaming/slo-report")
+async def get_streaming_slo_report(
+    lookback_hours: int = STREAMING_SLO_DEFAULT_LOOKBACK_HOURS,
+    limit: int = 500,
+    user_email: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+):
+    lookback_hours = max(1, min(168, int(lookback_hours)))
+    limit = max(10, min(1000, int(limit)))
+    is_admin = current_user.email == "gagan@appointy.com"
+
+    target_user = current_user.email
+    if user_email and user_email != current_user.email:
+        if not is_admin:
+            raise HTTPException(status_code=403, detail="Admin access required for user filter")
+        target_user = user_email
+    elif user_email:
+        target_user = user_email
+
+    started_after = datetime.utcnow() - timedelta(hours=lookback_hours)
+    sessions = await db.list_recording_sessions_since(
+        started_after=started_after,
+        user_email=target_user if not is_admin or user_email else None,
+        limit=limit,
+    )
+
+    summaries: List[Dict[str, Any]] = []
+    for session in sessions:
+        metadata = _normalize_metadata(session)
+        streaming_slo = metadata.get("streaming_slo")
+        if not isinstance(streaming_slo, dict):
+            continue
+        summaries.append(
+            {
+                "session_id": session.get("session_id"),
+                "meeting_id": session.get("meeting_id"),
+                "user_email": session.get("user_email"),
+                "status": session.get("status"),
+                "started_at": (
+                    session.get("started_at").isoformat()
+                    if session.get("started_at")
+                    else None
+                ),
+                "streaming_slo": streaming_slo,
+                "alerts_count": len(metadata.get("streaming_alerts") or []),
+                "alert_counts": metadata.get("streaming_alert_counts") or {},
+            }
+        )
+
+    total = len(summaries)
+    degraded_latency = 0
+    degraded_stability = 0
+    degraded_transport = 0
+    first_emit_values: List[float] = []
+    finalize_values: List[float] = []
+    for item in summaries:
+        slo = item["streaming_slo"]
+        health = slo.get("health") or {}
+        if health.get("latency_degraded"):
+            degraded_latency += 1
+        if health.get("stability_degraded"):
+            degraded_stability += 1
+        if health.get("transport_degraded"):
+            degraded_transport += 1
+        first_val = slo.get("first_stable_emit_latency_seconds")
+        if isinstance(first_val, (int, float)):
+            first_emit_values.append(float(first_val))
+        fin_val = slo.get("avg_segment_finalize_latency_seconds")
+        if isinstance(fin_val, (int, float)):
+            finalize_values.append(float(fin_val))
+
+    def _avg(values: List[float]) -> Optional[float]:
+        if not values:
+            return None
+        return round(sum(values) / len(values), 4)
+
+    return {
+        "scope": {
+            "lookback_hours": lookback_hours,
+            "started_after": started_after.isoformat(),
+            "user_filter": target_user if (not is_admin or user_email) else "all",
+            "session_limit": limit,
+        },
+        "summary": {
+            "sessions_with_slo": total,
+            "latency_degraded_sessions": degraded_latency,
+            "stability_degraded_sessions": degraded_stability,
+            "transport_degraded_sessions": degraded_transport,
+            "avg_first_stable_emit_latency_seconds": _avg(first_emit_values),
+            "avg_segment_finalize_latency_seconds": _avg(finalize_values),
+            "slo_target_seconds": STREAMING_SLO_TARGET_SECONDS,
+            "slo_max_seconds": STREAMING_SLO_MAX_SECONDS,
+        },
+        "sessions": summaries,
     }
 
 

@@ -16,6 +16,7 @@ This approach handles:
 from dataclasses import dataclass
 from typing import List, Dict, Tuple
 import logging
+from intervaltree import IntervalTree
 
 logger = logging.getLogger(__name__)
 
@@ -251,14 +252,29 @@ class AlignmentEngine:
 
         total_confidence = 0.0
 
+        # Optimization: Build IntervalTree for O(N log M) fast overlap lookups
+        tree = IntervalTree()
+        for seg in speaker_segments:
+            s_start = seg.get('start_time', 0.0)
+            s_end = seg.get('end_time', s_start)
+            # IntervalTree requires strict start < end
+            if s_start >= s_end:
+                s_end = s_start + 0.001
+            tree.addi(s_start, s_end, seg)
+
         for transcript in transcripts:
             # Extract timing (handle different field names)
             start = transcript.get('audio_start_time', transcript.get('start', 0))
             end = transcript.get('audio_end_time', transcript.get('end', start + 2))
             text = transcript.get('text', transcript.get('transcript', ''))
 
-            # Run alignment
-            result = self.align_segment(text, start, end, speaker_segments)
+            # Fast interval query: find only speaker segments that overlap this transcript's time
+            query_end = end if end > start else start + 0.001
+            overlapping_intervals = tree.overlap(start, query_end)
+            relevant_speaker_segments = [interval.data for interval in overlapping_intervals]
+
+            # Run alignment with the tiny subset of relevant segments (O(1) instead of O(M))
+            result = self.align_segment(text, start, end, relevant_speaker_segments)
 
             # Track metrics
             metrics['method_breakdown'][result.method] = \

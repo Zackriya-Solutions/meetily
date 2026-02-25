@@ -11,7 +11,19 @@
 
 export interface StreamingCallbacks {
   onPartial?: (text: string, confidence: number, isStable: boolean) => void;
-  onFinal?: (text: string, confidence: number, reason: string, timing?: { start: number, end: number, duration: number }) => void;
+  onFinal?: (
+    text: string,
+    confidence: number,
+    reason: string,
+    timing?: { start: number, end: number, duration: number },
+    metadata?: {
+      stability_score?: number;
+      stability_class?: 'stable' | 'volatile';
+      segment_finalize_latency_seconds?: number;
+      boundary_score?: number;
+      stability_breakdown?: Record<string, number>;
+    }
+  ) => void;
   onError?: (error: Error, code?: string) => void;
   onConnected?: (sessionId: string) => void;
   onDisconnected?: () => void;
@@ -71,12 +83,16 @@ export class AudioStreamClient {
       console.log('[AudioStream] Starting pipeline...');
 
       // 1. Get microphone access
+      // sampleRate: 16000 aligns with TenVAD's strict 16kHz requirement.
+      // Browsers that support it will capture at this rate natively;
+      // others will silently ignore it and the AudioContext resampling path acts as fallback.
       this.mediaStream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
-          channelCount: 1
+          channelCount: 1,
+          sampleRate: 16000,
         }
       });
 
@@ -238,7 +254,14 @@ export class AudioStreamClient {
                 start: data.audio_start_time,
                 end: data.audio_end_time,
                 duration: data.duration
-              } : undefined
+              } : undefined,
+              {
+                stability_score: data.stability_score,
+                stability_class: data.stability_class,
+                segment_finalize_latency_seconds: data.segment_finalize_latency_seconds,
+                boundary_score: data.boundary_score,
+                stability_breakdown: data.stability_breakdown,
+              }
             );
           }
           else if (data.type === 'stop_ack') {

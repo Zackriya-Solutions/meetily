@@ -146,7 +146,6 @@ async def _diarize_chunk(
         audio_data=data,
         meeting_id=f"benchmark-chunk-{chunk.index}",
         api_key=api_key,
-        audio_url=None,
     )
     t1 = time.perf_counter()
     return chunk, segments, (t1 - t0)

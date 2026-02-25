@@ -8,6 +8,7 @@ class ChatRequest(BaseModel):
     model: str
     model_name: str
     context_text: Optional[str] = None
+    context_entries: Optional[List[Dict[str, object]]] = None
     allowed_meeting_ids: Optional[List[str]] = None  # Scoped search
     history: Optional[List[Dict[str, str]]] = None  # Conversation history
 

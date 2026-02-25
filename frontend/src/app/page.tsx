@@ -46,6 +46,35 @@ interface OllamaModel {
   modified: string;
 }
 
+interface StreamingHealthPayload {
+  session_id: string;
+  active_connections: number;
+  runtime?: {
+    reconnect_storm_detected?: boolean;
+    recent_resume_events_count?: number;
+    dropped_audio_chunks?: number;
+    queue_depth?: number;
+    max_audio_queue_depth?: number;
+    backpressure_close_triggered?: boolean;
+    last_warning?: string | null;
+    alert_counts?: Record<string, number>;
+    alert_history?: Array<{
+      type: string;
+      severity: string;
+      message: string;
+      timestamp: string;
+    }>;
+  };
+  manager_stats?: {
+    stable_segments?: number;
+    volatile_segments?: number;
+    semantic_drift_events?: number;
+    correction_events?: number;
+    alignment_merges?: number;
+    alignment_fallbacks?: number;
+  };
+}
+
 export default function Home() {
 
   const [transcripts, setTranscripts] = useState<Transcript[]>([]);
@@ -117,6 +146,7 @@ export default function Home() {
   const [resumeStartSignal, setResumeStartSignal] = useState(0);
   const [recordingElapsedSeconds, setRecordingElapsedSeconds] = useState(0);
   const [audioTimelineOffsetSeconds, setAudioTimelineOffsetSeconds] = useState(0);
+  const [streamingHealth, setStreamingHealth] = useState<StreamingHealthPayload | null>(null);
 
   useEffect(() => {
     const checkRecoveries = async () => {
@@ -221,6 +251,39 @@ export default function Home() {
     audioTimelineOffsetRef.current = audioTimelineOffsetSeconds;
   }, [audioTimelineOffsetSeconds]);
 
+  // Streaming diagnostics polling (Phase 4 hardening visibility)
+  useEffect(() => {
+    if (!isRecording || !currentSessionId) {
+      setStreamingHealth(null);
+      return;
+    }
+
+    let cancelled = false;
+    let interval: ReturnType<typeof setInterval> | null = null;
+
+    const fetchStreamingHealth = async () => {
+      try {
+        const res = await authFetch(`/sessions/${currentSessionId}/streaming-health`, {
+          method: 'GET',
+          preventLogout: true
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!cancelled) setStreamingHealth(data as StreamingHealthPayload);
+      } catch {
+        // Keep UI quiet if endpoint temporarily unavailable
+      }
+    };
+
+    void fetchStreamingHealth();
+    interval = setInterval(fetchStreamingHealth, 10000);
+
+    return () => {
+      cancelled = true;
+      if (interval) clearInterval(interval);
+    };
+  }, [isRecording, currentSessionId]);
+
   const saveRecoverySnapshot = useCallback(async () => {
     const latestTranscripts = transcriptsRef.current;
     if (!latestTranscripts || latestTranscripts.length === 0) return;
@@ -277,7 +340,7 @@ export default function Home() {
     if (!isRecording) return;
 
     const handleBeforeUnload = () => {
-      saveRecoverySnapshot().catch(() => {});
+      saveRecoverySnapshot().catch(() => { });
     };
 
     window.addEventListener('beforeunload', handleBeforeUnload);
@@ -845,7 +908,11 @@ export default function Home() {
       sequence_id: update.sequence_id || 0,
       audio_start_time: adjustedAudioStart,
       audio_end_time: adjustedAudioEnd,
-      duration: update.duration
+      duration: update.duration,
+      stability_score: update.stability_score,
+      stability_class: update.stability_class || 'stable',
+      segment_finalize_latency_seconds: update.segment_finalize_latency_seconds,
+      boundary_score: update.boundary_score
     };
 
     setTranscripts(prev => {
@@ -1252,11 +1319,15 @@ export default function Home() {
         filteredTranscripts = filteredTranscripts.slice(-1000);
       }
 
-      const transcriptEntries = filteredTranscripts.map((t) => ({
-        text: t.text,
-        timestamp: t.timestamp,
-        audio_start_time: t.audio_start_time
-      }));
+      const transcriptEntries = filteredTranscripts
+        .filter((t) => (t.stability_class || 'stable') === 'stable')
+        .map((t) => ({
+          text: t.text,
+          timestamp: t.timestamp,
+          audio_start_time: t.audio_start_time,
+          stability_score: t.stability_score,
+          stability_class: t.stability_class || 'stable',
+        }));
 
       // Optimization: Limit the number of transcripts sent to prevent payload size issues
       // 1000 transcripts is roughly 1.5 - 2 hours of meeting data
@@ -1701,7 +1772,50 @@ export default function Home() {
                   marginLeft: sidebarCollapsed ? '4rem' : '16rem'
                 }}
               >
-                <div className="w-2/3 max-w-[750px] flex justify-center">
+                <div className="w-2/3 max-w-[750px] flex flex-col items-center gap-2">
+                  {/* {isRecording && streamingHealth && ( */}
+                  {/* <div className="w-full bg-white/95 border border-gray-200 rounded-lg px-3 py-2 shadow-sm text-xs text-gray-700"> */}
+                  {/* <div className="flex flex-wrap items-center gap-3">
+                        <span>conn: <strong>{streamingHealth.active_connections ?? 0}</strong></span>
+                        <span>queue: <strong>{streamingHealth.runtime?.queue_depth ?? 0}</strong></span>
+                        <span>dropped: <strong>{streamingHealth.runtime?.dropped_audio_chunks ?? 0}</strong></span>
+                        <span>stable: <strong>{streamingHealth.manager_stats?.stable_segments ?? 0}</strong></span>
+                        <span>volatile: <strong>{streamingHealth.manager_stats?.volatile_segments ?? 0}</strong></span>
+                        <span>drift: <strong>{streamingHealth.manager_stats?.semantic_drift_events ?? 0}</strong></span>
+                        <span>corrections: <strong>{streamingHealth.manager_stats?.correction_events ?? 0}</strong></span>
+                        {streamingHealth.runtime?.reconnect_storm_detected && (
+                          <span className="text-amber-700 font-semibold">reconnect-storm</span>
+                        )}
+                        {streamingHealth.runtime?.backpressure_close_triggered && (
+                          <span className="text-red-700 font-semibold">backpressure-hard-limit</span>
+                        )}
+                      </div> */}
+                  {/* {!!streamingHealth.runtime?.alert_history?.length && (
+                        <div className="mt-2 border-t border-gray-200 pt-2 space-y-1">
+                          <div className="flex flex-wrap gap-2">
+                            {Object.entries(streamingHealth.runtime?.alert_counts || {}).map(([key, count]) => (
+                              <span key={key} className="px-2 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200">
+                                {key}: <strong>{count}</strong>
+                              </span>
+                            ))}
+                          </div>
+                          <div className="space-y-1">
+                            {(streamingHealth.runtime?.alert_history || []).slice(-3).reverse().map((alert, idx) => (
+                              <div key={`${alert.type}-${alert.timestamp}-${idx}`} className="text-[11px] text-gray-600">
+                                <span className="font-semibold">{alert.severity.toUpperCase()}</span>
+                                {' · '}
+                                <span>{alert.type}</span>
+                                {' · '}
+                                <span>{new Date(alert.timestamp).toLocaleTimeString()}</span>
+                                {' · '}
+                                <span>{alert.message}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div> */}
+                  {/* )} */}
                   <div className="bg-white rounded-full shadow-lg flex items-center">
                     <RecordingControls
                       isRecording={isRecording}
@@ -1783,7 +1897,7 @@ export default function Home() {
           )}
 
           {/* Processing status overlay */}
-          {summaryStatus === 'processing' && !isRecording && (
+          {/* {summaryStatus === 'processing' && !isRecording && (
             <div className="fixed bottom-4 left-0 right-0 z-10">
               <div
                 className="flex justify-center pl-8 transition-[margin] duration-300"
@@ -1799,7 +1913,7 @@ export default function Home() {
                 </div>
               </div>
             </div>
-          )}
+          )} */}
           {isSavingTranscript && (
             <div className="fixed bottom-4 left-0 right-0 z-10">
               <div

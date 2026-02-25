@@ -149,7 +149,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
           // Partial transcripts disabled by backend
         },
 
-        onFinal: (text, confidence, reason, timing) => {
+        onFinal: (text, confidence, reason, timing, metadata) => {
           // Final transcripts (black, locked) - main content
           console.log('📝 [RecordingControls] Final transcript:', text.substring(0, 50) + '...');
 
@@ -160,7 +160,11 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
             is_partial: false,
             audio_start_time: timing?.start,
             audio_end_time: timing?.end,
-            duration: timing?.duration
+            duration: timing?.duration,
+            stability_score: metadata?.stability_score,
+            stability_class: metadata?.stability_class || 'stable',
+            segment_finalize_latency_seconds: metadata?.segment_finalize_latency_seconds,
+            boundary_score: metadata?.boundary_score
           };
 
           if (onTranscriptReceived) {

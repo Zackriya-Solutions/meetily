@@ -115,6 +115,41 @@ class RollingAudioBuffer:
         """
         return np.array(self.buffer, dtype=np.int16).tobytes()
 
+    def reconfigure(
+        self,
+        window_duration_ms: int,
+        slide_duration_ms: int,
+        preserve_tail: bool = True,
+    ) -> bool:
+        """
+        Dynamically update window/slide settings.
+
+        Returns:
+            True when configuration changed, False when unchanged/invalid.
+        """
+        if window_duration_ms <= 0 or slide_duration_ms <= 0:
+            return False
+        if window_duration_ms == self.window_duration_ms and slide_duration_ms == self.slide_duration_ms:
+            return False
+
+        old_samples = list(self.buffer) if preserve_tail else []
+        self.window_duration_ms = int(window_duration_ms)
+        self.slide_duration_ms = int(slide_duration_ms)
+        self.window_size = int((self.window_duration_ms / 1000) * self.sample_rate)
+        self.slide_size = int((self.slide_duration_ms / 1000) * self.sample_rate)
+        self.buffer = deque(maxlen=self.window_size)
+        if old_samples:
+            self.buffer.extend(old_samples[-self.window_size :])
+        self.samples_since_last_slide = min(self.samples_since_last_slide, self.slide_size)
+        logger.info(
+            "🔧 RollingBuffer reconfigured: window=%sms (%s samples), slide=%sms (%s samples)",
+            self.window_duration_ms,
+            self.window_size,
+            self.slide_duration_ms,
+            self.slide_size,
+        )
+        return True
+
     def clear(self):
         """Clear the buffer"""
         self.buffer.clear()

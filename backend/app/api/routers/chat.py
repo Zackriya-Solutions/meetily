@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
-from typing import Optional
+from typing import Optional, List, Dict, Any
 import logging
 import os
+import re
 
 try:
     from ..deps import get_current_user
@@ -30,6 +31,119 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
+def _tokenize_for_topic_similarity(text: str) -> set[str]:
+    return set(re.findall(r"[a-zA-Z0-9']+", (text or "").lower()))
+
+
+def _segment_stable_context_by_topic(
+    entries: List[Dict[str, Any]],
+    max_entries: int = 300,
+) -> str:
+    if not entries:
+        return ""
+
+    normalized: List[Dict[str, Any]] = []
+    for item in entries[-max_entries:]:
+        text = str(item.get("text", "")).strip()
+        if not text:
+            continue
+        stability_class = str(item.get("stability_class", "stable")).lower()
+        if stability_class == "volatile":
+            continue
+        is_stable = item.get("is_stable")
+        if is_stable is False:
+            continue
+
+        normalized.append(
+            {
+                "text": text,
+                "timestamp": item.get("timestamp"),
+                "audio_start_time": item.get("audio_start_time"),
+                "audio_end_time": item.get("audio_end_time"),
+                "stability_score": item.get("stability_score"),
+            }
+        )
+
+    if not normalized:
+        return ""
+
+    topics: List[Dict[str, Any]] = []
+    current_topic = {
+        "segments": [],
+        "token_memory": set(),
+        "start": None,
+        "end": None,
+    }
+    prev_end = None
+
+    for seg in normalized:
+        text = seg["text"]
+        seg_tokens = _tokenize_for_topic_similarity(text)
+        seg_start = seg.get("audio_start_time")
+        seg_end = seg.get("audio_end_time")
+
+        lexical_overlap = 0.0
+        if current_topic["token_memory"]:
+            overlap_count = len(seg_tokens & current_topic["token_memory"])
+            lexical_overlap = overlap_count / max(1, len(seg_tokens))
+
+        gap_seconds = None
+        if prev_end is not None and seg_start is not None:
+            try:
+                gap_seconds = float(seg_start) - float(prev_end)
+            except Exception:
+                gap_seconds = None
+
+        topic_shift = False
+        if current_topic["segments"]:
+            if gap_seconds is not None and gap_seconds >= 90:
+                topic_shift = True
+            elif lexical_overlap < 0.12 and len(current_topic["segments"]) >= 3:
+                topic_shift = True
+
+        if topic_shift:
+            topics.append(current_topic)
+            current_topic = {
+                "segments": [],
+                "token_memory": set(),
+                "start": None,
+                "end": None,
+            }
+
+        current_topic["segments"].append(seg)
+        current_topic["token_memory"].update(seg_tokens)
+        if current_topic["start"] is None:
+            current_topic["start"] = seg_start
+        current_topic["end"] = seg_end if seg_end is not None else seg_start
+        prev_end = seg_end if seg_end is not None else seg_start
+
+    if current_topic["segments"]:
+        topics.append(current_topic)
+
+    def _fmt_ts(value: Any) -> str:
+        if value is None:
+            return "n/a"
+        try:
+            sec = max(0, int(float(value)))
+            mm = sec // 60
+            ss = sec % 60
+            return f"{mm:02d}:{ss:02d}"
+        except Exception:
+            return "n/a"
+
+    lines: List[str] = []
+    lines.append("Structured Stable Meeting Context (topic segmented):")
+    for idx, topic in enumerate(topics, start=1):
+        start = _fmt_ts(topic.get("start"))
+        end = _fmt_ts(topic.get("end"))
+        lines.append(f"\n[Topic {idx} | {start} - {end}]")
+        for seg in topic["segments"]:
+            ts = seg.get("timestamp")
+            prefix = f"[{ts}] " if ts else ""
+            lines.append(f"- {prefix}{seg['text']}")
+    return "\n".join(lines)
+
+
 @router.post("/chat-meeting")
 async def chat_meeting(
     request: ChatRequest, current_user: User = Depends(get_current_user)
@@ -47,7 +161,15 @@ async def chat_meeting(
         logger.info(f"Received chat request for meeting {request.meeting_id}")
 
         full_text = ""
-        if request.context_text is not None:
+        if request.context_entries:
+            full_text = _segment_stable_context_by_topic(request.context_entries)
+            if full_text:
+                logger.info(
+                    "Using structured stable context_entries for chat (%s entries)",
+                    len(request.context_entries),
+                )
+
+        if not full_text and request.context_text is not None:
             full_text = request.context_text
             logger.info("Using provided context_text for chat")
         else:
@@ -114,6 +236,10 @@ async def catch_up(
                 continue
 
             if isinstance(item, dict):
+                stability_class = str(item.get("stability_class", "stable")).lower()
+                is_stable = item.get("is_stable", True)
+                if stability_class == "volatile" or is_stable is False:
+                    continue
                 text = str(item.get("text", "")).strip()
                 if not text:
                     continue

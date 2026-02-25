@@ -141,10 +141,27 @@ export function ChatInterface({ meetingId, onClose, currentTranscripts }: ChatIn
         };
     }, []);
 
-    // Construct context from live transcripts if available
+    const getStableContextEntries = () => {
+        if (!currentTranscripts || currentTranscripts.length === 0) return [];
+        return currentTranscripts
+            .filter((t) => (t.stability_class || 'stable') === 'stable')
+            .slice(-400)
+            .map((t) => ({
+                text: t.text,
+                timestamp: t.timestamp,
+                audio_start_time: t.audio_start_time,
+                audio_end_time: t.audio_end_time,
+                stability_score: t.stability_score,
+                stability_class: t.stability_class || 'stable',
+                is_stable: (t.stability_class || 'stable') !== 'volatile'
+            }));
+    };
+
+    // Construct fallback plain context from live transcripts if available
     const getContextFromTranscripts = () => {
-        if (!currentTranscripts || currentTranscripts.length === 0) return undefined;
-        return currentTranscripts.map(t => `[${t.timestamp}] ${t.text}`).join('\n');
+        const entries = getStableContextEntries();
+        if (entries.length === 0) return undefined;
+        return entries.map((t) => `[${t.timestamp}] ${t.text}`).join('\n');
     };
 
     const scrollToBottom = () => {
@@ -192,6 +209,7 @@ export function ChatInterface({ meetingId, onClose, currentTranscripts }: ChatIn
             const provider = modelConfig?.provider || 'gemini';
             const modelName = modelConfig?.model || 'gemini-2.5-flash';
 
+            const contextEntries = getStableContextEntries();
             const contextText = getContextFromTranscripts();
 
             const response = await authFetch('/chat-meeting', {
@@ -203,6 +221,7 @@ export function ChatInterface({ meetingId, onClose, currentTranscripts }: ChatIn
                     model: provider,
                     model_name: modelName,
                     context_text: contextText || "",
+                    context_entries: contextEntries,
                     allowed_meeting_ids: linkedMeetingIds.length > 0 ? linkedMeetingIds : undefined,
                     history: messages.slice(-10).map(m => ({
                         role: m.role,
@@ -370,4 +389,3 @@ export function ChatInterface({ meetingId, onClose, currentTranscripts }: ChatIn
         </div>
     );
 }
-

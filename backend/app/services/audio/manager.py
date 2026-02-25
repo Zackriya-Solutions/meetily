@@ -15,8 +15,10 @@ import numpy as np
 import logging
 import time
 import hashlib
-from typing import Optional, Callable, Set
-from concurrent.futures import ThreadPoolExecutor
+import os
+from collections import deque
+from typing import Optional, Callable, Set, List, Dict, Any, Tuple
+
 from .groq_client import GroqTranscriptionClient
 from .buffer import RollingAudioBuffer
 from .vad import SimpleVAD, SileroVAD, TenVAD
@@ -36,6 +38,7 @@ class StreamingTranscriptionManager:
             groq_api_key: Groq API key for Whisper Large v3
         """
         self.groq = GroqTranscriptionClient(groq_api_key)
+        # No ThreadPoolExecutor needed — GroqTranscriptionClient is now fully async.
 
         # VAD Initialization Strategy: ONLY TenVAD
         self.vad = None
@@ -64,9 +67,11 @@ class StreamingTranscriptionManager:
 
         # IMPROVED: Optimized for real-time responsiveness
         # 6s window provides enough context for grammar, but is short enough to fail fast
+        initial_window_ms = int(os.getenv("STREAMING_WINDOW_MS_BASE", "6000"))
+        initial_slide_ms = int(os.getenv("STREAMING_SLIDE_MS_BASE", "2000"))
         self.buffer = RollingAudioBuffer(
-            window_duration_ms=6000,  # 6s window (was 12s)
-            slide_duration_ms=2000,  # 2s slide (matches transcription interval)
+            window_duration_ms=initial_window_ms,
+            slide_duration_ms=initial_slide_ms,
         )
 
         # Transcript state
@@ -75,6 +80,7 @@ class StreamingTranscriptionManager:
         self.silence_duration_ms = 0
         self.same_text_count = 0
         self.is_speaking = False
+        self.volatile_segments: List[Dict[str, Any]] = []
 
         # IMPROVED: Track finalized sentence hashes to prevent duplicates
         self.finalized_hashes: Set[str] = set()
@@ -82,12 +88,66 @@ class StreamingTranscriptionManager:
             set()
         )  # Track individual words for overlap detection
 
-        # Thread pool for Groq API calls (blocking)
-        self.executor = ThreadPoolExecutor(max_workers=2)
+        # No thread pool needed — AsyncGroq handles concurrency natively.
 
         # Performance metrics
         self.total_chunks_processed = 0
         self.total_transcriptions = 0
+        self.total_stable_segments = 0
+        self.total_volatile_segments = 0
+        self.total_duplicate_suppressed = 0
+        self.total_hallucination_filtered = 0
+        self.total_semantic_drift_events = 0
+        self.total_correction_events = 0
+        self.total_alignment_merges = 0
+        self.total_alignment_fallbacks = 0
+        self.total_silence_holds = 0
+        self.total_force_flush_emits = 0
+        self.segment_finalize_latency_sum = 0.0
+        self.segment_finalize_latency_count = 0
+        self.first_stable_emit_latency_seconds: Optional[float] = None
+        self.session_wallclock_start = time.time()
+        self.stability_threshold = float(
+            os.getenv("STREAMING_STABILITY_THRESHOLD", "0.55")
+        )
+        self.min_boundary_score = float(
+            os.getenv("STREAMING_MIN_BOUNDARY_SCORE", "0.45")
+        )
+        self.silence_force_flush_ms = float(
+            os.getenv("STREAMING_SILENCE_FORCE_FLUSH_MS", "3200")
+        )
+        self.silence_min_words = int(
+            os.getenv("STREAMING_SILENCE_MIN_WORDS", "4")
+        )
+        self.silence_min_boundary_score = float(
+            os.getenv("STREAMING_SILENCE_MIN_BOUNDARY_SCORE", "0.35")
+        )
+        self.alignment_min_overlap_tokens = int(
+            os.getenv("STREAMING_ALIGNMENT_MIN_OVERLAP_TOKENS", "3")
+        )
+        self.alignment_min_score = float(
+            os.getenv("STREAMING_ALIGNMENT_MIN_SCORE", "0.62")
+        )
+        self.adaptive_window_enabled = (
+            os.getenv("STREAMING_ADAPTIVE_WINDOW_ENABLED", "true").lower() == "true"
+        )
+        self.adaptive_policy_cooldown_seconds = float(
+            os.getenv("STREAMING_ADAPTIVE_POLICY_COOLDOWN_SECONDS", "20")
+        )
+        self.last_adaptive_policy_update_ts = 0.0
+        self.current_policy_name = "base"
+        self.window_policy_switches = 0
+        self.recent_speech_flags = deque(maxlen=120)
+        self.base_window_ms = int(os.getenv("STREAMING_WINDOW_MS_BASE", "6000"))
+        self.base_slide_ms = int(os.getenv("STREAMING_SLIDE_MS_BASE", "2000"))
+        self.high_density_window_ms = int(
+            os.getenv("STREAMING_WINDOW_MS_HIGH_DENSITY", "8000")
+        )
+        self.high_density_slide_ms = int(
+            os.getenv("STREAMING_SLIDE_MS_HIGH_DENSITY", "2500")
+        )
+        self.low_density_window_ms = int(os.getenv("STREAMING_WINDOW_MS_LOW_DENSITY", "5000"))
+        self.low_density_slide_ms = int(os.getenv("STREAMING_SLIDE_MS_LOW_DENSITY", "1500"))
 
         # SMART TIMER CONFIG
         self.session_start_time = (
@@ -117,6 +177,202 @@ class StreamingTranscriptionManager:
         logger.info(
             "✅ StreamingTranscriptionManager initialized (SMART TIMER: 1.0s silence, 6s max)"
         )
+        if self.adaptive_window_enabled:
+            self._set_window_policy("base", self.base_window_ms, self.base_slide_ms)
+
+    def _set_window_policy(self, policy_name: str, window_ms: int, slide_ms: int) -> None:
+        if not self.adaptive_window_enabled:
+            return
+        changed = self.buffer.reconfigure(window_ms, slide_ms, preserve_tail=True)
+        if changed:
+            self.current_policy_name = policy_name
+            self.window_policy_switches += 1
+            # Keep trigger thresholds in sync with window policy.
+            self.max_buffer_duration_ms = max(5000, window_ms)
+            logger.info(
+                "📐 Window policy switched to '%s' (window=%sms, slide=%sms)",
+                policy_name,
+                window_ms,
+                slide_ms,
+            )
+
+    def _maybe_apply_adaptive_window_policy(self, is_complete_sentence: bool = False) -> None:
+        if not self.adaptive_window_enabled:
+            return
+        now = time.time()
+        if (now - self.last_adaptive_policy_update_ts) < self.adaptive_policy_cooldown_seconds:
+            return
+        self.last_adaptive_policy_update_ts = now
+
+        speech_density = (
+            sum(self.recent_speech_flags) / len(self.recent_speech_flags)
+            if self.recent_speech_flags
+            else 0.0
+        )
+        instability = (
+            self.total_semantic_drift_events
+            + self.total_correction_events
+            + self.total_volatile_segments
+        )
+        has_instability = instability > 0
+
+        if speech_density >= 0.72 and has_instability and not is_complete_sentence:
+            self._set_window_policy(
+                "high_density",
+                self.high_density_window_ms,
+                self.high_density_slide_ms,
+            )
+            return
+        if speech_density <= 0.35 and self.total_volatile_segments == 0:
+            self._set_window_policy(
+                "low_density",
+                self.low_density_window_ms,
+                self.low_density_slide_ms,
+            )
+            return
+        self._set_window_policy("base", self.base_window_ms, self.base_slide_ms)
+
+    def _compute_stability_score(
+        self,
+        text: str,
+        confidence: float,
+        trigger_reason: str,
+        is_complete_sentence: bool,
+        speech_duration_ms: float,
+    ) -> Tuple[float, Dict[str, float]]:
+        """Compute stability score v1 for stable/volatile stream separation."""
+        norm_conf = max(0.0, min(1.0, float(confidence or 0.0)))
+        trigger_weight = {
+            "punctuation": 0.20,
+            "sentence_complete": 0.18,
+            "silence": 0.16,
+            "silence_force_flush": 0.18,
+            "stability": 0.15,
+            "timeout": 0.10,
+        }.get(trigger_reason, 0.10)
+        sentence_bonus = 0.12 if is_complete_sentence else 0.0
+        repeat_bonus = min(self.same_text_count, 4) * 0.03
+        length_bonus = min(0.12, len(text.split()) * 0.008)
+        duration_bonus = min(0.10, max(0.0, speech_duration_ms) / 10000.0)
+        score = (
+            0.20
+            + (0.20 * norm_conf)
+            + trigger_weight
+            + sentence_bonus
+            + repeat_bonus
+            + length_bonus
+            + duration_bonus
+        )
+        score = max(0.0, min(1.0, score))
+        return score, {
+            "confidence": round(0.20 * norm_conf, 4),
+            "trigger": round(trigger_weight, 4),
+            "sentence": round(sentence_bonus, 4),
+            "repeat": round(repeat_bonus, 4),
+            "length": round(length_bonus, 4),
+            "duration": round(duration_bonus, 4),
+        }
+
+    def _compute_boundary_score(
+        self, text: str, is_complete_sentence: bool, speech_duration_ms: float
+    ) -> float:
+        words = len(text.split())
+        punctuation_bonus = 0.45 if is_complete_sentence else 0.0
+        length_bonus = min(0.30, words / 20.0)
+        stability_bonus = min(0.15, self.same_text_count * 0.03)
+        duration_bonus = min(0.10, max(0.0, speech_duration_ms) / 10000.0)
+        open_clause_penalty = 0.0
+        trailing = text.strip().lower()
+        if trailing:
+            trailing = trailing.split()[-1].strip(".,!?;:")
+            if trailing in {"and", "or", "but", "so", "because", "that", "to", "then"}:
+                open_clause_penalty = 0.15
+        score = (
+            punctuation_bonus
+            + length_bonus
+            + stability_bonus
+            + duration_bonus
+            - open_clause_penalty
+        )
+        return max(0.0, min(1.0, score))
+
+    async def _emit_candidate_segment(
+        self,
+        *,
+        text: str,
+        confidence: float,
+        trigger_reason: str,
+        audio_start: float,
+        audio_end: float,
+        metadata: Optional[dict],
+        on_final: Optional[Callable],
+        is_complete_sentence: bool,
+        speech_duration_ms: float,
+        boundary_score: float,
+    ) -> bool:
+        """Emit stable segments; retain unstable segments in volatile buffer."""
+        stability_score, stability_breakdown = self._compute_stability_score(
+            text=text,
+            confidence=confidence,
+            trigger_reason=trigger_reason,
+            is_complete_sentence=is_complete_sentence,
+            speech_duration_ms=speech_duration_ms,
+        )
+        is_stable = stability_score >= self.stability_threshold
+        duration = max(0.0, (audio_end or 0.0) - (audio_start or 0.0))
+        segment_finalize_latency_seconds = (
+            max(0.0, self.last_chunk_timestamp - audio_end) if audio_end else None
+        )
+
+        if not is_stable:
+            self.total_volatile_segments += 1
+            self.volatile_segments.append(
+                {
+                    "text": text,
+                    "reason": trigger_reason,
+                    "stability_score": round(stability_score, 4),
+                    "timestamp": time.time(),
+                }
+            )
+            self.volatile_segments = self.volatile_segments[-50:]
+            logger.debug(
+                "🟨 Volatile segment buffered (score=%.3f, threshold=%.2f, reason=%s)",
+                stability_score,
+                self.stability_threshold,
+                trigger_reason,
+            )
+            return False
+
+        if on_final:
+            final_data = {
+                "text": text,
+                "confidence": confidence,
+                "reason": trigger_reason,
+                "audio_start_time": audio_start,
+                "audio_end_time": audio_end,
+                "duration": duration,
+                "stability_score": round(stability_score, 4),
+                "stability_class": "stable",
+                "segment_finalize_latency_seconds": segment_finalize_latency_seconds,
+                "boundary_score": round(boundary_score, 4),
+                "stability_breakdown": stability_breakdown,
+            }
+            if metadata:
+                if metadata.get("original_text"):
+                    final_data["original_text"] = metadata["original_text"]
+                if metadata.get("translated") is not None:
+                    final_data["translated"] = metadata["translated"]
+            await on_final(final_data)
+
+        self.total_stable_segments += 1
+        if self.first_stable_emit_latency_seconds is None:
+            self.first_stable_emit_latency_seconds = max(
+                0.0, time.time() - self.session_wallclock_start
+            )
+        if segment_finalize_latency_seconds is not None:
+            self.segment_finalize_latency_sum += segment_finalize_latency_seconds
+            self.segment_finalize_latency_count += 1
+        return True
 
     async def process_audio_chunk(
         self,
@@ -190,8 +446,9 @@ class StreamingTranscriptionManager:
         # Convert bytes to numpy array
         audio_samples = np.frombuffer(audio_data, dtype=np.int16)
 
-        # Check for speech
-        is_speech = self.vad.is_speech(audio_samples)
+        # Check for speech — offload to thread so numpy+VAD C-ext doesn't block the event loop.
+        is_speech = await asyncio.to_thread(self.vad.is_speech, audio_samples)
+        self.recent_speech_flags.append(1 if is_speech else 0)
 
         # CRITICAL FIX: Always add to buffer to maintain time continuity
         # Previously, silence was dropped, causing the buffer to never fill if speech was sparse
@@ -218,6 +475,7 @@ class StreamingTranscriptionManager:
                     self.silence_duration_ms > self.silence_threshold_ms
                     and self.last_partial_text
                 ):
+                    clear_after_silence_finalize = True
                     # Hash-based deduplication check
                     sentence_hash = self._get_sentence_hash(self.last_partial_text)
 
@@ -225,31 +483,71 @@ class StreamingTranscriptionManager:
                         logger.info(
                             f"🔇 SMART TRIGGER: Silence ({self.silence_duration_ms:.0f}ms > {self.silence_threshold_ms}ms)"
                         )
+                        silence_speech_duration_ms = (
+                            self.speech_end_time - self.speech_start_time
+                        ) * 1000
+                        silence_is_complete = self._is_complete_sentence(
+                            self.last_partial_text
+                        )
+                        silence_boundary_score = self._compute_boundary_score(
+                            self.last_partial_text,
+                            silence_is_complete,
+                            silence_speech_duration_ms,
+                        )
+                        word_count = len(self.last_partial_text.split())
+                        is_force_flush = (
+                            self.silence_duration_ms >= self.silence_force_flush_ms
+                        )
 
-                        if on_final:
-                            await on_final(
-                                {
-                                    "text": self.last_partial_text,
-                                    "confidence": 1.0,
-                                    "reason": "silence",
-                                    "audio_start_time": self.speech_start_time,
-                                    "audio_end_time": self.speech_end_time,
-                                    "duration": self.speech_end_time
-                                    - self.speech_start_time,
-                                }
+                        if (
+                            not is_force_flush
+                            and (
+                                word_count < self.silence_min_words
+                                or silence_boundary_score
+                                < self.silence_min_boundary_score
                             )
+                        ):
+                            self.total_silence_holds += 1
+                            logger.debug(
+                                "🕒 Holding silence finalization (words=%s, boundary=%.2f, silence_ms=%.0f)",
+                                word_count,
+                                silence_boundary_score,
+                                self.silence_duration_ms,
+                            )
+                            # Keep current partial so next overlap cycle can improve confidence.
+                            clear_after_silence_finalize = False
 
-                        self.finalized_hashes.add(sentence_hash)
-                        self.last_final_text += " " + self.last_partial_text
+                        if clear_after_silence_finalize:
+                            emitted = await self._emit_candidate_segment(
+                                text=self.last_partial_text,
+                                confidence=1.0,
+                                trigger_reason=(
+                                    "silence_force_flush" if is_force_flush else "silence"
+                                ),
+                                audio_start=self.speech_start_time,
+                                audio_end=self.speech_end_time,
+                                metadata=None,
+                                on_final=on_final,
+                                is_complete_sentence=silence_is_complete,
+                                speech_duration_ms=silence_speech_duration_ms,
+                                boundary_score=silence_boundary_score,
+                            )
+                            if is_force_flush and emitted:
+                                self.total_force_flush_emits += 1
+                            if emitted:
+                                self.finalized_hashes.add(sentence_hash)
+                                self.last_final_text += " " + self.last_partial_text
                     else:
+                        self.total_duplicate_suppressed += 1
                         logger.debug(
                             f"⏭️  Skipping duplicate (silence): '{self.last_partial_text[:50]}...'"
                         )
 
-                    self.last_partial_text = ""
-                    self.same_text_count = 0
-                    self.is_speaking = False
-                    self.speech_start_time = 0  # Reset speech timer
+                    if clear_after_silence_finalize:
+                        self.last_partial_text = ""
+                        self.same_text_count = 0
+                        self.is_speaking = False
+                        self.speech_start_time = 0  # Reset speech timer
 
         # Check triggers regardless of current speech state (since buffer is filling)
         buffer_duration = self.buffer.get_buffer_duration_ms()
@@ -276,11 +574,8 @@ class StreamingTranscriptionManager:
                 window_bytes = self.buffer.get_window_bytes()
                 self.last_transcription_time = current_time
 
-                # Transcribe with Groq (run in thread pool since it's blocking)
-                loop = asyncio.get_event_loop()
-                result = await loop.run_in_executor(
-                    self.executor,
-                    self.groq.transcribe_audio_sync,
+                # Transcribe with AsyncGroq — no thread pool needed.
+                result = await self.groq.transcribe_audio_async(
                     window_bytes,
                     "auto",  # Auto-detect language
                     self.last_final_text[-100:] if self.last_final_text else None,
@@ -337,7 +632,52 @@ class StreamingTranscriptionManager:
         union = len(set1 | set2)
         return intersection / union if union > 0 else 0.0
 
-    def _remove_overlap(self, new_text: str) -> str:
+    def _levenshtein_distance(self, a: List[str], b: List[str]) -> int:
+        """Token-level Levenshtein distance."""
+        if not a:
+            return len(b)
+        if not b:
+            return len(a)
+        prev_row = list(range(len(b) + 1))
+        for i, token_a in enumerate(a, start=1):
+            curr_row = [i]
+            for j, token_b in enumerate(b, start=1):
+                insert_cost = curr_row[j - 1] + 1
+                delete_cost = prev_row[j] + 1
+                subst_cost = prev_row[j - 1] + (0 if token_a == token_b else 1)
+                curr_row.append(min(insert_cost, delete_cost, subst_cost))
+            prev_row = curr_row
+        return prev_row[-1]
+
+    def _normalize_tokens(self, text: str) -> List[str]:
+        return [w.lower().strip(".,!?;:\"'()[]{}") for w in text.split() if w.strip()]
+
+    def _alignment_overlap_size(self, prev_text: str, new_text: str) -> Tuple[int, float]:
+        """Find best suffix-prefix overlap via token edit-distance similarity."""
+        prev_tokens = self._normalize_tokens(prev_text)
+        new_tokens = self._normalize_tokens(new_text)
+        if len(prev_tokens) < self.alignment_min_overlap_tokens:
+            return 0, 0.0
+        if len(new_tokens) < self.alignment_min_overlap_tokens:
+            return 0, 0.0
+
+        tail_window = prev_tokens[-min(60, len(prev_tokens)) :]
+        max_overlap = min(len(tail_window), len(new_tokens), 24)
+        best_overlap = 0
+        best_score = 0.0
+        for overlap_size in range(max_overlap, self.alignment_min_overlap_tokens - 1, -1):
+            prev_suffix = tail_window[-overlap_size:]
+            new_prefix = new_tokens[:overlap_size]
+            dist = self._levenshtein_distance(prev_suffix, new_prefix)
+            score = 1.0 - (dist / max(overlap_size, 1))
+            if score > best_score:
+                best_score = score
+                best_overlap = overlap_size
+            if score >= self.alignment_min_score:
+                return overlap_size, score
+        return best_overlap, best_score
+
+    def _remove_overlap_heuristic(self, new_text: str) -> str:
         """
         Remove overlapping text using fuzzy matching.
         Handles Whisper's slight wording variations in overlapping audio.
@@ -398,6 +738,31 @@ class StreamingTranscriptionManager:
             return deduplicated.strip()
 
         return new_text
+
+    def _remove_overlap(self, new_text: str) -> str:
+        """Phase 2: alignment-first overlap merge; heuristic fallback retained."""
+        if not self.last_final_text:
+            return new_text
+
+        overlap_size, score = self._alignment_overlap_size(self.last_final_text, new_text)
+        if overlap_size >= self.alignment_min_overlap_tokens and score >= self.alignment_min_score:
+            new_words = new_text.split()
+            if overlap_size < len(new_words):
+                deduplicated = " ".join(new_words[overlap_size:]).strip()
+                if deduplicated:
+                    self.total_alignment_merges += 1
+                    logger.info(
+                        "🧩 Alignment merge removed %s overlap tokens (score=%.2f)",
+                        overlap_size,
+                        score,
+                    )
+                    return deduplicated
+            # Full overlap: emit empty to suppress duplicate.
+            self.total_alignment_merges += 1
+            return ""
+
+        self.total_alignment_fallbacks += 1
+        return self._remove_overlap_heuristic(new_text)
 
     def _get_sentence_hash(self, text: str) -> str:
         """Generate hash for normalized text to detect exact duplicates."""
@@ -524,6 +889,7 @@ class StreamingTranscriptionManager:
 
         # HALLUCINATION FILTER
         if self._is_hallucination(text):
+            self.total_hallucination_filtered += 1
             logger.info(f"👻 Filtered hallucination: '{text}'")
             return
 
@@ -532,15 +898,21 @@ class StreamingTranscriptionManager:
 
         # Skip if nothing left after deduplication
         if not deduplicated_text or len(deduplicated_text.strip()) < 3:
+            self.total_duplicate_suppressed += 1
             logger.debug(f"⏭️  Skipped - fully overlapping: '{text[:50]}...'")
             return
 
         # Use deduplicated text for processing
+        if len(text) > 0:
+            removed_ratio = max(0.0, (len(text) - len(deduplicated_text)) / len(text))
+            if removed_ratio >= 0.35:
+                self.total_semantic_drift_events += 1
         text = deduplicated_text
 
         # IMPROVED: Check if this exact text was already finalized (hash check)
         sentence_hash = self._get_sentence_hash(text)
         if sentence_hash in self.finalized_hashes:
+            self.total_duplicate_suppressed += 1
             logger.debug(f"⏭️  Skipping duplicate hash: '{text[:50]}...'")
             return
 
@@ -549,12 +921,15 @@ class StreamingTranscriptionManager:
             text, threshold=0.35
         ):  # Lowered from 0.4 to catch more
             # 40% of 4-grams match = likely duplicate
+            self.total_duplicate_suppressed += 1
             return
 
         # Check if text stabilized
         if text == self.last_partial_text:
             self.same_text_count += 1
         else:
+            if self.last_partial_text:
+                self.total_correction_events += 1
             self.same_text_count = 0
             self.last_partial_text = text
 
@@ -571,6 +946,7 @@ class StreamingTranscriptionManager:
 
         # SMART TIMER TRIGGER LOGIC
         is_complete_sentence = self._is_complete_sentence(text)
+        self._maybe_apply_adaptive_window_policy(is_complete_sentence=is_complete_sentence)
 
         # Calculate speech duration (using client-synced timestamps)
         speech_duration_ms = (
@@ -612,39 +988,46 @@ class StreamingTranscriptionManager:
             logger.info(f"⏱️ SMART TRIGGER: Sentence complete + stable")
 
         if trigger_reason:
+            boundary_score = self._compute_boundary_score(
+                text=text,
+                is_complete_sentence=is_complete_sentence,
+                speech_duration_ms=speech_duration_ms,
+            )
+            if (
+                trigger_reason in {"timeout", "stability"}
+                and boundary_score < self.min_boundary_score
+            ):
+                logger.debug(
+                    "🧱 Boundary gate blocked segment (reason=%s, score=%.2f, min=%.2f)",
+                    trigger_reason,
+                    boundary_score,
+                    self.min_boundary_score,
+                )
+                return
+
             # Debounce - check hash before emitting
             if sentence_hash in self.finalized_hashes:
                 logger.debug(f"⏭️  Debounced duplicate final: '{text[:50]}...'")
                 return
 
-            if on_final:
-                logger.debug(
-                    f"✅ Finalizing: '{text[:50]}...' (reason={trigger_reason})"
-                )
+            logger.debug(f"✅ Candidate final: '{text[:50]}...' (reason={trigger_reason})")
 
-                # Calculate timing (using accurate client timestamps)
-                audio_start = self.speech_start_time
-                audio_end = self.speech_end_time
-                duration = audio_end - audio_start
-
-                final_data = {
-                    "text": text,
-                    "confidence": confidence,
-                    "reason": trigger_reason,
-                    "audio_start_time": audio_start,
-                    "audio_end_time": audio_end,
-                    "duration": duration,
-                }
-
-                # Include translation metadata if available
-                if metadata:
-                    if metadata.get("original_text"):
-                        final_data["original_text"] = metadata["original_text"]
-                    if metadata.get("translated"):
-                        final_data["translated"] = metadata["translated"]
-
-                await on_final(final_data)
-
+            # Calculate timing (using accurate client timestamps)
+            audio_start = self.speech_start_time
+            audio_end = self.speech_end_time
+            emitted = await self._emit_candidate_segment(
+                text=text,
+                confidence=confidence,
+                trigger_reason=trigger_reason,
+                audio_start=audio_start,
+                audio_end=audio_end,
+                metadata=metadata,
+                on_final=on_final,
+                is_complete_sentence=is_complete_sentence,
+                speech_duration_ms=speech_duration_ms,
+                boundary_score=boundary_score,
+            )
+            if emitted:
                 # Track finalized text
                 self.finalized_hashes.add(sentence_hash)
                 self.last_final_text += " " + text
@@ -658,10 +1041,33 @@ class StreamingTranscriptionManager:
         return {
             "chunks_processed": self.total_chunks_processed,
             "transcriptions": self.total_transcriptions,
+            "stable_segments": self.total_stable_segments,
+            "volatile_segments": self.total_volatile_segments,
+            "duplicate_suppressed": self.total_duplicate_suppressed,
+            "hallucination_filtered": self.total_hallucination_filtered,
+            "correction_events": self.total_correction_events,
+            "semantic_drift_events": self.total_semantic_drift_events,
+            "alignment_merges": self.total_alignment_merges,
+            "alignment_fallbacks": self.total_alignment_fallbacks,
+            "silence_holds": self.total_silence_holds,
+            "silence_force_flush_emits": self.total_force_flush_emits,
+            "window_policy": self.current_policy_name,
+            "window_policy_switches": self.window_policy_switches,
+            "speech_density_recent": (
+                (sum(self.recent_speech_flags) / len(self.recent_speech_flags))
+                if self.recent_speech_flags
+                else 0.0
+            ),
             "buffer_duration_ms": self.buffer.get_buffer_duration_ms(),
             "is_speaking": self.is_speaking,
             "final_text_length": len(self.last_final_text),
             "partial_text": self.last_partial_text,
+            "first_stable_emit_latency_seconds": self.first_stable_emit_latency_seconds,
+            "avg_segment_finalize_latency_seconds": (
+                self.segment_finalize_latency_sum / self.segment_finalize_latency_count
+                if self.segment_finalize_latency_count > 0
+                else None
+            ),
         }
 
     def reset(self):
@@ -674,6 +1080,27 @@ class StreamingTranscriptionManager:
         self.is_speaking = False
         self.total_chunks_processed = 0
         self.total_transcriptions = 0
+        self.total_stable_segments = 0
+        self.total_volatile_segments = 0
+        self.total_duplicate_suppressed = 0
+        self.total_hallucination_filtered = 0
+        self.total_semantic_drift_events = 0
+        self.total_correction_events = 0
+        self.total_alignment_merges = 0
+        self.total_alignment_fallbacks = 0
+        self.total_silence_holds = 0
+        self.total_force_flush_emits = 0
+        self.window_policy_switches = 0
+        self.segment_finalize_latency_sum = 0.0
+        self.segment_finalize_latency_count = 0
+        self.first_stable_emit_latency_seconds = None
+        self.session_wallclock_start = time.time()
+        self.volatile_segments.clear()
+        self.recent_speech_flags.clear()
+        self.last_adaptive_policy_update_ts = 0.0
+        self.current_policy_name = "base"
+        if self.adaptive_window_enabled:
+            self._set_window_policy("base", self.base_window_ms, self.base_slide_ms)
         # Clear deduplication tracking
         self.finalized_hashes.clear()
         self.finalized_words.clear()
@@ -681,7 +1108,6 @@ class StreamingTranscriptionManager:
 
     def cleanup(self):
         """Cleanup resources"""
-        self.executor.shutdown(wait=False)
         logger.info("🧹 Manager cleanup complete")
 
     async def force_flush(self):
@@ -697,11 +1123,8 @@ class StreamingTranscriptionManager:
         if len(remaining_bytes) > 16000:  # At least 0.5s of audio
             logger.info(f"Flushing {len(remaining_bytes)} bytes of remaining audio")
 
-            # Transcribe final chunk
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(
-                None,  # Use default executor
-                self.groq.transcribe_audio_sync,
+            # Transcribe final chunk using async client
+            result = await self.groq.transcribe_audio_async(
                 remaining_bytes,
                 "auto",
                 self.last_final_text[-100:] if self.last_final_text else None,

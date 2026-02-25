@@ -26,6 +26,10 @@ export interface Transcript {
   speaker_confidence?: number;
   alignment_state?: 'CONFIDENT' | 'UNCERTAIN' | 'OVERLAP' | 'UNKNOWN_SPEAKER';
   source?: 'live' | 'diarized'; // NEW: Source of the transcript
+  stability_score?: number;
+  stability_class?: 'stable' | 'volatile';
+  segment_finalize_latency_seconds?: number;
+  boundary_score?: number;
 }
 
 export interface TranscriptUpdate {
@@ -40,6 +44,10 @@ export interface TranscriptUpdate {
   audio_start_time: number; // Seconds from recording start
   audio_end_time: number;   // Seconds from recording start
   duration: number;          // Segment duration in seconds
+  stability_score?: number;
+  stability_class?: 'stable' | 'volatile';
+  segment_finalize_latency_seconds?: number;
+  boundary_score?: number;
 }
 
 export interface Block {
