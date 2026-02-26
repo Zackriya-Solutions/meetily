@@ -1037,10 +1037,10 @@ class DiarizationService:
         if not text:
             return ""
 
-        # Remove 'undefined ' prefix (case-insensitive)
+        # Remove 'undefined' prefix (case-insensitive, with or without space)
         import re
 
-        text = re.sub(r"^(undefined\s+)+", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"^(undefined\s*)+", "", text, flags=re.IGNORECASE)
 
         # Remove other common artifacts
         text = text.replace("undefined", "").replace("  ", " ").strip()
@@ -1148,7 +1148,9 @@ class DiarizationService:
 
         payload_segments = []
         for index, seg in enumerate(aligned_transcripts):
-            payload_segments.append({"index": index, "text": seg.get("text", "")})
+            # Clean input text before sending to LLM to avoid garbage in/garbage out
+            clean_input = self._clean_undefined(seg.get("text", ""))
+            payload_segments.append({"index": index, "text": clean_input})
 
         prompt = f"""
         You are a professional meeting translator. Your task is to translate the following meeting transcript segments into clear, natural English.
@@ -1211,11 +1213,15 @@ class DiarizationService:
                 new_seg = dict(seg)
                 raw_text = seg.get("text", "")
 
-                # Clean undefined before translation
+                # Clean undefined before translation (redundant but safe)
                 cleaned_text = self._clean_undefined(raw_text)
 
                 new_seg["original_text"] = cleaned_text  # Keep clean original
-                new_seg["text"] = translated_dict.get(index, cleaned_text)
+
+                # Get translated text and Clean it too!
+                translated_text = translated_dict.get(index, cleaned_text)
+                new_seg["text"] = self._clean_undefined(translated_text)
+
                 new_seg["translated"] = True
                 translated_results.append(new_seg)
 

@@ -140,13 +140,14 @@ async def main():
     alignment_engine = AlignmentEngine()
 
     t0 = time.perf_counter()
-    groq_task = asyncio.create_task(diarization_service.transcribe_with_whisper(audio_data))
+    groq_task = asyncio.create_task(
+        diarization_service.transcribe_with_whisper(audio_data)
+    )
     diar_task = asyncio.create_task(
         diarization_service.diarize_meeting(
             meeting_id="benchmark-combined",
             provider="deepgram",
             audio_data=audio_data,
-            audio_url=None,
             user_email=None,
         )
     )
@@ -168,12 +169,18 @@ async def main():
     ]
 
     raw_input_segments = [
-        {"start": s.get("start", 0.0), "end": s.get("end", 0.0), "text": s.get("text", "")}
+        {
+            "start": s.get("start", 0.0),
+            "end": s.get("end", 0.0),
+            "text": s.get("text", ""),
+        }
         for s in (groq_segments or [])
         if s.get("end", 0.0) > s.get("start", 0.0)
     ]
 
-    aligned_raw, metrics_raw = alignment_engine.align_batch(raw_input_segments, speaker_segments)
+    aligned_raw, metrics_raw = alignment_engine.align_batch(
+        raw_input_segments, speaker_segments
+    )
 
     compacted = compact_transcript_segments(
         raw_input_segments,
@@ -182,7 +189,9 @@ async def main():
         min_segment_seconds=args.min_segment_seconds,
         min_words=args.min_words,
     )
-    aligned_compact, metrics_compact = alignment_engine.align_batch(compacted, speaker_segments)
+    aligned_compact, metrics_compact = alignment_engine.align_batch(
+        compacted, speaker_segments
+    )
     t2 = time.perf_counter()
 
     result = {

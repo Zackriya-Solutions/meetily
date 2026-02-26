@@ -446,6 +446,11 @@ class GroqTranscriptionClient:
                         seg_start = float(getattr(s, "start", 0.0)) + chunk_offset_sec
                         seg_end = float(getattr(s, "end", 0.0)) + chunk_offset_sec
                         seg_conf = getattr(s, "avg_logprob", 1.0)
+
+                    # Cleanup artifacts
+                    if seg_text.lower().startswith("undefined"):
+                        seg_text = seg_text[9:].strip()
+
                     segments.append(
                         {
                             "text": seg_text,
