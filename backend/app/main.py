@@ -54,7 +54,7 @@ origins = [
     "http://localhost:3118",
     "http://localhost:3000",
     "https://pnyxx.vercel.app",
-    "https://meet.pnyx.com",
+    "https://meet.quexio.com",
 ]
 
 app.add_middleware(

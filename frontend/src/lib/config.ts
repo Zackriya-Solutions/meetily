@@ -5,7 +5,7 @@
  * based on NODE_ENV environment variable.
  * 
  * Development (npm run dev): Uses localhost
- * Production (npm run build / Vercel): Uses env vars or meet.digest.lat
+ * Production (npm run build / Vercel): Uses env vars or meet.quexio.com
  */
 
 const isDevelopment = process.env.NODE_ENV === 'development';
@@ -14,12 +14,12 @@ export const config = {
   // HTTP API base URL
   apiUrl: isDevelopment 
     ? 'http://localhost:5167'
-    : (process.env.NEXT_PUBLIC_BACKEND_URL || 'https://meet.pnyx.com'),
+    : (process.env.NEXT_PUBLIC_BACKEND_URL || 'https://meet.quexio.com'),
   
   // WebSocket URL for real-time streaming
   wsUrl: isDevelopment
     ? 'ws://localhost:5167/ws/streaming-audio'
-    : (process.env.NEXT_PUBLIC_WS_URL || 'wss://meet.pnyx.com/ws/streaming-audio'),
+    : (process.env.NEXT_PUBLIC_WS_URL || 'wss://meet.quexio.com/ws/streaming-audio'),
   
   // Debug mode - enables extra logging
   debug: isDevelopment,

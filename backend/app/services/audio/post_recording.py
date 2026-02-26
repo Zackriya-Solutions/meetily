@@ -87,26 +87,43 @@ class PostRecordingService:
 
             if self.prefer_compressed_read and self.skip_wav_finalize_if_compressed:
                 compressed_path = await self._get_compressed_archive_path(meeting_id)
+                # DANGER: Only use compressed path if we are absolutely sure no concurrent pcm chunks exist
+                # If we have PCM chunks, we MUST merge them to ensure no data loss from session resumes.
                 if compressed_path:
-                    if self.storage_type == "gcp" and self.delete_pcm_after_merge:
-                        try:
-                            await self._cleanup_gcp_chunks(meeting_id)
-                            result["local_cleaned"] = True
-                        except Exception as e:
-                            logger.warning(
-                                f"Failed to delete PCM chunks in GCS for {meeting_id}: {e}"
-                            )
-                    result["status"] = "completed"
-                    result["uploaded_to_gcp"] = self.storage_type == "gcp"
-                    result["gcp_path"] = compressed_path
-                    logger.info(
-                        f"✅ Post-recording fast path for {meeting_id}: {compressed_path} already available"
-                    )
-                    if trigger_diarization:
-                        asyncio.create_task(
-                            self._trigger_diarization(meeting_id, user_email)
+                    logger.info(f"💾 Found compressed archive: {compressed_path}")
+                    
+                    # Double check for PCM chunks
+                    has_chunks = False
+                    if self.storage_type == "gcp":
+                        prefix = f"{meeting_id}/{self.chunk_prefix}/"
+                        files = await StorageService.list_files(prefix)
+                        has_chunks = any(f.endswith(".pcm") for f in files)
+                    else:
+                        local_dir = self.storage_path / meeting_id
+                        has_chunks = local_dir.exists() and any(local_dir.glob("chunk_*.pcm"))
+
+                    if not has_chunks:
+                        if self.storage_type == "gcp" and self.delete_pcm_after_merge:
+                            try:
+                                await self._cleanup_gcp_chunks(meeting_id)
+                                result["local_cleaned"] = True
+                            except Exception as e:
+                                logger.warning(
+                                    f"Failed to delete PCM chunks in GCS for {meeting_id}: {e}"
+                                )
+                        result["status"] = "completed"
+                        result["uploaded_to_gcp"] = self.storage_type == "gcp"
+                        result["gcp_path"] = compressed_path
+                        logger.info(
+                            f"✅ Post-recording fast path for {meeting_id}: {compressed_path} already available"
                         )
-                    return result
+                        if trigger_diarization:
+                            asyncio.create_task(
+                                self._trigger_diarization(meeting_id, user_email)
+                            )
+                        return result
+                    else:
+                        logger.info(f"📦 PCM chunks detected for {meeting_id}, ignoring compressed archive to ensure full merge.")
 
             if self.storage_type == "gcp":
                 logger.info(f"☁️ GCP mode: merging PCM in backend for {meeting_id}")
@@ -280,6 +297,12 @@ class PostRecordingService:
             if not chunk_files:
                 logger.error(f"No PCM chunks found in GCS for {meeting_id}")
                 return False
+
+            logger.info(f"📂 Merging {len(chunk_files)} PCM chunks from GCP for {meeting_id}")
+            for i, f in enumerate(chunk_files[:5]):
+                logger.debug(f"  [{i}] {f}")
+            if len(chunk_files) > 5:
+                logger.debug(f"  ... and {len(chunk_files) - 5} more")
 
             import io
             import wave

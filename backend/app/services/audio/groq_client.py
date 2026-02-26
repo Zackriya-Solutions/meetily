@@ -241,15 +241,39 @@ class GroqTranscriptionClient:
                         prompt=prompt,
                     )
 
+            # ENHANCED PROMPT: Force translation from the beginning
+            translation_prompt = prompt or (
+                "This is a recording of a meeting in Hindi and English. "
+                "Please translate everything to clear, natural English, "
+                "starting from the very first word. Do not skip the beginning."
+            )
+
             result = await self.client.audio.translations.create(
                 file=(filename, upload_bytes),
                 model="whisper-large-v3",
                 response_format="verbose_json",
                 temperature=0.0,
-                prompt=prompt or "This is a business meeting transcript.",
+                prompt=translation_prompt,
             )
 
             segments = []
+            # Log results for debugging
+            seg_count = len(result.segments) if hasattr(result, "segments") else 0
+            first_seg = result.segments[0] if seg_count > 0 else None
+            if first_seg:
+                if isinstance(first_seg, dict):
+                    first_start = first_seg.get("start", 0.0)
+                else:
+                    first_start = getattr(first_seg, "start", 0.0)
+            else:
+                first_start = "N/A"
+            logger.info(
+                "✅ Groq translation complete: %d segments, first_start=%s, total_text_len=%d",
+                seg_count,
+                first_start,
+                len(result.text),
+            )
+
             if hasattr(result, "segments"):
                 for s in result.segments:
                     if isinstance(s, dict):
@@ -337,12 +361,19 @@ class GroqTranscriptionClient:
                 chunk_offset_sec,
             )
 
+            # ENHANCED PROMPT: Ensure consistent translation context for chunks
+            translation_prompt = prompt or (
+                "This is a recording of a meeting in Hindi and English. "
+                "Please translate everything to clear, natural English, "
+                "starting from the very first word. Do not skip the beginning."
+            )
+
             result = await self.client.audio.translations.create(
                 file=(f"audio_chunk_{chunk_index}.wav", chunk_bytes),
                 model="whisper-large-v3",
                 response_format="verbose_json",
                 temperature=0.0,
-                prompt=prompt or "This is a business meeting transcript.",
+                prompt=translation_prompt,
             )
 
             chunk_text = (getattr(result, "text", "") or "").strip()

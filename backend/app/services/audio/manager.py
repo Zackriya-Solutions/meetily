@@ -248,7 +248,7 @@ class StreamingTranscriptionManager:
             "silence": 0.16,
             "silence_force_flush": 0.18,
             "stability": 0.15,
-            "timeout": 0.10,
+            "timeout": 0.18,  # Boosted from 0.10 to ensure safety-net triggers aren't volatile
         }.get(trigger_reason, 0.10)
         sentence_bonus = 0.12 if is_complete_sentence else 0.0
         repeat_bonus = min(self.same_text_count, 4) * 0.03
@@ -997,13 +997,19 @@ class StreamingTranscriptionManager:
                 trigger_reason in {"timeout", "stability"}
                 and boundary_score < self.min_boundary_score
             ):
-                logger.debug(
-                    "🧱 Boundary gate blocked segment (reason=%s, score=%.2f, min=%.2f)",
-                    trigger_reason,
-                    boundary_score,
-                    self.min_boundary_score,
-                )
-                return
+                # Safety net: If timeout is triggered, we MUST emit even if boundary score is low,
+                # otherwise the rolling buffer will drop this audio as it slides.
+                # We relax the gate for timeout to 0.15 (very low).
+                gate_threshold = 0.15 if trigger_reason == "timeout" else self.min_boundary_score
+                
+                if boundary_score < gate_threshold:
+                    logger.debug(
+                        "🧱 Boundary gate blocked segment (reason=%s, score=%.2f, min=%.2f)",
+                        trigger_reason,
+                        boundary_score,
+                        gate_threshold,
+                    )
+                    return
 
             # Debounce - check hash before emitting
             if sentence_hash in self.finalized_hashes:

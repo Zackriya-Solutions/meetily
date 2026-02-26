@@ -1021,6 +1021,20 @@ class DiarizationService:
             logger.info(f"AssemblyAI returned {len(segments)} speaker segments")
             return segments
 
+    def _clean_undefined(self, text: str) -> str:
+        """Robustly remove 'undefined' artifacts from transcript text."""
+        if not text:
+            return ""
+        
+        # Remove 'undefined ' prefix (case-insensitive)
+        import re
+        text = re.sub(r"^(undefined\s+)+", "", text, flags=re.IGNORECASE)
+        
+        # Remove other common artifacts
+        text = text.replace("undefined", "").replace("  ", " ").strip()
+        
+        return text
+
     async def align_with_transcripts(
         self,
         meeting_id: str,
@@ -1030,14 +1044,16 @@ class DiarizationService:
         """
         Align diarization results with transcript segments using 3-tier alignment.
 
-        Uses the new AlignmentEngine with:
-        - Tier 1: Time overlap (primary)
-        - Tier 2: Word density (handles timestamp drift)
-        - Tier 3: Explicit UNCERTAIN state
-
         Returns:
             Tuple of (aligned_transcripts, metrics)
         """
+        # CLEANUP: Pre-clean transcripts text to remove artifacts like 'undefined'
+        for t in transcripts:
+            if "text" in t:
+                t["text"] = self._clean_undefined(t["text"])
+            elif "transcript" in t:
+                t["transcript"] = self._clean_undefined(t["transcript"])
+
         if diarization_result.status != "completed":
             logger.warning(
                 f"Cannot align - diarization status: {diarization_result.status}"
@@ -1114,9 +1130,8 @@ class DiarizationService:
             speaker = t.get("speaker", "Unknown")
             text = t.get("text", "").strip()
 
-            # CLEANUP: Remove 'undefined' prefix if present
-            if text.startswith("undefined "):
-                text = text[10:]  # Remove 'undefined '
+            # CLEANUP: Remove 'undefined' artifacts
+            text = self._clean_undefined(text)
 
             if not text:
                 continue
