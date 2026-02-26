@@ -1,6 +1,6 @@
 [package]
 name = "iqcapture"
-version = "0.2.2"
+version = "0.2.3"
 description = "IQ:capture - A Tauri App for meeting minutes"
 authors = ["Sujith S"]
 license = "MIT"
