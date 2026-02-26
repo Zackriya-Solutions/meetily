@@ -26,6 +26,8 @@ export interface Transcript {
   speaker_confidence?: number;
   alignment_state?: 'CONFIDENT' | 'UNCERTAIN' | 'OVERLAP' | 'UNKNOWN_SPEAKER';
   source?: 'live' | 'diarized'; // NEW: Source of the transcript
+  translated?: boolean;         // NEW: Flag for post-alignment translation
+  original_text?: string;       // NEW: Original text before translation
   stability_score?: number;
   stability_class?: 'stable' | 'volatile';
   segment_finalize_latency_seconds?: number;

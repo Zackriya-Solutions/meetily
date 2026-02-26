@@ -102,8 +102,7 @@ class DiarizationService:
         # Alignment engine (3-tier logic)
         self.alignment_engine = AlignmentEngine()
         self.deepgram_parallel_enabled = (
-            os.getenv("DEEPGRAM_PARALLEL_DIARIZATION_ENABLED", "true").lower()
-            == "true"
+            os.getenv("DEEPGRAM_PARALLEL_DIARIZATION_ENABLED", "true").lower() == "true"
         )
         self.deepgram_parallel_chunk_minutes = float(
             os.getenv("DEEPGRAM_PARALLEL_CHUNK_MINUTES", "10")
@@ -130,16 +129,17 @@ class DiarizationService:
         """
         if not text_a or not text_b:
             return 0.0
-            
+
         try:
             from Levenshtein import ratio
+
             return ratio(text_a.lower().strip(), text_b.lower().strip())
         except ImportError:
             # Fallback to Jaccard
             def _tokenize(t):
                 cleaned = re.sub(r"[^a-zA-Z0-9\s]", " ", (t or "").lower())
                 return {w for w in cleaned.split() if len(w) > 2}
-            
+
             tokens_a = _tokenize(text_a)
             tokens_b = _tokenize(text_b)
             if not tokens_a or not tokens_b:
@@ -149,7 +149,10 @@ class DiarizationService:
 
     @staticmethod
     def _build_overlap_text(
-        segment_dicts: List[Dict], overlap_start: float, overlap_end: float, speaker: str
+        segment_dicts: List[Dict],
+        overlap_start: float,
+        overlap_end: float,
+        speaker: str,
     ) -> str:
         parts = []
         for seg in segment_dicts:
@@ -172,19 +175,22 @@ class DiarizationService:
             sampwidth = wav_reader.getsampwidth()
             framerate = wav_reader.getframerate()
             # Trust the actual data bytes, not the header nframes (often placeholder 0x7FFFFFFF from pipe)
-            pcm_frames = wav_reader.readframes(2**31 - 1) 
+            pcm_frames = wav_reader.readframes(2**31 - 1)
 
         total_bytes = len(pcm_frames)
         bytes_per_frame = nchannels * sampwidth
         total_frames = total_bytes // bytes_per_frame
-        
+
         chunk_seconds = max(60.0, chunk_minutes * 60.0)
         step_seconds = max(1.0, chunk_seconds - max(0.0, overlap_seconds))
         total_seconds = total_frames / float(framerate) if framerate else 0.0
 
         logger.info(
             "📏 Parallel split: total_duration=%.2fs total_frames=%d bytes=%d chunk_sec=%.1f",
-            total_seconds, total_frames, total_bytes, chunk_seconds
+            total_seconds,
+            total_frames,
+            total_bytes,
+            chunk_seconds,
         )
 
         chunks: List[Tuple[int, float, float, bytes]] = []
@@ -210,7 +216,7 @@ class DiarizationService:
 
             chunks.append((chunk_index, start_sec, end_sec, chunk_io.getvalue()))
             chunk_index += 1
-            
+
             # Avoid infinite loop if step is 0 or end reached
             if end_sec >= total_seconds:
                 break
@@ -519,7 +525,10 @@ class DiarizationService:
             self.groq = GroqTranscriptionClient(self.groq_api_key)
 
         logger.info("💎 Running Gold Standard Whisper transcription...")
-        result = await self.groq.transcribe_full_audio(audio_data)
+        result = await self.groq.transcribe_full_audio(
+            audio_data,
+            prompt="This is a business meeting in Hindi and English. Speakers may code-switch.",
+        )
 
         if result.get("error"):
             logger.error(f"Gold transcription failed: {result['error']}")
@@ -823,9 +832,11 @@ class DiarizationService:
                     # QUALITY TRANSCRIPTION: Prefer 'utterances' for natural punctuation,
                     # fallback to 'words' reconstruction for 100% completeness.
                     utterances = result.get("results", {}).get("utterances", [])
-                    
+
                     channels = result.get("results", {}).get("channels", [])
-                    alternatives = channels[0].get("alternatives", []) if channels else []
+                    alternatives = (
+                        channels[0].get("alternatives", []) if channels else []
+                    )
                     words = alternatives[0].get("words", []) if alternatives else []
 
                     if not words and not utterances:
@@ -1025,14 +1036,15 @@ class DiarizationService:
         """Robustly remove 'undefined' artifacts from transcript text."""
         if not text:
             return ""
-        
+
         # Remove 'undefined ' prefix (case-insensitive)
         import re
+
         text = re.sub(r"^(undefined\s+)+", "", text, flags=re.IGNORECASE)
-        
+
         # Remove other common artifacts
         text = text.replace("undefined", "").replace("  ", " ").strip()
-        
+
         return text
 
     async def align_with_transcripts(
@@ -1112,6 +1124,109 @@ class DiarizationService:
         )
 
         return aligned_transcripts, metrics
+
+    async def translate_aligned_transcript(
+        self,
+        meeting_id: str,
+        aligned_transcripts: List[Dict],
+        user_email: str,
+    ) -> List[Dict]:
+        """
+        Translate the text of aligned transcript segments into English using an LLM.
+        Preserves timestamps, speaker labels, and alignment confidence.
+        """
+        if not aligned_transcripts:
+            return aligned_transcripts
+
+        logger.info(
+            f"🌐 Translating {len(aligned_transcripts)} aligned segments for {meeting_id}"
+        )
+
+        # 1. Prepare segments for the LLM
+        # We need a format that is easy to parse back. JSON is best.
+        import json
+
+        payload_segments = []
+        for index, seg in enumerate(aligned_transcripts):
+            payload_segments.append({"index": index, "text": seg.get("text", "")})
+
+        prompt = f"""
+        You are a professional meeting translator. Your task is to translate the following meeting transcript segments into clear, natural English.
+        The input is a JSON array of segment objects. Each object has an `index` and `text`.
+        
+        Rules:
+        1. Translate the `text` field of each segment into English.
+        2. If a segment is already in English, simply return it as is or improve its grammatical clarity slightly.
+        3. Do NOT merge or split segments. You must return exactly the same number of segments, with the exact same `index` values.
+        4. Return ONLY a valid JSON array of objects, where each object has `index` and the new translated `text`.
+
+        Input Segments:
+        {json.dumps(payload_segments, ensure_ascii=False, indent=2)}
+        """
+
+        try:
+            api_key = os.getenv("GEMINI_API_KEY")
+            if not api_key:
+                logger.warning("GEMINI_API_KEY not found, skipping translation")
+                return aligned_transcripts
+
+            try:
+                from ..gemini_client import generate_content_text_async
+            except (ImportError, ValueError):
+                try:
+                    from services.gemini_client import generate_content_text_async
+                except ImportError:
+                    from app.services.gemini_client import generate_content_text_async
+
+            # Using Gemini as the default fast/cheap translation engine
+            response_text = await generate_content_text_async(
+                api_key=api_key,
+                model="gemini-2.0-flash",  # Reliable json output
+                contents=prompt,
+                config={"temperature": 0.1},
+            )
+
+            # Clean potential markdown wrapping
+            if response_text.startswith("```json"):
+                response_text = response_text[7:-3].strip()
+            elif response_text.startswith("```"):
+                response_text = response_text[3:-3].strip()
+
+            translated_payload = json.loads(response_text)
+
+            # Verify translation count matches
+            if len(translated_payload) != len(aligned_transcripts):
+                logger.error(
+                    f"❌ Translation count mismatch: Expected {len(aligned_transcripts)}, got {len(translated_payload)}"
+                )
+                return aligned_transcripts  # Fallback to original
+
+            # Map translations back to the original segments
+            translated_dict = {
+                item["index"]: item["text"] for item in translated_payload
+            }
+
+            translated_results = []
+            for index, seg in enumerate(aligned_transcripts):
+                new_seg = dict(seg)
+                raw_text = seg.get("text", "")
+
+                # Clean undefined before translation
+                cleaned_text = self._clean_undefined(raw_text)
+
+                new_seg["original_text"] = cleaned_text  # Keep clean original
+                new_seg["text"] = translated_dict.get(index, cleaned_text)
+                new_seg["translated"] = True
+                translated_results.append(new_seg)
+
+            logger.info(
+                f"✅ Successfully translated {len(translated_results)} segments for {meeting_id}"
+            )
+            return translated_results
+
+        except Exception as e:
+            logger.error(f"❌ Post-alignment translation failed for {meeting_id}: {e}")
+            return aligned_transcripts  # Fallback to original text on failure
 
     def format_transcript_with_speakers(self, transcripts: List[Dict]) -> str:
         """

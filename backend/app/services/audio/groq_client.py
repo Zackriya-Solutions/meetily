@@ -11,7 +11,7 @@ import os
 import logging
 import io
 import wave
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +52,7 @@ class GroqTranscriptionClient:
         self,
         audio_data: bytes,
         language: str = "hi",
-        prompt: str = None,
+        prompt: Optional[str] = None,
         translate_to_english: bool = True,
     ) -> dict:
         """
@@ -68,7 +68,9 @@ class GroqTranscriptionClient:
             # Build WAV bytes on a thread so we don't block the event loop.
             wav_bytes = await asyncio.to_thread(self._pcm_to_wav_bytes, audio_data)
 
-            streaming_model = os.getenv("GROQ_STREAMING_MODEL", "whisper-large-v3-turbo")
+            streaming_model = os.getenv(
+                "GROQ_STREAMING_MODEL", "whisper-large-v3-turbo"
+            )
             translation_model = os.getenv("GROQ_TRANSLATION_MODEL", "whisper-large-v3")
 
             if translate_to_english:
@@ -100,7 +102,6 @@ class GroqTranscriptionClient:
                     transcription = await self.client.audio.transcriptions.create(
                         file=("audio.wav", wav_bytes),
                         model=streaming_model,
-                        language=None,
                         prompt=prompt or "This is a business meeting.",
                         response_format="verbose_json",
                         temperature=0.0,
@@ -135,7 +136,6 @@ class GroqTranscriptionClient:
                 transcription = await self.client.audio.transcriptions.create(
                     file=("audio.wav", wav_bytes),
                     model=streaming_model,
-                    language=None,  # Auto-detect
                     prompt=prompt or "This is a business meeting.",
                     response_format="verbose_json",
                     temperature=0.0,
@@ -169,19 +169,23 @@ class GroqTranscriptionClient:
         self,
         audio_data: bytes,
         language: str = "hi",
-        prompt: str = None,
+        prompt: Optional[str] = None,
     ) -> dict:
         """Transcribe audio using Groq Whisper Large v3 (async, no translation)."""
         try:
             wav_bytes = await asyncio.to_thread(self._pcm_to_wav_bytes, audio_data)
-            transcription = await self.client.audio.transcriptions.create(
-                file=("audio.wav", wav_bytes),
-                model="whisper-large-v3",
-                language=language if language != "auto" else None,
-                prompt=prompt or "This is a business meeting in Hindi and English.",
-                response_format="verbose_json",
-                temperature=0.0,
-            )
+
+            kwargs = {
+                "file": ("audio.wav", wav_bytes),
+                "model": "whisper-large-v3",
+                "prompt": prompt or "This is a business meeting in Hindi and English.",
+                "response_format": "verbose_json",
+                "temperature": 0.0,
+            }
+            if language and language != "auto":
+                kwargs["language"] = language
+
+            transcription = await self.client.audio.transcriptions.create(**kwargs)
             return {
                 "text": transcription.text.strip(),
                 "confidence": 1.0,
@@ -198,8 +202,8 @@ class GroqTranscriptionClient:
     async def transcribe_full_audio(
         self,
         audio_data: bytes,
-        language: str = "en",
-        prompt: str = None,
+        language: Optional[str] = None,
+        prompt: Optional[str] = None,
     ) -> dict:
         """
         Transcribe a large audio file and return detailed segments.
@@ -218,7 +222,9 @@ class GroqTranscriptionClient:
             )
 
             if not looks_like_container:
-                upload_bytes = await asyncio.to_thread(self._pcm_to_wav_bytes, audio_data)
+                upload_bytes = await asyncio.to_thread(
+                    self._pcm_to_wav_bytes, audio_data
+                )
                 filename = "audio.wav"
             elif audio_data.startswith(b"OggS"):
                 filename = "audio.ogg"
@@ -227,7 +233,9 @@ class GroqTranscriptionClient:
             elif audio_data[4:8] == b"ftyp":
                 filename = "audio.m4a"
 
-            max_upload_bytes = int(os.getenv("GROQ_MAX_UPLOAD_BYTES", str(24 * 1024 * 1024)))
+            max_upload_bytes = int(
+                os.getenv("GROQ_MAX_UPLOAD_BYTES", str(24 * 1024 * 1024))
+            )
             if len(upload_bytes) > max_upload_bytes:
                 if looks_like_container and filename != "audio.wav":
                     raise ValueError(
@@ -239,22 +247,28 @@ class GroqTranscriptionClient:
                         wav_bytes=upload_bytes,
                         max_upload_bytes=max_upload_bytes,
                         prompt=prompt,
+                        language=language,
                     )
 
-            # ENHANCED PROMPT: Force translation from the beginning
-            translation_prompt = prompt or (
-                "This is a recording of a meeting in Hindi and English. "
-                "Please translate everything to clear, natural English, "
-                "starting from the very first word. Do not skip the beginning."
+            # PROMPT: Transcribe exactly what is spoken
+            transcription_prompt = prompt or (
+                "This is a recording of a business meeting. "
+                "The conversation may switch between Hindi and English. "
+                "Please transcribe exactly what is spoken, in the original language. "
+                "Do not skip any parts, start from the very beginning."
             )
 
-            result = await self.client.audio.translations.create(
-                file=(filename, upload_bytes),
-                model="whisper-large-v3",
-                response_format="verbose_json",
-                temperature=0.0,
-                prompt=translation_prompt,
-            )
+            kwargs = {
+                "file": (filename, upload_bytes),
+                "model": "whisper-large-v3",
+                "response_format": "verbose_json",
+                "temperature": 0.0,
+                "prompt": transcription_prompt,
+            }
+            if language and language != "auto":
+                kwargs["language"] = language
+
+            result = await self.client.audio.transcriptions.create(**kwargs)
 
             segments = []
             # Log results for debugging
@@ -268,7 +282,7 @@ class GroqTranscriptionClient:
             else:
                 first_start = "N/A"
             logger.info(
-                "✅ Groq translation complete: %d segments, first_start=%s, total_text_len=%d",
+                "✅ Groq transcription complete: %d segments, first_start=%s, total_text_len=%d",
                 seg_count,
                 first_start,
                 len(result.text),
@@ -287,13 +301,18 @@ class GroqTranscriptionClient:
                         seg_end = getattr(s, "end", 0.0)
                         seg_conf = getattr(s, "avg_logprob", 1.0)
                     segments.append(
-                        {"text": seg_text, "start": seg_start, "end": seg_end, "confidence": seg_conf}
+                        {
+                            "text": seg_text,
+                            "start": seg_start,
+                            "end": seg_end,
+                            "confidence": seg_conf,
+                        }
                     )
 
             return {
                 "text": result.text.strip(),
                 "segments": segments,
-                "language": "en",
+                "language": getattr(result, "language", "en"),
                 "duration": getattr(result, "duration", 0.0),
             }
 
@@ -305,12 +324,14 @@ class GroqTranscriptionClient:
         self,
         wav_bytes: bytes,
         max_upload_bytes: int,
-        prompt: str = None,
+        prompt: Optional[str] = None,
+        language: Optional[str] = None,
     ) -> Dict:
         """
         Chunk a large WAV into <= max_upload_bytes pieces and stitch transcript segments.
         Now async — each chunk is uploaded with await.
         """
+
         # Parse WAV header in a thread (blocking I/O)
         def _parse_wav(data: bytes):
             with wave.open(io.BytesIO(data), "rb") as wr:
@@ -321,9 +342,13 @@ class GroqTranscriptionClient:
                 pcm_frames = wr.readframes(total_frames)
             return nchannels, sampwidth, framerate, total_frames, pcm_frames
 
-        nchannels, sampwidth, framerate, total_frames, pcm_frames = await asyncio.to_thread(
-            _parse_wav, wav_bytes
-        )
+        (
+            nchannels,
+            sampwidth,
+            framerate,
+            total_frames,
+            pcm_frames,
+        ) = await asyncio.to_thread(_parse_wav, wav_bytes)
 
         bytes_per_frame = max(1, nchannels * sampwidth)
         chunk_target_bytes = max(1_000_000, max_upload_bytes - 256_000)
@@ -341,6 +366,10 @@ class GroqTranscriptionClient:
             end_byte = chunk_end_frame * bytes_per_frame
             chunk_pcm = pcm_frames[start_byte:end_byte]
 
+            if not chunk_pcm:
+                chunk_start_frame = chunk_end_frame
+                continue
+
             # Build chunk WAV in a thread
             def _build_chunk_wav(pcm: bytes) -> bytes:
                 chunk_io = io.BytesIO()
@@ -352,29 +381,54 @@ class GroqTranscriptionClient:
                 return chunk_io.getvalue()
 
             chunk_bytes = await asyncio.to_thread(_build_chunk_wav, chunk_pcm)
+            chunk_duration = (
+                len(chunk_pcm) / (framerate * sampwidth * nchannels)
+                if framerate and sampwidth and nchannels
+                else 0
+            )
             chunk_offset_sec = chunk_start_frame / float(framerate)
 
+            # Skip tiny chunks that Groq will reject (min 0.01s, but we'll use 0.1s for safety)
+            if chunk_duration < 0.1:
+                logger.info(
+                    "⏩ Skipping tiny Groq chunk: chunk=%s duration=%.4fs",
+                    chunk_index,
+                    chunk_duration,
+                )
+                chunk_start_frame = chunk_end_frame
+                chunk_index += 1
+                continue
+
             logger.info(
-                "📦 Groq chunked transcription: chunk=%s size=%s offset=%.2fs",
+                "📦 Groq chunked transcription: chunk=%s size=%s duration=%.2fs offset=%.2fs",
                 chunk_index,
                 len(chunk_bytes),
+                chunk_duration,
                 chunk_offset_sec,
             )
 
-            # ENHANCED PROMPT: Ensure consistent translation context for chunks
-            translation_prompt = prompt or (
-                "This is a recording of a meeting in Hindi and English. "
-                "Please translate everything to clear, natural English, "
-                "starting from the very first word. Do not skip the beginning."
+            # Generic prompt to focus on business context without leaky instructions
+            transcription_prompt = (
+                prompt or "Business meeting transcript in Hindi and English."
             )
 
-            result = await self.client.audio.translations.create(
-                file=(f"audio_chunk_{chunk_index}.wav", chunk_bytes),
-                model="whisper-large-v3",
-                response_format="verbose_json",
-                temperature=0.0,
-                prompt=translation_prompt,
-            )
+            try:
+                kwargs = {
+                    "file": (f"audio_chunk_{chunk_index}.wav", chunk_bytes),
+                    "model": "whisper-large-v3",
+                    "response_format": "verbose_json",
+                    "temperature": 0.0,
+                    "prompt": transcription_prompt,
+                }
+                if language and language != "auto":
+                    kwargs["language"] = language
+
+                result = await self.client.audio.transcriptions.create(**kwargs)
+            except Exception as e:
+                logger.error("❌ Groq chunk %s failed: %s", chunk_index, e)
+                chunk_start_frame = chunk_end_frame
+                chunk_index += 1
+                continue
 
             chunk_text = (getattr(result, "text", "") or "").strip()
             if chunk_text:
@@ -393,7 +447,12 @@ class GroqTranscriptionClient:
                         seg_end = float(getattr(s, "end", 0.0)) + chunk_offset_sec
                         seg_conf = getattr(s, "avg_logprob", 1.0)
                     segments.append(
-                        {"text": seg_text, "start": seg_start, "end": seg_end, "confidence": seg_conf}
+                        {
+                            "text": seg_text,
+                            "start": seg_start,
+                            "end": seg_end,
+                            "confidence": seg_conf,
+                        }
                     )
 
             chunk_start_frame = chunk_end_frame

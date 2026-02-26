@@ -76,7 +76,10 @@ def _sanitize_error_for_ui(raw: str | None) -> str | None:
     if "no module named" in lower:
         return "A required backend service is unavailable. Please try again shortly."
 
-    if "operator is not unique" in lower or "'str' object has no attribute 'get'" in lower:
+    if (
+        "operator is not unique" in lower
+        or "'str' object has no attribute 'get'" in lower
+    ):
         return "Temporary backend processing issue. Please retry diarization."
 
     if "no audio data found" in lower or "recording was enabled" in lower:
@@ -158,6 +161,9 @@ async def run_diarization_job(meeting_id: str, provider: str, user_email: str):
     Background job that runs speaker diarization.
     Simplified: Download -> Decode -> Parallel Diarization -> Alignment -> Save
     """
+    logger.info(
+        f"💎 Starting Diarization Job for {meeting_id} with provider: {provider}"
+    )
     try:
         start_time_total = datetime.utcnow()
         logger.info(f"🎯 Starting simplified diarization job for meeting {meeting_id}")
@@ -180,10 +186,10 @@ async def run_diarization_job(meeting_id: str, provider: str, user_email: str):
                 if await StorageService.check_file_exists(candidate):
                     selected_path = candidate
                     break
-            
+
             if not selected_path:
                 raise ValueError(f"No recording found in GCS for {meeting_id}")
-            
+
             audio_data = await StorageService.download_bytes(selected_path)
         else:
             # Local mode
@@ -191,6 +197,7 @@ async def run_diarization_job(meeting_id: str, provider: str, user_email: str):
             merged_wav = recording_dir / "merged_recording.wav"
             if merged_wav.exists():
                 import aiofiles
+
                 async with aiofiles.open(merged_wav, "rb") as af:
                     audio_data = await af.read()
             else:
@@ -205,198 +212,211 @@ async def run_diarization_job(meeting_id: str, provider: str, user_email: str):
 
         # CHECK CANCELLATION
         async with db._get_connection() as conn:
-            status = await conn.fetchval("SELECT status FROM diarization_jobs WHERE meeting_id = $1", meeting_id)
+            status = await conn.fetchval(
+                "SELECT status FROM diarization_jobs WHERE meeting_id = $1", meeting_id
+            )
             if status == "stopped":
                 return
 
-        # 3. Transcribe & Diarize in Parallel
-        # Use Groq for high-fidelity transcription (baseline)
-        # Use Deepgram for speaker segments
-        
-        # Groq Whisper Configuration
-        groq_parallel = os.getenv("GROQ_PARALLEL_WITH_DIARIZATION_ENABLED", "false").lower() == "true"
-        whisper_task = None
-        if groq_parallel:
-            logger.info("💎 Enqueuing Groq Whisper in parallel...")
-            whisper_task = asyncio.create_task(diarization_service.transcribe_with_whisper(wav_data, user_email=user_email))
-        
-        # Deepgram Diarization
-        api_key = await diarization_service._get_api_key(provider, user_email)
-        logger.info("🎯 Enqueuing Deepgram parallel diarization...")
-        diarization_task = asyncio.create_task(
-            diarization_service._diarize_with_deepgram_parallel(
-                wav_data=wav_data,
-                meeting_id=meeting_id,
-                api_key=api_key
-            )
+        # 3. Parallel Diarization & Gold Whisper Transcription
+        logger.info(
+            f"🚀 [Phase 1/2] Running parallel Groq-Whisper + {provider}-Diarization"
         )
-
-        # Execute
-        if groq_parallel:
-            diarization_segments, whisper_segments = await asyncio.gather(diarization_task, whisper_task)
-        else:
-            diarization_segments = await diarization_task
-            logger.info("💎 Running Groq baseline sequentially...")
-            whisper_segments = await diarization_service.transcribe_with_whisper(wav_data, user_email=user_email)
-
-        # 4. Alignment
-        result = DiarizationResult(
-            status="completed",
-            meeting_id=meeting_id,
-            speaker_count=len(set(s.speaker for s in diarization_segments)),
-            segments=diarization_segments,
-            processing_time_seconds=(datetime.utcnow() - start_time_total).total_seconds(),
-            provider=provider
-        )
-
-        if result.status == "completed":
-            alignment_inputs = whisper_segments if whisper_segments else [
-                {"start": s.start_time, "end": s.end_time, "text": s.text} for s in diarization_segments
-            ]
-
-            # Compaction (Group small segments for better alignment)
-            if alignment_inputs and os.getenv("ALIGNMENT_COMPACT_ENABLED", "true").lower() == "true":
-                alignment_inputs = _compact_transcript_segments(
-                    segments=alignment_inputs,
-                    max_gap_seconds=float(os.getenv("ALIGNMENT_COMPACT_MAX_GAP_SECONDS", "0.4")),
-                    max_duration_seconds=float(os.getenv("ALIGNMENT_COMPACT_MAX_DURATION_SECONDS", "8.0")),
-                    min_segment_seconds=float(os.getenv("ALIGNMENT_COMPACT_MIN_SEGMENT_SECONDS", "0.6")),
-                    min_words=int(os.getenv("ALIGNMENT_COMPACT_MIN_WORDS", "3")),
+        try:
+            diarization_task = asyncio.create_task(
+                diarization_service.diarize_meeting(
+                    meeting_id=meeting_id,
+                    audio_data=wav_data,
+                    provider=provider,
+                    user_email=user_email,
                 )
-
-            final_segments, alignment_metrics = await diarization_service.align_with_transcripts(
-                meeting_id, result, alignment_inputs
+            )
+            whisper_task = asyncio.create_task(
+                diarization_service.transcribe_with_whisper(
+                    wav_data, user_email=user_email
+                )
             )
 
-            # Step D: Save to DB (single connection + batch inserts + atomic completion)
-            db_save_start = time.perf_counter()
-
-            async def _persist_and_complete():
-                async with db._get_connection() as conn:
-                    async with conn.transaction():
-                        # 1. Clear old diarized transcripts only (Preserve live)
-                        await conn.execute(
-                            "DELETE FROM transcript_segments WHERE meeting_id = $1 AND source = 'diarized'",
-                            meeting_id,
-                        )
-
-                        # 2. Insert new aligned segments in batch
-                        insert_rows = []
-                        for t in final_segments:
-                            start_val = t.get("start", 0)
-                            timestamp_str = (
-                                f"({int(start_val // 60):02d}:{int(start_val % 60):02d})"
-                            )
-                            insert_rows.append(
-                                (
-                                    meeting_id,
-                                    t.get("text", ""),
-                                    timestamp_str,
-                                    t.get("start"),
-                                    t.get("end"),
-                                    (t.get("end", 0) - (t.get("start") or 0)),
-                                    "diarized",
-                                    t.get("speaker", "Speaker 0"),
-                                    t.get("speaker_confidence", 1.0),
-                                    t.get("alignment_state"),
-                                )
-                            )
-
-                        if insert_rows:
-                            await conn.executemany(
-                                """
-                                INSERT INTO transcript_segments (
-                                    meeting_id, transcript, timestamp,
-                                    audio_start_time, audio_end_time, duration,
-                                    source, speaker, speaker_confidence, alignment_state
-                                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-                                """,
-                                insert_rows,
-                            )
-
-                        # 3. Save version snapshot using the same connection
-                        version_num = await conn.fetchval(
-                            """
-                            SELECT COALESCE(MAX(version_num), 0) + 1
-                            FROM transcript_versions
-                            WHERE meeting_id = $1
-                            """,
-                            meeting_id,
-                        )
-                        confidence_metrics = db._calculate_confidence_metrics(final_segments)
-                        await conn.execute(
-                            """
-                            UPDATE transcript_versions
-                            SET is_authoritative = FALSE
-                            WHERE meeting_id = $1 AND is_authoritative = TRUE
-                            """,
-                            meeting_id,
-                        )
-                        await conn.execute(
-                            """
-                            INSERT INTO transcript_versions (
-                                meeting_id, version_num, source, content_json,
-                                is_authoritative, created_by, alignment_config, confidence_metrics
-                            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                            """,
-                            meeting_id,
-                            version_num,
-                            "diarized",
-                            json.dumps(final_segments, default=str),
-                            True,
-                            user_email,
-                            json.dumps(
-                                {
-                                    "provider": provider,
-                                    "alignment_metrics": alignment_metrics,
-                                }
-                            ),
-                            json.dumps(confidence_metrics),
-                        )
-
-                        # 4. Mark job complete atomically with data write
-                        segments_json = [
-                            {"speaker": s.speaker, "start": s.start_time, "end": s.end_time}
-                            for s in result.segments
-                        ]
-                        await conn.execute(
-                            """
-                            UPDATE diarization_jobs
-                            SET status = 'completed', completed_at = $1, result_json = $2
-                            WHERE meeting_id = $3
-                            """,
-                            datetime.utcnow(),
-                            json.dumps(segments_json),
-                            meeting_id,
-                        )
-                        await conn.execute(
-                            "UPDATE meetings SET diarization_status = 'completed' WHERE id = $1",
-                            meeting_id,
-                        )
-
-            db_timeout_seconds = int(
-                os.getenv("DIARIZATION_DB_SAVE_TIMEOUT_SECONDS", "180")
+            # Wait for both with a combined timeout
+            diarization_result, whisper_output = await asyncio.gather(
+                diarization_task, whisper_task
             )
-            await asyncio.wait_for(_persist_and_complete(), timeout=db_timeout_seconds)
+        except Exception as e:
+            logger.error(f"Parallel processing failed: {e}")
+            raise
 
-            logger.info(
-                "✅ Diarization persistence complete for %s: aligned=%s version_saved=true db_time=%.2fs",
-                meeting_id,
-                len(final_segments),
-                time.perf_counter() - db_save_start,
+        # 4. Result Verification
+        if not whisper_output:
+            raise ValueError("Whisper transcription returned no data")
+        if (
+            not diarization_result
+            or diarization_result.status == "failed"
+            or not diarization_result.segments
+        ):
+            # Fallback: Just use Whisper results with 'Unknown' speaker
+            logger.warning(
+                "Diarization failed or returned no segments. Falling back to Whisper only."
             )
-        else:
-            # Failed
+            diarization_result = DiarizationResult(
+                status="completed", segments=[], duration=0.0
+            )
+
+        # 5. Extract Whisper Segments
+        whisper_segments = (
+            whisper_output.get("segments", [])
+            if isinstance(whisper_output, dict)
+            else whisper_output
+        )
+
+        # CHECK CANCELLATION again before expensive alignment
+        async with db._get_connection() as conn:
+            status = await conn.fetchval(
+                "SELECT status FROM diarization_jobs WHERE meeting_id = $1", meeting_id
+            )
+            if status == "stopped":
+                return
+
+        # 🚀 [Phase 2/2] Align Gold Whisper segments with Speaker Diarization
+        logger.info(
+            f"🎯 [Phase 2/2] Aligning {len(whisper_segments)} Whisper segments with {len(diarization_result.segments)} speaker segments"
+        )
+
+        # Using the optimized 3-tier Alignment Engine
+        (
+            final_segments,
+            alignment_metrics,
+        ) = await diarization_service.align_with_transcripts(
+            meeting_id, diarization_result, whisper_segments
+        )
+
+        # Step D: Translate to English (since we now use raw transcription)
+        final_segments = await diarization_service.translate_aligned_transcript(
+            meeting_id, final_segments, user_email
+        )
+
+        # Step E: Save to DB (single connection + batch inserts + atomic completion)
+        db_save_start = time.perf_counter()
+
+        async def _persist_and_complete():
             async with db._get_connection() as conn:
-                await conn.execute(
-                    "UPDATE diarization_jobs SET status = 'failed', error_message = $1 WHERE meeting_id = $2",
-                    result.error,
-                    meeting_id,
-                )
-                await conn.execute(
-                    "UPDATE meetings SET diarization_status = 'failed' WHERE id = $1",
-                    meeting_id,
-                )
+                async with conn.transaction():
+                    # 1. Clear old diarized transcripts only (Preserve live)
+                    await conn.execute(
+                        "DELETE FROM transcript_segments WHERE meeting_id = $1 AND source = 'diarized'",
+                        meeting_id,
+                    )
+
+                    # 2. Insert new aligned segments in batch
+                    insert_rows = []
+                    for t in final_segments:
+                        start_val = t.get("start", 0)
+                        timestamp_str = (
+                            f"({int(start_val // 60):02d}:{int(start_val % 60):02d})"
+                        )
+                        insert_rows.append(
+                            (
+                                meeting_id,
+                                t.get("text", ""),
+                                timestamp_str,
+                                t.get("start"),
+                                t.get("end"),
+                                (t.get("end", 0) - (t.get("start") or 0)),
+                                "diarized",
+                                t.get("speaker", "Speaker 0"),
+                                t.get("speaker_confidence", 1.0),
+                                t.get("alignment_state"),
+                            )
+                        )
+
+                    if insert_rows:
+                        await conn.executemany(
+                            """
+                            INSERT INTO transcript_segments (
+                                meeting_id, transcript, timestamp,
+                                audio_start_time, audio_end_time, duration,
+                                source, speaker, speaker_confidence, alignment_state
+                            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                            """,
+                            insert_rows,
+                        )
+
+                    # 3. Save version snapshot using the same connection
+                    version_num = await conn.fetchval(
+                        """
+                        SELECT COALESCE(MAX(version_num), 0) + 1
+                        FROM transcript_versions
+                        WHERE meeting_id = $1
+                        """,
+                        meeting_id,
+                    )
+                    confidence_metrics = db._calculate_confidence_metrics(
+                        final_segments
+                    )
+                    await conn.execute(
+                        """
+                        UPDATE transcript_versions
+                        SET is_authoritative = FALSE
+                        WHERE meeting_id = $1 AND is_authoritative = TRUE
+                        """,
+                        meeting_id,
+                    )
+                    await conn.execute(
+                        """
+                        INSERT INTO transcript_versions (
+                            meeting_id, version_num, source, content_json,
+                            is_authoritative, created_by, alignment_config, confidence_metrics
+                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                        """,
+                        meeting_id,
+                        version_num,
+                        "diarized",
+                        json.dumps(final_segments, default=str),
+                        True,
+                        user_email,
+                        json.dumps(
+                            {
+                                "provider": provider,
+                                "alignment_metrics": alignment_metrics,
+                            }
+                        ),
+                        json.dumps(confidence_metrics),
+                    )
+
+                    # 4. Mark job complete atomically with data write
+                    segments_summary = [
+                        {
+                            "speaker": s.get("speaker", "Speaker 0"),
+                            "start": s.get("start", 0.0),
+                            "end": s.get("end", 0.0),
+                        }
+                        for s in final_segments
+                    ]
+                    await conn.execute(
+                        """
+                        UPDATE diarization_jobs
+                        SET status = 'completed', completed_at = $1, result_json = $2
+                        WHERE meeting_id = $3
+                        """,
+                        datetime.utcnow(),
+                        json.dumps(segments_summary),
+                        meeting_id,
+                    )
+                    await conn.execute(
+                        "UPDATE meetings SET diarization_status = 'completed' WHERE id = $1",
+                        meeting_id,
+                    )
+
+        db_timeout_seconds = int(
+            os.getenv("DIARIZATION_DB_SAVE_TIMEOUT_SECONDS", "180")
+        )
+        await asyncio.wait_for(_persist_and_complete(), timeout=db_timeout_seconds)
+
+        logger.info(
+            "✅ Diarization persistence complete for %s: aligned=%s version_saved=true db_time=%.2fs",
+            meeting_id,
+            len(final_segments),
+            time.perf_counter() - db_save_start,
+        )
 
     except Exception as e:
         logger.error(f"Diarization job error: {e}")

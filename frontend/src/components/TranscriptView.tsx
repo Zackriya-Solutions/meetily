@@ -404,6 +404,14 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({
                       {transcript.alignment_state === 'OVERLAP' && (
                         <span className="ml-2 text-orange-600 font-bold" title="Multiple speakers detected">👥 Overlap</span>
                       )}
+                      {(transcript as any).translated && (
+                        <span
+                          className="ml-2 text-blue-500 font-bold"
+                          title={`Original: ${(transcript as any).original_text || 'Unknown'}`}
+                        >
+                          🌐 Translated
+                        </span>
+                      )}
                     </span>
                   )}
                 </TooltipContent>
