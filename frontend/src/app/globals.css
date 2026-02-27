@@ -78,6 +78,14 @@
 
 @layer base {
   :root {
+    color-scheme: light;
+  }
+
+  .dark {
+    color-scheme: dark;
+  }
+
+  :root {
     --background: 0 0% 100%;
     --foreground: 0 0% 3.9%;
     --card: 0 0% 100%;
@@ -178,6 +186,52 @@
   .custom-scrollbar {
     scrollbar-width: thin;
     scrollbar-color: #d1d5db transparent;
+  }
+
+  .dark .custom-scrollbar {
+    scrollbar-color: #334155 #020617;
+  }
+
+  /* Global scrollbars */
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: #f3f4f6;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 9999px;
+    border: 2px solid #f3f4f6;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background: #94a3b8;
+  }
+
+  .dark *::-webkit-scrollbar-track {
+    background: #020617;
+  }
+
+  .dark *::-webkit-scrollbar-thumb {
+    background: #334155;
+    border-color: #020617;
+  }
+
+  .dark *::-webkit-scrollbar-thumb:hover {
+    background: #475569;
+  }
+
+  html {
+    scrollbar-width: thin;
+    scrollbar-color: #cbd5e1 #f3f4f6;
+  }
+
+  .dark html {
+    scrollbar-color: #334155 #020617;
   }
 
   /* BlockNote Editor - Override fixed dimensions for responsive layout */

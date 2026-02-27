@@ -40,6 +40,8 @@ export interface NotificationSettings {
   };
 }
 
+export type ThemeMode = 'light' | 'dark' | 'system';
+
 interface ConfigContextType {
   // Model configuration
   modelConfig: ModelConfig;
@@ -60,6 +62,9 @@ interface ConfigContextType {
   // UI preferences
   showConfidenceIndicator: boolean;
   toggleConfidenceIndicator: (checked: boolean) => void;
+  themeMode: ThemeMode;
+  setThemeMode: (mode: ThemeMode) => void;
+  resolvedTheme: 'light' | 'dark';
 
   // Ollama models
   models: OllamaModel[];
@@ -140,6 +145,22 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
       return saved !== null ? saved === 'true' : true;
     }
     return true;
+  });
+
+  const [themeMode, setThemeModeState] = useState<ThemeMode>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('themeMode');
+      if (saved === 'light' || saved === 'dark' || saved === 'system') {
+        return saved;
+      }
+    }
+    return 'system';
+  });
+  const [resolvedTheme, setResolvedTheme] = useState<'light' | 'dark'>(() => {
+    if (typeof window !== 'undefined') {
+      return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    }
+    return 'light';
   });
 
   // Summary configs
@@ -370,6 +391,77 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     window.dispatchEvent(new CustomEvent('confidenceIndicatorChanged', { detail: checked }));
   }, []);
 
+  const setThemeMode = useCallback((mode: ThemeMode) => {
+    setThemeModeState(mode);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('themeMode', mode);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    const root = document.documentElement;
+    let unlistenThemeChanged: (() => void) | null = null;
+
+    const getSystemTheme = async (): Promise<'light' | 'dark'> => {
+      // Prefer native Tauri window theme when available (more reliable on Windows)
+      if ((window as any).__TAURI_INTERNALS__) {
+        try {
+          const { getCurrentWindow } = await import('@tauri-apps/api/window');
+          const tauriTheme = await getCurrentWindow().theme();
+          if (tauriTheme === 'dark' || tauriTheme === 'light') {
+            return tauriTheme;
+          }
+        } catch (error) {
+          console.warn('[ConfigContext] Failed to read Tauri window theme, falling back to matchMedia:', error);
+        }
+      }
+      return mediaQuery.matches ? 'dark' : 'light';
+    };
+
+    const applyTheme = async () => {
+      const systemTheme = await getSystemTheme();
+      const nextTheme: 'light' | 'dark' =
+        themeMode === 'dark' || (themeMode === 'system' && systemTheme === 'dark') ? 'dark' : 'light';
+      setResolvedTheme(nextTheme);
+      root.classList.toggle('dark', nextTheme === 'dark');
+    };
+
+    applyTheme();
+
+    if (themeMode !== 'system') {
+      return () => {
+        if (unlistenThemeChanged) unlistenThemeChanged();
+      };
+    }
+
+    const handleChange = () => {
+      applyTheme();
+    };
+    mediaQuery.addEventListener('change', handleChange);
+
+    // Listen to native OS theme changes in Tauri
+    const setupTauriThemeListener = async () => {
+      if (!(window as any).__TAURI_INTERNALS__) return;
+      try {
+        const { getCurrentWindow } = await import('@tauri-apps/api/window');
+        unlistenThemeChanged = await getCurrentWindow().onThemeChanged(() => {
+          applyTheme();
+        });
+      } catch (error) {
+        console.warn('[ConfigContext] Failed to subscribe to Tauri theme changes:', error);
+      }
+    };
+    setupTauriThemeListener();
+
+    return () => {
+      mediaQuery.removeEventListener('change', handleChange);
+      if (unlistenThemeChanged) unlistenThemeChanged();
+    };
+  }, [themeMode]);
+
   const toggleIsAutoSummary = useCallback((checked: boolean) => {
     setisAutoSummary(checked);
     if (typeof window !== 'undefined') {
@@ -457,6 +549,9 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     setSelectedLanguage,
     showConfidenceIndicator,
     toggleConfidenceIndicator,
+    themeMode,
+    setThemeMode,
+    resolvedTheme,
     models,
     modelOptions,
     error,
@@ -476,6 +571,9 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     selectedLanguage,
     showConfidenceIndicator,
     toggleConfidenceIndicator,
+    themeMode,
+    setThemeMode,
+    resolvedTheme,
     models,
     modelOptions,
     error,
