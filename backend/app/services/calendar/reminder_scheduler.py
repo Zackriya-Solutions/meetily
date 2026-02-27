@@ -1,10 +1,12 @@
 import asyncio
 import logging
 import os
+import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Dict, List, Optional
 
 import httpx
+import redis.asyncio as redis
 
 try:
     from ...db import DatabaseManager
@@ -32,6 +34,13 @@ class CalendarReminderScheduler:
         self._stopped = asyncio.Event()
         self._interval_seconds = int(os.getenv("CALENDAR_REMINDER_LOOP_SECONDS", "60"))
 
+        # Distributed locking
+        self.redis = redis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379/0"))
+        self.worker_id = str(uuid.uuid4())
+        self.lock_key = "calendar_scheduler_leader_lock"
+        # TTL should be longer than the loop interval to prevent flapping
+        self.lock_ttl = self._interval_seconds * 2 + 10
+
     @staticmethod
     def _parse_event_time(value: Optional[str]) -> Optional[datetime]:
         if not value:
@@ -49,7 +58,9 @@ class CalendarReminderScheduler:
         if hangout:
             return hangout
         location = event.get("location", "")
-        if isinstance(location, str) and ("http://" in location or "https://" in location):
+        if isinstance(location, str) and (
+            "http://" in location or "https://" in location
+        ):
             return location
         return None
 
@@ -113,9 +124,7 @@ class CalendarReminderScheduler:
 
             attendees = item.get("attendees", []) or []
             attendee_emails = [
-                a.get("email", "").strip().lower()
-                for a in attendees
-                if a.get("email")
+                a.get("email", "").strip().lower() for a in attendees if a.get("email")
             ]
             organizer_email = (item.get("organizer", {}) or {}).get("email")
 
@@ -177,17 +186,50 @@ class CalendarReminderScheduler:
                 )
         await self._process_due_reminders()
 
+    async def _acquire_lock(self) -> bool:
+        """
+        Attempt to acquire or refresh the leader lock.
+        Returns True if this worker is the leader.
+        """
+        try:
+            # Try to acquire lock
+            acquired = await self.redis.set(
+                self.lock_key, self.worker_id, nx=True, ex=self.lock_ttl
+            )
+            if acquired:
+                return True
+
+            # If lock exists, check if we own it (refresh)
+            current_owner = await self.redis.get(self.lock_key)
+            if current_owner and current_owner.decode() == self.worker_id:
+                await self.redis.expire(self.lock_key, self.lock_ttl)
+                return True
+
+            return False
+        except Exception as e:
+            logger.error(f"[CalendarReminder] Lock acquisition failed: {e}")
+            return False
+
     async def _run_loop(self):
         logger.info(
-            f"[CalendarReminder] Worker started (interval={self._interval_seconds}s)"
+            f"[CalendarReminder] Worker {self.worker_id} started (interval={self._interval_seconds}s)"
         )
         while not self._stopped.is_set():
             try:
-                await self.run_once()
+                if await self._acquire_lock():
+                    # Only the leader runs the logic
+                    await self.run_once()
+                else:
+                    logger.debug(
+                        f"[CalendarReminder] Worker {self.worker_id} skipping (follower)"
+                    )
             except Exception as e:
                 logger.error(f"[CalendarReminder] Worker loop error: {e}")
+
             try:
-                await asyncio.wait_for(self._stopped.wait(), timeout=self._interval_seconds)
+                await asyncio.wait_for(
+                    self._stopped.wait(), timeout=self._interval_seconds
+                )
             except asyncio.TimeoutError:
                 pass
         logger.info("[CalendarReminder] Worker stopped")
