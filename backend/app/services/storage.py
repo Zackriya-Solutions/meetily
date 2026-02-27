@@ -53,10 +53,25 @@ def get_gcp_bucket():
 
         # Authenticate
         if os.path.exists(GOOGLE_CREDENTIALS_PATH):
-            credentials = service_account.Credentials.from_service_account_file(
-                GOOGLE_CREDENTIALS_PATH
-            )
-            _gcp_client = storage.Client(credentials=credentials)
+            try:
+                credentials = service_account.Credentials.from_service_account_file(
+                    GOOGLE_CREDENTIALS_PATH
+                )
+                _gcp_client = storage.Client(
+                    credentials=credentials, project=credentials.project_id
+                )
+            except Exception as cred_err:
+                # Fallback: try loading json manually if the strict parser fails on some fields
+                import json
+
+                with open(GOOGLE_CREDENTIALS_PATH, "r") as f:
+                    info = json.load(f)
+                credentials = service_account.Credentials.from_service_account_info(
+                    info
+                )
+                _gcp_client = storage.Client(
+                    credentials=credentials, project=info.get("project_id")
+                )
         else:
             # Fallback to default credentials (e.g. running on GCE/Cloud Run)
             logger.warning(
