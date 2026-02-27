@@ -15,7 +15,7 @@ class CalendarReminderEmailService:
     def _default_start_meeting_url(self, meeting_title: str) -> str:
         base = os.getenv(
             "CALENDAR_EMAIL_START_MEETING_URL",
-            "http://localhost:3118/?autoStart=true&source=calendar_email",
+            "https://meet.quexio.com/?autoStart=true&source=calendar_email",
         )
         separator = "&" if "?" in base else "?"
         return f"{base}{separator}meetingTitle={quote_plus(meeting_title)}"
@@ -67,7 +67,7 @@ class CalendarReminderEmailService:
         text_lines = [
             f"Hi {host_email},",
             "",
-            f"Your meeting \"{meeting_title}\" is {meeting_time_label}.",
+            f'Your meeting "{meeting_title}" is {meeting_time_label}.',
             f"Start Pnyx: {start_meeting_url}",
         ]
         if meeting_link:
@@ -146,7 +146,7 @@ class CalendarReminderEmailService:
         text_lines = [
             f"Hi {host_email},",
             "",
-            f"Here are the meeting notes for \"{meeting_title}\".",
+            f'Here are the meeting notes for "{meeting_title}".',
             "",
             notes_excerpt,
         ]

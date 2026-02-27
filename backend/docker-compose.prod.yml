@@ -53,7 +53,7 @@ services:
       - ./data:/app/data
       - ./logs:/app/logs
       # Secrets (mounted read-only)
-      - ${GOOGLE_APPLICATION_CREDENTIALS_FILE:-./gcp-service-account.json}:/app/gcp-service-account.json:ro
+      - ${GOOGLE_APPLICATION_CREDENTIALS_FILE:-./app/gcp-service-account.json}:/app/gcp-service-account.json:ro
       # Production usually does NOT mount source code
     # Use Gunicorn for production
     command: ["gunicorn", "-w", "4", "-k", "uvicorn.workers.UvicornWorker", "main:app", "--bind", "0.0.0.0:5167", "--timeout", "120"]
@@ -92,7 +92,7 @@ services:
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
-      - ${GOOGLE_APPLICATION_CREDENTIALS_FILE:-./gcp-service-account.json}:/app/gcp-service-account.json:ro
+      - ${GOOGLE_APPLICATION_CREDENTIALS_FILE:-./app/gcp-service-account.json}:/app/gcp-service-account.json:ro
     # Run Celery worker
     command: ["celery", "-A", "celery_app:celery_app", "worker", "-l", "INFO", "-Q", "celery", "--concurrency=2"]
     depends_on:
