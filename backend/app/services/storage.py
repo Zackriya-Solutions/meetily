@@ -18,11 +18,13 @@ STORAGE_TYPE = os.getenv("STORAGE_TYPE", "local").lower()  # 'local' or 'gcp'
 GCP_BUCKET_NAME = os.getenv("GCP_BUCKET_NAME")
 
 # Determine correct credentials path
-default_creds = "backend/gcp-service-account.json"
+default_creds = "gcp-service-account.json"
 if os.path.exists("/app/gcp-service-account.json"):
     default_creds = "/app/gcp-service-account.json"
-elif os.path.exists("gcp-service-account.json"):
-    default_creds = "gcp-service-account.json"
+elif os.path.exists("backend/app/gcp-service-account.json"):
+    default_creds = "backend/app/gcp-service-account.json"
+elif os.path.exists("app/gcp-service-account.json"):
+    default_creds = "app/gcp-service-account.json"
 
 GOOGLE_CREDENTIALS_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", default_creds)
 
@@ -95,7 +97,9 @@ class StorageService:
 
     @staticmethod
     async def upload_bytes(
-        data: bytes, destination_path: str, content_type: str = "application/octet-stream"
+        data: bytes,
+        destination_path: str,
+        content_type: str = "application/octet-stream",
     ) -> bool:
         """
         Upload raw bytes to storage.
