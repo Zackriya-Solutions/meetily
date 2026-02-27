@@ -1,0 +1,108 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: meeting-copilot-redis
+    restart: always
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Production Backend Service
+  meeting-copilot-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.app
+    image: meeting-copilot-backend:latest
+    container_name: meeting-copilot-backend
+    restart: always
+    ports:
+      - "${APP_PORT:-5167}:5167"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app
+      # Use PostgreSQL for production DB (ensure DATABASE_URL is set in .env)
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+      # Other env vars passed through from .env file
+      - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
+      - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY}
+      - TRANSCRIPTION_PROVIDER=${TRANSCRIPTION_PROVIDER:-groq}
+      - STORAGE_TYPE=${STORAGE_TYPE}
+      - GCP_BUCKET_NAME=${GCP_BUCKET_NAME}
+      - GOOGLE_APPLICATION_CREDENTIALS=${GOOGLE_APPLICATION_CREDENTIALS:-/app/gcp-service-account.json}
+      - AUDIO_MERGE_SERVICE_URL=${AUDIO_MERGE_SERVICE_URL}
+      - DELETE_PCM_AFTER_MERGE=${DELETE_PCM_AFTER_MERGE:-true}
+      - AUDIO_CHUNK_PREFIX=${AUDIO_CHUNK_PREFIX:-pcm_chunks}
+      - AUDIO_CELERY_ENABLED=${AUDIO_CELERY_ENABLED:-true}
+    volumes:
+      # Data persistence (logs, uploads, etc.)
+      - ./data:/app/data
+      - ./logs:/app/logs
+      # Secrets (mounted read-only)
+      - ${GOOGLE_APPLICATION_CREDENTIALS_FILE:-./gcp-service-account.json}:/app/gcp-service-account.json:ro
+      # Production usually does NOT mount source code
+    # Use Gunicorn for production
+    command: ["gunicorn", "-w", "4", "-k", "uvicorn.workers.UvicornWorker", "main:app", "--bind", "0.0.0.0:5167", "--timeout", "120"]
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5167/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # Production Celery Worker
+  celery-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.app
+    image: meeting-copilot-backend:latest
+    container_name: meeting-copilot-celery-worker
+    restart: always
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app
+      - DATABASE_URL=${DATABASE_URL}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+      - STORAGE_TYPE=${STORAGE_TYPE}
+      - GCP_BUCKET_NAME=${GCP_BUCKET_NAME}
+      - GOOGLE_APPLICATION_CREDENTIALS=${GOOGLE_APPLICATION_CREDENTIALS:-/app/gcp-service-account.json}
+      - AUDIO_CELERY_ENABLED=${AUDIO_CELERY_ENABLED:-true}
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ${GOOGLE_APPLICATION_CREDENTIALS_FILE:-./gcp-service-account.json}:/app/gcp-service-account.json:ro
+    # Run Celery worker
+    command: ["celery", "-A", "celery_app:celery_app", "worker", "-l", "INFO", "-Q", "celery", "--concurrency=2"]
+    depends_on:
+      redis:
+        condition: service_healthy
+      meeting-copilot-backend:
+        condition: service_started
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  redis_data:
+    driver: local
