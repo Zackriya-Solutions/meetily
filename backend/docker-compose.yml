@@ -42,6 +42,7 @@ services:
       - PYTHONPATH=/app
       - DATABASE_PATH=/app/data/meeting_minutes.db
       - DATABASE_URL=postgresql://neondb_owner:npg_3JYK7ySezjrT@ep-morning-truth-ahrz730e-pooler.c-3.us-east-1.aws.neon.tech/neondb?sslmode=require
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
       - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - GROQ_API_KEY=${GROQ_API_KEY}

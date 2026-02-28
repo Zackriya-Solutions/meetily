@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { ArrowLeft, Settings2, Mic, Database as DatabaseIcon, SparkleIcon, Key, Calendar } from 'lucide-react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { TranscriptSettings, TranscriptModelProps } from '@/components/TranscriptSettings';
 import { RecordingSettings } from '@/components/RecordingSettings';
 import { PreferenceSettings } from '@/components/PreferenceSettings';
@@ -15,12 +15,23 @@ type SettingsTab = 'general' | 'recording' | 'Transcriptionmodels' | 'summaryMod
 
 export default function SettingsPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
   const [transcriptModelConfig, setTranscriptModelConfig] = useState<TranscriptModelProps>({
     provider: 'localWhisper',
     model: 'large-v3',
     apiKey: null
   });
+
+  useEffect(() => {
+    const tabParam = searchParams.get('tab');
+    if (tabParam) {
+      const validTabs: SettingsTab[] = ['general', 'recording', 'Transcriptionmodels', 'summaryModels', 'personalKeys', 'calendar'];
+      if (validTabs.includes(tabParam as SettingsTab)) {
+        setActiveTab(tabParam as SettingsTab);
+      }
+    }
+  }, [searchParams]);
 
   const tabs = [
     { id: 'general' as const, label: 'General', icon: <Settings2 className="w-4 h-4" /> },

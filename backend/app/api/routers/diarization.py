@@ -258,7 +258,13 @@ async def run_diarization_job(meeting_id: str, provider: str, user_email: str):
                 "Diarization failed or returned no segments. Falling back to Whisper only."
             )
             diarization_result = DiarizationResult(
-                status="completed", segments=[], duration=0.0
+                status="completed",
+                meeting_id=meeting_id,
+                speaker_count=0,
+                segments=[],
+                processing_time_seconds=0.0,
+                provider=provider,
+                error="Fallback to Whisper (Diarization failed/empty)",
             )
 
         # 5. Extract Whisper Segments

@@ -32,12 +32,16 @@ class StreamingTranscriptionManager:
     Audio → VAD → Rolling Buffer → Groq API → Partial/Final
     """
 
-    def __init__(self, groq_api_key: str):
+    def __init__(
+        self, groq_api_key: str, meeting_context: Optional[Dict[str, Any]] = None
+    ):
         """
         Args:
             groq_api_key: Groq API key for Whisper Large v3
+            meeting_context: Dictionary with meeting details (title, agenda, participants)
         """
         self.groq = GroqTranscriptionClient(groq_api_key)
+        self.meeting_context = meeting_context or {}
         # No ThreadPoolExecutor needed — GroqTranscriptionClient is now fully async.
 
         # VAD Initialization Strategy: ONLY TenVAD
@@ -116,9 +120,7 @@ class StreamingTranscriptionManager:
         self.silence_force_flush_ms = float(
             os.getenv("STREAMING_SILENCE_FORCE_FLUSH_MS", "3200")
         )
-        self.silence_min_words = int(
-            os.getenv("STREAMING_SILENCE_MIN_WORDS", "4")
-        )
+        self.silence_min_words = int(os.getenv("STREAMING_SILENCE_MIN_WORDS", "4"))
         self.silence_min_boundary_score = float(
             os.getenv("STREAMING_SILENCE_MIN_BOUNDARY_SCORE", "0.35")
         )
@@ -146,8 +148,12 @@ class StreamingTranscriptionManager:
         self.high_density_slide_ms = int(
             os.getenv("STREAMING_SLIDE_MS_HIGH_DENSITY", "2500")
         )
-        self.low_density_window_ms = int(os.getenv("STREAMING_WINDOW_MS_LOW_DENSITY", "5000"))
-        self.low_density_slide_ms = int(os.getenv("STREAMING_SLIDE_MS_LOW_DENSITY", "1500"))
+        self.low_density_window_ms = int(
+            os.getenv("STREAMING_WINDOW_MS_LOW_DENSITY", "5000")
+        )
+        self.low_density_slide_ms = int(
+            os.getenv("STREAMING_SLIDE_MS_LOW_DENSITY", "1500")
+        )
 
         # SMART TIMER CONFIG
         self.session_start_time = (
@@ -180,7 +186,9 @@ class StreamingTranscriptionManager:
         if self.adaptive_window_enabled:
             self._set_window_policy("base", self.base_window_ms, self.base_slide_ms)
 
-    def _set_window_policy(self, policy_name: str, window_ms: int, slide_ms: int) -> None:
+    def _set_window_policy(
+        self, policy_name: str, window_ms: int, slide_ms: int
+    ) -> None:
         if not self.adaptive_window_enabled:
             return
         changed = self.buffer.reconfigure(window_ms, slide_ms, preserve_tail=True)
@@ -196,11 +204,15 @@ class StreamingTranscriptionManager:
                 slide_ms,
             )
 
-    def _maybe_apply_adaptive_window_policy(self, is_complete_sentence: bool = False) -> None:
+    def _maybe_apply_adaptive_window_policy(
+        self, is_complete_sentence: bool = False
+    ) -> None:
         if not self.adaptive_window_enabled:
             return
         now = time.time()
-        if (now - self.last_adaptive_policy_update_ts) < self.adaptive_policy_cooldown_seconds:
+        if (
+            now - self.last_adaptive_policy_update_ts
+        ) < self.adaptive_policy_cooldown_seconds:
             return
         self.last_adaptive_policy_update_ts = now
 
@@ -374,6 +386,38 @@ class StreamingTranscriptionManager:
             self.segment_finalize_latency_count += 1
         return True
 
+    def _construct_prompt(self) -> str:
+        """Construct dynamic prompt from meeting context."""
+        parts = ["This is a business meeting."]
+
+        if self.meeting_context:
+            title = self.meeting_context.get("title")
+            if title:
+                parts.append(f"Title: {title}")
+
+            desc = self.meeting_context.get("description")
+            if desc:
+                # Basic keyword extraction from description
+                # Take first 200 chars to avoid token limit issues
+                parts.append(f"Topic: {desc[:200]}")
+
+            participants = self.meeting_context.get("participants", [])
+            names = [
+                str(p.get("name"))
+                for p in participants
+                if isinstance(p, dict) and p.get("name")
+            ]
+            if names:
+                parts.append(f"Participants: {', '.join(names)}")
+
+        # Add a few lines of recent context for continuity
+        if self.last_final_text:
+            # Take last 20 words
+            last_words = self.last_final_text.split()[-20:]
+            parts.append(f"Previous: {' '.join(last_words)}")
+
+        return "\n".join(parts)
+
     async def process_audio_chunk(
         self,
         audio_data: bytes,
@@ -415,7 +459,9 @@ class StreamingTranscriptionManager:
                 self.last_raw_client_timestamp is not None
                 and raw_timestamp + 0.05 < self.last_raw_client_timestamp
             ):
-                proposed_offset = (self.last_chunk_timestamp + chunk_duration) - raw_timestamp
+                proposed_offset = (
+                    self.last_chunk_timestamp + chunk_duration
+                ) - raw_timestamp
                 if proposed_offset > self.client_timestamp_offset:
                     self.client_timestamp_offset = proposed_offset
                 logger.info(
@@ -433,7 +479,9 @@ class StreamingTranscriptionManager:
                     f"Non-monotonic timestamp detected: {timestamp:.3f}s < {self.last_chunk_timestamp:.3f}s. "
                     f"Adjusting to prevent time travel."
                 )
-                timestamp = self.last_chunk_timestamp + min(max(chunk_duration, 0.02), 0.1)
+                timestamp = self.last_chunk_timestamp + min(
+                    max(chunk_duration, 0.02), 0.1
+                )
 
             self.last_raw_client_timestamp = raw_timestamp
             self.last_chunk_timestamp = timestamp
@@ -499,13 +547,9 @@ class StreamingTranscriptionManager:
                             self.silence_duration_ms >= self.silence_force_flush_ms
                         )
 
-                        if (
-                            not is_force_flush
-                            and (
-                                word_count < self.silence_min_words
-                                or silence_boundary_score
-                                < self.silence_min_boundary_score
-                            )
+                        if not is_force_flush and (
+                            word_count < self.silence_min_words
+                            or silence_boundary_score < self.silence_min_boundary_score
                         ):
                             self.total_silence_holds += 1
                             logger.debug(
@@ -522,7 +566,9 @@ class StreamingTranscriptionManager:
                                 text=self.last_partial_text,
                                 confidence=1.0,
                                 trigger_reason=(
-                                    "silence_force_flush" if is_force_flush else "silence"
+                                    "silence_force_flush"
+                                    if is_force_flush
+                                    else "silence"
                                 ),
                                 audio_start=self.speech_start_time,
                                 audio_end=self.speech_end_time,
@@ -575,10 +621,11 @@ class StreamingTranscriptionManager:
                 self.last_transcription_time = current_time
 
                 # Transcribe with AsyncGroq — no thread pool needed.
+                prompt = self._construct_prompt()
                 result = await self.groq.transcribe_audio_async(
                     window_bytes,
                     "auto",  # Auto-detect language
-                    self.last_final_text[-100:] if self.last_final_text else None,
+                    prompt,
                     True,  # translate_to_english=True
                 )
 
@@ -652,7 +699,9 @@ class StreamingTranscriptionManager:
     def _normalize_tokens(self, text: str) -> List[str]:
         return [w.lower().strip(".,!?;:\"'()[]{}") for w in text.split() if w.strip()]
 
-    def _alignment_overlap_size(self, prev_text: str, new_text: str) -> Tuple[int, float]:
+    def _alignment_overlap_size(
+        self, prev_text: str, new_text: str
+    ) -> Tuple[int, float]:
         """Find best suffix-prefix overlap via token edit-distance similarity."""
         prev_tokens = self._normalize_tokens(prev_text)
         new_tokens = self._normalize_tokens(new_text)
@@ -665,7 +714,9 @@ class StreamingTranscriptionManager:
         max_overlap = min(len(tail_window), len(new_tokens), 24)
         best_overlap = 0
         best_score = 0.0
-        for overlap_size in range(max_overlap, self.alignment_min_overlap_tokens - 1, -1):
+        for overlap_size in range(
+            max_overlap, self.alignment_min_overlap_tokens - 1, -1
+        ):
             prev_suffix = tail_window[-overlap_size:]
             new_prefix = new_tokens[:overlap_size]
             dist = self._levenshtein_distance(prev_suffix, new_prefix)
@@ -744,8 +795,13 @@ class StreamingTranscriptionManager:
         if not self.last_final_text:
             return new_text
 
-        overlap_size, score = self._alignment_overlap_size(self.last_final_text, new_text)
-        if overlap_size >= self.alignment_min_overlap_tokens and score >= self.alignment_min_score:
+        overlap_size, score = self._alignment_overlap_size(
+            self.last_final_text, new_text
+        )
+        if (
+            overlap_size >= self.alignment_min_overlap_tokens
+            and score >= self.alignment_min_score
+        ):
             new_words = new_text.split()
             if overlap_size < len(new_words):
                 deduplicated = " ".join(new_words[overlap_size:]).strip()
@@ -946,7 +1002,9 @@ class StreamingTranscriptionManager:
 
         # SMART TIMER TRIGGER LOGIC
         is_complete_sentence = self._is_complete_sentence(text)
-        self._maybe_apply_adaptive_window_policy(is_complete_sentence=is_complete_sentence)
+        self._maybe_apply_adaptive_window_policy(
+            is_complete_sentence=is_complete_sentence
+        )
 
         # Calculate speech duration (using client-synced timestamps)
         speech_duration_ms = (
@@ -1000,8 +1058,10 @@ class StreamingTranscriptionManager:
                 # Safety net: If timeout is triggered, we MUST emit even if boundary score is low,
                 # otherwise the rolling buffer will drop this audio as it slides.
                 # We relax the gate for timeout to 0.15 (very low).
-                gate_threshold = 0.15 if trigger_reason == "timeout" else self.min_boundary_score
-                
+                gate_threshold = (
+                    0.15 if trigger_reason == "timeout" else self.min_boundary_score
+                )
+
                 if boundary_score < gate_threshold:
                     logger.debug(
                         "🧱 Boundary gate blocked segment (reason=%s, score=%.2f, min=%.2f)",
@@ -1016,7 +1076,9 @@ class StreamingTranscriptionManager:
                 logger.debug(f"⏭️  Debounced duplicate final: '{text[:50]}...'")
                 return
 
-            logger.debug(f"✅ Candidate final: '{text[:50]}...' (reason={trigger_reason})")
+            logger.debug(
+                f"✅ Candidate final: '{text[:50]}...' (reason={trigger_reason})"
+            )
 
             # Calculate timing (using accurate client timestamps)
             audio_start = self.speech_start_time

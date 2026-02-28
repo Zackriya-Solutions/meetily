@@ -47,8 +47,14 @@ async def save_model_config(
     await db.save_model_config(request.provider, request.model, request.whisperModel)
     if request.apiKey is not None:
         # Don't save if it's just the masked placeholder
-        if request.apiKey == "****************":
-            logger.info(f"Skipping save for masked API key (provider: {request.provider})")
+        if (
+            request.apiKey == "****************"
+            or request.apiKey == "****"
+            or (request.apiKey and "..." in request.apiKey)
+        ):
+            logger.info(
+                f"Skipping save for masked API key (provider: {request.provider})"
+            )
         else:
             # Save as personal key for isolation
             await db.save_user_api_key(
@@ -64,7 +70,9 @@ async def get_model_config(current_user: User = Depends(get_current_user)):
     if config:
         # HOTFIX: Migrate users away from retired gemini-1.5 models
         if config.get("model", "") in ["gemini-1.5-flash", "gemini-1.5-pro"]:
-            logger.info(f"Migrating retired model {config['model']} to gemini-2.5-flash")
+            logger.info(
+                f"Migrating retired model {config['model']} to gemini-2.5-flash"
+            )
             config["model"] = "gemini-2.5-flash"
             await db.save_model_config(
                 config["provider"],
@@ -122,7 +130,11 @@ async def save_transcript_config(
     """Save the transcript configuration"""
     await db.save_transcript_config(request.provider, request.model)
     if request.apiKey is not None:
-        if request.apiKey == "****************":
+        if (
+            request.apiKey == "****************"
+            or request.apiKey == "****"
+            or (request.apiKey and "..." in request.apiKey)
+        ):
             logger.info(
                 f"Skipping save for masked transcript API key (provider: {request.provider})"
             )

@@ -28,6 +28,7 @@ import { ButtonGroup } from '@/components/ui/button-group';
 import { apiUrl } from '@/lib/config';
 import { authFetch, AuthError } from '@/lib/api';
 import { recoveryService, PendingMeetingData } from '@/lib/transcriptRecovery';
+import { SetupRequirements } from '@/components/SetupRequirements';
 
 
 
@@ -1572,6 +1573,7 @@ export default function Home() {
           {/* Title area - Sticky header */}
           <div className="sticky top-0 z-10 bg-white p-4 border-gray-200">
             <div className="flex flex-col space-y-3">
+              <SetupRequirements />
               <div className="flex  flex-col space-y-2">
                 <div className="flex justify-center  items-center space-x-2">
                   <ButtonGroup>
@@ -1591,18 +1593,7 @@ export default function Home() {
                       </Button>
                     )}
                     {/* {!isRecording && transcripts?.length === 0 && ( */}
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setShowModelSelector(true)}
-                      title="Transcription Model Settings"
-                    >
-                      <Settings />
-                      <span className='hidden md:inline'>
-                        Model
-                      </span>
-                    </Button>
-
+                    
                     <Button
                       variant="outline"
                       size="sm"
@@ -1612,17 +1603,6 @@ export default function Home() {
                       <MicrophoneIcon />
                       <span className='hidden md:inline'>
                         Devices
-                      </span>
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setShowLanguageSettings(true)}
-                      title="Language"
-                    >
-                      <GlobeIcon />
-                      <span className='hidden md:inline'>
-                        Language
                       </span>
                     </Button>
                   </ButtonGroup>

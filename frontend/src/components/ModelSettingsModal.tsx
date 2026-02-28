@@ -118,9 +118,15 @@ export function ModelSettingsModal({
   const fetchApiKey = async (provider: string) => {
     try {
       console.log('Fetching API key for', provider);
-      // In web version, we might not have a secure way to fetch stored keys yet, 
-      // or we rely on them being in the config response.
-      // Mocking for now or using local state if parent passed it.
+      setApiKey(''); // Clear current key while fetching
+      
+      const response = await authFetch('/api/user/keys');
+      if (response.ok) {
+        const keys = await response.json();
+        if (keys[provider]) {
+          setApiKey(keys[provider]);
+        }
+      }
     } catch (err) {
       console.error('Error fetching API key:', err);
       setApiKey(null);
@@ -521,6 +527,7 @@ export function ModelSettingsModal({
                   ...modelConfig,
                   provider,
                   model: defaultModel,
+                  apiKey: null, // Reset API key when switching providers
                 });
                 fetchApiKey(provider);
 

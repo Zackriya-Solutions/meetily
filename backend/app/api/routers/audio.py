@@ -88,9 +88,7 @@ STREAMING_RECONNECT_STORM_THRESHOLD = int(
 STREAMING_BACKPRESSURE_CLOSE_AFTER_DROPS = int(
     os.getenv("STREAMING_BACKPRESSURE_CLOSE_AFTER_DROPS", "300")
 )
-STREAMING_ALERT_HISTORY_LIMIT = int(
-    os.getenv("STREAMING_ALERT_HISTORY_LIMIT", "100")
-)
+STREAMING_ALERT_HISTORY_LIMIT = int(os.getenv("STREAMING_ALERT_HISTORY_LIMIT", "100"))
 STREAMING_ALERT_COOLDOWN_SECONDS = int(
     os.getenv("STREAMING_ALERT_COOLDOWN_SECONDS", "45")
 )
@@ -177,11 +175,7 @@ def _build_streaming_slo_snapshot(
         if (stable_segments + volatile_segments) > 0
         else 0.0
     )
-    drift_rate = (
-        float(drifts) / float(stable_segments)
-        if stable_segments > 0
-        else 0.0
-    )
+    drift_rate = float(drifts) / float(stable_segments) if stable_segments > 0 else 0.0
     return {
         "captured_at": datetime.utcnow().isoformat(),
         "first_stable_emit_latency_seconds": first_stable_latency,
@@ -196,14 +190,22 @@ def _build_streaming_slo_snapshot(
         "drift_rate": round(drift_rate, 4),
         "dropped_audio_chunks": int(runtime.get("dropped_audio_chunks") or 0),
         "max_audio_queue_depth": int(runtime.get("max_audio_queue_depth") or 0),
-        "reconnect_storm_detected": bool(runtime.get("reconnect_storm_detected", False)),
+        "reconnect_storm_detected": bool(
+            runtime.get("reconnect_storm_detected", False)
+        ),
         "backpressure_close_triggered": bool(
             runtime.get("backpressure_close_triggered", False)
         ),
         "health": {
             "latency_degraded": bool(
-                (avg_finalize_latency is not None and avg_finalize_latency > STREAMING_SLO_MAX_SECONDS)
-                or (first_stable_latency is not None and first_stable_latency > STREAMING_SLO_MAX_SECONDS)
+                (
+                    avg_finalize_latency is not None
+                    and avg_finalize_latency > STREAMING_SLO_MAX_SECONDS
+                )
+                or (
+                    first_stable_latency is not None
+                    and first_stable_latency > STREAMING_SLO_MAX_SECONDS
+                )
             ),
             "stability_degraded": bool(
                 correction_rate > 0.25
@@ -234,14 +236,18 @@ async def _persist_runtime_snapshot(
             },
         )
     except Exception as exc:
-        logger.debug("[Streaming] Failed persisting runtime snapshot for %s: %s", session_id, exc)
+        logger.debug(
+            "[Streaming] Failed persisting runtime snapshot for %s: %s", session_id, exc
+        )
 
 
 async def _route_streaming_alert(alert_event: Dict[str, Any]) -> None:
     if not STREAMING_ALERT_WEBHOOK_URL:
         return
     try:
-        async with httpx.AsyncClient(timeout=STREAMING_ALERT_WEBHOOK_TIMEOUT_SECONDS) as client:
+        async with httpx.AsyncClient(
+            timeout=STREAMING_ALERT_WEBHOOK_TIMEOUT_SECONDS
+        ) as client:
             await client.post(STREAMING_ALERT_WEBHOOK_URL, json=alert_event)
     except Exception as exc:
         logger.warning("[StreamingAlert] Webhook route failed: %s", exc)
@@ -376,7 +382,9 @@ async def _finalize_session(
                             and CHUNK_UPLOAD_VIA_CELERY
                             and STORAGE_TYPE != "gcp"
                         )
-                        upload_status = "pending" if should_enqueue_chunk_upload else "uploaded"
+                        upload_status = (
+                            "pending" if should_enqueue_chunk_upload else "uploaded"
+                        )
                         await db.upsert_recording_chunk(
                             session_id=session_id,
                             chunk_index=int(chunk_index),
@@ -489,14 +497,18 @@ def _schedule_deferred_cleanup(session_id: str):
                     f"[Streaming] Resume grace expired for {session_id}; finalizing session."
                 )
                 if AUDIO_CELERY_ENABLED:
-                    await _finalize_session(session_id, flush=False, process_audio=False)
+                    await _finalize_session(
+                        session_id, flush=False, process_audio=False
+                    )
                     try:
                         try:
                             from ...tasks.audio_pipeline import (
                                 enqueue_finalize_session_task,
                             )
                         except (ImportError, ValueError):
-                            from tasks.audio_pipeline import enqueue_finalize_session_task
+                            from tasks.audio_pipeline import (
+                                enqueue_finalize_session_task,
+                            )
 
                         await state_service.transition(session_id, "finalizing")
                         task_id = enqueue_finalize_session_task(session_id)
@@ -582,7 +594,9 @@ async def websocket_streaming_audio(
                         f"Reconnect storm detected: >= {STREAMING_RECONNECT_STORM_THRESHOLD} "
                         f"resumes in {STREAMING_RECONNECT_STORM_WINDOW_SECONDS}s"
                     ),
-                    details={"resume_count_window": STREAMING_RECONNECT_STORM_THRESHOLD},
+                    details={
+                        "resume_count_window": STREAMING_RECONNECT_STORM_THRESHOLD
+                    },
                 )
             )
         logger.info(f"[Streaming] 🔄 Resuming session {session_id}")
@@ -605,7 +619,9 @@ async def websocket_streaming_audio(
     if meeting_id:
         try:
             existing_meeting = await db.get_meeting(active_meeting_id)
-            if existing_meeting and not await rbac.can(current_user, "edit", active_meeting_id):
+            if existing_meeting and not await rbac.can(
+                current_user, "edit", active_meeting_id
+            ):
                 await websocket.send_json(
                     {
                         "type": "error",
@@ -657,7 +673,9 @@ async def websocket_streaming_audio(
 
         if not is_resume:
             groq_api_key = (
-                (await db.get_api_key("groq", user_email=user_email)) if user_email else ""
+                (await db.get_api_key("groq", user_email=user_email))
+                if user_email
+                else ""
             ) or os.getenv("GROQ_API_KEY", "")
             groq_api_key = groq_api_key.strip()
             if not groq_api_key:
@@ -678,7 +696,23 @@ async def websocket_streaming_audio(
                 await websocket.close()
                 return
 
-            manager = StreamingTranscriptionManager(groq_api_key)
+            # Fetch meeting context for dynamic prompting
+            meeting_context = {}
+            if active_meeting_id:
+                try:
+                    meeting_data = await db.get_meeting(active_meeting_id)
+                    if meeting_data:
+                        meeting_context = {
+                            "title": meeting_data.get("title"),
+                            "description": meeting_data.get("description"),
+                            "participants": meeting_data.get("participants", []),
+                        }
+                except Exception as e:
+                    logger.warning(f"[Streaming] Failed to fetch meeting context: {e}")
+
+            manager = StreamingTranscriptionManager(
+                groq_api_key, meeting_context=meeting_context
+            )
             streaming_managers[session_id] = manager
             logger.info(f"[Streaming] ✅ Session {session_id} started (HYBRID mode)")
 
@@ -839,7 +873,8 @@ async def websocket_streaming_audio(
                     current_mgr = manager or streaming_managers.get(session_id)
                     if current_mgr:
                         runtime_stats["max_audio_queue_depth"] = max(
-                            runtime_stats.get("max_audio_queue_depth", 0), audio_queue.qsize()
+                            runtime_stats.get("max_audio_queue_depth", 0),
+                            audio_queue.qsize(),
                         )
                         await current_mgr.process_audio_chunk(
                             audio_data=chunk,
@@ -866,10 +901,14 @@ async def websocket_streaming_audio(
                 await asyncio.sleep(STREAMING_METRICS_LOG_INTERVAL_SECONDS)
                 current_mgr = manager or streaming_managers.get(session_id)
                 mgr_stats = current_mgr.get_stats() if current_mgr else {}
-                runtime_stats["connection_count"] = active_connections.get(session_id, 0)
+                runtime_stats["connection_count"] = active_connections.get(
+                    session_id, 0
+                )
                 runtime_stats["queue_depth"] = audio_queue.qsize()
                 runtime_stats["last_update_at"] = datetime.utcnow().isoformat()
-                avg_finalize_latency = mgr_stats.get("avg_segment_finalize_latency_seconds")
+                avg_finalize_latency = mgr_stats.get(
+                    "avg_segment_finalize_latency_seconds"
+                )
                 first_emit_latency = mgr_stats.get("first_stable_emit_latency_seconds")
                 stable_segments = int(mgr_stats.get("stable_segments") or 0)
                 volatile_segments = int(mgr_stats.get("volatile_segments") or 0)
@@ -892,7 +931,10 @@ async def websocket_streaming_audio(
                     mgr_stats.get("semantic_drift_events"),
                     mgr_stats.get("correction_events"),
                 )
-                if avg_finalize_latency is not None and avg_finalize_latency > STREAMING_SLO_MAX_SECONDS:
+                if (
+                    avg_finalize_latency is not None
+                    and avg_finalize_latency > STREAMING_SLO_MAX_SECONDS
+                ):
                     await _emit_streaming_alert(
                         session_id=session_id,
                         alert_type="slo_finalize_latency",
@@ -901,9 +943,14 @@ async def websocket_streaming_audio(
                             f"Average segment finalization latency {avg_finalize_latency:.2f}s "
                             f"exceeds {STREAMING_SLO_MAX_SECONDS:.1f}s"
                         ),
-                        details={"avg_segment_finalize_latency_seconds": avg_finalize_latency},
+                        details={
+                            "avg_segment_finalize_latency_seconds": avg_finalize_latency
+                        },
                     )
-                if first_emit_latency is not None and first_emit_latency > STREAMING_SLO_MAX_SECONDS:
+                if (
+                    first_emit_latency is not None
+                    and first_emit_latency > STREAMING_SLO_MAX_SECONDS
+                ):
                     await _emit_streaming_alert(
                         session_id=session_id,
                         alert_type="slo_first_emit_latency",
@@ -912,9 +959,13 @@ async def websocket_streaming_audio(
                             f"First stable segment latency {first_emit_latency:.2f}s "
                             f"exceeds {STREAMING_SLO_MAX_SECONDS:.1f}s"
                         ),
-                        details={"first_stable_emit_latency_seconds": first_emit_latency},
+                        details={
+                            "first_stable_emit_latency_seconds": first_emit_latency
+                        },
                     )
-                if (stable_segments + volatile_segments) >= 8 and correction_rate > 0.25:
+                if (
+                    stable_segments + volatile_segments
+                ) >= 8 and correction_rate > 0.25:
                     await _emit_streaming_alert(
                         session_id=session_id,
                         alert_type="transcript_instability",
@@ -956,7 +1007,9 @@ async def websocket_streaming_audio(
                 break
 
             if message.get("type") == "websocket.disconnect":
-                logger.info(f"[Streaming] Session {session_id} received disconnect frame")
+                logger.info(
+                    f"[Streaming] Session {session_id} received disconnect frame"
+                )
                 break
 
             if "text" in message:
@@ -984,8 +1037,12 @@ async def websocket_streaming_audio(
             if "bytes" in message:
                 last_heartbeat = time.time()
                 await _touch_session_heartbeat_best_effort()
-                runtime_stats["messages_received"] = runtime_stats.get("messages_received", 0) + 1
-                runtime_stats["audio_frames_received"] = runtime_stats.get("audio_frames_received", 0) + 1
+                runtime_stats["messages_received"] = (
+                    runtime_stats.get("messages_received", 0) + 1
+                )
+                runtime_stats["audio_frames_received"] = (
+                    runtime_stats.get("audio_frames_received", 0) + 1
+                )
 
                 message_bytes = message["bytes"]
                 timestamp = None
@@ -1011,7 +1068,9 @@ async def websocket_streaming_audio(
                                 and CHUNK_UPLOAD_VIA_CELERY
                                 and STORAGE_TYPE != "gcp"
                             )
-                            upload_status = "pending" if should_enqueue_chunk_upload else "uploaded"
+                            upload_status = (
+                                "pending" if should_enqueue_chunk_upload else "uploaded"
+                            )
                             try:
                                 await db.upsert_recording_chunk(
                                     session_id=session_id,
@@ -1061,7 +1120,8 @@ async def websocket_streaming_audio(
                     audio_queue.put_nowait((audio_chunk, timestamp))
                     runtime_stats["consecutive_dropped_audio_chunks"] = 0
                     runtime_stats["max_audio_queue_depth"] = max(
-                        runtime_stats.get("max_audio_queue_depth", 0), audio_queue.qsize()
+                        runtime_stats.get("max_audio_queue_depth", 0),
+                        audio_queue.qsize(),
                     )
                 except asyncio.QueueFull:
                     dropped_audio_chunks += 1
@@ -1455,7 +1515,9 @@ async def get_streaming_slo_report(
     target_user = current_user.email
     if user_email and user_email != current_user.email:
         if not is_admin:
-            raise HTTPException(status_code=403, detail="Admin access required for user filter")
+            raise HTTPException(
+                status_code=403, detail="Admin access required for user filter"
+            )
         target_user = user_email
     elif user_email:
         target_user = user_email
@@ -1572,7 +1634,9 @@ async def retry_pipeline_finalize(
         )
         return {"session_id": session_id, "enqueued": True, "task_id": task_id}
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to enqueue finalize: {exc}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to enqueue finalize: {exc}"
+        )
 
 
 @router.post("/sessions/reconcile")
