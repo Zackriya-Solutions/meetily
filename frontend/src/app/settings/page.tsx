@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense } from 'react';
 import { ArrowLeft, Settings2, Mic, Database as DatabaseIcon, SparkleIcon, Key, Calendar } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { TranscriptSettings, TranscriptModelProps } from '@/components/TranscriptSettings';
@@ -13,7 +13,7 @@ import { authFetch } from '@/lib/api';
 
 type SettingsTab = 'general' | 'recording' | 'Transcriptionmodels' | 'summaryModels' | 'personalKeys' | 'calendar';
 
-export default function SettingsPage() {
+function SettingsContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
@@ -123,4 +123,12 @@ export default function SettingsPage() {
       </div>
     </div>
   );
-};
+}
+
+export default function SettingsPage() {
+  return (
+    <Suspense fallback={<div className="h-screen bg-gray-50 flex items-center justify-center">Loading settings...</div>}>
+      <SettingsContent />
+    </Suspense>
+  );
+}
