@@ -54,6 +54,7 @@ pub mod summary;
 pub mod tray;
 pub mod utils;
 pub mod whisper_engine;
+pub mod outline;
 
 use audio::{list_audio_devices, AudioDevice, trigger_audio_permission};
 use log::{error as log_error, info as log_info};
@@ -703,9 +704,14 @@ pub fn run() {
             onboarding::save_onboarding_status_cmd,
             onboarding::reset_onboarding_status_cmd,
             onboarding::complete_onboarding,
+            // Outline integration commands
+            outline::outline_fetch_collections,
+            outline::outline_create_document,
             // System settings commands
             #[cfg(target_os = "macos")]
             utils::open_system_settings,
+            utils::write_bytes_to_file,
+            utils::open_url,
             // Retranscription commands
             audio::retranscription::start_retranscription_command,
             audio::retranscription::cancel_retranscription_command,

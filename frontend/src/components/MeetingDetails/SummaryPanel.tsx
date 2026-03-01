@@ -26,7 +26,8 @@ interface SummaryPanelProps {
   isSaving: boolean;
   onSaveAll: () => Promise<void>;
   onCopySummary: () => Promise<void>;
-  onOpenFolder: () => Promise<void>;
+  onExportPdf: () => Promise<void>;
+  onExportToOutline: () => Promise<void>;
   aiSummary: Summary | null;
   summaryStatus: 'idle' | 'processing' | 'summarizing' | 'regenerating' | 'completed' | 'error';
   transcripts: Transcript[];
@@ -62,7 +63,8 @@ export function SummaryPanel({
   isSaving,
   onSaveAll,
   onCopySummary,
-  onOpenFolder,
+  onExportPdf,
+  onExportToOutline,
   aiSummary,
   summaryStatus,
   transcripts,
@@ -128,11 +130,8 @@ export function SummaryPanel({
                 isDirty={isTitleDirty || (summaryRef.current?.isDirty || false)}
                 onSave={onSaveAll}
                 onCopy={onCopySummary}
-                onFind={() => {
-                  // TODO: Implement find in summary functionality
-                  console.log('Find in summary clicked');
-                }}
-                onOpenFolder={onOpenFolder}
+                onExportPdf={onExportPdf}
+                onExportToOutline={onExportToOutline}
                 hasSummary={!!aiSummary}
               />
             </div>

@@ -4,6 +4,9 @@ import { BlockNoteSummaryViewRef } from '@/components/AISummary/BlockNoteSummary
 import { toast } from 'sonner';
 import Analytics from '@/lib/analytics';
 import { invoke as invokeTauri } from '@tauri-apps/api/core';
+import { save } from '@tauri-apps/plugin-dialog';
+import { generatePdfFromMarkdown } from '@/lib/pdfExport';
+import { exportToOutline, loadOutlineConfig } from '@/lib/outlineExport';
 
 interface UseCopyOperationsProps {
   meeting: any;
@@ -189,8 +192,138 @@ export function useCopyOperations({
     }
   }, [aiSummary, meetingTitle, meeting, blockNoteSummaryRef]);
 
+  // Export summary as PDF
+  const handleExportPdf = useCallback(async () => {
+    try {
+      let summaryMarkdown = '';
+
+      // Try to get markdown from BlockNote editor first
+      if (blockNoteSummaryRef.current?.getMarkdown) {
+        summaryMarkdown = await blockNoteSummaryRef.current.getMarkdown();
+      }
+
+      // Fallback: Check if aiSummary has markdown property
+      if (!summaryMarkdown && aiSummary && 'markdown' in aiSummary) {
+        summaryMarkdown = (aiSummary as any).markdown || '';
+      }
+
+      // Fallback: Convert legacy format
+      if (!summaryMarkdown && aiSummary) {
+        const sections = Object.entries(aiSummary)
+          .filter(([key]) => key !== 'markdown' && key !== 'summary_json' && key !== '_section_order' && key !== 'MeetingName')
+          .map(([, section]) => {
+            if (section && typeof section === 'object' && 'title' in section && 'blocks' in section) {
+              const sectionTitle = `## ${section.title}\n\n`;
+              const sectionContent = section.blocks
+                .map((block: any) => `- ${block.content}`)
+                .join('\n');
+              return sectionTitle + sectionContent;
+            }
+            return '';
+          })
+          .filter(s => s.trim())
+          .join('\n\n');
+        summaryMarkdown = sections;
+      }
+
+      if (!summaryMarkdown.trim()) {
+        toast.error('No summary content available to export');
+        return;
+      }
+
+      // Generate the PDF bytes
+      const dateStr = new Date(meeting.created_at).toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+      });
+      const bytes = await generatePdfFromMarkdown(summaryMarkdown, meetingTitle, dateStr);
+
+      // Sanitize the title for use as a filename
+      const safeTitle = meetingTitle.replace(/[<>:"/\\|?*]/g, '_').trim() || 'meeting-summary';
+
+      // Open native save dialog
+      const filePath = await save({
+        defaultPath: `${safeTitle}.pdf`,
+        filters: [{ name: 'PDF Document', extensions: ['pdf'] }],
+      });
+
+      if (!filePath) {
+        return;
+      }
+
+      // Write the file via Rust command
+      await invokeTauri('write_bytes_to_file', { path: filePath, data: Array.from(bytes) });
+      toast.success('PDF document exported successfully');
+
+      // Track export analytics
+      await Analytics.trackButtonClick('export_pdf', 'meeting_details');
+    } catch (error) {
+      console.error('Failed to export PDF document:', error);
+      toast.error('Failed to export PDF document');
+    }
+  }, [meeting, meetingTitle, aiSummary, blockNoteSummaryRef]);
+
+  // Export summary to Outline
+  const handleExportToOutline = useCallback(async () => {
+    const config = loadOutlineConfig();
+    if (!config.url || !config.apiKey || !config.collectionId) {
+      toast.error('Outline is not configured. Go to Settings → Integrations to set it up.');
+      return;
+    }
+
+    let summaryMarkdown = '';
+
+    if (blockNoteSummaryRef.current?.getMarkdown) {
+      summaryMarkdown = await blockNoteSummaryRef.current.getMarkdown();
+    }
+    if (!summaryMarkdown && aiSummary && 'markdown' in aiSummary) {
+      summaryMarkdown = (aiSummary as any).markdown || '';
+    }
+    if (!summaryMarkdown && aiSummary) {
+      summaryMarkdown = Object.entries(aiSummary)
+        .filter(([key]) => key !== 'markdown' && key !== 'summary_json' && key !== '_section_order' && key !== 'MeetingName')
+        .map(([, section]) => {
+          if (section && typeof section === 'object' && 'title' in section && 'blocks' in section) {
+            return `## ${section.title}\n\n` + (section as any).blocks.map((b: any) => `- ${b.content}`).join('\n');
+          }
+          return '';
+        })
+        .filter(Boolean)
+        .join('\n\n');
+    }
+
+    if (!summaryMarkdown.trim()) {
+      toast.error('No summary content available to export');
+      return;
+    }
+
+    const title = meetingTitle || 'Meeting Summary';
+    const dateStr = new Date(meeting.created_at).toLocaleDateString('en-US', {
+      year: 'numeric', month: 'long', day: 'numeric',
+    });
+    const fullMarkdown = `# ${title}\n\n**Date:** ${dateStr}\n\n---\n\n${summaryMarkdown}`;
+
+    const loadingToastId = toast.loading('Exporting to Outline…');
+    try {
+      const docUrl = await exportToOutline(config, title, fullMarkdown);
+      toast.dismiss(loadingToastId);
+      toast.success('Exported to Outline', {
+        description: 'Document created successfully.',
+        action: docUrl ? { label: 'Open', onClick: () => invokeTauri('open_url', { url: docUrl }) } : undefined,
+      });
+      await Analytics.trackButtonClick('export_outline', 'meeting_details');
+    } catch (error: any) {
+      toast.dismiss(loadingToastId);
+      console.error('Failed to export to Outline:', error);
+      toast.error(`Failed to export to Outline: ${error?.message ?? error}`);
+    }
+  }, [meeting, meetingTitle, aiSummary, blockNoteSummaryRef]);
+
   return {
     handleCopyTranscript,
     handleCopySummary,
+    handleExportPdf,
+    handleExportToOutline,
   };
 }

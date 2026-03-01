@@ -2,7 +2,13 @@
 
 import { Button } from '@/components/ui/button';
 import { ButtonGroup } from '@/components/ui/button-group';
-import { Copy, Save, Loader2, Search, FolderOpen } from 'lucide-react';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { Copy, Save, Loader2, FileText, Upload, ChevronDown, BookOpen } from 'lucide-react';
 import Analytics from '@/lib/analytics';
 
 interface SummaryUpdaterButtonGroupProps {
@@ -10,8 +16,9 @@ interface SummaryUpdaterButtonGroupProps {
   isDirty: boolean;
   onSave: () => Promise<void>;
   onCopy: () => Promise<void>;
+  onExportPdf: () => Promise<void>;
+  onExportToOutline: () => Promise<void>;
   onFind?: () => void;
-  onOpenFolder: () => Promise<void>;
   hasSummary: boolean;
 }
 
@@ -20,8 +27,9 @@ export function SummaryUpdaterButtonGroup({
   isDirty,
   onSave,
   onCopy,
+  onExportPdf,
+  onExportToOutline,
   onFind,
-  onOpenFolder,
   hasSummary
 }: SummaryUpdaterButtonGroupProps) {
   return (
@@ -67,23 +75,42 @@ export function SummaryUpdaterButtonGroup({
         <span className="hidden lg:inline">Copy</span>
       </Button>
 
-      {/* Find button */}
-      {/* {onFind && (
-        <Button
-          variant="outline"
-          size="sm"
-          title="Find in Summary"
-          onClick={() => {
-            Analytics.trackButtonClick('find_in_summary', 'meeting_details');
-            onFind();
-          }}
-          disabled={!hasSummary}
-          className="cursor-pointer"
-        >
-          <Search />
-          <span className="hidden lg:inline">Find</span>
-        </Button>
-      )} */}
+      {/* Export dropdown */}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!hasSummary}
+            className="cursor-pointer gap-1"
+            title="Export summary"
+          >
+            <Upload className="w-4 h-4" />
+            <span className="hidden lg:inline">Export</span>
+            <ChevronDown className="w-3 h-3 opacity-60" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem
+            onClick={() => {
+              Analytics.trackButtonClick('export_pdf', 'meeting_details');
+              onExportPdf();
+            }}
+          >
+            <FileText className="w-4 h-4 mr-2" />
+            PDF
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            onClick={() => {
+              Analytics.trackButtonClick('export_outline', 'meeting_details');
+              onExportToOutline();
+            }}
+          >
+            <BookOpen className="w-4 h-4 mr-2" />
+            Outline (Notes)
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </ButtonGroup>
   );
 }
