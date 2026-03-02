@@ -114,8 +114,11 @@ pub(crate) fn split_segment_at_silence(
         return vec![segment.clone()];
     }
 
-    let ms_per_sample = (segment.end_timestamp_ms - segment.start_timestamp_ms)
-        / segment.samples.len() as f64;
+    // Use the known 16kHz sample rate for timestamp calculations rather than
+    // deriving it from the segment's timestamps and sample count. If a resampling
+    // artifact alters the sample count, the derived rate becomes wrong and
+    // timestamps explode (e.g., 108 minutes in a 56-minute meeting).
+    const MS_PER_SAMPLE: f64 = 1000.0 / 16000.0; // 0.0625 ms at 16kHz
     let mut result = Vec::new();
     let mut pos = 0usize;
 
@@ -124,7 +127,7 @@ pub(crate) fn split_segment_at_silence(
         if remaining <= max_samples {
             // Last chunk - take everything remaining
             let chunk_samples = segment.samples[pos..].to_vec();
-            let chunk_start_ms = segment.start_timestamp_ms + (pos as f64 * ms_per_sample);
+            let chunk_start_ms = segment.start_timestamp_ms + (pos as f64 * MS_PER_SAMPLE);
             let chunk_end_ms = segment.end_timestamp_ms;
             result.push(crate::audio::vad::SpeechSegment {
                 samples: chunk_samples,
@@ -181,8 +184,8 @@ pub(crate) fn split_segment_at_silence(
         };
 
         let chunk_samples = segment.samples[pos..chunk_end].to_vec();
-        let chunk_start_ms = segment.start_timestamp_ms + (pos as f64 * ms_per_sample);
-        let chunk_end_ms = segment.start_timestamp_ms + (chunk_end as f64 * ms_per_sample);
+        let chunk_start_ms = segment.start_timestamp_ms + (pos as f64 * MS_PER_SAMPLE);
+        let chunk_end_ms = segment.start_timestamp_ms + (chunk_end as f64 * MS_PER_SAMPLE);
 
         result.push(crate::audio::vad::SpeechSegment {
             samples: chunk_samples,

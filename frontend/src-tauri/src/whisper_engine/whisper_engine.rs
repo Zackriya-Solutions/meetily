@@ -474,23 +474,35 @@ impl WhisperEngine {
         false
     }
 
-    // Enhanced word repetition removal
+    /// Strip trailing punctuation for comparison (e.g. "it," → "it", "we." → "we")
+    fn strip_trailing_punct(word: &str) -> &str {
+        word.trim_end_matches(|c: char| c.is_ascii_punctuation())
+    }
+
+    // Enhanced word repetition removal — case-insensitive, punctuation-aware
     fn remove_word_repetitions<'a>(words: &'a [&'a str]) -> Vec<&'a str> {
         let mut cleaned_words = Vec::new();
         let mut i = 0;
 
         while i < words.len() {
             let current_word = words[i];
+            let current_stripped = Self::strip_trailing_punct(current_word).to_lowercase();
             let mut repeat_count = 1;
 
-            // Count consecutive repetitions of the same word
-            while i + repeat_count < words.len() && words[i + repeat_count] == current_word {
-                repeat_count += 1;
+            // Count consecutive repetitions — case-insensitive, ignore trailing punctuation
+            while i + repeat_count < words.len() {
+                let next_stripped = Self::strip_trailing_punct(words[i + repeat_count]).to_lowercase();
+                if next_stripped == current_stripped {
+                    repeat_count += 1;
+                } else {
+                    break;
+                }
             }
 
-            // Be more aggressive: if word is repeated 2+ times, only keep one instance
+            // Keep only one instance of repeated words
             if repeat_count >= 2 {
-                cleaned_words.push(current_word);
+                // Keep the last occurrence (most likely to have correct trailing punctuation)
+                cleaned_words.push(words[i + repeat_count - 1]);
                 i += repeat_count;
             } else {
                 cleaned_words.push(current_word);
@@ -498,10 +510,44 @@ impl WhisperEngine {
             }
         }
 
-        cleaned_words
+        // Second pass: collapse single-letter stutters like "c c c c c c crap" → "crap"
+        // (Whisper sometimes produces these on noise or unclear speech)
+        let mut final_words: Vec<&'a str> = Vec::new();
+        let mut j = 0;
+        while j < cleaned_words.len() {
+            let w = cleaned_words[j];
+            if Self::strip_trailing_punct(w).len() == 1 {
+                // Count consecutive single-letter tokens
+                let mut stutter_count = 1;
+                while j + stutter_count < cleaned_words.len()
+                    && Self::strip_trailing_punct(cleaned_words[j + stutter_count]).len() == 1
+                {
+                    stutter_count += 1;
+                }
+                if stutter_count >= 3 {
+                    // Drop the stutter entirely — it's noise
+                    j += stutter_count;
+                    continue;
+                }
+            }
+            final_words.push(w);
+            j += 1;
+        }
+
+        final_words
     }
 
-    // Enhanced phrase repetition removal with variable length detection
+    /// Case-insensitive, punctuation-stripped phrase comparison
+    fn phrases_match(a: &[&str], b: &[&str]) -> bool {
+        a.len() == b.len()
+            && a.iter().zip(b.iter()).all(|(x, y)| {
+                Self::strip_trailing_punct(x).to_lowercase()
+                    == Self::strip_trailing_punct(y).to_lowercase()
+            })
+    }
+
+    // Enhanced phrase repetition removal — handles 2+ consecutive repetitions,
+    // case-insensitive, punctuation-aware. Tries longest phrase first for greedy match.
     fn remove_phrase_repetitions<'a>(words: &'a [&'a str]) -> Vec<&'a str> {
         if words.len() < 4 {
             return words.to_vec();
@@ -513,19 +559,31 @@ impl WhisperEngine {
         while i < words.len() {
             let mut phrase_found = false;
 
-            // Check for 2-word to 5-word phrase repetitions
-            for phrase_len in 2..=std::cmp::min(5, (words.len() - i) / 2) {
-                if i + phrase_len * 2 <= words.len() {
-                    let phrase1 = &words[i..i + phrase_len];
-                    let phrase2 = &words[i + phrase_len..i + phrase_len * 2];
+            // Try longest phrases first (greedy) — 5-word down to 2-word
+            let max_phrase = std::cmp::min(5, (words.len() - i) / 2);
+            for phrase_len in (2..=max_phrase).rev() {
+                if i + phrase_len * 2 > words.len() {
+                    continue;
+                }
+                let phrase = &words[i..i + phrase_len];
+                let next_phrase = &words[i + phrase_len..i + phrase_len * 2];
 
-                    if phrase1 == phrase2 {
-                        // Add the phrase once and skip the repetition
-                        final_words.extend_from_slice(phrase1);
-                        i += phrase_len * 2;
-                        phrase_found = true;
-                        break;
+                if Self::phrases_match(phrase, next_phrase) {
+                    // Count how many times this phrase repeats consecutively
+                    let mut reps = 2;
+                    while i + phrase_len * (reps + 1) <= words.len() {
+                        let candidate = &words[i + phrase_len * reps..i + phrase_len * (reps + 1)];
+                        if Self::phrases_match(phrase, candidate) {
+                            reps += 1;
+                        } else {
+                            break;
+                        }
                     }
+                    // Keep just one copy of the phrase
+                    final_words.extend_from_slice(phrase);
+                    i += phrase_len * reps;
+                    phrase_found = true;
+                    break;
                 }
             }
 
