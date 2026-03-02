@@ -605,6 +605,8 @@ pub fn resample_audio(input: &[f32], from_sample_rate: u32, to_sample_rate: u32)
     }
 }
 
+/// Fast resampling optimized for transcription preprocessing
+///
 pub fn write_audio_to_file(
     audio: &[f32],
     sample_rate: u32,

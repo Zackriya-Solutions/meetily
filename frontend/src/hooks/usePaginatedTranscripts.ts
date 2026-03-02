@@ -24,6 +24,7 @@ interface UsePaginatedTranscriptsReturn {
     // Actions
     loadMore: () => Promise<void>;
     reset: () => void;
+    refetch: () => Promise<void>;
 }
 
 /**
@@ -151,6 +152,20 @@ export function usePaginatedTranscripts({
         }
     }, [hasMore, meetingId, loadTranscriptsAtOffset, isLoading]);
 
+    // Force refetch of data (e.g., after retranscription)
+    const refetch = useCallback(async () => {
+        if (!meetingId) return;
+
+        reset();
+        setIsLoading(true);
+        try {
+            await loadMetadata();
+            await loadTranscriptsAtOffset(0, false);
+        } finally {
+            setIsLoading(false);
+        }
+    }, [meetingId, reset, loadMetadata, loadTranscriptsAtOffset]);
+
     // Initial load
     useEffect(() => {
         if (!meetingId) {
@@ -195,5 +210,6 @@ export function usePaginatedTranscripts({
         error,
         loadMore,
         reset,
+        refetch,
     };
 }

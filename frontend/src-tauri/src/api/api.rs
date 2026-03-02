@@ -12,7 +12,6 @@ use crate::{
             transcript::TranscriptsRepository,
         },
     },
-    onboarding::load_onboarding_status,
     state::AppState,
     summary::CustomOpenAIConfig,
 };
@@ -466,7 +465,7 @@ pub async fn api_update_profile<R: Runtime>(
 
 #[tauri::command]
 pub async fn api_get_model_config<R: Runtime>(
-    app: AppHandle<R>,
+    _app: AppHandle<R>,
     state: tauri::State<'_, AppState>,
     _auth_token: Option<String>,
 ) -> Result<Option<ModelConfig>, String> {
@@ -636,7 +635,7 @@ pub async fn api_get_transcript_config<R: Runtime>(
             log_info!("No transcript config found, returning default.");
             Ok(Some(TranscriptConfig {
                 provider: "parakeet".to_string(),
-                model: "parakeet-tdt-0.6b-v3-int8".to_string(),
+                model: crate::config::DEFAULT_PARAKEET_MODEL.to_string(),
                 api_key: None,
             }))
         }

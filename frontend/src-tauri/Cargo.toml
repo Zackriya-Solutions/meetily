@@ -1,6 +1,6 @@
 [package]
 name = "meetily"
-version = "0.2.1"
+version = "0.3.0"
 description = "A Tauri App for meeting minutes"
 authors = ["Sujith S"]
 license = "MIT"
@@ -134,10 +134,12 @@ ndarray = "0.16"
 bytes = { version = "1.9.0", features = ["serde"] }
 
 esaxx-rs = "0.1.10"
-symphonia = { version = "0.5.4", features = ["aac", "isomp4", "opt-simd"] }
+symphonia = { version = "0.5.4", features = ["aac", "isomp4", "mp3", "flac", "ogg", "vorbis", "pcm", "wav", "opt-simd"] }
 rand = "0.8.5"
+rayon = "1.10"
 rubato = "0.15.0"
 ringbuf = "0.4.8"
+tempfile = "3.3.0"
 
 ffmpeg-sidecar = { git = "https://github.com/nathanbabcock/ffmpeg-sidecar", branch = "main" }
 
