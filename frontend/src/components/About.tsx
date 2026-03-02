@@ -48,7 +48,7 @@ export function About() {
     };
 
     return (
-        <div className="p-4 space-y-4 h-[80vh] overflow-y-auto bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100">
+        <div className="p-4 space-y-4 h-[80vh] overflow-y-auto custom-scrollbar bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100">
             {/* Compact Header */}
             <div className="text-center">
                 <div className="mb-3">
