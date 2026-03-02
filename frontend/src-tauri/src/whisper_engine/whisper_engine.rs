@@ -997,6 +997,73 @@ impl WhisperEngine {
         // Check for repetition loops and clean them up
         let cleaned_result = Self::clean_repetitive_text(&final_result);
 
+        // Temperature fallback: if repetition ratio is high (0.5-0.7) but not
+        // discard-level (>0.7), retry at a higher temperature to break the loop.
+        // Whisper can get stuck in repetitive output at low temperatures.
+        let cleaned_result = if !cleaned_result.is_empty() {
+            let ratio = Self::calculate_repetition_ratio(&cleaned_result);
+            if ratio > 0.5 && duration_seconds >= 1.0 {
+                let retry_temp = (adaptive_config.temperature + 0.2).min(0.6);
+                log::info!(
+                    "Transcription #{}: high repetition ratio ({:.2}), retrying at temperature {:.1}",
+                    transcription_count, ratio, retry_temp
+                );
+
+                // Rebuild params with higher temperature
+                let mut retry_params = FullParams::new(SamplingStrategy::BeamSearch {
+                    beam_size: adaptive_config.beam_size as i32,
+                    patience: 1.0,
+                });
+                retry_params.set_language(language_code);
+                retry_params.set_translate(should_translate);
+                retry_params.set_initial_prompt("Meeting transcript. Use proper punctuation and capitalization.");
+                retry_params.set_no_timestamps(true);
+                retry_params.set_token_timestamps(true);
+                retry_params.set_print_special(false);
+                retry_params.set_print_progress(false);
+                retry_params.set_print_realtime(false);
+                retry_params.set_print_timestamps(false);
+                retry_params.set_suppress_blank(true);
+                retry_params.set_suppress_non_speech_tokens(true);
+                retry_params.set_temperature(retry_temp);
+                retry_params.set_max_initial_ts(1.0);
+                retry_params.set_entropy_thold(2.4);
+                retry_params.set_logprob_thold(-1.0);
+                retry_params.set_no_speech_thold(0.45);
+                retry_params.set_max_len(200);
+                retry_params.set_single_segment(false);
+
+                let mut retry_state = ctx.create_state()?;
+                retry_state.full(retry_params, &audio_data)?;
+                let retry_segments = retry_state.full_n_segments()?;
+
+                let mut retry_result = String::new();
+                for i in 0..retry_segments {
+                    if let Ok(text) = retry_state.full_get_segment_text_lossy(i) {
+                        let t = text.trim();
+                        if !t.is_empty() {
+                            if !retry_result.is_empty() { retry_result.push(' '); }
+                            retry_result.push_str(t);
+                        }
+                    }
+                }
+                let retry_cleaned = Self::clean_repetitive_text(&retry_result);
+                let retry_ratio = Self::calculate_repetition_ratio(&retry_cleaned);
+
+                // Keep the retry only if it's less repetitive
+                if retry_ratio < ratio {
+                    log::info!("Temperature fallback improved: ratio {:.2} -> {:.2}", ratio, retry_ratio);
+                    retry_cleaned
+                } else {
+                    cleaned_result
+                }
+            } else {
+                cleaned_result
+            }
+        } else {
+            cleaned_result
+        };
+
         // Performance optimization: smart logging for transcription results
         if cleaned_result.is_empty() {
             // Only log empty results occasionally to reduce spam

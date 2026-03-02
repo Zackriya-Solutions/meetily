@@ -725,10 +725,10 @@ impl AudioPipeline {
         // Create VAD processor with balanced redemption time for speech accumulation
         // The VAD processor now handles 48kHz->16kHz resampling internally
         // This bridges natural pauses without excessive fragmentation
-        // macOS: 400ms works well with Core Audio's tight buffering
+        // macOS: 800ms bridges most intra-sentence pauses without excessive latency
         // Windows: 1000ms balances WASAPI's chunkier delivery vs live transcription latency
 
-        let redemption_time = if cfg!(target_os = "macos") { 400 } else { 1000 };
+        let redemption_time = if cfg!(target_os = "macos") { 800 } else { 1000 };
 
         let vad_processor = match ContinuousVadProcessor::new(sample_rate, redemption_time) {
             Ok(processor) => {
@@ -861,9 +861,10 @@ impl AudioPipeline {
                             match self.vad_processor.process_audio(&mixed_with_gain) {
                                 Ok(speech_segments) => {
                                     for segment in speech_segments {
-                                        if segment.samples.len() < 16000 {
-                                            // Minimum 1s at 16kHz — very short segments produce hallucinations
-                                            debug!("⏭️ Dropping short VAD segment: {:.1}ms ({} samples < 16000)",
+                                        if segment.samples.len() < 8000 {
+                                            // Minimum 0.5s at 16kHz — captures short responses (Yes/No/OK)
+                                            // while VAD's 250ms min_speech_time already filters noise bursts
+                                            debug!("⏭️ Dropping short VAD segment: {:.1}ms ({} samples < 8000)",
                                                    segment.end_timestamp_ms - segment.start_timestamp_ms,
                                                    segment.samples.len());
                                             continue;

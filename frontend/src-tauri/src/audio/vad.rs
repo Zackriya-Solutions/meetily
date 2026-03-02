@@ -109,51 +109,17 @@ impl ContinuousVadProcessor {
         Ok(completed_segments)
     }
 
-    /// Improved resampling from input sample rate to 16kHz with anti-aliasing
-    /// Uses linear interpolation and basic low-pass filtering for better quality
+    /// Resample from input sample rate to 16kHz using high-quality sinc resampler.
+    /// VAD makes critical speech/silence decisions — poor resampling causes aliasing
+    /// that introduces false positives (noise→speech) and false negatives (missed speech).
     fn resample_to_16k(&self, samples: &[f32]) -> Result<Vec<f32>> {
         if self.sample_rate == 16000 {
             return Ok(samples.to_vec());
         }
 
-        // Calculate downsampling ratio
-        let ratio = self.sample_rate as f64 / 16000.0;
-        let output_len = (samples.len() as f64 / ratio) as usize;
-        let mut resampled = Vec::with_capacity(output_len);
+        let resampled = super::audio_processing::resample(samples, self.sample_rate, 16000)?;
 
-        // Apply simple low-pass filter before downsampling to reduce aliasing
-        let cutoff_freq = 0.4; // Normalized frequency (0.4 * Nyquist)
-        let mut filtered_samples = Vec::with_capacity(samples.len());
-        
-        // Simple moving average filter (basic low-pass)
-        let filter_size = (self.sample_rate as f64 / (cutoff_freq * self.sample_rate as f64)) as usize;
-        let filter_size = std::cmp::max(1, std::cmp::min(filter_size, 5)); // Limit filter size
-        
-        for i in 0..samples.len() {
-            let start = if i >= filter_size { i - filter_size } else { 0 };
-            let end = std::cmp::min(i + filter_size + 1, samples.len());
-            let sum: f32 = samples[start..end].iter().sum();
-            filtered_samples.push(sum / (end - start) as f32);
-        }
-
-        // Linear interpolation downsampling
-        for i in 0..output_len {
-            let source_pos = i as f64 * ratio;
-            let source_index = source_pos as usize;
-            let fraction = source_pos - source_index as f64;
-            
-            if source_index + 1 < filtered_samples.len() {
-                // Linear interpolation
-                let sample1 = filtered_samples[source_index];
-                let sample2 = filtered_samples[source_index + 1];
-                let interpolated = sample1 + (sample2 - sample1) * fraction as f32;
-                resampled.push(interpolated);
-            } else if source_index < filtered_samples.len() {
-                resampled.push(filtered_samples[source_index]);
-            }
-        }
-
-        debug!("Resampled from {} samples ({}Hz) to {} samples (16kHz) with anti-aliasing",
+        debug!("Resampled from {} samples ({}Hz) to {} samples (16kHz) via sinc resampler",
                samples.len(), self.sample_rate, resampled.len());
 
         Ok(resampled)
