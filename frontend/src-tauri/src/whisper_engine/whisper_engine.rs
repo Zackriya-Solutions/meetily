@@ -737,6 +737,112 @@ impl WhisperEngine {
         Ok((cleaned_result, avg_confidence, is_partial))
     }
 
+    /// Batch transcription for retranscription workloads.
+    /// Uses beam_size=5 (regardless of platform) and chains the previous segment's
+    /// text into initial_prompt for cross-segment context continuity.
+    pub async fn transcribe_batch(
+        &self,
+        audio_data: Vec<f32>,
+        language: Option<String>,
+        previous_text: Option<&str>,
+    ) -> Result<(String, f32)> {
+        let ctx_lock = self.current_context.read().await;
+        let ctx = ctx_lock.as_ref()
+            .ok_or_else(|| anyhow!("No model loaded. Please load a model first."))?;
+
+        let hardware_profile = crate::audio::HardwareProfile::detect();
+        let batch_config = hardware_profile.get_whisper_config_batch();
+
+        let mut params = FullParams::new(SamplingStrategy::BeamSearch {
+            beam_size: batch_config.beam_size as i32,
+            patience: 1.0
+        });
+
+        let (language_code, should_translate) = match language.as_deref() {
+            Some("auto") => (None, false),
+            None => (Some("en"), false),
+            Some("auto-translate") => (None, true),
+            Some(lang) => (Some(lang), false),
+        };
+        params.set_language(language_code);
+        params.set_translate(should_translate);
+
+        // Chain previous segment text into initial_prompt for continuity.
+        // Whisper uses the prompt to condition its decoder — feeding prior context
+        // dramatically reduces hallucinations and improves punctuation across segments.
+        let prompt = match previous_text {
+            Some(prev) if !prev.is_empty() => {
+                // Take last ~200 chars of previous text for context
+                let ctx_start = prev.len().saturating_sub(200);
+                let ctx_start = prev.ceil_char_boundary(ctx_start);
+                format!(
+                    "Meeting transcript. Use proper punctuation and capitalization. {}",
+                    &prev[ctx_start..]
+                )
+            }
+            _ => "Meeting transcript. Use proper punctuation and capitalization.".to_string(),
+        };
+        params.set_initial_prompt(&prompt);
+
+        params.set_no_timestamps(true);
+        params.set_token_timestamps(true);
+        params.set_print_special(false);
+        params.set_print_progress(false);
+        params.set_print_realtime(false);
+        params.set_print_timestamps(false);
+        params.set_suppress_blank(true);
+        params.set_suppress_non_speech_tokens(true);
+        params.set_temperature(batch_config.temperature);
+        params.set_max_initial_ts(1.0);
+        params.set_entropy_thold(2.4);
+        params.set_logprob_thold(-1.0);
+        params.set_no_speech_thold(0.45);
+        params.set_max_len(200);
+        params.set_single_segment(false);
+
+        let mut state = ctx.create_state()?;
+        state.full(params, &audio_data)?;
+
+        let num_segments = state.full_n_segments()?;
+        let mut result = String::new();
+        let mut total_confidence = 0.0f32;
+        let mut segment_count = 0;
+
+        for i in 0..num_segments {
+            let segment_text = match state.full_get_segment_text_lossy(i) {
+                Ok(text) => text,
+                Err(_) => continue,
+            };
+            let segment_length = segment_text.len() as f32;
+            let segment_confidence = if segment_length > 0.0 {
+                (segment_length / 100.0).min(0.9) + 0.1
+            } else {
+                0.1
+            };
+            total_confidence += segment_confidence;
+            segment_count += 1;
+
+            let cleaned_text = segment_text.trim();
+            if !cleaned_text.is_empty() {
+                if !result.is_empty() {
+                    result.push(' ');
+                }
+                result.push_str(cleaned_text);
+            }
+        }
+
+        let final_result = result.trim().to_string();
+        let cleaned_result = Self::clean_repetitive_text(&final_result);
+
+        let avg_confidence = if segment_count > 0 {
+            total_confidence / segment_count as f32
+        } else {
+            0.0
+        };
+
+        Ok((cleaned_result, avg_confidence))
+    }
+
     pub async fn transcribe_audio(&self, audio_data: Vec<f32>, language: Option<String>) -> Result<String> {
         let ctx_lock = self.current_context.read().await;
         let ctx = ctx_lock.as_ref()
@@ -782,7 +888,7 @@ impl WhisperEngine {
         // BALANCED settings - good quality with reasonable speed
         params.set_suppress_blank(true);
         params.set_suppress_non_speech_tokens(true);
-        params.set_temperature(0.3);             // Lower than 0.4 for consistency, higher than 0.0 for quality
+        params.set_temperature(adaptive_config.temperature); // Hardware-adaptive (0.1-0.4)
         params.set_max_initial_ts(1.0);
         params.set_entropy_thold(2.4);
         params.set_logprob_thold(-1.0);

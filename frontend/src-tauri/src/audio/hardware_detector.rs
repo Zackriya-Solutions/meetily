@@ -220,6 +220,18 @@ impl HardwareProfile {
         }
     }
 
+    /// Generate Whisper configuration for batch/retranscription workloads.
+    /// No real-time constraint, so always use beam_size=5 for best accuracy.
+    pub fn get_whisper_config_batch(&self) -> AdaptiveWhisperConfig {
+        AdaptiveWhisperConfig {
+            beam_size: 5,
+            temperature: 0.2,
+            use_gpu: self.has_gpu_acceleration,
+            max_threads: Some(self.cpu_cores.min(8) as usize),
+            chunk_size_preference: ChunkSizePreference::Quality,
+        }
+    }
+
     /// Get recommended chunk duration in milliseconds based on performance tier
     pub fn get_recommended_chunk_duration_ms(&self) -> u32 {
         match self.performance_tier {
