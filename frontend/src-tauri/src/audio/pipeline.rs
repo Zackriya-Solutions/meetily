@@ -725,9 +725,10 @@ impl AudioPipeline {
         // Create VAD processor with balanced redemption time for speech accumulation
         // The VAD processor now handles 48kHz->16kHz resampling internally
         // This bridges natural pauses without excessive fragmentation
-        // For mac os core audio, 900ms, for windows 400ms seems good
+        // macOS: 400ms works well with Core Audio's tight buffering
+        // Windows: 2000ms needed to bridge WASAPI's chunkier delivery and natural pauses
 
-        let redemption_time = if cfg!(target_os = "macos") { 400 } else { 400 };
+        let redemption_time = if cfg!(target_os = "macos") { 400 } else { 2000 };
 
         let vad_processor = match ContinuousVadProcessor::new(sample_rate, redemption_time) {
             Ok(processor) => {
@@ -858,7 +859,7 @@ impl AudioPipeline {
                                     for segment in speech_segments {
                                         let duration_ms = segment.end_timestamp_ms - segment.start_timestamp_ms;
 
-                                        if segment.samples.len() >= 800 {  // Minimum 50ms at 16kHz - matches Parakeet capability
+                                        if segment.samples.len() >= 16000 {  // Minimum 1s at 16kHz — Whisper pads to 30s internally; very short segments produce hallucinations
                                             info!("📤 Sending VAD segment: {:.1}ms, {} samples",
                                                   duration_ms, segment.samples.len());
 
@@ -940,8 +941,8 @@ impl AudioPipeline {
                 for segment in final_segments {
                     let duration_ms = segment.end_timestamp_ms - segment.start_timestamp_ms;
 
-                    // Send segments >= 50ms (800 samples at 16kHz) - matches main pipeline filter
-                    if segment.samples.len() >= 800 {
+                    // Send segments >= 1s (16000 samples at 16kHz) - matches main pipeline filter
+                    if segment.samples.len() >= 16000 {
                         info!("📤 Sending final VAD segment to Whisper: {:.1}ms duration, {} samples",
                               duration_ms, segment.samples.len());
 

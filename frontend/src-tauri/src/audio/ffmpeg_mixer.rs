@@ -17,7 +17,7 @@ use log::{debug, warn, info};
 use super::device_detection::InputDeviceKind;
 
 /// Configuration flags for audio processing features
-pub const RNNOISE_APPLY_ENABLED: bool = false;  // Default: disabled (Whisper handles noise well)
+pub const RNNOISE_APPLY_ENABLED: bool = true;  // Neural network noise reduction (10-15 dB), improves Whisper accuracy in noisy environments
 
 /// Timestamp for audio samples (reserved for future use)
 #[allow(dead_code)]

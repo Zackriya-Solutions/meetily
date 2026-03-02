@@ -40,7 +40,7 @@ impl ContinuousVadProcessor {
         // CONTINUOUS SPEECH FIX: Tuned for capturing complete 5+ second utterances
         // Previous: 0.55/0.40 with 400ms redemption was fragmenting speech into 40ms segments
         // New: More lenient thresholds + longer redemption for continuous speech
-        config.positive_speech_threshold = 0.50;  // Silero default - good for continuous speech
+        config.positive_speech_threshold = 0.40;  // Lowered from 0.50 to catch quieter speakers
         config.negative_speech_threshold = 0.35;  // Silero default - allows natural pauses
 
         // CRITICAL FIX: Removed redemption_time capping to support long continuous speech

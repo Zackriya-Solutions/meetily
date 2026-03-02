@@ -577,12 +577,18 @@ impl WhisperEngine {
         // If language is "auto-translate", enable translation to English
         // Otherwise, use the specified language code
         let (language_code, should_translate) = match language.as_deref() {
-            Some("auto") | None => (None, false),
+            Some("auto") => (None, false),
+            None => (Some("en"), false),  // Default to English — avoids auto-detection overhead and misdetection on short segments
             Some("auto-translate") => (None, true),
             Some(lang) => (Some(lang), false),
         };
         params.set_language(language_code);
         params.set_translate(should_translate);
+
+        // Condition Whisper's decoder on meeting-style output format
+        // This is OpenAI's documented #1 accuracy lever — steers output toward
+        // proper punctuation, capitalization, and transcription style
+        params.set_initial_prompt("Meeting transcript. Use proper punctuation and capitalization.");
 
         // CRITICAL: Disable timestamp tokens to prevent whisper.cpp chunking heuristics
         // The "single timestamp ending - skip entire chunk" optimization incorrectly discards
@@ -604,10 +610,9 @@ impl WhisperEngine {
         params.set_max_initial_ts(1.0);
         params.set_entropy_thold(2.4);
         params.set_logprob_thold(-1.0);
-        // BALANCED FIX: Lowered from 0.75 to 0.55 to allow quiet speech detection
-        // Previous value was too aggressive and rejected valid quiet speech
-        // 0.55 is balanced - prevents hallucinations while preserving quiet speech
-        params.set_no_speech_thold(0.55);
+        // Lowered from 0.55 to 0.45 to preserve quiet speech segments
+        // Higher values cause Whisper to discard valid speech from quieter speakers
+        params.set_no_speech_thold(0.45);
         params.set_max_len(200);
         params.set_single_segment(false);
 
@@ -694,12 +699,16 @@ impl WhisperEngine {
         // If language is "auto-translate", enable translation to English
         // Otherwise, use the specified language code
         let (language_code, should_translate) = match language.as_deref() {
-            Some("auto") | None => (None, false),
+            Some("auto") => (None, false),
+            None => (Some("en"), false),  // Default to English — avoids auto-detection overhead and misdetection on short segments
             Some("auto-translate") => (None, true),
             Some(lang) => (Some(lang), false),
         };
         params.set_language(language_code);
         params.set_translate(should_translate);
+
+        // Condition Whisper's decoder on meeting-style output format
+        params.set_initial_prompt("Meeting transcript. Use proper punctuation and capitalization.");
 
         // CRITICAL: Disable timestamp tokens to prevent whisper.cpp chunking heuristics
         // The "single timestamp ending - skip entire chunk" optimization incorrectly discards
@@ -719,10 +728,9 @@ impl WhisperEngine {
         params.set_max_initial_ts(1.0);
         params.set_entropy_thold(2.4);
         params.set_logprob_thold(-1.0);
-        // BALANCED FIX: Lowered from 0.75 to 0.55 to allow quiet speech detection
-        // Previous value was too aggressive and rejected valid quiet speech
-        // 0.55 is balanced - prevents hallucinations while preserving quiet speech
-        params.set_no_speech_thold(0.55);
+        // Lowered from 0.55 to 0.45 to preserve quiet speech segments
+        // Higher values cause Whisper to discard valid speech from quieter speakers
+        params.set_no_speech_thold(0.45);
 
         // Reasonable length limits
         params.set_max_len(200);                 // Reasonable length
