@@ -57,20 +57,11 @@ function detectGPU() {
       }
     }
 
-    // Check for Vulkan
-    if (commandExists('vulkaninfo') || (platform === 'win32' && require('fs').existsSync('C:\\VulkanSDK'))) {
-      const vulkanSdk = process.env.VULKAN_SDK;
-      const blasInclude = process.env.BLAS_INCLUDE_DIRS;
-
-      if (vulkanSdk && blasInclude) {
-        console.log('🔵 Vulkan detected with all dependencies - using Vulkan acceleration');
-        return 'vulkan';
-      } else {
-        console.log('⚠️  Vulkan detected but missing dependencies - falling back to CPU');
-        if (!vulkanSdk) console.log('   Missing: VULKAN_SDK environment variable');
-        if (!blasInclude) console.log('   Missing: BLAS_INCLUDE_DIRS environment variable');
-        return null;
-      }
+    // Check for Vulkan (available on most modern GPUs via drivers)
+    const vulkanSdk = process.env.VULKAN_SDK;
+    if (commandExists('vulkaninfo') || vulkanSdk || (platform === 'win32' && require('fs').existsSync('C:\\VulkanSDK'))) {
+      console.log('🔵 Vulkan detected - using Vulkan acceleration');
+      return 'vulkan';
     }
 
     // Check if OpenBLAS is available
