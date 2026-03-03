@@ -40,6 +40,7 @@ pub mod api;
 pub mod audio;
 pub mod config;
 pub mod console_utils;
+pub mod credentials;
 pub mod database;
 pub mod notifications;
 pub mod ollama;

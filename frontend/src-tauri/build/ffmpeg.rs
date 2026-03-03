@@ -3,8 +3,11 @@
 // ============================================================================
 // Download and bundle FFmpeg binaries at build-time to eliminate runtime download delays
 
-/// Download and bundle FFmpeg binary for current target platform
-/// Checks cache first, downloads only if missing or corrupted
+/// Bundle FFmpeg binary for the current target platform.
+///
+/// On macOS: prefers a locally-installed FFmpeg (Homebrew) for verified provenance.
+/// On other platforms: falls back to downloading pre-built binaries.
+/// Checks cache first, only copies/downloads if missing or corrupted.
 pub fn ensure_ffmpeg_binary() {
     let target = std::env::var("TARGET")
         .or_else(|_| std::env::var("HOST"))
@@ -23,19 +26,17 @@ pub fn ensure_ffmpeg_binary() {
     let binaries_dir = std::path::PathBuf::from(&manifest_dir).join("binaries");
     let binary_path = binaries_dir.join(&binary_name);
 
-    // Cache check: Skip download if binary exists and works
+    // Cache check: Skip if binary exists and works
     if binary_path.exists() {
         println!("cargo:warning=🔍 Found cached FFmpeg binary: {}", binary_name);
         if verify_ffmpeg_binary(&binary_path) {
             println!("cargo:warning=✅ FFmpeg binary already cached and verified: {}", binary_name);
             return;
         } else {
-            println!("cargo:warning=⚠️  Cached FFmpeg binary appears corrupted, re-downloading...");
+            println!("cargo:warning=⚠️  Cached FFmpeg binary appears corrupted, replacing...");
             let _ = std::fs::remove_file(&binary_path);
         }
     }
-
-    println!("cargo:warning=📥 FFmpeg binary not found, downloading for {}", target);
 
     // Create binaries directory if it doesn't exist
     if !binaries_dir.exists() {
@@ -43,20 +44,71 @@ pub fn ensure_ffmpeg_binary() {
             .expect("Failed to create binaries directory");
     }
 
-    // Download and extract
+    // On macOS, prefer system-installed FFmpeg (Homebrew) for verified provenance.
+    // This avoids bundling pre-built binaries from third-party sources.
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(local_ffmpeg) = find_local_ffmpeg() {
+            println!("cargo:warning=🍺 Using locally-installed FFmpeg: {:?}", local_ffmpeg);
+            std::fs::copy(&local_ffmpeg, &binary_path)
+                .expect("Failed to copy local FFmpeg to binaries/");
+
+            // Ensure executable
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mut perms = std::fs::metadata(&binary_path)
+                    .expect("Failed to get metadata")
+                    .permissions();
+                perms.set_mode(0o755);
+                std::fs::set_permissions(&binary_path, perms)
+                    .expect("Failed to set executable permissions");
+            }
+
+            if verify_ffmpeg_binary(&binary_path) {
+                println!("cargo:warning=✅ Local FFmpeg binary verified and bundled: {}", binary_name);
+                return;
+            } else {
+                println!("cargo:warning=⚠️  Local FFmpeg verification failed, falling back to download...");
+                let _ = std::fs::remove_file(&binary_path);
+            }
+        } else {
+            println!("cargo:warning=⚠️  No local FFmpeg found. Install with: brew install ffmpeg");
+            println!("cargo:warning=📥 Falling back to pre-built binary download...");
+        }
+    }
+
+    // Fallback: download pre-built binary (non-macOS, or macOS without Homebrew FFmpeg)
+    println!("cargo:warning=📥 FFmpeg binary not found locally, downloading for {}", target);
     match download_and_extract_ffmpeg(&target, &binary_path) {
         Ok(()) => {
             println!("cargo:warning=✅ FFmpeg binary downloaded successfully: {}", binary_name);
-
-            // Verify downloaded binary works
             if !verify_ffmpeg_binary(&binary_path) {
                 panic!("⚠️  Downloaded FFmpeg binary verification failed!");
             }
         }
         Err(e) => {
-            panic!("⚠️  Failed to download FFmpeg: {}", e);
+            panic!("⚠️  Failed to obtain FFmpeg: {}", e);
         }
     }
+}
+
+/// Find a locally-installed FFmpeg binary (Homebrew or system PATH).
+#[cfg(target_os = "macos")]
+fn find_local_ffmpeg() -> Option<std::path::PathBuf> {
+    // Check common Homebrew paths first
+    let homebrew_paths = [
+        "/opt/homebrew/bin/ffmpeg",       // Apple Silicon Homebrew
+        "/usr/local/bin/ffmpeg",          // Intel Homebrew
+    ];
+    for path in &homebrew_paths {
+        let p = std::path::PathBuf::from(path);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    // Fall back to which(1) lookup
+    which::which("ffmpeg").ok()
 }
 
 /// Download FFmpeg from platform-specific URL and extract to target location

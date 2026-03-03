@@ -225,7 +225,7 @@ pub async fn generate_summary(
             (None, None, None)
         };
 
-        serde_json::json!(ChatRequest {
+        let mut body = serde_json::json!(ChatRequest {
             model: model_name.to_string(),
             messages: vec![
                 ChatMessage {
@@ -240,7 +240,22 @@ pub async fn generate_summary(
             max_tokens: max_tokens_val,
             temperature: temperature_val,
             top_p: top_p_val,
-        })
+        });
+
+        // Azure OpenAI newer models require max_completion_tokens instead of max_tokens
+        if let Some(tokens) = body.get("max_tokens").and_then(|v| v.as_u64()) {
+            let uses_completion_tokens = model_name.contains("gpt-5.")
+                || model_name.contains("gpt-4.1")
+                || model_name.contains("gpt-4.2")
+                || model_name.contains("o1-")
+                || model_name.contains("o3-");
+            if uses_completion_tokens {
+                body.as_object_mut().unwrap().remove("max_tokens");
+                body["max_completion_tokens"] = serde_json::json!(tokens);
+            }
+        }
+
+        body
     } else {
         serde_json::json!(ClaudeRequest {
             system: system_prompt.to_string(),

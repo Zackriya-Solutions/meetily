@@ -1,0 +1,69 @@
+name: Security Audit
+
+on:
+  push:
+    branches: [main, security-hardening]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 6 * * 1'  # Weekly on Monday at 6am UTC
+
+jobs:
+  rust-audit:
+    name: Rust Dependency Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cargo-audit
+        run: cargo install cargo-audit
+      - name: Run cargo audit
+        working-directory: frontend/src-tauri
+        run: cargo audit
+
+  npm-audit:
+    name: NPM Dependency Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install pnpm
+        run: npm install -g pnpm
+      - name: Install dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+      - name: Run pnpm audit
+        working-directory: frontend
+        run: pnpm audit --audit-level=high || true  # Don't fail build on audit warnings
+
+  secret-scan:
+    name: Secret Detection
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check for hardcoded secrets
+        run: |
+          # Check for common secret patterns
+          echo "Checking for potential hardcoded secrets..."
+          FOUND=0
+
+          # PostHog keys
+          if grep -r "phc_" --include="*.rs" --include="*.ts" --include="*.tsx" --include="*.js" frontend/src-tauri/src/ frontend/src/ 2>/dev/null; then
+            echo "::error::Found potential PostHog API key"
+            FOUND=1
+          fi
+
+          # Generic API key patterns (excluding test files and comments)
+          if grep -rn "api_key.*=.*\"[a-zA-Z0-9_-]{20,}\"" --include="*.rs" frontend/src-tauri/src/ 2>/dev/null | grep -v "test" | grep -v "//"; then
+            echo "::warning::Found potential hardcoded API key in Rust source"
+          fi
+
+          if [ $FOUND -eq 1 ]; then
+            exit 1
+          fi
+
+          echo "No hardcoded secrets detected"

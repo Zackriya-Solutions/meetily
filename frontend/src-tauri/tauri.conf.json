@@ -25,9 +25,14 @@
         "security": {
             "csp": {
                 "default-src": "'self'",
+                "script-src": "'self'",
                 "style-src": "'self' 'unsafe-inline'",
-                "img-src": "'self' asset: https://asset.localhost data:",
-                "connect-src": "'self' http://localhost:11434 http://localhost:5167 http://localhost:8178 https://api.ollama.ai"
+                "img-src": "'self' asset: https://asset.localhost",
+                "connect-src": "'self' http://localhost:11434 http://localhost:5167 http://localhost:8178 https://api.ollama.ai https://api.openai.com https://api.anthropic.com https://api.groq.com https://openrouter.ai",
+                "font-src": "'self'",
+                "object-src": "'none'",
+                "base-uri": "'self'",
+                "form-action": "'self'"
             },
             "assetProtocol": {
                 "enable": true,

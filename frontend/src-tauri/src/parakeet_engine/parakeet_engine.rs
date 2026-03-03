@@ -450,28 +450,101 @@ impl ParakeetEngine {
         self.current_model.read().await.is_some()
     }
 
-    /// Transcribe audio samples using the loaded Parakeet model
+    /// Maximum chunk duration in seconds for Parakeet transcription.
+    /// Audio longer than this is split into chunks to avoid ONNX Runtime OOM errors.
+    /// 60 seconds keeps encoder tensors well within memory limits (~240MB per chunk).
+    const MAX_CHUNK_SECONDS: f64 = 60.0;
+
+    /// Sample rate expected by Parakeet models.
+    const SAMPLE_RATE: f64 = 16000.0;
+
+    /// Overlap between chunks in seconds, to avoid cutting words at boundaries.
+    const CHUNK_OVERLAP_SECONDS: f64 = 1.0;
+
+    /// Transcribe audio samples using the loaded Parakeet model.
+    /// Long audio (>60s) is automatically split into chunks to prevent OOM crashes.
     pub async fn transcribe_audio(&self, audio_data: Vec<f32>) -> Result<String> {
         let mut model_guard = self.current_model.write().await;
         let model = model_guard
             .as_mut()
             .ok_or_else(|| anyhow!("No Parakeet model loaded. Please load a model first."))?;
 
-        let duration_seconds = audio_data.len() as f64 / 16000.0; // Assuming 16kHz
+        let duration_seconds = audio_data.len() as f64 / Self::SAMPLE_RATE;
         log::debug!(
             "Parakeet transcribing {} samples ({:.1}s duration)",
             audio_data.len(),
             duration_seconds
         );
 
-        // Transcribe using Parakeet model
-        let result = model
-            .transcribe_samples(audio_data)
-            .map_err(|e| anyhow!("Parakeet transcription failed: {}", e))?;
+        // Short audio: transcribe directly (no chunking overhead)
+        if duration_seconds <= Self::MAX_CHUNK_SECONDS {
+            let result = model
+                .transcribe_samples(audio_data)
+                .map_err(|e| anyhow!("Parakeet transcription failed: {}", e))?;
+            log::debug!("Parakeet transcription result: '{}'", result.text);
+            return Ok(result.text);
+        }
 
-        log::debug!("Parakeet transcription result: '{}'", result.text);
+        // Long audio: split into chunks and transcribe sequentially
+        let max_chunk_samples = (Self::MAX_CHUNK_SECONDS * Self::SAMPLE_RATE) as usize;
+        let overlap_samples = (Self::CHUNK_OVERLAP_SECONDS * Self::SAMPLE_RATE) as usize;
+        let step = max_chunk_samples.saturating_sub(overlap_samples);
 
-        Ok(result.text)
+        let total_samples = audio_data.len();
+        let num_chunks = (total_samples + step - 1) / step;
+        log::info!(
+            "Parakeet: splitting {:.1}s audio into {} chunks of {:.0}s each",
+            duration_seconds,
+            num_chunks,
+            Self::MAX_CHUNK_SECONDS
+        );
+
+        let mut transcripts = Vec::new();
+        let mut offset = 0usize;
+        let mut chunk_idx = 0usize;
+
+        while offset < total_samples {
+            let end = (offset + max_chunk_samples).min(total_samples);
+            let chunk = audio_data[offset..end].to_vec();
+            let chunk_duration = chunk.len() as f64 / Self::SAMPLE_RATE;
+
+            log::debug!(
+                "Parakeet chunk {}/{}: samples {}..{} ({:.1}s)",
+                chunk_idx + 1,
+                num_chunks,
+                offset,
+                end,
+                chunk_duration
+            );
+
+            match model.transcribe_samples(chunk) {
+                Ok(result) => {
+                    let text = result.text.trim().to_string();
+                    if !text.is_empty() {
+                        transcripts.push(text);
+                    }
+                }
+                Err(e) => {
+                    log::error!(
+                        "Parakeet chunk {} failed: {}. Skipping chunk.",
+                        chunk_idx + 1,
+                        e
+                    );
+                }
+            }
+
+            offset += step;
+            chunk_idx += 1;
+        }
+
+        let combined = transcripts.join(" ");
+        log::debug!(
+            "Parakeet transcription complete: {} chunks, {} chars",
+            chunk_idx,
+            combined.len()
+        );
+
+        Ok(combined)
     }
 
     /// Get the models directory path

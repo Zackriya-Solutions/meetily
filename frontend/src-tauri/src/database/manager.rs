@@ -32,6 +32,10 @@ impl DatabaseManager {
 
         let pool = SqlitePool::connect(tauri_db_path).await?;
 
+        // Migrate any plaintext API keys to the platform keychain BEFORE
+        // running SQL migrations (which will null out the plaintext columns).
+        Self::migrate_keys_to_keychain(&pool).await;
+
         sqlx::migrate!("./migrations").run(&pool).await?;
 
         Ok(DatabaseManager { pool })
@@ -155,6 +159,85 @@ impl DatabaseManager {
 
         // Now use the standard initialization which will detect and migrate the legacy db
         Self::new_from_app_handle(app_handle).await
+    }
+
+    /// One-time migration of plaintext API keys from the database to the
+    /// platform keychain.  This runs BEFORE the SQL migration that nulls out
+    /// the plaintext columns, so data is preserved.  Errors are logged but
+    /// never fatal -- the worst case is the user re-enters their keys.
+    async fn migrate_keys_to_keychain(pool: &SqlitePool) {
+        use sqlx::Row;
+
+        // --- Summary-provider keys (settings table) ---
+        let settings_row = sqlx::query(
+            r#"SELECT groqApiKey, openaiApiKey, anthropicApiKey,
+                      ollamaApiKey, openRouterApiKey, customOpenAIConfig
+               FROM settings WHERE id = '1' LIMIT 1"#,
+        )
+        .fetch_optional(pool)
+        .await;
+
+        if let Ok(Some(row)) = settings_row {
+            let pairs: &[(&str, &str)] = &[
+                ("groq", "groqApiKey"),
+                ("openai", "openaiApiKey"),
+                ("claude", "anthropicApiKey"),
+                ("ollama", "ollamaApiKey"),
+                ("openrouter", "openRouterApiKey"),
+            ];
+            for (provider, col) in pairs {
+                let val: Option<String> = row.try_get(col).unwrap_or(None);
+                match crate::credentials::migrate_key_to_keychain(provider, val.as_deref()) {
+                    Ok(true) => log::info!("Migrated settings key '{}' to keychain", provider),
+                    Ok(false) => {} // nothing to migrate
+                    Err(e) => log::warn!("Failed to migrate settings key '{}': {}", provider, e),
+                }
+            }
+
+            // Custom OpenAI config -- extract api_key from JSON and store separately
+            let config_json: Option<String> = row.try_get("customOpenAIConfig").unwrap_or(None);
+            if let Some(ref json) = config_json {
+                if let Ok(cfg) = serde_json::from_str::<crate::summary::CustomOpenAIConfig>(json) {
+                    match crate::credentials::migrate_key_to_keychain(
+                        "custom-openai",
+                        cfg.api_key.as_deref(),
+                    ) {
+                        Ok(true) => log::info!("Migrated custom-openai key to keychain"),
+                        Ok(false) => {}
+                        Err(e) => log::warn!("Failed to migrate custom-openai key: {}", e),
+                    }
+                }
+            }
+        }
+
+        // --- Transcript-provider keys (transcript_settings table) ---
+        let transcript_row = sqlx::query(
+            r#"SELECT whisperApiKey, deepgramApiKey, elevenLabsApiKey,
+                      groqApiKey, openaiApiKey
+               FROM transcript_settings WHERE id = '1' LIMIT 1"#,
+        )
+        .fetch_optional(pool)
+        .await;
+
+        if let Ok(Some(row)) = transcript_row {
+            let pairs: &[(&str, &str)] = &[
+                ("transcript-localWhisper", "whisperApiKey"),
+                ("transcript-deepgram", "deepgramApiKey"),
+                ("transcript-elevenLabs", "elevenLabsApiKey"),
+                ("transcript-groq", "groqApiKey"),
+                ("transcript-openai", "openaiApiKey"),
+            ];
+            for (keychain_key, col) in pairs {
+                let val: Option<String> = row.try_get(col).unwrap_or(None);
+                match crate::credentials::migrate_key_to_keychain(keychain_key, val.as_deref()) {
+                    Ok(true) => log::info!("Migrated transcript key '{}' to keychain", keychain_key),
+                    Ok(false) => {}
+                    Err(e) => {
+                        log::warn!("Failed to migrate transcript key '{}': {}", keychain_key, e)
+                    }
+                }
+            }
+        }
     }
 
     pub fn pool(&self) -> &SqlitePool {

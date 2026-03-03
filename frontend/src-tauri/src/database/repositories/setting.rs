@@ -67,6 +67,7 @@ impl SettingsRepository {
         Ok(())
     }
 
+    /// Store an API key in the platform keychain (not in the database).
     pub async fn save_api_key(
         pool: &SqlitePool,
         provider: &str,
@@ -79,64 +80,64 @@ impl SettingsRepository {
             ));
         }
 
-        let api_key_column = match provider {
-            "openai" => "openaiApiKey",
-            "claude" => "anthropicApiKey",
-            "ollama" => "ollamaApiKey",
-            "groq" => "groqApiKey",
-            "openrouter" => "openRouterApiKey",
-            "builtin-ai" => return Ok(()), // No API key needed
+        if provider == "builtin-ai" {
+            return Ok(()); // No API key needed
+        }
+
+        // Validate provider
+        match provider {
+            "openai" | "claude" | "ollama" | "groq" | "openrouter" => {}
             _ => {
                 return Err(sqlx::Error::Protocol(
                     format!("Invalid provider: {}", provider).into(),
                 ))
             }
-        };
+        }
 
-        let query = format!(
+        // Store in keychain instead of database
+        crate::credentials::store_api_key(provider, api_key)
+            .map_err(|e| sqlx::Error::Protocol(e.into()))?;
+
+        // Ensure a settings row exists (for other columns like provider/model)
+        let _ = sqlx::query(
             r#"
-            INSERT INTO settings (id, provider, model, whisperModel, "{}")
-            VALUES ('1', 'openai', 'gpt-4o-2024-11-20', 'large-v3', $1)
-            ON CONFLICT(id) DO UPDATE SET
-                "{}" = $1
+            INSERT INTO settings (id, provider, model, whisperModel)
+            VALUES ('1', 'openai', 'gpt-4o-2024-11-20', 'large-v3')
+            ON CONFLICT(id) DO NOTHING
             "#,
-            api_key_column, api_key_column
-        );
-        sqlx::query(&query).bind(api_key).execute(pool).await?;
+        )
+        .execute(pool)
+        .await;
 
         Ok(())
     }
 
+    /// Retrieve an API key from the platform keychain (not from the database).
     pub async fn get_api_key(
-        pool: &SqlitePool,
+        _pool: &SqlitePool,
         provider: &str,
     ) -> std::result::Result<Option<String>, sqlx::Error> {
-        // Custom OpenAI uses JSON config - extract API key from there
+        // Custom OpenAI uses JSON config - extract API key from keychain
         if provider == "custom-openai" {
-            let config = Self::get_custom_openai_config(pool).await?;
-            return Ok(config.and_then(|c| c.api_key));
+            return crate::credentials::get_api_key("custom-openai")
+                .map_err(|e| sqlx::Error::Protocol(e.into()));
         }
 
-        let api_key_column = match provider {
-            "openai" => "openaiApiKey",
-            "ollama" => "ollamaApiKey",
-            "groq" => "groqApiKey",
-            "claude" => "anthropicApiKey",
-            "openrouter" => "openRouterApiKey",
-            "builtin-ai" => return Ok(None), // No API key needed
+        if provider == "builtin-ai" {
+            return Ok(None); // No API key needed
+        }
+
+        match provider {
+            "openai" | "claude" | "ollama" | "groq" | "openrouter" => {}
             _ => {
                 return Err(sqlx::Error::Protocol(
                     format!("Invalid provider: {}", provider).into(),
                 ))
             }
-        };
+        }
 
-        let query = format!(
-            "SELECT {} FROM settings WHERE id = '1' LIMIT 1",
-            api_key_column
-        );
-        let api_key = sqlx::query_scalar(&query).fetch_optional(pool).await?;
-        Ok(api_key)
+        crate::credentials::get_api_key(provider)
+            .map_err(|e| sqlx::Error::Protocol(e.into()))
     }
 
     pub async fn get_transcript_config(
@@ -172,103 +173,100 @@ impl SettingsRepository {
         Ok(())
     }
 
+    /// Store a transcript API key in the platform keychain.
     pub async fn save_transcript_api_key(
         pool: &SqlitePool,
         provider: &str,
         api_key: &str,
     ) -> std::result::Result<(), sqlx::Error> {
-        let api_key_column = match provider {
-            "localWhisper" => "whisperApiKey",
+        // Validate provider
+        match provider {
+            "localWhisper" | "deepgram" | "elevenLabs" | "groq" | "openai" => {}
             "parakeet" => return Ok(()), // Parakeet doesn't need an API key, return early
-            "deepgram" => "deepgramApiKey",
-            "elevenLabs" => "elevenLabsApiKey",
-            "groq" => "groqApiKey",
-            "openai" => "openaiApiKey",
             _ => {
                 return Err(sqlx::Error::Protocol(
                     format!("Invalid provider: {}", provider).into(),
                 ))
             }
-        };
+        }
 
-        let query = format!(
+        // Store in keychain with "transcript-" prefix
+        let keychain_key = format!("transcript-{}", provider);
+        crate::credentials::store_api_key(&keychain_key, api_key)
+            .map_err(|e| sqlx::Error::Protocol(e.into()))?;
+
+        // Ensure a transcript_settings row exists
+        let _ = sqlx::query(
             r#"
-            INSERT INTO transcript_settings (id, provider, model, "{}")
-            VALUES ('1', 'parakeet', '{}', $1)
-            ON CONFLICT(id) DO UPDATE SET
-                "{}" = $1
+            INSERT INTO transcript_settings (id, provider, model)
+            VALUES ('1', 'parakeet', $1)
+            ON CONFLICT(id) DO NOTHING
             "#,
-            api_key_column, crate::config::DEFAULT_PARAKEET_MODEL, api_key_column
-        );
-        sqlx::query(&query).bind(api_key).execute(pool).await?;
+        )
+        .bind(crate::config::DEFAULT_PARAKEET_MODEL)
+        .execute(pool)
+        .await;
 
         Ok(())
     }
 
+    /// Retrieve a transcript API key from the platform keychain.
     pub async fn get_transcript_api_key(
-        pool: &SqlitePool,
+        _pool: &SqlitePool,
         provider: &str,
     ) -> std::result::Result<Option<String>, sqlx::Error> {
-        let api_key_column = match provider {
-            "localWhisper" => "whisperApiKey",
+        match provider {
+            "localWhisper" | "deepgram" | "elevenLabs" | "groq" | "openai" => {}
             "parakeet" => return Ok(None), // Parakeet doesn't need an API key
-            "deepgram" => "deepgramApiKey",
-            "elevenLabs" => "elevenLabsApiKey",
-            "groq" => "groqApiKey",
-            "openai" => "openaiApiKey",
             _ => {
                 return Err(sqlx::Error::Protocol(
                     format!("Invalid provider: {}", provider).into(),
                 ))
             }
-        };
+        }
 
-        let query = format!(
-            "SELECT {} FROM transcript_settings WHERE id = '1' LIMIT 1",
-            api_key_column
-        );
-        let api_key = sqlx::query_scalar(&query).fetch_optional(pool).await?;
-        Ok(api_key)
+        let keychain_key = format!("transcript-{}", provider);
+        crate::credentials::get_api_key(&keychain_key)
+            .map_err(|e| sqlx::Error::Protocol(e.into()))
     }
 
+    /// Delete an API key from the platform keychain.
     pub async fn delete_api_key(
         pool: &SqlitePool,
         provider: &str,
     ) -> std::result::Result<(), sqlx::Error> {
-        // Custom OpenAI uses JSON config - clear the entire config
+        // Custom OpenAI: delete from keychain AND clear DB config
         if provider == "custom-openai" {
+            // Delete key from keychain (ignore if not found)
+            let _ = crate::credentials::delete_api_key("custom-openai");
+            // Also clear the JSON config from database
             sqlx::query("UPDATE settings SET customOpenAIConfig = NULL WHERE id = '1'")
                 .execute(pool)
                 .await?;
             return Ok(());
         }
 
-        let api_key_column = match provider {
-            "openai" => "openaiApiKey",
-            "ollama" => "ollamaApiKey",
-            "groq" => "groqApiKey",
-            "claude" => "anthropicApiKey",
-            "openrouter" => "openRouterApiKey",
-            "builtin-ai" => return Ok(()), // No API key needed
+        if provider == "builtin-ai" {
+            return Ok(()); // No API key needed
+        }
+
+        match provider {
+            "openai" | "claude" | "ollama" | "groq" | "openrouter" => {}
             _ => {
                 return Err(sqlx::Error::Protocol(
                     format!("Invalid provider: {}", provider).into(),
                 ))
             }
-        };
+        }
 
-        let query = format!(
-            "UPDATE settings SET {} = NULL WHERE id = '1'",
-            api_key_column
-        );
-        sqlx::query(&query).execute(pool).await?;
-
-        Ok(())
+        crate::credentials::delete_api_key(provider)
+            .map_err(|e| sqlx::Error::Protocol(e.into()))
     }
 
     // ===== CUSTOM OPENAI CONFIG METHODS =====
 
-    /// Gets the custom OpenAI configuration from JSON
+    /// Gets the custom OpenAI configuration from DB JSON, with the API key
+    /// retrieved from the platform keychain and merged back in.
     ///
     /// # Returns
     /// * `Ok(Some(CustomOpenAIConfig))` - Config exists and is valid JSON
@@ -296,10 +294,16 @@ impl SettingsRepository {
 
                 if let Some(json) = config_json {
                     // Parse JSON into CustomOpenAIConfig
-                    let config: CustomOpenAIConfig = serde_json::from_str(&json)
+                    let mut config: CustomOpenAIConfig = serde_json::from_str(&json)
                         .map_err(|e| sqlx::Error::Protocol(
                             format!("Invalid JSON in customOpenAIConfig: {}", e).into()
                         ))?;
+
+                    // Merge API key from keychain
+                    if config.api_key.is_none() {
+                        config.api_key = crate::credentials::get_api_key("custom-openai")
+                            .map_err(|e| sqlx::Error::Protocol(e.into()))?;
+                    }
 
                     Ok(Some(config))
                 } else {
@@ -310,7 +314,8 @@ impl SettingsRepository {
         }
     }
 
-    /// Saves the custom OpenAI configuration as JSON
+    /// Saves the custom OpenAI configuration as JSON, with the API key
+    /// stored separately in the platform keychain.
     ///
     /// # Arguments
     /// * `pool` - Database connection pool
@@ -323,8 +328,19 @@ impl SettingsRepository {
         pool: &SqlitePool,
         config: &CustomOpenAIConfig,
     ) -> std::result::Result<(), sqlx::Error> {
-        // Serialize config to JSON
-        let config_json = serde_json::to_string(config)
+        // Extract API key and store it in the keychain
+        if let Some(ref api_key) = config.api_key {
+            if !api_key.is_empty() {
+                crate::credentials::store_api_key("custom-openai", api_key)
+                    .map_err(|e| sqlx::Error::Protocol(e.into()))?;
+            }
+        }
+
+        // Save config to DB without the API key (it lives in the keychain now)
+        let mut config_for_db = config.clone();
+        config_for_db.api_key = None;
+
+        let config_json = serde_json::to_string(&config_for_db)
             .map_err(|e| sqlx::Error::Protocol(
                 format!("Failed to serialize config to JSON: {}", e).into()
             ))?;
