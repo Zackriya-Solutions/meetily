@@ -62,15 +62,21 @@ app.add_middleware(
 app.include_router(config_router)
 
 if DEPLOYMENT_MODE == "cloud":
-    # Cloud mode: auth, usage, device, template routes only
+    # Cloud mode: auth, usage, device, template routes + mobile cloud routes
     from auth_routes import router as auth_router
     from usage_routes import router as usage_router
+    from cloud_meetings_routes import router as cloud_meetings_router
+    from cloud_transcription_routes import router as cloud_transcription_router
+    from cloud_summarization_routes import router as cloud_summarization_router
     app.include_router(auth_router)
     app.include_router(usage_router)
+    app.include_router(cloud_meetings_router)
+    app.include_router(cloud_transcription_router)
+    app.include_router(cloud_summarization_router)
     app.include_router(device_router)
     app.include_router(template_router)
     app.include_router(release_router)
-    logger.info("Running in CLOUD mode — auth, usage, device, template, release routes active")
+    logger.info("Running in CLOUD mode — auth, usage, meetings, transcription, summarization, device, template, release routes active")
 else:
     # Local mode: meeting/transcript/summary routes only (default)
     app.include_router(template_router)

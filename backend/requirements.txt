@@ -11,3 +11,5 @@ ollama==0.5.2
 motor==3.6.0
 argon2-cffi==23.1.0
 PyJWT==2.9.0
+deepgram-sdk==3.9.0
+httpx==0.28.1

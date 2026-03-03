@@ -60,6 +60,20 @@ def get_usage_summaries_collection():
     return client[db_name]["usage_summaries"]
 
 
+def get_meetings_collection():
+    """Get the meetings collection for cloud-stored meetings (mobile)."""
+    client = get_mongo_client()
+    db_name = os.getenv("MONGODB_DATABASE", "iqcapture")
+    return client[db_name]["meetings"]
+
+
+def get_transcription_jobs_collection():
+    """Get the transcription_jobs collection for cloud transcription tracking."""
+    client = get_mongo_client()
+    db_name = os.getenv("MONGODB_DATABASE", "iqcapture")
+    return client[db_name]["transcription_jobs"]
+
+
 async def check_mongo_connection() -> bool:
     """Check if MongoDB is reachable by sending a ping.
 
