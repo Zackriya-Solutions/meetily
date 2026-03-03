@@ -1,0 +1,16 @@
+# Diarization Service Dependencies
+
+fastapi>=0.115.0
+uvicorn[standard]>=0.34.0
+python-multipart>=0.0.9
+httpx>=0.27.0
+
+# PyTorch < 2.6 required (2.6+ has weights_only=True default breaking pyannote)
+torch<2.6
+torchaudio<2.6
+
+# Pin huggingface_hub to version supporting use_auth_token (pre-0.23)
+huggingface_hub>=0.20.0,<0.23.0
+
+# Pyannote for speaker diarization
+pyannote.audio>=3.1.0,<4.0
