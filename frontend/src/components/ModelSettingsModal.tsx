@@ -1179,7 +1179,7 @@ export function ModelSettingsModal({
                   </Button>
                 </div>
                 {ollamaEndpointChanged && !error && (
-                  <Alert className="mt-3 border-yellow-500 bg-yellow-50">
+                  <Alert className="mt-3 border-yellow-500 dark:border-yellow-700 bg-yellow-50 dark:bg-yellow-900/20">
                     <AlertDescription className="text-yellow-800">
                       Endpoint changed. Please click "Fetch Models" to load models from the new endpoint before saving.
                     </AlertDescription>
@@ -1275,7 +1275,7 @@ export function ModelSettingsModal({
 
                         {/* Show progress for gemma3:1b download */}
                         {isDownloading('gemma3:1b') && getProgress('gemma3:1b') !== undefined && (
-                          <div className="bg-white rounded-md border p-3">
+                          <div className="bg-white dark:bg-gray-900 rounded-md border border-gray-200 dark:border-gray-700 p-3">
                             <div className="flex items-center justify-between mb-2">
                               <span className="text-sm font-medium text-blue-600">Downloading gemma3:1b</span>
                               <span className="text-sm font-semibold text-blue-600">
@@ -1333,7 +1333,7 @@ export function ModelSettingsModal({
 
                           {/* Progress bar for downloading models */}
                           {modelIsDownloading && progress !== undefined && (
-                            <div className="mt-3 pt-3 border-t border-gray-200">
+                            <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
                               <div className="flex items-center justify-between mb-2">
                                 <span className="text-sm font-medium text-blue-600">Downloading...</span>
                                 <span className="text-sm font-semibold text-blue-600">{Math.round(progress)}%</span>

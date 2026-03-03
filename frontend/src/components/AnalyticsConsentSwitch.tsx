@@ -156,22 +156,22 @@ export default function AnalyticsConsentSwitch() {
     <>
       <div className="space-y-4">
         <div>
-          <h3 className="text-base font-semibold text-gray-800 mb-2">Usage Analytics</h3>
-          <p className="text-sm text-gray-600 mb-4">
+          <h3 className="text-base font-semibold text-gray-800 dark:text-gray-200 mb-2">Usage Analytics</h3>
+          <p className="text-sm text-gray-600 dark:text-gray-300 mb-4">
             Help us improve Meetily by sharing anonymous usage data. No personal content is collected—everything stays on your device.
           </p>
         </div>
 
-        <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-200">
+        <div className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800">
           <div>
-            <h4 className="font-semibold text-gray-800">Enable Analytics</h4>
-            <p className="text-sm text-gray-600">
+            <h4 className="font-semibold text-gray-800 dark:text-gray-200">Enable Analytics</h4>
+            <p className="text-sm text-gray-600 dark:text-gray-300">
               {isProcessing ? 'Updating...' : 'Anonymous usage patterns only'}
             </p>
           </div>
           <div className="flex items-center gap-2 ml-4">
             {isProcessing && (
-              <Loader2 className="w-4 h-4 animate-spin text-gray-500" />
+              <Loader2 className="w-4 h-4 animate-spin text-gray-500 dark:text-gray-400" />
             )}
             <Switch
               checked={isAnalyticsOptedIn}
@@ -183,15 +183,15 @@ export default function AnalyticsConsentSwitch() {
 
         {/* User ID Display */}
         {isAnalyticsOptedIn && userId && (
-          <div className="p-4 border rounded-lg bg-gray-50">
+          <div className="p-4 border border-gray-200 dark:border-gray-800 rounded-lg bg-gray-50 dark:bg-gray-900">
             <div className="flex items-start justify-between gap-4">
               <div className="flex-1 min-w-0">
-                <div className="font-medium text-gray-800 mb-1">Your User ID</div>
-                <p className="text-xs text-gray-600 mb-2">
+                <div className="font-medium text-gray-800 dark:text-gray-200 mb-1">Your User ID</div>
+                <p className="text-xs text-gray-600 dark:text-gray-300 mb-2">
                   Share this ID when reporting issues to help us investigate your issue logs
                 </p>
                 <div className="flex items-center gap-2">
-                  <code className="text-xs text-gray-700 bg-white px-2 py-1 rounded border border-gray-300 font-mono flex-1 truncate">
+                  <code className="text-xs text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-800 px-2 py-1 rounded border border-gray-300 dark:border-gray-700 font-mono flex-1 truncate">
                     {userId}
                   </code>
                   <Button
@@ -219,15 +219,15 @@ export default function AnalyticsConsentSwitch() {
           </div>
         )}
 
-        <div className="flex items-start gap-2 p-2 bg-blue-50 rounded border border-blue-200">
+        <div className="flex items-start gap-2 p-2 bg-blue-50 dark:bg-blue-900/20 rounded border border-blue-200 dark:border-blue-900/50">
           <Info className="w-4 h-4 text-blue-600 mt-0.5 flex-shrink-0" />
-          <div className="text-xs text-blue-700">
+          <div className="text-xs text-blue-700 dark:text-blue-300">
             <p className="mb-1">
               Your meetings, transcripts, and recordings remain completely private and local.
             </p>
             <button
               onClick={handlePrivacyPolicyClick}
-              className="text-blue-600 hover:text-blue-800 underline hover:no-underline"
+              className="text-blue-600 dark:text-blue-300 hover:text-blue-800 dark:hover:text-blue-200 underline hover:no-underline"
             >
               View Privacy Policy
             </button>
