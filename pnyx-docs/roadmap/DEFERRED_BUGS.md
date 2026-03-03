@@ -307,3 +307,51 @@ Real meeting rule refinement:
 
 3. E2E test:
 - Event create/update/decline in Google Calendar and verify reminder recipients/timing.
+
+## BUG-ASK-AI-001: Ask AI context handling and prompting issues
+
+- Status: Deferred
+- Priority: High
+- Reported: 2026-03-01
+- Area: AI Features / Context Awareness / Prompt Engineering
+
+### Symptoms
+
+- "Ask AI" feature is not working as expected.
+- Context from previous meetings is not being correctly added or utilized.
+- Responses often lack the necessary depth or relevance due to insufficient context.
+
+### Impact
+
+- Users cannot effectively query their meeting history.
+- Reduced value of the "Ask AI" feature for cross-meeting insights.
+
+### Current Understanding
+
+- The current system prompt does not effectively incorporate or leverage context from previous meetings.
+- The retrieval mechanism for previous meeting context may be flawed or limited.
+
+### Deferred Fix Plan (When Resumed)
+
+1. Investigate the context retrieval logic to ensure relevant previous meetings are fetched.
+2. Refine the system prompt to better instruct the AI on how to use the provided context.
+3. Implement a more robust context window management strategy to handle larger amounts of historical data.
+4. Add evaluation cases to verify "Ask AI" performance with multi-meeting context.
+
+## TASK-SETTINGS-CLEANUP-001: Remove unnecessary tabs from Settings
+
+- Status: Deferred
+- Priority: Medium
+- Reported: 2026-03-01
+- Area: Frontend / UX / Settings
+
+### Description
+
+- The Settings page currently contains tabs that are not needed for the current version of the application.
+- These unused tabs clutter the UI and may confuse users.
+
+### Action Items
+
+1. Identify the specific tabs in the Settings component that are obsolete or not functional.
+2. Remove the corresponding UI elements and associated routing/logic.
+3. Verify that the remaining settings tabs function correctly.
