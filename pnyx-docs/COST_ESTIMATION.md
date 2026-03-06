@@ -1,163 +1,101 @@
 # Cost Estimation: Meeting Co-Pilot (Production Audit)
 
-**Date:** Feb 13, 2026
-**Status:** Estimates based on **Audit of Actual Codebase** & Production Pricing.
+**Date:** March 06, 2026
+**Status:** Estimates based on **Audit of Actual Codebase**, API Pricing, & GCP Architecture.
 
 ---
 
 ## 1. Executive Summary
 
-Our current architecture is **highly cost-optimized** by leveraging local embeddings and Google's aggressive pricing for Gemini models. The primary costs are **Infrastructure (GCP)** and **Transcription (Deepgram/Groq)**, not LLM tokens.
+Our current architecture is built for **cost-efficiency and modularity**, leveraging Google's aggressive pricing for Gemini models as the core. The codebase supports multiple fallbacks (OpenAI, Anthropic, Groq, local models) providing flexibility of cost versus output quality.
 
-*   **Cost Per 1-Hour Meeting:** **~$0.04** (Standard) to **$0.30** (Premium Diarization), with **~$0.001–$0.005** additional optional spend for audio-enhanced notes generation.
-*   **Monthly Infrastructure Cost:** **~$100** (Fixed GCP Compute + DB).
-*   **Hidden Win:** Vector embeddings are running locally (Free), avoiding OpenAI embedding costs entirely.
+The primary expenses derive from **Infrastructure (GCP)** and **Audio Processing (Deepgram/Groq)**, rather than core LLM text token generation.
+
+*   **Cost Per 1-Hour Meeting (Base):** **~$0.04** (Live Transcript) to **$0.30** (Uploaded Audio Diarization).
+*   **Audio Notes Generation:** **~$0.001–$0.010** additional spend for multimodal ingestion.
+*   **Infrastructure Cost (Current Fixed):** **~$94.00 / mo** (GCP Compute, Cloud Run, DB).
+*   **Infrastructure Cost (Proposed Serverless Migration):** **~$35.00 - $60.00 / mo** (Shifting to Cloud Tasks + Memorystore).
+*   **Hidden Win:** Vector embeddings run locally (Free), avoiding API embedding costs entirely.
 
 ---
 
-## 2. Unit Economics (Per Hour of Audio)
+## 2. API & Model Economics (Unit Costs)
 
 ### A. Speech-to-Text (STT) & Diarization
-*Code Audit: Uses Groq (Whisper v3) for streaming, Deepgram (Nova-2) for uploads.*
+*Code Audit: The application utilizes Groq for fast live streaming and Deepgram for processing audio files with speaker diarization.*
 
 | Service | Model | Cost / Hour | Role in Codebase |
 | :--- | :--- | :--- | :--- |
-| **Groq** | Whisper Large v3 | **$0.036** | **Live Streaming.** Insanely fast, cheap text. |
-| **Deepgram** | Nova-2 | **$0.260** | **File Uploads.** Used for speaker diarization. |
-| **Total (Hybrid)** | | **~$0.300** | If using "Double Pay" method (Uploads). |
+| **Groq API** | Whisper Large v3 | **$0.036** | **Live Streaming (`audio_pipeline.py`).** Ultra-low latency, cheap text. |
+| **Deepgram** | Nova-2 | **$0.260** | **File Uploads/Diarization (`diarization.py`).** Used for offline speaker separation and high-accuracy processing. |
 
-> **Optimization:** Live meetings only cost $0.04/hr. Uploads cost ~$0.30/hr.
+> **Optimization:** Live meetings only cost $0.04/hr. Relying heavily on Deepgram file uploads post-meeting increases STT costs to ~$0.30/hr.
 
-### B. LLM Intelligence (Summaries & Chat)
-*Code Audit: Defaults to `gemini-2.5-pro`.*
+### B. LLM Intelligence (Summaries, Chat, Logic)
+*Code Audit: Gemini is the default, but `transcript.py` and `chat.py` securely support OpenAI, Anthropic, and Groq fallback models via environment variables.*
 
-| Task | Model Used | Cost / Meeting | Notes |
+| Task / Provider | Model Used | Estimated Cost | Notes |
 | :--- | :--- | :--- | :--- |
-| **Summarization** | **Gemini 2.5 Flash** | **~$0.001** | effectively free on Google's tier. |
-| **Chat / Q&A** | **Gemini 2.5 Flash** | **~$0.000** | Ultra-low cost per query. |
-| **Alternative** | GPT-4o-mini | $0.002 | Supported fallback in code. |
+| **Gemini (Default)** | Gemini 2.5 Flash / Pro | **~$0.001 - $0.005** / meeting | Almost free on Google's current tier. Handles Summarization, Chat, and initial Multimodal tasks. |
+| **OpenAI (Optional)** | GPT-4o / GPT-4o-mini | **~$0.02 - $0.15** / meeting | Configurable in UI. Higher cost, higher fidelity reasoning fallback. |
+| **Anthropic (Optional)**| Claude 3.5 Sonnet | **~$0.03 - $0.10** / meeting | Configurable in UI. Excellent for complex summarization templates. |
+| **Groq (Optional)** | Llama 3 (Text) | **~$0.005** / meeting | Extremely fast logic processing, very low token cost. |
 
-### B2. Audio-Enhanced Notes (Gemini Multimodal)
-*Assumption: Meeting notes generation can include transcript + meeting audio.*
+### C. Web Search & Grounding (RAG)
+*Code Audit: Grounded chat answers via RAG / RAG-Web.*
 
-| Mode | Extra Cost / 1-hour Meeting | Notes |
+| Provider | Cost | Application |
 | :--- | :--- | :--- |
-| **Transcript-only** | **Baseline** | Existing behavior, no extra audio inference path. |
-| **Compressed audio + transcript (Recommended)** | **~$0.001–$0.005** | Best quality/latency tradeoff for notes generation. |
-| **WAV + transcript** | **~$0.002–$0.010** | Similar quality, but higher transfer latency and higher processing overhead. |
-
-> **Recommendation:** Keep `recording.wav` as archival source, but use a compressed derivative (for example `recording.notes.opus`) for model ingestion by default.
-
-### C. Web Search (RAG)
-*Assumption: Production Usage (Paid Tiers).*
-
-| Provider | Cost | Notes |
-| :--- | :--- | :--- |
-| **Brave Search** | **$3.00–$5.00 / 1k** | **Recommended.** Pricing appears inconsistent between Brave's public page and dashboard; confirm actual rate in the Brave API dashboard before selecting. |
-| **Gemini Grounding (Google Search)** | **~$35.00 / 1k grounded prompts** | **If using Gemini Grounding** for search. Billed per grounded prompt; confirm latest pricing before rollout. |
-| **Tavily (Pro)** | $29.00 / mo | 2,500 searches. Good for complex agents. |
+| **Brave Search API** | **$3.00 / 1,000 queries** | General web scraping and fact-checking (`search_web` function). |
+| **Gemini Grounding** | **~$35.00 / 1,000 queries**| Billed per grounded prompt if using native Google Grounding (confirm latest API pricing). |
 
 ---
 
-## 3. Feature-Wise Token Consumption (Audit)
+## 3. Infrastructure Costs (Current vs. Proposed Migration)
 
-We analyzed the codebase to calculate exact token loads per feature.
-*Assumption: 1 hour audio = ~9,000 words transcript.*
+The application currently relies on a traditional "Long-Running Worker" architecture (Compute Engine running Celery). We have a planned migration in `celery_to_gcp_migration.md` to shift to a "Serverless Trigger" model to cut idle costs.
 
-### 1. Generating Summary (`summarization.py`)
-*   **Logic:** Transcript is split into 5,000 char chunks (~1,250 tokens) with 1,000 char overlap.
-*   **Chunks:** ~10 chunks for a 1-hour meeting.
-*   **Per Chunk Cost:**
-    *   Input: 1,250 (Text) + 350 (System Prompt) = **1,600 Tokens**
-    *   Output: ~500 Tokens (JSON Schema)
-*   **Total Per Meeting:** ~16,000 Input / ~5,000 Output.
-*   **Cost (Gemini 2.5 Flash):** **<$0.002**
-
-### 2. Chat / Q&A (`chat.py`)
-*   **Logic:** RAG retrieves context + Web Search results + Chat History.
-*   **Input Load:**
-    *   Meeting Context: Up to 7,500 tokens (Truncated).
-    *   RAG Results: ~2,500 tokens.
-    *   History: ~1,000 tokens.
-    *   **Total Input:** **~11,000 Tokens per query.**
-*   **Output Load:** ~300 Tokens (Answer).
-*   **Cost (Gemini 2.5 Flash):** **~$0.0001 per query.** (Negligible)
-
-### 3. Web Research (`search_web` function)
-*   **Logic:** Crawls 4 web pages, truncates each to 2,000 chars (~500 tokens).
-*   **Input Load:** 4 pages * 500 tokens = **2,000 Tokens**.
-*   **Output Load:** ~300 Tokens (Summary).
-*   **Cost:** Negligible token cost. Main cost is the **Search API call ($0.003)**.
-
----
-
-## 4. Infrastructure Costs (GCP Production Stack)
-*Assumption: ~150 concurrent users. 24/7 Availability.*
+### A. Current GCP Production Stack (Fixed Cost)
+*Assumption: ~150 concurrent users. 24/7 Availability on traditional servers.*
 
 | Component | Service | Spec | Cost / Month |
 | :--- | :--- | :--- | :--- |
-| **Backend** | **GCP Compute Engine** | **e2-standard-2** (2 vCPU, 8GB RAM) | **$48.91** |
+| **Backend / Celery Worker** | **GCP Compute Engine** | **e2-standard-2** (2 vCPU, 8GB RAM) | **$48.91** |
 | **Frontend** | **GCP Cloud Run** | Auto-scaling container | **~$15.00** |
 | **Database** | **Neon Postgres (Pro)** | 10GB Storage + Compute | **$19.00** |
 | **Storage** | **GCS (Standard)** | 100GB Audio (Opus) | **$2.60** |
 | **Disk** | **Persistent Disk** | 50GB SSD (Backend OS) | **$8.50** |
-| **Total** | | | **~$94.00 / mo** |
+| **Total (Current)** | | | **~$94.00 / mo** |
+
+### B. Proposed GCP Serverless Migration (Variable Cost)
+*Goal: Replace Celery/Redis Compute instances with native, auto-scaling GCP services.*
+
+| Current Component | New GCP Native Service | Estimated Cost / Month | Cost Benefit Analysis |
+| :--- | :--- | :--- | :--- |
+| **Broker/Store (Redis)** | **Cloud Memorystore** (Basic, 1GB) | **~$35.00** | Slightly higher base cost than self-hosting, but ZERO container maintenance/downtime risk. |
+| **Task Queue (Celery)** | **Cloud Tasks** | **~$0.40 / million ops** | **Massive Savings.** Pay-per-use, completely eliminates the need for an always-on VM for background polling. |
+| **Execution (Worker)** | **Cloud Run (Backend Worker)** | **~$15.00** (Variable) | Scale-to-zero capability. You only pay for CPU/RAM exactly when audio is uploading, summarizing, or diarizing. |
+| **Total (Post-Migration)** | | **~$50.00 - $70.00 / mo** | Eliminates fixed Compute/Disk ($57). Memorystore ($35) becomes the main fixed cost. Overall potential savings of **20–40%**, with infinitely better burst scaling. |
 
 ---
 
-## 5. Total Cost Per Meeting Scenario
+## 4. Total Cost Per Meeting Scenarios
 
-| Scenario | Stack | Cost |
+Evaluating total spend based on meeting type (1-hour length):
+
+| Scenario | Service Stack Utilized | Estimated Cost |
 | :--- | :--- | :--- |
-| **Live Meeting (1hr)** | Groq + Gemini Flash + Local Embeddings | **$0.04** |
-| **Uploaded File (1hr)** | Deepgram + Gemini Flash + Local Embeddings | **$0.27** |
-| **Audio-Enhanced Notes Add-on (1hr)** | Gemini Flash multimodal (`compressed + transcript`) | **+$0.001–$0.005** |
-
-### Groq Parallel Baseline (Feature-Flagged)
-
-- **Flag:** `GROQ_PARALLEL_WITH_DIARIZATION_ENABLED`
-- **Default:** `false` (sequential Groq + diarization to protect free-tier ASPH limits)
-- **Enable when:** Paid Groq tier (or higher quota) is active.
-- **Tradeoff:** Better wall-clock latency, but much higher burst quota usage and increased `429 rate_limit_exceeded` risk on free/on-demand limits.
+| **Live Listening Only** | Groq (STT) + Gemini Flash (Summary) + Local Embeddings | **~$0.04** |
+| **File Upload (Diarization)** | Deepgram (STT) + Gemini Flash (Summary) + Local Embeddings | **~$0.27** |
+| **Audio-Enhanced Notes** | Gemini Multimodal API (`compressed audio + transcript`) | **+$0.001–$0.010** |
+| **Active AI Participant** | Live STT ($0.04) + ElevenLabs TTS (Assuming 5 mins speech = $0.15) + Gemini Reasoning | **~$0.20** |
+| **Premium API Config**| Deepgram Upload ($0.26) + OpenAI GPT-4o Summary ($0.10) | **~$0.36** |
 
 ---
 
-## 6. Save-Time Optimization Impact (Option 1)
+## 5. Action Plan & Cost Monitoring
 
-### 3-hour Meeting Finalization Time
-
-| Flow | Save-Time Overhead |
-| :--- | :--- |
-| **Compress after Save (current heavy path)** | **~8 to 25 min** |
-| **Parallel encode during recording (recommended)** | **~10 to 60 sec** |
-
-**Expected save-time reduction:** ~95% to 99%.
-
----
-
-## 7. Action Plan for Further Savings
-
-1.  **Switch Upload Pipeline:** Currently, uploads might be using *both* Groq and Deepgram (Double Tax). Ensure `file_processing.py` uses Deepgram exclusively for uploads to save the $0.04 Groq fee per upload.
-2.  **Audio Compression (Today Plan):** Keep PCM transcription pipeline unchanged, but run parallel encoding during recording and store compressed archival audio (`recording.opus`) in GCP as primary artifact.
-3.  **Brave Search:** Implement Brave Search API integration to keep RAG costs low as search volume scales.
-4.  **Pyannote (Future Optimization):** If Deepgram becomes too expensive at scale ($0.26/hr), implement a self-hosted Pyannote service (on a cheap GPU) + Groq. This would cut the upload cost from $0.27/hr to ~$0.14/hr (50% savings), though it adds operational complexity.
-5.  **Groq Parallel Mode (Paid Only):** Keep sequential mode as default for free-tier stability; enable `GROQ_PARALLEL_WITH_DIARIZATION_ENABLED=true` only when ASPH limits and budget can absorb parallel burst traffic.
-
----
-
-## 8. Security Addendum (Audio Encryption)
-
-1. **Minimum for today:** Enable CMEK-backed encryption for GCP recording objects + strict KMS IAM.
-2. **Preferred next hardening:** Add application-level envelope encryption for recordings with decrypt-on-arrival backend streaming.
-3. **Access control:** Route sensitive audio retrieval through RBAC-protected endpoints rather than broad signed URL usage.
-
-
-<!-- 
-1). use of celery for better retries in upload audio
-2). calender integration
-3). share meeting to calender users
-4). audio encryption
-5). better prompts
-6). user persona / journey 
-
--->
+1. **Execute Serverless Migration:** Fast-track the `celery_to_gcp_migration.md` plan. Shifting the backend background tasks to **Cloud Tasks + Cloud Run** will drastically reduce idle compute waste and handle sudden influxes of large meeting uploads smoothly.
+2. **Audio Compression:** Continue storing compressed archival audio (`recording.opus`) in GCP GCS as the primary artifact to keep the $2.60/100GB storage costs negligible.
+3. **TTS Monitoring (ElevenLabs):** The AI Participant feature introduces the highest variable cost (ElevenLabs). Consider implementing a "budget limit" or switching to a cheaper TTS provider (e.g., Google TTS, OpenAI TTS) if the AI participant feature usage spikes.
+4. **API Key Fallback Management:** With the recent update prioritizing `.env` keys over Database keys for Gemini, ensure production `.env` files are tightly managed using Google Secret Manager to prevent accidental quota bursts from compromised keys.
