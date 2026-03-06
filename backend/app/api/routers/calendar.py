@@ -12,6 +12,7 @@ try:
         CalendarConnectRequest,
         CalendarDisconnectRequest,
         CalendarReminderEmailRequest,
+        SyncOAuthRequest,
     )
     from ...schemas.user import User
     from ...services.calendar.google_oauth import GoogleCalendarOAuthService
@@ -24,6 +25,7 @@ except (ImportError, ValueError):
         CalendarConnectRequest,
         CalendarDisconnectRequest,
         CalendarReminderEmailRequest,
+        SyncOAuthRequest,
     )
     from schemas.user import User
     from services.calendar.google_oauth import GoogleCalendarOAuthService
@@ -95,6 +97,7 @@ async def disconnect_calendar(
 @router.post("/reminders/send")
 async def send_calendar_reminder_email(
     request: CalendarReminderEmailRequest,
+        SyncOAuthRequest,
     current_user: User = Depends(get_current_user),
 ):
     settings = await db.get_calendar_automation_settings(current_user.email)
@@ -155,3 +158,31 @@ async def google_calendar_callback(
         logger.error(f"Google OAuth callback failed: {e}")
         params = urlencode({"calendar": "error", "reason": "oauth_failed"})
         return RedirectResponse(f"{frontend_settings_url}?{params}")
+
+from datetime import datetime
+
+@router.post("/sync-oauth")
+async def sync_oauth_tokens(
+    request: SyncOAuthRequest,
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        expires_at = None
+        if request.token_expires_at:
+            # Handle standard ISO formats
+            expires_string = request.token_expires_at.replace("Z", "+00:00")
+            expires_at = datetime.fromisoformat(expires_string).replace(tzinfo=None)
+            
+        await db.upsert_calendar_integration(
+            user_email=current_user.email,
+            provider="google",
+            external_account_email=request.external_account_email,
+            scopes=request.scopes,
+            access_token=request.access_token,
+            refresh_token=request.refresh_token or "", # Fallback if empty
+            token_expires_at=expires_at,
+        )
+        return {"status": "success"}
+    except Exception as e:
+        logger.error(f"Failed to sync oauth tokens: {e}")
+        raise HTTPException(status_code=500, detail="Failed to sync tokens")

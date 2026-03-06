@@ -29,6 +29,7 @@ try:
         calendar,
         admin,
         feedback,
+        sharing,
     )
 except ImportError:
     from api.routers import (
@@ -41,6 +42,7 @@ except ImportError:
         calendar,
         admin,
         feedback,
+        sharing,
     )
 
 app = FastAPI(
@@ -76,6 +78,7 @@ app.include_router(settings.router, tags=["Settings"])
 app.include_router(calendar.router, tags=["Calendar"])
 app.include_router(admin.router, tags=["Admin"])
 app.include_router(feedback.router, prefix="/feedback", tags=["Feedback"])
+app.include_router(sharing.router)
 
 
 @app.on_event("startup")

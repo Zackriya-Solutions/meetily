@@ -63,3 +63,10 @@ class RefineNotesRequest(BaseModel):
     user_instruction: str
     model: str = "gemini"
     model_name: str = "gemini-3-pro-preview"
+
+
+class ShareNotesRequest(BaseModel):
+    meeting_id: str
+    recipient_emails: Optional[List[str]] = None  # None = all accepted attendees
+    share_summary: bool = True
+    share_transcript: bool = False

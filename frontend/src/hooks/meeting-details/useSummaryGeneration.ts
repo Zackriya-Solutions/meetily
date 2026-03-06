@@ -166,6 +166,12 @@ export function useSummaryGeneration({
               modelConfig.model,
               true
             );
+
+            if (isRegeneration && typeof window !== 'undefined') {
+              const evt = new CustomEvent('show-share-dialog', { detail: { meetingId: meeting.id }});
+              window.dispatchEvent(evt);
+            }
+
             return;
           }
 
@@ -262,6 +268,11 @@ export function useSummaryGeneration({
 
           if (meetingName && onMeetingUpdated) {
             await onMeetingUpdated();
+          }
+
+          if (isRegeneration && typeof window !== 'undefined') {
+            const evt = new CustomEvent('show-share-dialog', { detail: { meetingId: meeting.id }});
+            window.dispatchEvent(evt);
           }
         }
       });

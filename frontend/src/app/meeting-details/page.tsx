@@ -27,7 +27,7 @@ interface NotesGenerationInfo {
 function MeetingDetailsContent() {
   const searchParams = useSearchParams();
   const meetingId = searchParams.get('id');
-  const { setCurrentMeeting, refetchMeetings, serverAddress } = useSidebar();
+  const { setCurrentMeeting, refetchMeetings, serverAddress, refetchSharedNotes } = useSidebar();
   const router = useRouter();
   const [meetingDetails, setMeetingDetails] = useState<MeetingDetailsResponse | null>(null);
   const [meetingSummary, setMeetingSummary] = useState<Summary | null>(null);
@@ -93,34 +93,78 @@ function MeetingDetailsContent() {
   }, [hasCheckedAutoGen, serverAddress]);
 
   // Extract fetchMeetingDetails so it can be called from child components
-  const fetchMeetingDetails = useCallback(async () => {
+    const fetchMeetingDetails = useCallback(async () => {
     if (!meetingId || meetingId === 'intro-call' || !serverAddress) {
       return;
     }
 
     try {
-      const response = await authFetch(`/get-meeting/${meetingId}`);
+      const isShared = searchParams.get('shared') === 'true';
+      const url = isShared ? `/api/sharing/${meetingId}` : `/get-meeting/${meetingId}`;
+      const response = await authFetch(url);
+      
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
+      
       const data = await response.json();
-      console.log('Meeting details:', data);
-      setMeetingDetails(data);
-      setCurrentMeeting({ id: data.id, title: data.title });
+      
+      if (isShared) {
+        // Shared response format: { meeting: {...}, summary: {...}, transcripts: [...] }
+        if (data.meeting) {
+          data.meeting.transcripts = data.transcripts || [];
+          setMeetingDetails(data.meeting);
+          setCurrentMeeting({ id: data.meeting.id, title: data.meeting.title });
+        }
+        
+        // Also trigger the "viewed" endpoint in the background
+        authFetch(`/api/sharing/${meetingId}/viewed`, { method: 'PATCH' })
+          .then(() => {
+            if (refetchSharedNotes) refetchSharedNotes();
+          })
+          .catch(err => console.error("Failed to mark shared note viewed", err));
+          
+      } else {
+        // Standard response format
+        console.log('Meeting details:', data);
+        setMeetingDetails(data);
+        setCurrentMeeting({ id: data.id, title: data.title });
+      }
     } catch (error) {
       console.error('Error fetching meeting details:', error);
       setError("Failed to load meeting details");
     }
-  }, [meetingId, setCurrentMeeting, serverAddress]);
+  }, [meetingId, setCurrentMeeting, serverAddress, searchParams]);
 
-  const fetchMeetingSummary = useCallback(async () => {
+    const fetchMeetingSummary = useCallback(async () => {
     if (!meetingId || meetingId === 'intro-call' || !serverAddress) return;
     try {
-      const response = await authFetch(`/get-summary/${meetingId}`);
+      const isShared = searchParams.get('shared') === 'true';
+      const url = isShared ? `/api/sharing/${meetingId}` : `/get-summary/${meetingId}`;
+      const response = await authFetch(url);
+      
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
-      const summary = await response.json();
+      const rawResponse = await response.json();
+      
+      // Extract summary based on endpoint
+      let summary = rawResponse;
+      if (isShared) {
+        // If shared, the summary is embedded, but it might not be formatted exactly like `/get-summary`
+        // we'll try to map it to the expected structure
+        if (!rawResponse.summary) {
+           setMeetingSummary(null);
+           return;
+        }
+        // Transform shared summary data into what the code below expects
+        summary = {
+           status: "completed",
+           data: rawResponse.summary,
+           notes_generation: null
+        };
+      }
+      
       setNotesGenerationInfo(summary.notes_generation || null);
       console.log('🔍 FETCH SUMMARY: Received data:', summary);
 
@@ -199,7 +243,7 @@ function MeetingDetailsContent() {
       setMeetingSummary(null);
       setNotesGenerationInfo(null);
     }
-  }, [meetingId, serverAddress]);
+  }, [meetingId, serverAddress, searchParams]);
 
   const handleMeetingUpdated = useCallback(async () => {
     await fetchMeetingDetails();

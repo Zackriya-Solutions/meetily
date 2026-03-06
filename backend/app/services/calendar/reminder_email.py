@@ -135,43 +135,82 @@ class CalendarReminderEmailService:
         self,
         host_email: str,
         meeting_title: str,
-        notes_markdown: str,
-        meeting_link: Optional[str] = None,
+        tldr: str = "",
+        action_items: Optional[List[str]] = None,
+        app_notes_url: str = "",
     ) -> Dict[str, str]:
         safe_title = html.escape(meeting_title)
         safe_host_email = html.escape(host_email)
-        safe_meeting_link = html.escape(meeting_link or "", quote=True)
-        notes_excerpt = (notes_markdown or "").strip()
-        if len(notes_excerpt) > 3500:
-            notes_excerpt = notes_excerpt[:3500].rstrip() + "\n\n[...truncated]"
+        safe_app_url = html.escape(app_notes_url or "", quote=True)
+        safe_tldr = html.escape(tldr or "Your meeting notes are ready.")
+        items = action_items or []
 
         subject = f"Recap: {meeting_title}"
+
+        # --- Plain-text fallback ---
         text_lines = [
             f"Hi {host_email},",
             "",
-            f'Here are the meeting notes for "{meeting_title}".',
+            f'Your notes for "{meeting_title}" are ready.',
             "",
-            notes_excerpt,
+            f"TL;DR: {tldr or 'Your meeting notes are ready.'}",
         ]
-        if meeting_link:
-            text_lines.extend(["", f"Meeting Link: {meeting_link}"])
+        if items:
+            text_lines.extend(["", "Top Action Items:"])
+            for idx, item in enumerate(items[:3], 1):
+                text_lines.append(f"  {idx}. {item}")
+        if app_notes_url:
+            text_lines.extend([
+                "",
+                f"View full meeting notes & transcript: {app_notes_url}",
+            ])
         text_body = "\n".join(text_lines)
 
-        join_link_html = (
-            f'<p style="margin: 14px 0 0;"><a href="{safe_meeting_link}" '
-            'style="color:#1d4ed8;text-decoration:none;font-weight:600;">Open meeting link</a></p>'
-            if meeting_link
-            else ""
-        )
+        # --- Action items HTML ---
+        action_items_html = ""
+        if items:
+            li_items = "".join(
+                f'<li style="margin:0 0 6px;color:#334155;">{html.escape(item)}</li>'
+                for item in items[:3]
+            )
+            action_items_html = f"""
+            <div style="margin:16px 0;padding:14px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;">
+              <p style="margin:0 0 8px;font-weight:600;color:#92400e;font-size:13px;text-transform:uppercase;letter-spacing:.04em;">Action Items</p>
+              <ol style="margin:0 0 0 18px;padding:0;font-size:14px;">
+                {li_items}
+              </ol>
+            </div>
+            """
+
+        # --- CTA button HTML ---
+        cta_html = ""
+        if safe_app_url:
+            cta_html = f"""
+            <div style="text-align:center;margin:20px 0 8px;">
+              <a href="{safe_app_url}"
+                 style="display:inline-block;background:#0f172a;color:#ffffff;text-decoration:none;padding:13px 28px;border-radius:8px;font-weight:600;font-size:15px;">
+                View Full Meeting Notes &amp; Transcript
+              </a>
+            </div>
+            """
 
         html_body = f"""
-        <div style="font-family:'Segoe UI',Arial,sans-serif;max-width:760px;margin:0 auto;padding:22px;color:#111827;background:#f8fafc;">
-          <div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:12px;padding:20px;">
+        <div style="font-family:'Segoe UI',Arial,sans-serif;max-width:680px;margin:0 auto;padding:22px;color:#111827;background:#f8fafc;">
+          <div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:12px;padding:24px;">
             <p style="margin:0;color:#64748b;font-size:12px;letter-spacing:.06em;text-transform:uppercase;">Pnyx Meeting Recap</p>
-            <h2 style="margin:8px 0 12px;font-size:22px;line-height:1.3;">{safe_title}</h2>
-            <p style="margin:0 0 14px;color:#334155;">Hi {safe_host_email}, your notes are ready.</p>
-            <pre style="white-space:pre-wrap;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin:0;color:#0f172a;">{html.escape(notes_excerpt)}</pre>
-            {join_link_html}
+            <h2 style="margin:8px 0 14px;font-size:22px;line-height:1.3;">{safe_title}</h2>
+            <p style="margin:0 0 6px;color:#334155;">Hi {safe_host_email}, your notes are ready.</p>
+
+            <div style="margin:14px 0;padding:12px;background:#f0f9ff;border-left:4px solid #3b82f6;border-radius:0 8px 8px 0;">
+              <p style="margin:0;color:#1e40af;font-size:14px;line-height:1.5;"><strong>TL;DR:</strong> {safe_tldr}</p>
+            </div>
+
+            {action_items_html}
+            {cta_html}
+
+            <p style="margin:16px 0 0;color:#94a3b8;font-size:12px;text-align:center;">
+              This email was sent by Pnyx Meeting Co-Pilot.
+            </p>
           </div>
         </div>
         """
@@ -221,21 +260,33 @@ class CalendarReminderEmailService:
         self,
         host_email: str,
         meeting_title: str,
-        notes_markdown: str,
-        meeting_link: Optional[str] = None,
+        tldr: str = "",
+        action_items: Optional[List[str]] = None,
+        app_notes_url: str = "",
         attendees: Optional[List[str]] = None,
         include_attendees: bool = False,
+        accepted_only_emails: Optional[List[str]] = None,
     ) -> Dict:
         recipients = [host_email]
         if include_attendees and attendees:
             recipients.extend(attendees)
         recipients = self._clean_emails(recipients)
 
+        # Filter to only accepted/tentative attendees if provided
+        if accepted_only_emails is not None:
+            accepted_set = {e.strip().lower() for e in accepted_only_emails if e}
+            # Always keep the host
+            recipients = [
+                r for r in recipients
+                if r == host_email.strip().lower() or r in accepted_set
+            ]
+
         content = self._build_recap_email_content(
             host_email=host_email,
             meeting_title=meeting_title,
-            notes_markdown=notes_markdown,
-            meeting_link=meeting_link,
+            tldr=tldr,
+            action_items=action_items,
+            app_notes_url=app_notes_url,
         )
 
         await self.sender.send(
@@ -250,3 +301,4 @@ class CalendarReminderEmailService:
             "recipient_count": len(recipients),
             "recipients": recipients,
         }
+

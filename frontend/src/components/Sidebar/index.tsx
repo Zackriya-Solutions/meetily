@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
-import { ChevronDown, ChevronRight, File, Settings, ChevronLeftCircle, ChevronRightCircle, Calendar, StickyNote, Home, Trash2, Mic, Square, Plus, Search, Pencil, LogOut, Upload, MessageSquare, Activity } from 'lucide-react';
+import { ChevronDown, ChevronRight, File, Settings, ChevronLeftCircle, ChevronRightCircle, Calendar, StickyNote, Home, Trash2, Mic, Square, Plus, Search, Pencil, LogOut, Upload, MessageSquare, Activity, Share2 } from 'lucide-react';
 import { signOut } from 'next-auth/react';
 import { authFetch } from '@/lib/api';
 import { useRouter, usePathname } from 'next/navigation';
@@ -53,7 +53,8 @@ const Sidebar: React.FC = () => {
     isSearching,
     meetings,
     setMeetings,
-    serverAddress
+    serverAddress,
+    sharedNotesCount
   } = useSidebar();
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set(['meetings']));
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -482,6 +483,29 @@ const Sidebar: React.FC = () => {
           <Tooltip>
             <TooltipTrigger asChild>
               <button
+                onClick={() => router.push('/shared-notes')}
+                className={`p-2 rounded-lg transition-colors duration-150 ${pathname === '/shared-notes' ? 'bg-gray-100' : 'hover:bg-gray-100'
+                  }`}
+              >
+                <div className="relative">
+                  <Share2 className="w-5 h-5 text-gray-600" />
+                  {sharedNotesCount > 0 && (
+                    <span className="absolute -top-1 -right-1 flex h-3 w-3">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-3 w-3 bg-blue-500"></span>
+                    </span>
+                  )}
+                </div>
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right">
+              <p>Shared with Me</p>
+            </TooltipContent>
+          </Tooltip>
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
                 onClick={() => router.push('/settings')}
                 className={`p-2 rounded-lg transition-colors duration-150 ${isSettingsPage ? 'bg-gray-100' : 'hover:bg-gray-100'
                   }`}
@@ -527,7 +551,7 @@ const Sidebar: React.FC = () => {
           <Tooltip>
             <TooltipTrigger asChild>
               <button
-                onClick={() => signOut()}
+                onClick={() => { sessionStorage.clear(); localStorage.removeItem('calendarPromptSeen'); signOut(); }}
                 className="p-2 rounded-lg transition-colors duration-150 hover:bg-red-50 group"
               >
                 <LogOut className="w-5 h-5 text-gray-600 group-hover:text-red-500" />
@@ -802,6 +826,21 @@ const Sidebar: React.FC = () => {
             </button>
 
             <button
+              onClick={() => router.push('/shared-notes')}
+              className={`w-full flex items-center justify-between px-3 py-1.5 mt-1 mb-1 text-sm font-medium rounded-lg transition-colors shadow-sm ${pathname === '/shared-notes' ? 'bg-gray-300 text-gray-800' : 'text-gray-700 bg-gray-200 hover:bg-gray-300'}`}
+            >
+              <div className="flex items-center">
+                <Share2 className="w-4 h-4 mr-2" />
+                <span>Shared with Me</span>
+              </div>
+              {sharedNotesCount > 0 && (
+                <span className="bg-blue-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">
+                  {sharedNotesCount}
+                </span>
+              )}
+            </button>
+
+            <button
               onClick={() => router.push('/settings')}
               className="w-full flex items-center justify-center px-3 py-1.5 mt-1 mb-1 text-sm font-medium text-gray-700 bg-gray-200 hover:bg-gray-300 rounded-lg transition-colors shadow-sm"
             >
@@ -825,7 +864,7 @@ const Sidebar: React.FC = () => {
             </button>
 
             <button
-              onClick={() => signOut()}
+              onClick={() => { sessionStorage.clear(); localStorage.removeItem('calendarPromptSeen'); signOut(); }}
               className="w-full flex items-center justify-center px-3 py-1.5 mt-1 mb-1 text-sm font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-lg transition-colors shadow-sm"
             >
               <LogOut className="w-4 h-4 mr-2" />

@@ -53,6 +53,8 @@ interface SidebarContextType {
   stopSummaryPolling: (meetingId: string) => void;
   // Refetch meetings from backend
   refetchMeetings: () => Promise<void>;
+  sharedNotesCount: number;
+  refetchSharedNotes: () => Promise<void>;
 
 }
 
@@ -78,6 +80,7 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
   const [serverAddress, setServerAddress] = useState('');
   const [transcriptServerAddress, setTranscriptServerAddress] = useState('');
   const [activeSummaryPolls, setActiveSummaryPolls] = useState<Map<string, NodeJS.Timeout>>(new Map());
+  const [sharedNotesCount, setSharedNotesCount] = useState(0);
   const { status } = useSession(); // Access Auth Session Check
 
 
@@ -116,9 +119,30 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
     }
   }, [serverAddress, status]);
 
+  const fetchSharedNotesCount = React.useCallback(async () => {
+    if (status === 'authenticated' && serverAddress) {
+      try {
+        const response = await authFetch('/api/sharing/shared-with-me');
+        if (response.ok) {
+          const data = await response.json();
+          // Count unread: notes_updated_at > last_viewed_at, or last_viewed_at is null
+          const unreadCount = data.filter((note: any) => {
+            if (!note.last_viewed_at) return true;
+            if (note.notes_updated_at && new Date(note.notes_updated_at) > new Date(note.last_viewed_at)) return true;
+            return false;
+          }).length;
+          setSharedNotesCount(unreadCount);
+        }
+      } catch (error) {
+        console.error('Error fetching shared notes count:', error);
+      }
+    }
+  }, [serverAddress, status]);
+
   useEffect(() => {
     fetchMeetings();
-  }, [serverAddress, fetchMeetings]);
+    fetchSharedNotesCount();
+  }, [serverAddress, fetchMeetings, fetchSharedNotesCount]);
 
   useEffect(() => {
     const fetchSettings = async () => {
@@ -336,6 +360,8 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
       startSummaryPolling,
       stopSummaryPolling,
       refetchMeetings: fetchMeetings,
+      sharedNotesCount,
+      refetchSharedNotes: fetchSharedNotesCount,
 
     }}>
       {children}

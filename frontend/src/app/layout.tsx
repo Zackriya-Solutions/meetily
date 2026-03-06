@@ -8,6 +8,7 @@ import "sonner/dist/styles.css"
 import Sidebar from '@/components/Sidebar'
 import { SidebarProvider } from '@/components/Sidebar/SidebarProvider'
 import MainContent from '@/components/MainContent'
+import { CalendarConnectPrompt } from '@/components/CalendarConnectPrompt'
 import AnalyticsProvider from '@/components/AnalyticsProvider'
 import { AuthProvider } from '@/components/AuthProvider'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -47,7 +48,10 @@ export default function RootLayout({
                   ) : (
                     <div className="flex">
                       <Sidebar />
-                      <MainContent>{children}</MainContent>
+                      <MainContent>
+                        <CalendarConnectPrompt />
+                        {children}
+                      </MainContent>
                     </div>
                   )}
                 </TooltipProvider>

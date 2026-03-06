@@ -5,6 +5,7 @@ import { Summary, SummaryResponse } from '@/types';
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
 import Analytics from '@/lib/analytics';
 import { TranscriptPanel } from '@/components/MeetingDetails/TranscriptPanel';
+import { ShareNotesDialog } from '@/components/ShareNotesDialog';
 import { SummaryPanel } from '@/components/MeetingDetails/SummaryPanel';
 import { ChatInterface } from '@/components/MeetingDetails/ChatInterface';
 import { Bot, MessageSquare } from 'lucide-react';
@@ -48,6 +49,15 @@ export default function PageContent({
   // State
   const [isRecording] = useState(false);
   const [summaryResponse] = useState<SummaryResponse | null>(null);
+  const [shareDialogState, setShareDialogState] = useState<{isOpen: boolean, meetingId: string}>({isOpen: false, meetingId: ""});
+
+  useEffect(() => {
+    const handleShowShare = (e: any) => {
+      setShareDialogState({ isOpen: true, meetingId: e.detail.meetingId });
+    };
+    window.addEventListener('show-share-dialog', handleShowShare);
+    return () => window.removeEventListener('show-share-dialog', handleShowShare);
+  }, []);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [currentTranscriptVersion, setCurrentTranscriptVersion] = useState<number | undefined>(undefined);
 

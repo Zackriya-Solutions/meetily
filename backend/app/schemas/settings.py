@@ -38,6 +38,8 @@ class CalendarAutomationSettingsRequest(BaseModel):
     reminder_offset_minutes: int
     recap_enabled: bool
     writeback_enabled: bool
+    share_summary: bool = True
+    share_transcript: bool = False
 
 
 class CalendarReminderEmailRequest(BaseModel):
@@ -47,3 +49,13 @@ class CalendarReminderEmailRequest(BaseModel):
     start_meeting_url: Optional[str] = None
     attendees: Optional[List[str]] = None
     include_attendees: Optional[bool] = None
+
+from datetime import datetime
+from typing import Optional, List
+
+class SyncOAuthRequest(BaseModel):
+    access_token: str
+    refresh_token: Optional[str] = None
+    token_expires_at: Optional[str] = None
+    scopes: List[str]
+    external_account_email: str

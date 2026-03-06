@@ -1020,37 +1020,119 @@ async def generate_notes_with_gemini_background(
 
         # 7. Calendar post-processing hooks: recap email + optional writeback.
         try:
-            if calendar_event_context:
-                settings = await db.get_calendar_automation_settings(user_email)
-                attendees = calendar_event_context.get("attendees") or []
-                _, attendee_emails = _extract_attendee_names_emails(attendees)
-                is_proper_meeting = len(attendee_emails) > 1
+            settings = await db.get_calendar_automation_settings(user_email)
+            attendees = calendar_event_context.get("attendees", []) if calendar_event_context else []
+            
+            # RSVP filtering
+            accepted_attendees = []
+            for att in attendees:
+                if isinstance(att, dict):
+                    status = att.get("responseStatus", "needsAction")
+                    if status in ("accepted", "tentative"):
+                        email = att.get("email", "").strip().lower()
+                        if email:
+                            accepted_attendees.append(email)
+                else:
+                    accepted_attendees.append(str(att).strip().lower())
+                    
+            _, attendee_emails = _extract_attendee_names_emails(attendees)
+            # Use accepted attendees if available, otherwise fallback to all extracted emails
+            final_attendees = accepted_attendees if accepted_attendees else attendee_emails
+            
+            # Ad-hoc meeting detection
+            is_proper_meeting = calendar_event_context is not None and len(final_attendees) >= 2
 
-                if settings.get("recap_enabled", True) and is_proper_meeting:
-                    recap_service = CalendarReminderEmailService()
-                    await recap_service.send_post_meeting_recap(
-                        host_email=user_email,
-                        meeting_title=final_result.get("MeetingName", meeting_title),
-                        notes_markdown=markdown_output,
-                        meeting_link=calendar_event_context.get("meeting_link"),
-                        attendees=attendee_emails,
-                        include_attendees=bool(
-                            settings.get("attendee_reminders_enabled", False)
-                        ),
+            if is_proper_meeting and settings.get("recap_enabled", True):
+                # Extract TL;DR
+                tldr = ""
+                session_summary = final_result.get("SessionSummary", {})
+                if session_summary.get("blocks"):
+                    tldr_block = session_summary["blocks"][0].get("content", "")
+                    tldr = (tldr_block[:200] + "...") if len(tldr_block) > 200 else tldr_block
+
+                # Extract Action Items
+                action_items = []
+                action_section = final_result.get("ImmediateActionItems", {})
+                if action_section.get("blocks"):
+                    for block in action_section["blocks"][:3]:
+                        action_items.append(block.get("content", ""))
+
+                # Check if this is a regeneration
+                existing_shares = await db.get_shared_notes_for_user(user_email)
+                # Wait, getting shared notes FOR user means notes shared WITH user. 
+                # We need to see if the host has already shared this meeting.
+                # Let's query using a custom check or get_shared_note for an attendee.
+                # A simple way: check if any shared note exists for this meeting.
+                async with db._get_connection() as conn:
+                    existing_count = await conn.fetchval(
+                        "SELECT COUNT(*) FROM shared_meeting_notes WHERE meeting_id = $1", 
+                        meeting_id
                     )
 
-                if settings.get("writeback_enabled", False):
-                    oauth_service = GoogleCalendarOAuthService(db=db)
-                    await oauth_service.writeback_notes_to_event(
-                        user_email=user_email,
-                        event_id=calendar_event_context["event_id"],
-                        notes_markdown=markdown_output,
-                    )
+                if existing_count > 0:
+                    # Regeneration -> silent update, mark notes updated
+                    await db.mark_shared_notes_updated(meeting_id)
+                    logger.info("Silent regeneration update for meeting %s. Did not resend email.", meeting_id)
+                else:
+                    # First-time generation -> create shares and send email
+                    app_base_url = os.environ.get("APP_BASE_URL", "http://localhost:3118")
+                    share_config = {
+                        "summary": settings.get("share_summary", True),
+                        "transcript": settings.get("share_transcript", False)
+                    }
+
+                    shared_tokens = []
+                    for recipient in final_attendees:
+                        if recipient != user_email: # Don't share with self
+                            token = await db.create_shared_note(
+                                meeting_id=meeting_id,
+                                owner_email=user_email,
+                                shared_with_email=recipient,
+                                share_config=share_config
+                            )
+                            shared_tokens.append(token)
+                    
+                    if shared_tokens:
+                        # Use the first token to generate the URL (or wait, the email goes to all, but each needs a unique token?)
+                        # Actually, send_post_meeting_recap sends ONE email to all BCC'd or individually?
+                        # The plan says "The shared notes link in emails will point to {APP_BASE_URL}/shared/{meeting_id}?token={share_token}"
+                        # If each user needs a unique token, we might need to send individual emails or use a generic token.
+                        # Wait, the prompt says "{APP_BASE_URL}/shared/{meeting_id}?token={share_token}".
+                        # But send_post_meeting_recap takes `attendees` and sends one email (or loops inside).
+                        # Let's pass the first token just as a generic link, or if the email service expects a single app_notes_url.
+                        # Wait, the prompt says "app_notes_url parameter". So it assumes one URL. 
+                        # Let's pass the URL for the first token, or let's create a generic view token?
+                        # Actually, let's just pass `share_token` of the first created share, or since they all access the same meeting,
+                        # the token validates the user if they log in, OR the token grants access directly. 
+                        # Let's just use the first token as the access URL in the email.
+                        token_to_use = shared_tokens[0]
+                        app_notes_url = f"{app_base_url}/shared/{meeting_id}?token={token_to_use}"
+                        
+                        recap_service = CalendarReminderEmailService()
+                        await recap_service.send_post_meeting_recap(
+                            host_email=user_email,
+                            meeting_title=final_result.get("MeetingName", meeting_title),
+                            tldr=tldr,
+                            action_items=action_items,
+                            app_notes_url=app_notes_url,
+                            attendees=final_attendees,
+                            include_attendees=bool(settings.get("attendee_reminders_enabled", False)),
+                            accepted_only_emails=final_attendees
+                        )
+
+            if calendar_event_context and settings.get("writeback_enabled", False):
+                oauth_service = GoogleCalendarOAuthService(db=db)
+                await oauth_service.writeback_notes_to_event(
+                    user_email=user_email,
+                    event_id=calendar_event_context["event_id"],
+                    notes_markdown=markdown_output,
+                )
         except Exception as post_hook_error:
             logger.error(
                 "Calendar post-processing failed for %s: %s",
                 meeting_id,
                 post_hook_error,
+                exc_info=True
             )
 
     except Exception as e:

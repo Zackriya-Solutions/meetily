@@ -59,6 +59,7 @@ export const authOptions: NextAuthOptions = {
           prompt: "consent",
           access_type: "offline",
           response_type: "code",
+          scope: "openid email profile https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events",
         },
       },
     }),
@@ -91,15 +92,19 @@ export const authOptions: NextAuthOptions = {
             
           console.log('[Auth] Initial sign in - Token expires at:', new Date(accessTokenExpires).toISOString(), 'expires_in:', account.expires_in);
           
+          
+                    
           return {
             accessToken: account.access_token,
             accessTokenExpires,
-          refreshToken: account.refresh_token,
-          idToken: account.id_token,
-          email: user.email,
-          name: user.name,
-          picture: user.image,
-        };
+            refreshToken: account.refresh_token,
+            idToken: account.id_token,
+            email: user.email,
+            name: user.name,
+            picture: user.image,
+            calendarScopes: account.scope?.includes('calendar'),
+            rawScopes: account.scope,
+          };
       }
 
       // Return previous token if the access token has not expired yet (with 5-minute buffer)
@@ -118,6 +123,9 @@ export const authOptions: NextAuthOptions = {
       session.accessToken = token.accessToken as string;
       session.idToken = token.idToken as string;
       session.error = token.error as string;
+      session.calendarScopes = token.calendarScopes as boolean;
+      session.refreshToken = token.refreshToken as string;
+      session.rawScopes = token.rawScopes as string;
       session.user = {
         ...session.user,
         email: token.email as string,

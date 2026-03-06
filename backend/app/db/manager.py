@@ -1196,13 +1196,17 @@ class DatabaseManager:
             "reminder_offset_minutes": 2,
             "recap_enabled": True,
             "writeback_enabled": False,
+            "share_summary": True,
+            "share_transcript": False,
         }
 
         async with self._get_connection() as conn:
             row = await conn.fetchrow(
                 """
                 SELECT reminders_enabled, attendee_reminders_enabled, reminder_offset_minutes,
-                       recap_enabled, writeback_enabled
+                       recap_enabled, writeback_enabled,
+                       COALESCE(share_summary, TRUE) AS share_summary,
+                       COALESCE(share_transcript, FALSE) AS share_transcript
                 FROM calendar_automation_settings
                 WHERE user_email = $1
             """,
@@ -1216,6 +1220,8 @@ class DatabaseManager:
                 "reminder_offset_minutes": row["reminder_offset_minutes"],
                 "recap_enabled": row["recap_enabled"],
                 "writeback_enabled": row["writeback_enabled"],
+                "share_summary": row["share_summary"],
+                "share_transcript": row["share_transcript"],
             }
 
     async def upsert_calendar_automation_settings(
@@ -1227,18 +1233,21 @@ class DatabaseManager:
                 """
                 INSERT INTO calendar_automation_settings (
                     user_email, reminders_enabled, attendee_reminders_enabled,
-                    reminder_offset_minutes, recap_enabled, writeback_enabled, updated_at
+                    reminder_offset_minutes, recap_enabled, writeback_enabled,
+                    share_summary, share_transcript, updated_at
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                 ON CONFLICT (user_email) DO UPDATE SET
                     reminders_enabled = EXCLUDED.reminders_enabled,
                     attendee_reminders_enabled = EXCLUDED.attendee_reminders_enabled,
                     reminder_offset_minutes = EXCLUDED.reminder_offset_minutes,
                     recap_enabled = EXCLUDED.recap_enabled,
                     writeback_enabled = EXCLUDED.writeback_enabled,
+                    share_summary = EXCLUDED.share_summary,
+                    share_transcript = EXCLUDED.share_transcript,
                     updated_at = EXCLUDED.updated_at
                 RETURNING reminders_enabled, attendee_reminders_enabled, reminder_offset_minutes,
-                          recap_enabled, writeback_enabled
+                          recap_enabled, writeback_enabled, share_summary, share_transcript
             """,
                 user_email,
                 settings["reminders_enabled"],
@@ -1246,6 +1255,8 @@ class DatabaseManager:
                 settings["reminder_offset_minutes"],
                 settings["recap_enabled"],
                 settings["writeback_enabled"],
+                settings.get("share_summary", True),
+                settings.get("share_transcript", False),
                 now,
             )
             return {
@@ -1254,6 +1265,8 @@ class DatabaseManager:
                 "reminder_offset_minutes": row["reminder_offset_minutes"],
                 "recap_enabled": row["recap_enabled"],
                 "writeback_enabled": row["writeback_enabled"],
+                "share_summary": row["share_summary"],
+                "share_transcript": row["share_transcript"],
             }
 
     async def get_active_calendar_integrations(self, provider: str = "google") -> List[Dict]:
@@ -2090,4 +2103,137 @@ class DatabaseManager:
                 status,
                 now,
                 feedback_id,
+            )
+
+    # ─── Shared Meeting Notes ─────────────────────────────────────────────
+
+    async def create_shared_note(
+        self,
+        meeting_id: str,
+        owner_email: str,
+        shared_with_email: str,
+        share_config: Optional[Dict] = None,
+    ) -> Dict:
+        """Create a shared note record and return the row with share_token."""
+        import uuid
+
+        token = str(uuid.uuid4())
+        config = json.dumps(share_config or {"summary": True, "transcript": False})
+        now = datetime.utcnow()
+        async with self._get_connection() as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO shared_meeting_notes (
+                    meeting_id, owner_email, shared_with_email,
+                    share_token, shared_at, share_config
+                )
+                VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+                ON CONFLICT (meeting_id, shared_with_email) DO UPDATE SET
+                    share_config = EXCLUDED.share_config,
+                    notes_updated_at = NULL
+                RETURNING id, meeting_id, owner_email, shared_with_email, share_token, shared_at, share_config
+            """,
+                meeting_id,
+                owner_email,
+                shared_with_email.strip().lower(),
+                token,
+                now,
+                config,
+            )
+            return dict(row) if row else {}
+
+    async def get_shared_notes_for_user(self, user_email: str) -> List[Dict]:
+        """Get all meetings shared with this user."""
+        async with self._get_connection() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT sn.id, sn.meeting_id, sn.owner_email, sn.shared_at,
+                       sn.last_viewed_at, sn.notes_updated_at, sn.share_config,
+                       m.title AS meeting_title
+                FROM shared_meeting_notes sn
+                LEFT JOIN meetings m ON m.id = sn.meeting_id
+                WHERE sn.shared_with_email = $1
+                ORDER BY sn.shared_at DESC
+            """,
+                user_email.strip().lower(),
+            )
+            results = []
+            for row in rows:
+                item = dict(row)
+                item["shared_at"] = item["shared_at"].isoformat() if item["shared_at"] else None
+                item["last_viewed_at"] = item["last_viewed_at"].isoformat() if item.get("last_viewed_at") else None
+                item["notes_updated_at"] = item["notes_updated_at"].isoformat() if item.get("notes_updated_at") else None
+                item["has_update"] = (
+                    item["notes_updated_at"] is not None
+                    and (item["last_viewed_at"] is None or item["notes_updated_at"] > item["last_viewed_at"])
+                )
+                results.append(item)
+            return results
+
+    async def get_shared_note_by_token(self, share_token: str) -> Optional[Dict]:
+        """Look up a shared note by its token (for email link access)."""
+        async with self._get_connection() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT sn.id, sn.meeting_id, sn.owner_email, sn.shared_with_email,
+                       sn.share_config, m.title AS meeting_title
+                FROM shared_meeting_notes sn
+                LEFT JOIN meetings m ON m.id = sn.meeting_id
+                WHERE sn.share_token = $1
+            """,
+                share_token,
+            )
+            return dict(row) if row else None
+
+    async def get_shared_note(self, meeting_id: str, user_email: str) -> Optional[Dict]:
+        """Check if a specific meeting has been shared with a user."""
+        async with self._get_connection() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT id, meeting_id, owner_email, shared_with_email,
+                       share_token, share_config, shared_at, last_viewed_at, notes_updated_at
+                FROM shared_meeting_notes
+                WHERE meeting_id = $1 AND shared_with_email = $2
+            """,
+                meeting_id,
+                user_email.strip().lower(),
+            )
+            return dict(row) if row else None
+
+    async def has_shared_notes(self, meeting_id: str) -> bool:
+        """Check if any sharing records exist for a meeting (to detect re-generation)."""
+        async with self._get_connection() as conn:
+            row = await conn.fetchrow(
+                "SELECT 1 FROM shared_meeting_notes WHERE meeting_id = $1 LIMIT 1",
+                meeting_id,
+            )
+            return row is not None
+
+    async def mark_shared_notes_updated(self, meeting_id: str):
+        """Set notes_updated_at for all recipients of a meeting (silent update)."""
+        now = datetime.utcnow()
+        async with self._get_connection() as conn:
+            await conn.execute(
+                """
+                UPDATE shared_meeting_notes
+                SET notes_updated_at = $2
+                WHERE meeting_id = $1
+            """,
+                meeting_id,
+                now,
+            )
+
+    async def mark_shared_note_viewed(self, meeting_id: str, user_email: str):
+        """Update last_viewed_at for a specific recipient (clears 'Updated' badge)."""
+        now = datetime.utcnow()
+        async with self._get_connection() as conn:
+            await conn.execute(
+                """
+                UPDATE shared_meeting_notes
+                SET last_viewed_at = $3
+                WHERE meeting_id = $1 AND shared_with_email = $2
+            """,
+                meeting_id,
+                user_email.strip().lower(),
+                now,
             )
