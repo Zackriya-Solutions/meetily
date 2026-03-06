@@ -2,281 +2,159 @@
 
 ## 1. Feature Overview
 
-Pnyx will introduce an in-meeting AI capability that acts as a silent participant and monitors live conversation for situations that require intervention.
+Pnyx features an in-meeting AI capability that acts as a silent participant monitoring live conversations for communication breakdowns or situations requiring intervention.
 
-This feature is implemented as a lightweight, real-time guardrail system that:
-- analyzes a rolling transcript window
-- checks meeting context (title, description, optional agenda)
-- intervenes only when specific risk conditions are met
+Unlike typical summary bots, this feature is implemented as a lightweight, real-time guardrail system that:
+- Analyzes a rolling transcript window in real-time.
+- Checks meeting context (title, description, optional user-defined agenda).
+- Intervenes **only** when specific risk conditions are met (e.g., agenda deviation, prolonged indecision, unresolved questions).
+- Emits structured JSON alerts down the websocket to be surfaced cleanly in the UI side panel.
 
-Output is shown in a side panel as a guardrail alert, not as continuous commentary.
+## 2. System Architecture & Component Breakdown
 
+The AI Participant system operates parallel to the live audio transcription pipeline. It is entirely non-blocking to the critical path of audio processing.
 
-## 2. Product Motivation
+### A. The Components (`ai_participant.py`)
 
-Most meeting tools optimize for post-meeting summaries. Pnyx aims to improve meeting quality while the meeting is in progress.
+1. **`RollingTranscriptBuffer`**
+   Maintains the recent utterance history. It is bounded by both time (e.g., last 180 seconds) and character count (e.g., max 6000 characters) to ensure the LLM prompt fits within context limits and only analyzes recent, relevant speech.
+2. **`MeetingContext` & `AIParticipantEngine`**
+   The core orchestrator. It packages the static/dynamic meeting context (Goal, Agenda, Participants) alongside the active buffer. It manages the analysis interval (e.g., every 90 seconds) to prevent spamming the LLM, handles LLM fallback chains (e.g., Gemini Pro -> Flash), and parses the structured JSON response.
+3. **`GuardrailEvaluator`**
+   The deterministic filter sitting *after* the LLM reasoning phase. It suppresses LLM outputs based on strict rules:
+   - **Confidence Checks:** Rejects insights below a minimum confidence threshold (default 0.70).
+   - **Sustained Streaks:** Requires "agenda deviation" to be sustained over multiple analysis cycles before alerting.
+   - **Duration Thresholds:** Requires "no decision" or "unresolved question" to only trigger if the active discussion window is sufficiently long.
+   - **Cooldowns & Deduping:** Prevents spamming the UI by enforcing a cooldown period (default 180s) and suppressing identical insights using a signature hash (`reason:normalized_insight`).
 
-Desired outcomes:
-- reduce agenda drift
-- prevent long discussions without closure
-- surface unresolved critical questions
-- prevent repeated or context-losing discussion loops
+### B. The Integration (`audio.py`)
 
-For MVP (2-3 days), implementation must be simple, reliable, and low-noise.
+The fast-path websocket in `audio.py` pushes final transcript segments to the `AIParticipantEngine`. The engine runs its interval checks asynchronously. If an alert is generated, `audio.py` immediately beams an `ai_guardrail_alert` payload to the frontend.
 
+Additionally, `audio.py` handles an **Inactivity Fallback Alert**. If absolute silence is detected for an extended period (e.g., 3 minutes) while the meeting is active, it bypasses the LLM and emits a hardcoded "missing context" alert to prompt the team to start the agenda.
 
-## 3. Guardrail Philosophy
+---
 
-Core principle:
+## 3. Complete Data Flow Diagram
 
-`Silence by default. Intervene only when necessary.`
+```mermaid
+sequenceDiagram
+    participant C as Client (Browser)
+    participant WS as FastAPI WebSocket (audio.py)
+    participant M as Transcription Manager
+    participant E as AIParticipantEngine
+    participant B as RollingTranscriptBuffer
+    participant LLM as Gemini API (Fallback: Groq/OpenAI)
+    participant G as GuardrailEvaluator
+    participant DB as Postgres (State)
 
-The AI is a silent observer, not a periodic commentator. It should not generate routine updates every few minutes. It should only alert when one or more guardrail conditions are detected.
-
-If no guardrail condition is met, system output must be:
-
-`NO_INTERVENTION`
-
-This keeps meeting flow uninterrupted and preserves trust in alerts.
-
-
-## 4. System Architecture
-
-```text
-Audio
--> Streaming Transcription
--> Transcript Buffer (rolling window)
--> Context Analyzer
--> LLM Reasoning
--> Guardrail Evaluator
--> Insight Publisher
--> AI Guardrail Side Panel
+    C->>WS: Audio Chunks (PCM)
+    WS->>M: Process Chunk
+    M-->>WS: Final Transcript Segment
+    WS->>E: ingest_transcript(text, timestamp)
+    E->>B: add(timestamp, text) (Prunes old text)
+    
+    rect rgb(200, 220, 240)
+        note right of WS: Asynchronous Interval Check (e.g., every 90s)
+        E->>E: Check if analysis_interval_seconds elapsed
+        alt Interval Elapsed & Buffer Sufficient
+            E->>LLM: _reason_with_llm(Prompt + Buffer + Context)
+            LLM-->>E: JSON Insight (Intervention Required?)
+            E->>G: evaluate(assessment)
+            
+            note right of G: Applies Confidence, Streak, Cooldown, Dedup logic
+            
+            alt Evaluator returns Alert
+                G-->>E: GuardrailAlert
+                E-->>WS: GuardrailAlert
+                WS->>DB: Persist Alert State & Stats
+                WS->>C: Send WebSocket message (type: "ai_guardrail_alert")
+            end
+        end
+    end
+    
+    rect rgb(250, 230, 230)
+        note right of WS: Silence Fallback Check
+        WS->>WS: Check last_final_transcript_at
+        alt Silence > inactivity_alert_seconds
+            WS->>WS: Generate Inactivity Context Alert
+            WS->>C: Send WebSocket message (type: "ai_guardrail_alert")
+        end
+    end
 ```
 
-### Component roles
+---
 
-1. `Transcript Buffer`
-- Maintains recent utterances (time-bounded and token-bounded).
+## 4. LLM Reasoning Model & Fallbacks
 
-2. `Context Analyzer`
-- Packages meeting title, description, agenda, recent transcript window, and minimal prior state.
+The AI Participant relies heavily on structured output generation. 
 
-3. `LLM Reasoning`
-- Produces structured assessment: topic status, decision signals, unresolved questions, context gaps, and intervention candidate.
+### Trigger Conditions (The `reason` Enum)
+1. `agenda_deviation`: Conversation has drifted significantly from the registered agenda.
+2. `no_decision`: Lengthy discussion on a topic without reaching a clear conclusion.
+3. `unresolved_question`: An important question was asked but ignored or forgotten.
+4. `missing_context_or_repeat`: The team is repeating a previously resolved topic or lacking baseline context.
 
-4. `Guardrail Evaluator`
-- Applies deterministic trigger rules, thresholds, cooldown, and dedup suppression.
-- Decides publish vs `NO_INTERVENTION`.
-
-5. `Insight Publisher`
-- Pushes only accepted alerts to UI and stores short alert history.
-
-
-## 5. Data Flow
-
-1. Meeting starts:
-- ingest `meeting_id`, `title`, `description`, `agenda_text` (optional)
-
-2. Live transcript arrives continuously:
-- `timestamp`, `speaker_id` (if available), `text`
-
-3. Buffer management:
-- rolling window: last 3 minutes
-- token cap: 1000-1500 tokens
-
-4. Analysis cadence:
-- engine evaluates periodically (for example every 60-90 seconds)
-- evaluation does not imply publication
-
-5. LLM structured reasoning output:
-- intervention required or not
-- candidate reason and insight
-- confidence score
-
-6. Guardrail evaluation:
-- check trigger conditions and thresholds
-- enforce cooldown and duplicate suppression
-- return publishable alert or `NO_INTERVENTION`
-
-7. UI update:
-- side panel updates only when a new alert is published
-
-
-## 6. LLM Prompt Design
-
-### Prompt intent
-
-The prompt must explicitly enforce silent behavior:
-
-`You are a silent meeting observer. You should remain silent unless one of the guardrail conditions is detected.`
-
-### Inputs to model
-
-- meeting title
-- meeting description
-- meeting agenda (optional)
-- recent transcript window
-- lightweight prior context (last topic/alerts summary)
-
-### Required output schema
+### LLM Prompt Strategy
+The system prompt explicitly commands the LLM: `You are a silent meeting observer. You should remain silent unless one of the guardrail conditions is detected.` The output must be strict JSON.
 
 If no intervention is needed:
-
 ```json
-{
-  "intervention_required": false
-}
+{  "intervention_required": false }
 ```
-
 If intervention is needed:
-
 ```json
 {
   "intervention_required": true,
-  "reason": "agenda_deviation | no_decision | unresolved_question | missing_context_or_repeat",
-  "insight": "Short actionable guardrail alert.",
-  "confidence": 0.84
+  "reason": "agenda_deviation",
+  "insight": "Short actionable guardrail alert sentence here.",
+  "confidence": 0.85
 }
 ```
 
-### Prompt constraints
+### Model Fallbacks
+Because real-time inference can be flaky, the `AIParticipantEngine` is initialized with a primary model (`gemini-2.5-pro`) and an array of fallback models (e.g., `gemini-2.5-flash`). If the primary model times out or throws an error, it immediately calls the fallback model during the same evaluation cycle.
 
-- do not produce commentary unless intervention is required
-- ground output only in provided transcript/context
-- keep insight concise (1 sentence, <= 30 words)
-- return strict JSON only
+---
 
+## 5. Configuration & Environment Variables
 
-## 7. Insight Generation Logic
+The behavior of the AI Participant is highly tunable via environment variables without requiring code changes.
 
-The engine performs periodic analysis but only publishes on guardrail triggers.
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `AI_PARTICIPANT_ENABLED` | `true` | Master kill switch for the feature. |
+| `AI_PARTICIPANT_MODEL` | `gemini-3-pro-preview` | Primary reasoning model. |
+| `AI_PARTICIPANT_FALLBACK_MODELS` | `gemini-3-flash-preview` | Comma-separated fallback models in case of timeout/error. |
+| `AI_PARTICIPANT_WINDOW_SECONDS` | `180` | Number of seconds of transcript to retain in the buffer. |
+| `AI_PARTICIPANT_MAX_WINDOW_CHARS` | `6000` | Hard cap on transcript characters to prevent LLM context bloat. |
+| `AI_PARTICIPANT_ANALYSIS_INTERVAL_SECONDS` | `90` | How often (in seconds) the LLM evaluates the buffer. |
+| `AI_PARTICIPANT_COOLDOWN_SECONDS` | `180` | Minimum time between emitting consecutive alerts. |
+| `AI_PARTICIPANT_MIN_CONFIDENCE` | `0.70` | Minimum LLM confidence (0.0 - 1.0) required to publish an alert. |
+| `AI_PARTICIPANT_AGENDA_SUSTAINED_CYCLES` | `1` | Number of consecutive `agenda_deviation` LLM hits required to trigger. |
+| `AI_PARTICIPANT_INACTIVITY_ALERT_SECONDS`| `180` | Seconds of silence before emitting an automatic context prompt. |
+| `AI_PARTICIPANT_LLM_TIMEOUT_SECONDS` | `12` | Max time allowed for the LLM to respond before giving up or falling back. |
 
-### Guardrail trigger conditions
+---
 
-1. `agenda_deviation`
-- current topic diverges from agenda for sustained period
+## 6. UI Integration & Display
 
-2. `long_discussion_without_decision`
-- topic duration exceeds threshold and no decision signal detected
+When the UI receives an `ai_guardrail_alert` over the websocket, it surfaces it in the right-hand side panel. 
 
-3. `important_unresolved_question`
-- meaningful question remains unanswered beyond threshold
+**Rules:**
+- The panel is quiet by default to avoid distraction.
+- When an alert arrives, a card pops up with a Reason Badge (e.g., `⚠️ Decision Needed`) and the actionable insight text.
+- Over the course of the meeting, the history of alerts is retained locally so users can review previous AI nudges.
+- Temporary contexts (like changing the Goal manually in the UI midway through the meeting) send a `context_update` websocket message to the backend, which immediately updates the `MeetingContext` instructing the LLM to evaluate against the new goal.
 
-4. `missing_context_or_repeated_topic`
-- discussion revisits resolved topic or ignores previously established context
+## 7. Metrics & Observability
 
-### Evaluator pseudocode
+The `AIParticipantEngine` collects extensive metrics per-session injected into the Postgres `meeting_session.metadata` under `streaming_runtime.ai_guardrail`. 
 
-```python
-if agenda_deviation is True:
-    publish_alert()
-elif topic_duration > TOPIC_DURATION_THRESHOLD and decision_detected is False:
-    publish_alert()
-elif unresolved_question is True:
-    publish_alert()
-elif missing_context_or_repeat is True:
-    publish_alert()
-else:
-    return "NO_INTERVENTION"
-```
+Captured metrics include:
+- `evaluations`: Total LLM calls.
+- `published`: Alerts actually sent to the UI.
+- Suppression counts (`suppressed_low_confidence`, `suppressed_cooldown`, `suppressed_duplicate`, `suppressed_no_intervention`).
+- Error rates (`llm_failures`, `parse_failures`).
 
-### Suggested MVP thresholds
-
-- agenda deviation sustained: >= 2 analysis cycles
-- no-decision topic duration: >= 6 minutes
-- unresolved question duration: >= 4 minutes
-- minimum confidence to publish: >= 0.70
-
-
-## 8. UI Behavior
-
-The side panel stays quiet by default.
-
-### Default state
-
-- no active alert card
-- optional label: `Monitoring meeting guardrails`
-
-### Triggered state
-
-Show a single alert card:
-
-`AI Guardrail Alert`
-
-Examples:
-- `The discussion appears to have moved away from agenda topic "Latency Benchmark".`
-- `The team has discussed transcription providers for several minutes but no decision has been recorded yet.`
-
-### Display rules
-
-- show reason type badge (Agenda, Decision, Question, Context)
-- show timestamp (`Updated at HH:MM`)
-- keep last 3 alerts in collapsible history
-- do not display repeated identical alerts during cooldown
-
-
-## 9. Implementation Plan
-
-### Day 1
-
-1. Add meeting context ingestion (title/description/agenda).
-2. Build rolling transcript buffer (time + token bounded).
-3. Implement LLM prompt and strict JSON parser.
-4. Define guardrail output schema and evaluator interface.
-
-### Day 2
-
-1. Integrate reasoning call with live transcription pipeline.
-2. Build Guardrail Evaluator rule checks and thresholds.
-3. Add side panel alert rendering (quiet default + alert mode).
-4. Add event publishing path for accepted alerts only.
-
-### Day 3
-
-1. Add cooldown system and duplicate suppression.
-2. Tune thresholds on sample transcripts.
-3. Improve prompt clarity for false positive reduction.
-4. Add minimal telemetry and failure handling.
-
-
-## 10. Risks and Limitations
-
-1. False positives in decision/non-decision detection.
-2. Missed alerts when transcript quality is poor.
-3. Agenda deviation quality depends on agenda clarity.
-4. Important questions may be hard to classify without speaker intent.
-5. Alert fatigue risk if thresholds are too aggressive.
-
-MVP mitigations:
-- confidence thresholds
-- sustained-condition checks (not single-window triggers)
-- cooldown + dedupe
-- concise alert wording
-
-
-## 11. Future Improvements
-
-1. Hybrid rule + embedding similarity for better topic continuity.
-2. Speaker-aware responsibility detection (who asked / who should answer).
-3. User feedback loop (`useful` / `not useful`) for online tuning.
-4. Team-specific policy presets (strict vs relaxed guardrails).
-5. Action-item extraction when repeated no-decision alerts occur.
-6. Adaptive thresholds by meeting type (standup, planning, design review).
-
-
-## Cooldown and Success Metrics (MVP Acceptance)
-
-### Cooldown policy
-
-- minimum 5 minutes between similar alerts (`reason` + semantic similarity)
-- suppress duplicate or near-duplicate insights
-- reopen alerting only when topic context materially changes
-
-### Success metrics
-
-Replace periodic-output metric with guardrail quality metrics:
-
-- low noise: target `< 1 alert every 5-10 minutes` per active meeting
-- high relevance: target `> 70% user-perceived usefulness`
-- intervention discipline: majority of cycles return `NO_INTERVENTION`
-
+This telemetry is crucial for tuning the confidence thresholds and cooldowns in production to balance signal vs. noise.
