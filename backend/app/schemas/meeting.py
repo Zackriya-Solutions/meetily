@@ -45,7 +45,7 @@ class GenerateNotesRequest(BaseModel):
     meeting_id: str
     template_id: str = "standard_meeting"
     model: str = "gemini"
-    model_name: str = "gemini-2.5-flash"
+    model_name: str = "gemini-3-pro-preview"
     custom_context: str = ""  # User-provided context for better note generation
     transcript: str = ""  # Optional explicit transcript text (to override DB)
     use_audio_context: bool = True
@@ -62,4 +62,4 @@ class RefineNotesRequest(BaseModel):
     current_notes: str
     user_instruction: str
     model: str = "gemini"
-    model_name: str = "gemini-2.5-flash"
+    model_name: str = "gemini-3-pro-preview"

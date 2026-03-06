@@ -29,7 +29,7 @@ class SummarizationService:
         self,
         text: str,
         model: str = "gemini",
-        model_name: str = "gemini-2.5-flash",
+        model_name: str = "gemini-3-pro-preview",
         chunk_size: int = 5000,
         overlap: int = 1000,
         custom_prompt: str = "Generate a summary of the meeting transcript.",

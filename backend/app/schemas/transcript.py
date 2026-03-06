@@ -30,7 +30,7 @@ class TranscriptRequest(BaseModel):
 
     text: str
     model: str = "gemini"
-    model_name: str = "gemini-2.5-flash"
+    model_name: str = "gemini-3-flash-preview"
     meeting_id: str
     chunk_size: Optional[int] = 5000
     overlap: Optional[int] = 1000

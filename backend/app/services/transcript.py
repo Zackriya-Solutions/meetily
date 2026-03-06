@@ -8,6 +8,7 @@ from pydantic_ai import Agent
 from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.groq import GroqModel
 from pydantic_ai.models.openai import OpenAIModel
+from pydantic_ai.models.gemini import GeminiModel
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.providers.groq import GroqProvider
 from pydantic_ai.providers.anthropic import AnthropicProvider
@@ -139,18 +140,22 @@ class TranscriptService:
                 llm = OpenAIModel(model_name, provider=OpenAIProvider(api_key=api_key))
                 logger.info(f"Using OpenAI model: {model_name}")
             elif model == "gemini":
-                api_key = await self.db.get_api_key("gemini", user_email=user_email)
-                if not api_key:
-                    # Prioritize GEMINI_API_KEY over GOOGLE_API_KEY
-                    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+                # Prioritize Environment Variables over Database
+                api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+                if api_key:
+                    logger.info("Using Gemini API key from environment variable")
+                else:
+                    api_key = await self.db.get_api_key("gemini", user_email=user_email)
+                    if api_key:
+                        logger.info(f"Using Gemini API key from database for user: {user_email}")
+                
                 if not api_key:
                     raise ValueError(
                         "Gemini API key not found. Set GEMINI_API_KEY environment variable."
                     )
 
-                # Use gemini-2.5-flash for speed and large context (Default)
-                model_name = model_name or "gemini-2.5-flash"
-                llm = model_name
+                # Try simple client initialization to check for immediate key errors
+                llm = GeminiModel(model_name, api_key=api_key)
                 logger.info(f"Using Gemini model: {model_name}")
             else:
                 logger.error(f"Unsupported model provider requested: {model}")
@@ -254,7 +259,6 @@ class TranscriptService:
                             {custom_prompt}
                             ---
                             """
-
                             # Use Gemini for structured output
                             response_text = await generate_content_text_async(
                                 api_key=api_key,

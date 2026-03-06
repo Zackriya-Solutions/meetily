@@ -35,7 +35,13 @@ class CalendarReminderScheduler:
         self._interval_seconds = int(os.getenv("CALENDAR_REMINDER_LOOP_SECONDS", "60"))
 
         # Distributed locking
-        self.redis = redis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379/0"))
+        # Prefer REDIS_URL; fall back to CELERY_BROKER_URL for docker-compose setups.
+        redis_url = (
+            os.getenv("REDIS_URL")
+            or os.getenv("CELERY_BROKER_URL")
+            or "redis://localhost:6379/0"
+        )
+        self.redis = redis.from_url(redis_url)
         self.worker_id = str(uuid.uuid4())
         self.lock_key = "calendar_scheduler_leader_lock"
         # TTL should be longer than the loop interval to prevent flapping
@@ -123,9 +129,17 @@ class CalendarReminderScheduler:
                 continue
 
             attendees = item.get("attendees", []) or []
-            attendee_emails = [
-                a.get("email", "").strip().lower() for a in attendees if a.get("email")
-            ]
+            attendee_entries = []
+            for attendee in attendees:
+                email = (attendee.get("email") or "").strip().lower()
+                if not email:
+                    continue
+                attendee_entries.append(
+                    {
+                        "email": email,
+                        "name": (attendee.get("displayName") or "").strip(),
+                    }
+                )
             organizer_email = (item.get("organizer", {}) or {}).get("email")
 
             events.append(
@@ -135,7 +149,7 @@ class CalendarReminderScheduler:
                     "meeting_link": self._extract_meeting_link(item),
                     "agenda_description": item.get("description"),
                     "organizer_email": organizer_email,
-                    "attendee_emails": attendee_emails,
+                    "attendee_emails": attendee_entries,
                     "start_time": start_time,
                     "end_time": end_time,
                 }

@@ -41,7 +41,10 @@ class CalendarReminderEmailService:
     def _clean_emails(candidates: List[str]) -> List[str]:
         cleaned = []
         for value in candidates:
-            email = (value or "").strip().lower()
+            if isinstance(value, dict):
+                email = (value.get("email") or "").strip().lower()
+            else:
+                email = (str(value or "")).strip().lower()
             if "@" not in email:
                 continue
             if email not in cleaned:

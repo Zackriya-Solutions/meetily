@@ -60,7 +60,7 @@ const Sidebar: React.FC = () => {
   const [showModelSettings, setShowModelSettings] = useState(false);
   const [modelConfig, setModelConfig] = useState<ModelConfig>({
     provider: 'gemini',
-    model: 'gemini-2.5-flash',
+    model: 'gemini-2.5-pro',
     whisperModel: 'large-v3',
     apiKey: null,
     ollamaEndpoint: null

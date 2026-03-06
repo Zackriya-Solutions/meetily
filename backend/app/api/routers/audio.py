@@ -26,10 +26,12 @@ import httpx
 
 try:
     from ..deps import get_current_user
+    from ...schemas.audio import StreamingSessionHealthResponse
     from ...schemas.user import User
     from ...db import DatabaseManager
     from ...core.rbac import RBAC
     from ...core.security import verify_google_token
+    from ...services.ai_participant import AIParticipantEngine, MeetingContext
     from ...services.audio.manager import StreamingTranscriptionManager
     from ...services.audio.recorder import get_or_create_recorder, stop_recorder
     from ...services.audio.post_recording import get_post_recording_service
@@ -37,10 +39,12 @@ try:
     from ...services.storage import StorageService
 except (ImportError, ValueError):
     from api.deps import get_current_user
+    from schemas.audio import StreamingSessionHealthResponse
     from schemas.user import User
     from db import DatabaseManager
     from core.rbac import RBAC
     from core.security import verify_google_token
+    from services.ai_participant import AIParticipantEngine, MeetingContext
     from services.audio.manager import StreamingTranscriptionManager
     from services.audio.recorder import get_or_create_recorder, stop_recorder
     from services.audio.post_recording import get_post_recording_service
@@ -61,6 +65,7 @@ session_context = {}
 session_finalize_locks = {}
 session_finalized = set()
 session_runtime_stats = {}
+session_ai_participants = {}
 
 RESUME_GRACE_SECONDS = int(os.getenv("STREAMING_RESUME_GRACE_SECONDS", "45"))
 STREAMING_AUDIO_QUEUE_MAX_CHUNKS = int(
@@ -101,6 +106,15 @@ STREAMING_SLO_DEFAULT_LOOKBACK_HOURS = int(
 )
 STREAMING_SLO_TARGET_SECONDS = float(os.getenv("STREAMING_SLO_TARGET_SECONDS", "8.0"))
 STREAMING_SLO_MAX_SECONDS = float(os.getenv("STREAMING_SLO_MAX_SECONDS", "10.0"))
+AI_PARTICIPANT_INACTIVITY_ALERT_SECONDS = int(
+    os.getenv("AI_PARTICIPANT_INACTIVITY_ALERT_SECONDS", "180")
+)
+AI_PARTICIPANT_INACTIVITY_COOLDOWN_SECONDS = int(
+    os.getenv("AI_PARTICIPANT_INACTIVITY_COOLDOWN_SECONDS", "300")
+)
+AI_PARTICIPANT_INACTIVITY_RESET_MIN_CHARS = int(
+    os.getenv("AI_PARTICIPANT_INACTIVITY_RESET_MIN_CHARS", "12")
+)
 
 state_service = get_audio_pipeline_state_service()
 
@@ -341,6 +355,92 @@ def _cancel_pending_cleanup(session_id: str):
         task.cancel()
 
 
+async def _build_ai_meeting_context(meeting_id: str, user_email: str) -> MeetingContext:
+    context = MeetingContext(meeting_id=meeting_id)
+    if not meeting_id:
+        return context
+
+    try:
+        meeting_data = await db.get_meeting(meeting_id)
+        if meeting_data:
+            context.title = (meeting_data.get("title") or "").strip()
+            context.goal = (meeting_data.get("goal") or "").strip()
+            context.description = (meeting_data.get("description") or "").strip()
+    except Exception as meeting_err:
+        logger.debug(
+            "[AIParticipant] Failed loading meeting context for %s: %s",
+            meeting_id,
+            meeting_err,
+        )
+
+    try:
+        event_context = await db.get_calendar_event_context_for_meeting(
+            meeting_id=meeting_id,
+            user_email=user_email,
+        )
+        if event_context:
+            agenda_text = (event_context.get("agenda_description") or "").strip()
+            if agenda_text:
+                context.agenda_text = agenda_text
+            attendees = event_context.get("attendees") or []
+            participant_names: List[str] = []
+            for attendee in attendees:
+                if isinstance(attendee, dict):
+                    display_name = (attendee.get("name") or "").strip()
+                    email = (attendee.get("email") or "").strip().lower()
+                else:
+                    display_name = ""
+                    email = str(attendee or "").strip().lower()
+
+                if display_name and display_name not in participant_names:
+                    participant_names.append(display_name)
+                    continue
+
+                if email:
+                    local = email.split("@")[0]
+                    inferred = " ".join(
+                        part for part in re.split(r"[._-]+", local) if part
+                    ).title()
+                    if inferred and inferred not in participant_names:
+                        participant_names.append(inferred)
+            if participant_names:
+                context.participant_names = participant_names
+    except Exception as event_err:
+        logger.debug(
+            "[AIParticipant] Failed loading agenda context for %s: %s",
+            meeting_id,
+            event_err,
+        )
+
+    return context
+
+
+def _normalize_manual_context(payload: Dict[str, Any]) -> Dict[str, Any]:
+    context_payload = payload.get("manual_context")
+    if not isinstance(context_payload, dict):
+        return {}
+
+    goal = " ".join(str(context_payload.get("goal") or "").split()).strip()
+    agenda_text = " ".join(
+        str(context_payload.get("agenda_text") or "").split()
+    ).strip()
+
+    raw_participants = context_payload.get("participants") or []
+    participants: List[str] = []
+    if isinstance(raw_participants, list):
+        for item in raw_participants:
+            value = " ".join(str(item or "").split()).strip()
+            if value and value not in participants:
+                participants.append(value)
+
+    return {
+        "goal": goal[:300],
+        "agenda_text": agenda_text[:2000],
+        "participants": participants[:30],
+        "has_values": bool(goal or agenda_text or participants),
+    }
+
+
 async def _finalize_session(
     session_id: str, flush: bool = True, process_audio: bool = True
 ):
@@ -446,6 +546,7 @@ async def _finalize_session(
             except Exception:
                 pass
             streaming_managers.pop(session_id, None)
+        session_ai_participants.pop(session_id, None)
 
         active_connections.pop(session_id, None)
         session_context.pop(session_id, None)
@@ -569,6 +670,7 @@ async def websocket_streaming_audio(
 
     # Initialize manager to avoid unbound errors
     manager = None
+    ai_engine = None
 
     # Check if resuming session
     is_resume = False
@@ -581,6 +683,7 @@ async def websocket_streaming_audio(
             await websocket.close(code=1008)
             return
         manager = streaming_managers[session_id]
+        ai_engine = session_ai_participants.get(session_id)
         is_resume = True
         _cancel_pending_cleanup(session_id)
         reconnect_storm = _mark_runtime_resume(session_id)
@@ -700,13 +803,34 @@ async def websocket_streaming_audio(
             meeting_context = {}
             if active_meeting_id:
                 try:
-                    meeting_data = await db.get_meeting(active_meeting_id)
-                    if meeting_data:
-                        meeting_context = {
-                            "title": meeting_data.get("title"),
-                            "description": meeting_data.get("description"),
-                            "participants": meeting_data.get("participants", []),
-                        }
+                    ai_context = await _build_ai_meeting_context(
+                        meeting_id=active_meeting_id,
+                        user_email=user_email,
+                    )
+                    meeting_context = {
+                        "title": ai_context.title,
+                        "description": ai_context.description,
+                    }
+                    ai_engine = AIParticipantEngine(
+                        db=db,
+                        user_email=user_email,
+                        meeting_context=ai_context,
+                    )
+                    session_ai_participants[session_id] = ai_engine
+                    logger.info(
+                        "[AIParticipant] Engine initialized session=%s meeting=%s enabled=%s model=%s interval=%ss min_window_chars=%s verbose_logs=%s decision_logs=%s goal=%s agenda_chars=%s participants=%s",
+                        session_id,
+                        active_meeting_id,
+                        ai_engine.enabled,
+                        ai_engine.model_name,
+                        ai_engine.analysis_interval_seconds,
+                        ai_engine.min_chars_before_analysis,
+                        ai_engine.verbose_logs,
+                        ai_engine.evaluator.decision_logs,
+                        bool(ai_context.goal),
+                        len(ai_context.agenda_text or ""),
+                        len(ai_context.participant_names or []),
+                    )
                 except Exception as e:
                     logger.warning(f"[Streaming] Failed to fetch meeting context: {e}")
 
@@ -715,6 +839,39 @@ async def websocket_streaming_audio(
             )
             streaming_managers[session_id] = manager
             logger.info(f"[Streaming] ✅ Session {session_id} started (HYBRID mode)")
+
+    if ai_engine is None and active_meeting_id:
+        try:
+            ai_context = await _build_ai_meeting_context(
+                meeting_id=active_meeting_id,
+                user_email=user_email,
+            )
+            ai_engine = AIParticipantEngine(
+                db=db,
+                user_email=user_email,
+                meeting_context=ai_context,
+            )
+            session_ai_participants[session_id] = ai_engine
+            logger.info(
+                "[AIParticipant] Engine initialized session=%s meeting=%s enabled=%s model=%s interval=%ss min_window_chars=%s verbose_logs=%s decision_logs=%s goal=%s agenda_chars=%s participants=%s",
+                session_id,
+                active_meeting_id,
+                ai_engine.enabled,
+                ai_engine.model_name,
+                ai_engine.analysis_interval_seconds,
+                ai_engine.min_chars_before_analysis,
+                ai_engine.verbose_logs,
+                ai_engine.evaluator.decision_logs,
+                bool(ai_context.goal),
+                len(ai_context.agenda_text or ""),
+                len(ai_context.participant_names or []),
+            )
+        except Exception as ai_ctx_err:
+            logger.debug(
+                "[AIParticipant] Context bootstrap failed for %s: %s",
+                session_id,
+                ai_ctx_err,
+            )
 
     try:
         await state_service.ensure_session(
@@ -835,6 +992,104 @@ async def websocket_streaming_audio(
 
         # Do not persist live transcript segments on streaming path.
         # Transcript persistence is handled by explicit save-transcript flow.
+        if ai_engine:
+            asyncio.create_task(_process_ai_guardrail(data, event_ts))
+
+    last_final_transcript_at = time.time()
+    last_inactivity_alert_at = 0.0
+
+    async def _publish_ai_guardrail_alert_payload(
+        *,
+        alert_id: str,
+        reason: str,
+        insight: str,
+        confidence: float,
+        event_ts: str,
+        updated_at: str,
+        ai_stats: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        payload = {
+            "type": "ai_guardrail_alert",
+            "id": alert_id,
+            "reason": reason,
+            "insight": insight,
+            "confidence": confidence,
+            "timestamp": event_ts,
+            "updated_at": updated_at,
+        }
+
+        await websocket.send_json(payload)
+        logger.info(
+            "[AIParticipant] Alert published session=%s meeting=%s reason=%s confidence=%.2f updated_at=%s insight=%s",
+            session_id,
+            active_meeting_id,
+            reason,
+            float(confidence or 0.0),
+            updated_at,
+            " ".join((insight or "").split())[:180],
+        )
+        runtime_stats["ai_guardrail_alerts_count"] = (
+            int(runtime_stats.get("ai_guardrail_alerts_count") or 0) + 1
+        )
+        runtime_stats["last_ai_guardrail_alert"] = payload
+        runtime_stats["last_update_at"] = datetime.utcnow().isoformat()
+
+        metadata_patch = {
+            "ai_guardrail_last_alert": payload,
+            "ai_guardrail_last_alert_at": payload["updated_at"],
+            "ai_guardrail_alerts_count": runtime_stats["ai_guardrail_alerts_count"],
+        }
+        if ai_stats is not None:
+            metadata_patch["ai_guardrail"] = ai_stats
+
+        await state_service.db.merge_recording_session_metadata(
+            session_id, metadata_patch
+        )
+
+    async def _process_ai_guardrail(data: Dict[str, Any], event_ts: str) -> None:
+        nonlocal last_final_transcript_at
+        try:
+            transcript_text = (data.get("text") or "").strip()
+            if not transcript_text:
+                return
+
+            # Do not reset inactivity on extremely short/filler transcripts.
+            # This avoids perpetual timer resets from 1-5 char noisy chunks.
+            if len(transcript_text) >= AI_PARTICIPANT_INACTIVITY_RESET_MIN_CHARS:
+                last_final_transcript_at = time.time()
+            transcript_time = data.get("audio_end_time")
+            alert = await ai_engine.ingest_transcript(
+                text=transcript_text,
+                transcript_time_seconds=transcript_time,
+            )
+            ai_stats = ai_engine.get_stats_snapshot()
+            runtime_stats["ai_guardrail"] = ai_stats
+            runtime_stats["last_update_at"] = datetime.utcnow().isoformat()
+
+            if not alert:
+                logger.debug(
+                    "[AIParticipant] No alert session=%s attempts=%s last_model=%s window_chars=%s window_duration=%.1fs",
+                    session_id,
+                    ai_stats.get("analysis_attempts"),
+                    ai_stats.get("last_model_used") or ai_stats.get("model"),
+                    ai_stats.get("window_char_count"),
+                    float(ai_stats.get("window_duration_seconds") or 0.0),
+                )
+                return
+
+            await _publish_ai_guardrail_alert_payload(
+                alert_id=alert.id,
+                reason=alert.reason.value,
+                insight=alert.insight,
+                confidence=alert.confidence,
+                event_ts=event_ts,
+                updated_at=alert.timestamp,
+                ai_stats=ai_stats,
+            )
+        except Exception as ai_err:
+            logger.error(
+                "[AIParticipant] Guardrail processing failed: %s", ai_err, exc_info=True
+            )
 
     async def on_error(message: str, code: Optional[str] = None):
         try:
@@ -895,6 +1150,7 @@ async def websocket_streaming_audio(
     last_snapshot_persist_at = 0.0
 
     async def metrics_monitor():
+        nonlocal last_inactivity_alert_at
         nonlocal last_snapshot_persist_at
         try:
             while True:
@@ -979,6 +1235,56 @@ async def websocket_streaming_audio(
                             "volatile_segments": volatile_segments,
                         },
                     )
+                if ai_engine and AI_PARTICIPANT_INACTIVITY_ALERT_SECONDS > 0:
+                    now_ts = time.time()
+                    silence_seconds = max(0.0, now_ts - float(last_final_transcript_at))
+                    if (
+                        silence_seconds >= AI_PARTICIPANT_INACTIVITY_ALERT_SECONDS
+                        and (now_ts - float(last_inactivity_alert_at))
+                        >= AI_PARTICIPANT_INACTIVITY_COOLDOWN_SECONDS
+                    ):
+                        ai_stats = ai_engine.get_stats_snapshot()
+                        runtime_stats["ai_guardrail"] = ai_stats
+                        runtime_stats["last_update_at"] = datetime.utcnow().isoformat()
+                        context_goal = (
+                            getattr(ai_engine.meeting_context, "goal", "") or ""
+                        ).strip()
+                        context_agenda = (
+                            getattr(ai_engine.meeting_context, "agenda_text", "") or ""
+                        ).strip()
+                        if context_goal:
+                            insight = (
+                                f"No active discussion detected recently. Start by aligning on the meeting goal: "
+                                f"{context_goal[:140]}"
+                            )
+                        elif context_agenda:
+                            first_line = context_agenda.splitlines()[0].strip()
+                            first_line = first_line or context_agenda[:140]
+                            insight = (
+                                "No active discussion detected recently. Start with this agenda point: "
+                                f"{first_line[:140]}"
+                            )
+                        else:
+                            insight = (
+                                "No active discussion detected recently. Please start the conversation by stating "
+                                "the meeting objective and first topic."
+                            )
+                        await _publish_ai_guardrail_alert_payload(
+                            alert_id=str(uuid.uuid4()),
+                            reason="missing_context_or_repeat",
+                            insight=insight,
+                            confidence=0.85,
+                            event_ts=datetime.utcnow().isoformat(),
+                            updated_at=datetime.utcnow().isoformat(),
+                            ai_stats=ai_stats,
+                        )
+                        logger.info(
+                            "[AIParticipant] Inactivity alert candidate session=%s silence_seconds=%.1f cooldown_seconds=%s",
+                            session_id,
+                            silence_seconds,
+                            AI_PARTICIPANT_INACTIVITY_COOLDOWN_SECONDS,
+                        )
+                        last_inactivity_alert_at = now_ts
                 now_ts = time.time()
                 if (now_ts - last_snapshot_persist_at) >= 60:
                     await _persist_runtime_snapshot(
@@ -1031,6 +1337,58 @@ async def websocket_streaming_audio(
                         await websocket.send_json({"type": "stop_ack"})
                         explicit_stop = True
                         break
+                    if data.get("type") == "context_update":
+                        manual_context = _normalize_manual_context(data)
+                        if ai_engine and manual_context.get("has_values"):
+                            goal = manual_context.get("goal") or None
+                            agenda_text = manual_context.get("agenda_text") or None
+                            participants = manual_context.get("participants") or None
+                            ai_engine.apply_manual_context(
+                                goal=goal,
+                                agenda_text=agenda_text,
+                                participant_names=participants,
+                            )
+                            runtime_stats["ai_context_source"] = "manual"
+                            runtime_stats["ai_manual_context"] = manual_context
+                            runtime_stats["last_update_at"] = (
+                                datetime.utcnow().isoformat()
+                            )
+                            logger.info(
+                                "[AIParticipant] Manual context applied session=%s meeting=%s goal=%s agenda_chars=%s participants=%s",
+                                session_id,
+                                active_meeting_id,
+                                bool(goal),
+                                len(agenda_text or ""),
+                                len(participants or []),
+                            )
+                            try:
+                                await state_service.db.merge_recording_session_metadata(
+                                    session_id,
+                                    {
+                                        "ai_manual_context": manual_context,
+                                        "ai_context_source": runtime_stats[
+                                            "ai_context_source"
+                                        ],
+                                    },
+                                )
+                            except Exception:
+                                pass
+                        else:
+                            logger.info(
+                                "[AIParticipant] Manual context ignored session=%s meeting=%s has_engine=%s has_values=%s",
+                                session_id,
+                                active_meeting_id,
+                                bool(ai_engine),
+                                bool(manual_context.get("has_values")),
+                            )
+                        await websocket.send_json(
+                            {
+                                "type": "context_ack",
+                                "applied": bool(manual_context.get("has_values")),
+                                "timestamp": datetime.utcnow().isoformat(),
+                            }
+                        )
+                        continue
                 except:
                     pass
 
@@ -1470,7 +1828,10 @@ async def get_pipeline_session_status(
     }
 
 
-@router.get("/sessions/{session_id}/streaming-health")
+@router.get(
+    "/sessions/{session_id}/streaming-health",
+    response_model=StreamingSessionHealthResponse,
+)
 async def get_streaming_session_health(
     session_id: str, current_user: User = Depends(get_current_user)
 ):

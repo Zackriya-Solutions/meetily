@@ -11,7 +11,7 @@ import Analytics from '@/lib/analytics';
 import { RefObject, useState } from 'react';
 import { RefineNotesSidebar } from './RefineNotesSidebar';
 
-import { Trash2 } from 'lucide-react'; // Add Trash2 icon
+import { Trash2, X } from 'lucide-react'; // Add Trash2 and X icon
 
 interface SummaryPanelProps {
   meeting: {
@@ -95,6 +95,7 @@ export function SummaryPanel({
   const isSummaryLoading = summaryStatus === 'processing' || summaryStatus === 'summarizing' || summaryStatus === 'regenerating';
   const [isRefineSidebarOpen, setIsRefineSidebarOpen] = useState(false);
   const [currentNotesContent, setCurrentNotesContent] = useState('');
+  const [isDiarizedPromptDismissed, setIsDiarizedPromptDismissed] = useState(false);
 
   const handleOpenRefine = async () => {
     if (summaryRef.current) {
@@ -177,17 +178,26 @@ export function SummaryPanel({
         </div>
       )}
 
-      {aiSummary && !isSummaryLoading && notesGenerationInfo?.recommend_regenerate_with_diarized && (
+      {aiSummary && !isSummaryLoading && notesGenerationInfo?.recommend_regenerate_with_diarized && !isDiarizedPromptDismissed && (
         <div className="mx-6 mt-4 p-3 rounded-lg border border-amber-200 bg-amber-50 flex items-center justify-between gap-3">
           <p className="text-sm text-amber-900">
             Speaker-aware transcript is available. Regenerating with diarized transcript can improve notes quality.
           </p>
-          <button
-            onClick={() => onRegenerateWithDiarized?.()}
-            className="px-3 py-1.5 rounded-md bg-amber-600 text-white text-sm hover:bg-amber-700"
-          >
-            Regenerate with diarized
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => onRegenerateWithDiarized?.()}
+              className="px-3 py-1.5 rounded-md bg-amber-600 text-white text-sm hover:bg-amber-700"
+            >
+              Regenerate with diarized
+            </button>
+            <button
+              onClick={() => setIsDiarizedPromptDismissed(true)}
+              className="p-1.5 rounded-md text-amber-600 hover:bg-amber-100 transition-colors"
+              title="Dismiss"
+            >
+              <X size={16} />
+            </button>
+          </div>
         </div>
       )}
 
@@ -208,6 +218,8 @@ export function SummaryPanel({
                 onTemplateSelect={onTemplateSelect}
                 hasTranscripts={transcripts.length > 0}
                 isModelConfigLoading={isModelConfigLoading}
+                isDiarizedAvailable={transcripts.some((t) => t.source === 'diarized') || !!notesGenerationInfo?.diarized_available}
+                onRegenerateWithDiarized={onRegenerateWithDiarized}
               />
             </div>
             {/* Loading spinner */}
@@ -233,6 +245,8 @@ export function SummaryPanel({
                 onTemplateSelect={onTemplateSelect}
                 hasTranscripts={transcripts.length > 0}
                 isModelConfigLoading={isModelConfigLoading}
+                isDiarizedAvailable={transcripts.some((t) => t.source === 'diarized') || !!notesGenerationInfo?.diarized_available}
+                onRegenerateWithDiarized={onRegenerateWithDiarized}
               />
             </div>
             {/* Empty state message */}

@@ -483,8 +483,12 @@ class DiarizationService:
     async def _get_groq_api_key(self, user_email: str = None) -> Optional[str]:
         """
         Resolve Groq API key for diarization transcription.
-        Priority: 1) User-specific key from DB, 2) Environment, 3) cached instance key.
+        Priority: 1) Environment, 2) User-specific key from DB, 3) cached instance key.
         """
+        env_key = os.getenv("GROQ_API_KEY")
+        if env_key:
+            return env_key
+
         if user_email:
             try:
                 try:
@@ -498,10 +502,6 @@ class DiarizationService:
                     return db_key
             except Exception as e:
                 logger.warning(f"Failed to get Groq key from database: {e}")
-
-        env_key = os.getenv("GROQ_API_KEY")
-        if env_key:
-            return env_key
 
         return self.groq_api_key
 
@@ -1167,9 +1167,10 @@ class DiarizationService:
         """
 
         try:
-            api_key = os.getenv("GEMINI_API_KEY")
+            # Prioritize Environment Variables over Database (Consistency)
+            api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
             if not api_key:
-                logger.warning("GEMINI_API_KEY not found, skipping translation")
+                logger.warning("GEMINI_API_KEY or GOOGLE_API_KEY not found, skipping translation")
                 return aligned_transcripts
 
             try:
@@ -1183,7 +1184,7 @@ class DiarizationService:
             # Using Gemini as the default fast/cheap translation engine
             response_text = await generate_content_text_async(
                 api_key=api_key,
-                model="gemini-2.0-flash",  # Reliable json output
+                model="gemini-3-flash-preview",  # Reliable json output
                 contents=prompt,
                 config={"temperature": 0.1},
             )

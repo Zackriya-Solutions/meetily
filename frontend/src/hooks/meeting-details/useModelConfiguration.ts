@@ -13,7 +13,7 @@ export function useModelConfiguration({ serverAddress }: UseModelConfigurationPr
   // Note: No hardcoded defaults - DB is the source of truth
   const [modelConfig, setModelConfig] = useState<ModelConfig>({
     provider: 'gemini',
-    model: 'gemini-2.5-flash', // Default to Gemini
+    model: 'gemini-2.5-pro', // Default to Gemini
     whisperModel: 'large-v3'
   });
   const [isLoading, setIsLoading] = useState(true);

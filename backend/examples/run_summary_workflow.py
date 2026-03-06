@@ -9,7 +9,7 @@ import logging
 # --- Configuration ---
 DEFAULT_BASE_URL = "http://localhost:5167"
 DEFAULT_MODEL_PROVIDER = "gemini"  # Or 'ollama', 'groq', 'openai' etc.
-DEFAULT_MODEL_NAME = "gemini-2.5-flash" # Adjust if needed (example)
+DEFAULT_MODEL_NAME = "gemini-3-pro-preview" # Adjust if needed (example)
 DEFAULT_CHUNK_SIZE = 40000
 DEFAULT_OVERLAP = 1000
 DEFAULT_POLL_INTERVAL_SECONDS = 5  # How often to check the status

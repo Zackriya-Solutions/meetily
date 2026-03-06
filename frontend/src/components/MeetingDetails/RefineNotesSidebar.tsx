@@ -138,7 +138,7 @@ export function RefineNotesSidebar({ meetingId, onClose, currentNotes, onApplyRe
                     current_notes: currentNotes,
                     user_instruction: userMessage,
                     model: 'gemini', // Default to gemini for now
-                    model_name: 'gemini-2.5-flash'
+                    model_name: 'gemini-2.5-pro'
                 }),
             });
 

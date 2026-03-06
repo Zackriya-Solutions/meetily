@@ -18,7 +18,7 @@ class CatchUpRequest(BaseModel):
 
     transcripts: List[Union[str, Dict[str, object]]]  # Supports plain text or rich transcript entries
     model: str = "gemini"
-    model_name: str = "gemini-2.5-flash"
+    model_name: str = "gemini-3-flash-preview"
     window_minutes: Optional[int] = None
     window_start_iso: Optional[str] = None
     window_end_iso: Optional[str] = None

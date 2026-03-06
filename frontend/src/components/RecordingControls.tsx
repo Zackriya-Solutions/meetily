@@ -31,6 +31,21 @@ interface RecordingControlsProps {
   initialSessionId?: string | null;
   onPauseChange?: (paused: boolean) => void;
   startSignal?: number;
+  onGuardrailAlert?: (alert: {
+    id: string;
+    reason: 'agenda_deviation' | 'no_decision' | 'unresolved_question' | 'missing_context_or_repeat';
+    insight: string;
+    confidence: number;
+    timestamp: string;
+    updated_at?: string;
+  }) => void;
+  manualContext?: {
+    goal: string;
+    agenda_text: string;
+    participants: string[];
+  };
+  contextApplySignal?: number;
+  onContextApplied?: (applied: boolean) => void;
 }
 
 export const RecordingControls: React.FC<RecordingControlsProps> = ({
@@ -46,7 +61,11 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
   onSessionIdReceived,
   initialSessionId,
   onPauseChange,
-  startSignal
+  startSignal,
+  onGuardrailAlert,
+  manualContext,
+  contextApplySignal,
+  onContextApplied
 }) => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
@@ -143,10 +162,19 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
         onConnected: (sessionId) => {
           console.log('✅ Connected to streaming service, session:', sessionId);
           if (onSessionIdReceived) onSessionIdReceived(sessionId);
+          if (manualContext) {
+            client.updateMeetingContext(manualContext);
+          }
+        },
+        onContextAck: (applied) => {
+          onContextApplied?.(applied);
         },
 
         onPartial: (text, confidence, isStable) => {
           // Partial transcripts disabled by backend
+        },
+        onGuardrailAlert: (alert) => {
+          onGuardrailAlert?.(alert);
         },
 
         onFinal: (text, confidence, reason, timing, metadata) => {
@@ -228,7 +256,14 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
     } finally {
       setIsStarting(false);
     }
-  }, [onRecordingStart, onTranscriptionError, onTranscriptReceived, isStarting, initialSessionId, onSessionIdReceived, session?.idToken]);
+  }, [onRecordingStart, onTranscriptionError, onTranscriptReceived, isStarting, initialSessionId, onSessionIdReceived, session?.idToken, onGuardrailAlert, manualContext, onContextApplied]);
+
+  useEffect(() => {
+    if (!isRecording) return;
+    if (!manualContext) return;
+    if (!contextApplySignal || contextApplySignal <= 0) return;
+    audioClientRef.current?.updateMeetingContext(manualContext);
+  }, [isRecording, manualContext, contextApplySignal]);
 
   // External start trigger (used by recovery resume action).
   useEffect(() => {

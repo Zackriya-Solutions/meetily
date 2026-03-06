@@ -35,7 +35,7 @@ When a meeting ends and has transcripts, notes are automatically generated using
 {
   "template_id": "standard_meeting",
   "model": "gemini",
-  "model_name": "gemini-2.5-flash",
+  "model_name": "gemini-2.5-pro",
   "use_audio_context": true,
   "audio_mode": "auto",
   "audio_url": "",

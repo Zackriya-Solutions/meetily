@@ -17,7 +17,7 @@ Target outcome: higher factual accuracy and better action-item extraction withou
 ### Current generation path
 - Notes endpoint: `POST /meetings/{meeting_id}/generate-notes`
 - Current backend implementation: `backend/app/api/routers/transcripts.py`
-- Current behavior: transcript-only summarization using Gemini (`gemini-2.5-flash`) with template prompt.
+- Current behavior: transcript-only summarization using Gemini (`gemini-2.5-pro`) with template prompt.
 
 ### Current audio path
 - Recording stored as `recording.wav` at path convention: `{meeting_id}/recording.wav`

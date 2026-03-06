@@ -78,7 +78,7 @@ function MeetingDetailsContent() {
         method: 'POST',
         body: JSON.stringify({
           provider: 'gemini',
-          model: 'gemini-2.5-flash',
+          model: 'gemini-2.5-pro',
           whisperModel: 'large-v3',
           apiKey: null // Will use env var on backend
         })

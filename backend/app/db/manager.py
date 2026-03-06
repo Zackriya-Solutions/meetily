@@ -795,7 +795,7 @@ class DatabaseManager:
             # Default to Gemini if no config found
             return {
                 "provider": "gemini",
-                "model": "gemini-2.5-flash",
+                "model": "gemini-3-pro-preview",
                 "whisperModel": "large-v3",
             }
 
@@ -1477,7 +1477,7 @@ class DatabaseManager:
                       OR LOWER(meeting_title) LIKE LOWER($3) || '%'
                       OR LOWER($3) LIKE LOWER(meeting_title) || '%'
                   )
-                  AND start_time BETWEEN ($4 - INTERVAL '12 hours') AND ($4 + INTERVAL '12 hours')
+                  AND start_time BETWEEN ($4::timestamp - INTERVAL '12 hours') AND ($4::timestamp + INTERVAL '12 hours')
                 ORDER BY ABS(EXTRACT(EPOCH FROM (start_time - $4))) ASC
                 LIMIT 1
             """,
@@ -1496,7 +1496,7 @@ class DatabaseManager:
                     FROM calendar_events
                     WHERE user_email = $1
                       AND provider = $2
-                      AND start_time BETWEEN ($3 - INTERVAL '3 hours') AND ($3 + INTERVAL '3 hours')
+                      AND start_time BETWEEN ($3::timestamp - INTERVAL '3 hours') AND ($3::timestamp + INTERVAL '3 hours')
                     ORDER BY ABS(EXTRACT(EPOCH FROM (start_time - $3))) ASC
                     LIMIT 1
                 """,

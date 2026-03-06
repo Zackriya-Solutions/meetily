@@ -25,7 +25,7 @@ async def test_chat_meeting_streams_text(async_client, monkeypatch):
         "meeting_id": "meeting-1",
         "question": "What happened?",
         "model": "gemini",
-        "model_name": "gemini-2.5-flash",
+        "model_name": "gemini-3-pro-preview",
         "context_text": "Team discussed launch scope.",
     }
 
@@ -55,7 +55,7 @@ async def test_catch_up_streams_summary(async_client, monkeypatch):
             {"timestamp": "00:42", "text": "Owner is Alex for release notes."},
         ],
         "model": "gemini",
-        "model_name": "gemini-2.5-flash",
+        "model_name": "gemini-3-pro-preview",
     }
 
     response = await async_client.post("/catch-up", json=payload)
@@ -70,7 +70,7 @@ async def test_catch_up_rejects_empty_transcript(async_client):
     payload = {
         "transcripts": [],
         "model": "gemini",
-        "model_name": "gemini-2.5-flash",
+        "model_name": "gemini-3-pro-preview",
     }
 
     response = await async_client.post("/catch-up", json=payload)

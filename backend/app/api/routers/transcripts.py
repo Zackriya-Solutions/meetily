@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from fastapi.responses import JSONResponse, StreamingResponse
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List, Dict
 import logging
 import json
 import uuid
@@ -420,29 +420,35 @@ async def process_transcript_background(
 
         # Default to Gemini if no model specified
         transcript.model = transcript.model or "gemini"
-        transcript.model_name = transcript.model_name or "gemini-2.5-flash"
+        transcript.model_name = transcript.model_name or "gemini-3-pro-preview"
 
         if transcript.model in ["claude", "groq", "openai", "gemini"]:
-            # Check if API key is available in DB or Environment
-            api_key = await db.get_api_key(transcript.model, user_email=user_email)
+            # Prioritize Environment Variables over Database
+            import os
+            env_keys = {
+                "gemini": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+                "groq": ["GROQ_API_KEY"],
+                "openai": ["OPENAI_API_KEY"],
+                "claude": ["ANTHROPIC_API_KEY"],
+            }
+            
+            api_key = None
+            possible_keys = env_keys.get(transcript.model, [])
+            for k in possible_keys:
+                if os.getenv(k):
+                    api_key = os.getenv(k)
+                    break
+            
             if not api_key:
-                import os
-
-                env_keys = {
-                    "gemini": ["GOOGLE_API_KEY", "GEMINI_API_KEY"],
-                    "groq": ["GROQ_API_KEY"],
-                    "openai": ["OPENAI_API_KEY"],
-                    "claude": ["ANTHROPIC_API_KEY"],
+                api_key = await db.get_api_key(transcript.model, user_email=user_email)
+            if not api_key:
+                provider_names = {
+                    "claude": "Anthropic",
+                    "groq": "Groq",
+                    "openai": "OpenAI",
+                    "gemini": "Gemini",
                 }
-
-                if not any(os.getenv(k) for k in env_keys.get(transcript.model, [])):
-                    provider_names = {
-                        "claude": "Anthropic",
-                        "groq": "Groq",
-                        "openai": "OpenAI",
-                        "gemini": "Gemini",
-                    }
-                    raise ValueError(
+                raise ValueError(
                         f"{provider_names.get(transcript.model, transcript.model)} API key not configured. Please set your API key in the environmental variables or settings."
                     )
 
@@ -592,6 +598,35 @@ async def generate_notes_with_gemini_background(
         no_html = re.sub(r"<[^>]+>", " ", value)
         return re.sub(r"\s+", " ", no_html).strip()
 
+    def _extract_attendee_names_emails(attendees_raw) -> Tuple[List[str], List[str]]:
+        names: List[str] = []
+        emails: List[str] = []
+        if not isinstance(attendees_raw, list):
+            return names, emails
+
+        for attendee in attendees_raw:
+            if isinstance(attendee, dict):
+                email = (attendee.get("email") or "").strip().lower()
+                name = (attendee.get("name") or "").strip()
+            else:
+                email = (str(attendee or "")).strip().lower()
+                name = ""
+
+            if email and email not in emails:
+                emails.append(email)
+
+            if name:
+                if name not in names:
+                    names.append(name)
+            elif email:
+                # Fallback best-effort display name from local part
+                local = email.split("@")[0]
+                inferred = " ".join(part for part in re.split(r"[._-]+", local) if part)
+                inferred = inferred.title().strip()
+                if inferred and inferred not in names:
+                    names.append(inferred)
+        return names, emails
+
     try:
         calendar_event_context = await db.get_calendar_event_context_for_meeting(
             meeting_id=meeting_id,
@@ -607,6 +642,7 @@ async def generate_notes_with_gemini_background(
             calendar_event_context.get("agenda_description") or ""
         )
         attendees = calendar_event_context.get("attendees") or []
+        attendee_names, attendee_emails = _extract_attendee_names_emails(attendees)
         if calendar_event_context.get("meeting_title"):
             calendar_context_lines.append(
                 f"- Calendar title: {calendar_event_context['meeting_title']}"
@@ -620,6 +656,14 @@ async def generate_notes_with_gemini_background(
                 f"- Meeting link: {calendar_event_context['meeting_link']}"
             )
         calendar_context_lines.append(f"- Attendee count: {len(attendees)}")
+        if attendee_names:
+            calendar_context_lines.append(
+                "- Participant names from calendar: " + ", ".join(attendee_names[:25])
+            )
+        if attendee_emails:
+            calendar_context_lines.append(
+                "- Participant emails from calendar: " + ", ".join(attendee_emails[:25])
+            )
         if agenda_text:
             calendar_context_lines.append(f"- Agenda/description: {agenda_text}")
 
@@ -627,6 +671,12 @@ async def generate_notes_with_gemini_background(
         template_prompt += f"\n\nAdditional Context:\n{custom_context}"
     if calendar_context_lines:
         template_prompt += "\n\nCalendar Context:\n" + "\n".join(calendar_context_lines)
+        template_prompt += (
+            "\n\nParticipant Name Rules:\n"
+            "- Use participant names from Calendar Context when filling the People section.\n"
+            "- Do not invent new participant names unless they are clearly stated in transcript/audio.\n"
+            "- If uncertain, prefer email-based identity over fabricated names."
+        )
 
     def _extract_json_object(text: str) -> str:
         if not text:
@@ -776,9 +826,11 @@ async def generate_notes_with_gemini_background(
         mime_type: str,
         audio_bytes: bytes,
     ) -> Optional[str]:
-        api_key = await db.get_api_key("gemini", user_email=user_email_local)
+        # Prioritize Environment Variables over Database
+        api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
         if not api_key:
-            api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+            api_key = await db.get_api_key("gemini", user_email=user_email_local)
+        
         if not api_key:
             logger.warning("Gemini API key missing for multimodal notes generation")
             return None
@@ -804,7 +856,7 @@ async def generate_notes_with_gemini_background(
         def _sync_generate() -> Optional[str]:
             return generate_content_with_file_sync(
                 api_key=api_key,
-                model=model_name or "gemini-2.5-flash",
+                model=model_name or "gemini-3-pro-preview",
                 prompt=multimodal_prompt,
                 file_path=temp_audio_path,
                 mime_type=mime_type,
@@ -836,7 +888,7 @@ async def generate_notes_with_gemini_background(
         }
 
         all_json_data = []
-        model_name = "gemini-2.5-flash"
+        model_name = "gemini-3-pro-preview"
 
         # 2. Try multimodal generation first (behind feature flag + request flags)
         notes_audio_enabled = os.getenv("NOTES_AUDIO_ENABLED", "true").lower() == "true"
@@ -971,7 +1023,8 @@ async def generate_notes_with_gemini_background(
             if calendar_event_context:
                 settings = await db.get_calendar_automation_settings(user_email)
                 attendees = calendar_event_context.get("attendees") or []
-                is_proper_meeting = len(attendees) > 1
+                _, attendee_emails = _extract_attendee_names_emails(attendees)
+                is_proper_meeting = len(attendee_emails) > 1
 
                 if settings.get("recap_enabled", True) and is_proper_meeting:
                     recap_service = CalendarReminderEmailService()
@@ -980,7 +1033,7 @@ async def generate_notes_with_gemini_background(
                         meeting_title=final_result.get("MeetingName", meeting_title),
                         notes_markdown=markdown_output,
                         meeting_link=calendar_event_context.get("meeting_link"),
-                        attendees=attendees,
+                        attendees=attendee_emails,
                         include_attendees=bool(
                             settings.get("attendee_reminders_enabled", False)
                         ),

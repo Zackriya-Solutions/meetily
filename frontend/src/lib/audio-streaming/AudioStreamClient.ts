@@ -10,6 +10,15 @@
  */
 
 export interface StreamingCallbacks {
+  onContextAck?: (applied: boolean) => void;
+  onGuardrailAlert?: (alert: {
+    id: string;
+    reason: 'agenda_deviation' | 'no_decision' | 'unresolved_question' | 'missing_context_or_repeat';
+    insight: string;
+    confidence: number;
+    timestamp: string;
+    updated_at?: string;
+  }) => void;
   onPartial?: (text: string, confidence: number, isStable: boolean) => void;
   onFinal?: (
     text: string,
@@ -244,6 +253,19 @@ export class AudioStreamClient {
             this.sessionId = data.session_id; // Store for reconnection
             this.callbacks.onConnected?.(data.session_id);
           }
+          else if (data.type === 'ai_guardrail_alert') {
+            this.callbacks.onGuardrailAlert?.({
+              id: data.id,
+              reason: data.reason,
+              insight: data.insight,
+              confidence: data.confidence,
+              timestamp: data.timestamp,
+              updated_at: data.updated_at,
+            });
+          }
+          else if (data.type === 'context_ack') {
+            this.callbacks.onContextAck?.(Boolean(data.applied));
+          }
           else if (data.type === 'partial') this.callbacks.onPartial?.(data.text, data.confidence, data.is_stable);
           else if (data.type === 'final') {
             this.callbacks.onFinal?.(
@@ -429,5 +451,33 @@ export class AudioStreamClient {
    */
   getSessionId(): string | null {
     return this.sessionId;
+  }
+
+  updateMeetingContext(context: {
+    goal?: string;
+    agenda_text?: string;
+    participants?: string[];
+  }): void {
+    if (!this.websocket || this.websocket.readyState !== WebSocket.OPEN) return;
+    const goal = (context.goal || '').trim();
+    const agenda = (context.agenda_text || '').trim();
+    const participants = Array.isArray(context.participants)
+      ? context.participants.map((item) => (item || '').trim()).filter(Boolean)
+      : [];
+    if (!goal && !agenda && participants.length === 0) return;
+    try {
+      this.websocket.send(
+        JSON.stringify({
+          type: 'context_update',
+          manual_context: {
+            goal,
+            agenda_text: agenda,
+            participants,
+          },
+        })
+      );
+    } catch (error) {
+      console.warn('[AudioStream] Failed to send context update:', error);
+    }
   }
 }

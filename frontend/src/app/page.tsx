@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useContext, useCallback, useRef } from 'react';
+import { useState, useEffect, useContext, useCallback, useMemo, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { Transcript, TranscriptUpdate, Summary, SummaryResponse } from '@/types';
 import { EditableTitle } from '@/components/EditableTitle';
@@ -76,6 +76,21 @@ interface StreamingHealthPayload {
   };
 }
 
+interface AIGuardrailAlert {
+  id: string;
+  reason: 'agenda_deviation' | 'no_decision' | 'unresolved_question' | 'missing_context_or_repeat';
+  insight: string;
+  confidence: number;
+  timestamp: string;
+  updated_at?: string;
+}
+
+interface ManualMeetingContext {
+  goal: string;
+  agenda_text: string;
+  participants: string[];
+}
+
 export default function Home() {
 
   const [transcripts, setTranscripts] = useState<Transcript[]>([]);
@@ -96,7 +111,7 @@ export default function Home() {
   const [summaryError, setSummaryError] = useState<string | null>(null);
   const [modelConfig, setModelConfig] = useState<ModelConfig>({
     provider: 'gemini',
-    model: 'gemini-2.5-flash',
+    model: 'gemini-2.5-pro',
     whisperModel: 'large-v3'
   });
   const [transcriptModelConfig, setTranscriptModelConfig] = useState<TranscriptModelProps>({
@@ -148,6 +163,16 @@ export default function Home() {
   const [recordingElapsedSeconds, setRecordingElapsedSeconds] = useState(0);
   const [audioTimelineOffsetSeconds, setAudioTimelineOffsetSeconds] = useState(0);
   const [streamingHealth, setStreamingHealth] = useState<StreamingHealthPayload | null>(null);
+  const [activeGuardrailAlert, setActiveGuardrailAlert] = useState<AIGuardrailAlert | null>(null);
+  const [guardrailAlertHistory, setGuardrailAlertHistory] = useState<AIGuardrailAlert[]>([]);
+  const [showGuardrailHistory, setShowGuardrailHistory] = useState(false);
+  const [meetingGoalInput, setMeetingGoalInput] = useState('');
+  const [meetingAgendaInput, setMeetingAgendaInput] = useState('');
+  const [meetingParticipantsInput, setMeetingParticipantsInput] = useState('');
+  const [contextAppliedStatus, setContextAppliedStatus] = useState<'idle' | 'applying' | 'applied' | 'failed'>('idle');
+  const [contextApplySignal, setContextApplySignal] = useState(0);
+  const lastGuardrailSignatureRef = useRef<string>('');
+  const lastGuardrailAtRef = useRef<number>(0);
 
   useEffect(() => {
     const checkRecoveries = async () => {
@@ -458,7 +483,7 @@ export default function Home() {
     claude: ['claude-3-5-sonnet-latest'],
     groq: ['llama-3.3-70b-versatile'],
     openrouter: [],
-    gemini: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash'],
+    gemini: ['gemini-2.5-pro', 'gemini-2.5-pro', 'gemini-2.0-flash'],
     openai: ['gpt-4o', 'gpt-4-turbo'],
   };
 
@@ -589,6 +614,107 @@ export default function Home() {
     // Auto-scroll logic is handled by the existing useEffect on [transcripts]
   }, []);
 
+  const getGuardrailReasonLabel = (reason: AIGuardrailAlert['reason']) => {
+    switch (reason) {
+      case 'agenda_deviation':
+        return 'Agenda';
+      case 'no_decision':
+        return 'Decision';
+      case 'unresolved_question':
+        return 'Question';
+      case 'missing_context_or_repeat':
+        return 'Context';
+      default:
+        return 'Guardrail';
+    }
+  };
+
+  const getGuardrailBadgeClasses = (reason: AIGuardrailAlert['reason']) => {
+    switch (reason) {
+      case 'agenda_deviation':
+        return 'border-blue-300 text-blue-700 bg-blue-50';
+      case 'no_decision':
+        return 'border-amber-300 text-amber-700 bg-amber-50';
+      case 'unresolved_question':
+        return 'border-red-300 text-red-700 bg-red-50';
+      case 'missing_context_or_repeat':
+        return 'border-emerald-300 text-emerald-700 bg-emerald-50';
+      default:
+        return 'border-gray-300 text-gray-700 bg-gray-50';
+    }
+  };
+
+  const formatGuardrailTime = (raw?: string) => {
+    if (!raw) return '--:--';
+    const trimmed = raw.trim();
+    const hasTimezone = /(?:Z|[+-]\d{2}:\d{2})$/i.test(trimmed);
+    const normalized = hasTimezone ? trimmed : `${trimmed}Z`;
+    const dt = new Date(normalized);
+    if (Number.isNaN(dt.getTime())) return '--:--';
+    return dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  };
+
+  const handleGuardrailAlert = useCallback((alert: AIGuardrailAlert) => {
+    const insightKey = `${alert.reason}:${(alert.insight || '').trim().toLowerCase()}`;
+    const nowMs = Date.now();
+    if (
+      insightKey === lastGuardrailSignatureRef.current &&
+      nowMs - lastGuardrailAtRef.current < 180000
+    ) {
+      return;
+    }
+    lastGuardrailSignatureRef.current = insightKey;
+    lastGuardrailAtRef.current = nowMs;
+
+    setActiveGuardrailAlert(alert);
+    setGuardrailAlertHistory((prev) => {
+      const next = [alert, ...prev.filter((item) => item.id !== alert.id && item.insight !== alert.insight)];
+      return next.slice(0, 3);
+    });
+  }, []);
+
+  const parsedMeetingParticipants = useMemo(
+    () =>
+      meetingParticipantsInput
+        .split(',')
+        .map((item) => item.trim())
+        .filter((item, index, arr) => item.length > 0 && arr.indexOf(item) === index)
+        .slice(0, 30),
+    [meetingParticipantsInput]
+  );
+
+  const manualMeetingContext: ManualMeetingContext = useMemo(
+    () => ({
+      goal: meetingGoalInput.trim(),
+      agenda_text: meetingAgendaInput.trim(),
+      participants: parsedMeetingParticipants,
+    }),
+    [meetingGoalInput, meetingAgendaInput, parsedMeetingParticipants]
+  );
+
+  useEffect(() => {
+    setContextAppliedStatus('idle');
+  }, [meetingGoalInput, meetingAgendaInput, meetingParticipantsInput]);
+
+  const hasManualContextValues = Boolean(
+    manualMeetingContext.goal ||
+    manualMeetingContext.agenda_text ||
+    (manualMeetingContext.participants && manualMeetingContext.participants.length > 0)
+  );
+
+  const applyManualContext = useCallback(() => {
+    if (!hasManualContextValues) {
+      setContextAppliedStatus('failed');
+      return;
+    }
+    if (!isRecording) {
+      toast.info('Context will be applied when recording starts.');
+      return;
+    }
+    setContextAppliedStatus('applying');
+    setContextApplySignal((v) => v + 1);
+  }, [hasManualContextValues, isRecording]);
+
   // Sync transcript history and meeting name from backend on reload
   // This fixes the issue where reloading during active recording causes state desync
 
@@ -668,6 +794,11 @@ export default function Home() {
 
       // Update state
       console.log('Setting recording state to true');
+      setActiveGuardrailAlert(null);
+      setGuardrailAlertHistory([]);
+      setShowGuardrailHistory(false);
+      lastGuardrailSignatureRef.current = '';
+      lastGuardrailAtRef.current = 0;
       setIsRecording(true);
       setIsPaused(false);
 
@@ -1347,12 +1478,12 @@ export default function Home() {
       // The catch-up endpoint currently only supports gemini and groq
       const supportedProviders = ['gemini', 'groq'];
       let provider = modelConfig?.provider || 'gemini';
-      let modelName = modelConfig?.model || 'gemini-2.5-flash';
+      let modelName = modelConfig?.model || 'gemini-2.5-pro';
 
       if (!supportedProviders.includes(provider)) {
         console.warn(`[CatchUp] Unsupported provider "${provider}" selected. Falling back to Gemini.`);
         provider = 'gemini';
-        modelName = 'gemini-2.5-flash';
+        modelName = 'gemini-2.5-pro';
       }
 
       const response = await authFetch('/catch-up', {
@@ -1593,7 +1724,7 @@ export default function Home() {
                       </Button>
                     )}
                     {/* {!isRecording && transcripts?.length === 0 && ( */}
-                    
+
                     <Button
                       variant="outline"
                       size="sm"
@@ -1712,6 +1843,72 @@ export default function Home() {
 
           {/* Permission Warning (only for Tauri mode) */}
 
+          <div className="flex justify-center mb-4">
+            <div className="w-2/3 max-w-[750px] rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-sm font-semibold text-gray-900">Meeting Context for AI Guardrails</p>
+                <span className="text-xs text-gray-500">Best set before recording starts</span>
+              </div>
+              <div className="grid grid-cols-1 gap-2">
+                <input
+                  type="text"
+                  value={meetingGoalInput}
+                  onChange={(e) => setMeetingGoalInput(e.target.value)}
+                  placeholder="Meeting goal (example: decide launch date and owners)"
+                  className="w-full rounded-md border border-gray-200 px-3 py-2 text-sm focus:border-gray-400 focus:outline-none"
+                />
+                <textarea
+                  value={meetingAgendaInput}
+                  onChange={(e) => setMeetingAgendaInput(e.target.value)}
+                  placeholder="Agenda (optional)"
+                  className="w-full min-h-[72px] rounded-md border border-gray-200 px-3 py-2 text-sm focus:border-gray-400 focus:outline-none"
+                />
+                <input
+                  type="text"
+                  value={meetingParticipantsInput}
+                  onChange={(e) => setMeetingParticipantsInput(e.target.value)}
+                  placeholder="Participants (comma separated, optional)"
+                  className="w-full rounded-md border border-gray-200 px-3 py-2 text-sm focus:border-gray-400 focus:outline-none"
+                />
+              </div>
+              <div className="mt-2 flex items-center justify-between">
+                <p className="text-xs text-gray-500">
+                  You can still update this during recording; changes are applied live.
+                </p>
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={applyManualContext}
+                    disabled={!hasManualContextValues || contextAppliedStatus === 'applying'}
+                    className={`rounded-md px-3 py-1.5 text-xs font-medium ${!hasManualContextValues || contextAppliedStatus === 'applying'
+                        ? 'bg-gray-100 text-gray-400'
+                        : 'bg-gray-900 text-white hover:bg-gray-800'
+                      }`}
+                  >
+                    {contextAppliedStatus === 'applying' ? 'Applying...' : 'Apply Context'}
+                  </button>
+                  {isRecording && (
+                    <span className={`text-xs font-medium ${contextAppliedStatus === 'applied'
+                        ? 'text-emerald-700'
+                        : contextAppliedStatus === 'failed'
+                          ? 'text-red-700'
+                          : contextAppliedStatus === 'applying'
+                            ? 'text-blue-700'
+                            : 'text-gray-500'
+                      }`}>
+                      {contextAppliedStatus === 'applied'
+                        ? 'Context applied'
+                        : contextAppliedStatus === 'failed'
+                          ? 'Context apply failed'
+                          : contextAppliedStatus === 'applying'
+                            ? 'Applying context...'
+                            : 'Context pending'}
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
 
           {/* Transcript content */}
           <div className="pb-20">
@@ -1729,6 +1926,57 @@ export default function Home() {
               </div>
             </div>
           </div>
+
+          {(isRecording || activeGuardrailAlert) && (
+            <div className="fixed top-28 right-6 z-30 w-[320px] max-w-[calc(100vw-2rem)]">
+              <div className="rounded-xl border border-gray-200 bg-white/95 shadow-lg backdrop-blur-sm p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm font-semibold text-gray-900">AI Guardrails</p>
+                  {activeGuardrailAlert && (
+                    <span className="text-[11px] text-gray-500">
+                      Updated at {formatGuardrailTime(activeGuardrailAlert.updated_at || activeGuardrailAlert.timestamp)}
+                    </span>
+                  )}
+                </div>
+
+                {!activeGuardrailAlert ? (
+                  <p className="text-sm text-gray-600">Monitoring meeting guardrails</p>
+                ) : (
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${getGuardrailBadgeClasses(activeGuardrailAlert.reason)}`}>
+                        {getGuardrailReasonLabel(activeGuardrailAlert.reason)}
+                      </span>
+                      <span className="text-[11px] text-amber-700">
+                        {Math.round(activeGuardrailAlert.confidence * 100)}%
+                      </span>
+                    </div>
+                    <p className="text-sm text-gray-800">{activeGuardrailAlert.insight}</p>
+                  </div>
+                )}
+
+                {guardrailAlertHistory.length > 1 && (
+                  <div className="border-t border-gray-100 pt-2 space-y-1">
+                    <button
+                      type="button"
+                      onClick={() => setShowGuardrailHistory((prev) => !prev)}
+                      className="text-xs font-medium text-gray-500 hover:text-gray-700"
+                    >
+                      {showGuardrailHistory ? 'Hide alert history' : 'Show alert history'}
+                    </button>
+                    {showGuardrailHistory && guardrailAlertHistory.slice(1, 4).map((item) => (
+                      <div key={item.id} className="text-xs text-gray-600 flex items-start justify-between gap-2">
+                        <span className="line-clamp-2">{item.insight}</span>
+                        <span className="whitespace-nowrap text-[10px] text-gray-400">
+                          {formatGuardrailTime(item.updated_at || item.timestamp)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Custom prompt input at bottom of transcript section */}
           {/* {!isRecording && transcripts.length > 0 && !isMeetingActive && (
@@ -1802,6 +2050,12 @@ export default function Home() {
                       onRecordingStop={(success) => handleRecordingStop(success)}
                       onRecordingStart={handleRecordingStart}
                       onTranscriptReceived={handleTranscriptUpdate}
+                      onGuardrailAlert={handleGuardrailAlert}
+                      manualContext={manualMeetingContext}
+                      contextApplySignal={contextApplySignal}
+                      onContextApplied={(applied) =>
+                        setContextAppliedStatus(applied ? 'applied' : 'failed')
+                      }
                       onStopInitiated={() => setIsStopping(true)}
                       barHeights={barHeights}
                       onTranscriptionError={(message) => {

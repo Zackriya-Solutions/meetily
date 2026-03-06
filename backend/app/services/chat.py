@@ -55,9 +55,10 @@ class ChatService:
 
         try:
             # We use Gemini for fast reformulation
-            api_key = await self.db.get_api_key("gemini", user_email=user_email)
+            # Prioritize Environment Variables over Database
+            api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
             if not api_key:
-                api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+                api_key = await self.db.get_api_key("gemini", user_email=user_email)
             if not api_key:
                 return question
 
@@ -98,7 +99,7 @@ Search Query:"""
             reformulated = (
                 await generate_content_text_async(
                     api_key=api_key,
-                    model="gemini-2.5-flash",
+                    model="gemini-3-pro-preview",
                     contents=prompt,
                 )
             ).strip()
@@ -125,9 +126,10 @@ Search Query:"""
         has_context = bool(context_snippet and len(context_snippet.strip()) > 50)
 
         try:
-            api_key = await self.db.get_api_key("gemini", user_email=user_email)
+            # Prioritize Environment Variables over Database
+            api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
             if not api_key:
-                api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+                api_key = await self.db.get_api_key("gemini", user_email=user_email)
             if not api_key:
                 return False  # Default to no search if we can't classify
 
@@ -144,7 +146,7 @@ Answer ONLY "SEARCH" or "MEETING":
             answer = (
                 generate_content_text_sync(
                     api_key=api_key,
-                    model="gemini-2.5-flash",
+                    model="gemini-3-pro-preview",
                     contents=classifier_prompt,
                 )
             ).strip().upper()
@@ -306,9 +308,10 @@ Answer ONLY "SEARCH" or "MEETING":
             logger.info(f"Extracted content from {len(sources)} sources")
 
             # Step 3: Use Gemini to synthesize
-            api_key = await self.db.get_api_key("gemini", user_email=user_email)
+            # Prioritize Environment Variables over Database
+            api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
             if not api_key:
-                api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+                api_key = await self.db.get_api_key("gemini", user_email=user_email)
 
             if not api_key:
                 return "❌ Gemini API key not configured."
@@ -340,7 +343,7 @@ Format: Provide a direct answer followed by supporting details without inline ci
 
             response_text = await generate_content_text_async(
                 api_key=api_key,
-                model="gemini-2.5-flash",
+                model="gemini-3-pro-preview",
                 contents=prompt,
                 config={
                     "temperature": 0.3,
@@ -696,9 +699,10 @@ USER QUESTION: {question}
 
             # --- GEMINI SUPPORT ---
             elif model == "gemini":
-                api_key = await self.db.get_api_key("gemini", user_email=user_email)
+                # Prioritize Environment Variables over Database
+                api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
                 if not api_key:
-                    api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+                    api_key = await self.db.get_api_key("gemini", user_email=user_email)
                 if not api_key:
                     raise ValueError("Gemini API key not found")
 
@@ -836,9 +840,10 @@ USER QUESTION: {question}
 
             # --- GEMINI SUPPORT ---
             elif model == "gemini":
-                api_key = await self.db.get_api_key("gemini", user_email=user_email)
+                # Prioritize Environment Variables over Database
+                api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
                 if not api_key:
-                    api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+                    api_key = await self.db.get_api_key("gemini", user_email=user_email)
                 if not api_key:
                     raise ValueError("Gemini API key not found")
 

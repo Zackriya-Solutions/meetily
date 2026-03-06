@@ -29,7 +29,7 @@ Our current architecture is **highly cost-optimized** by leveraging local embedd
 > **Optimization:** Live meetings only cost $0.04/hr. Uploads cost ~$0.30/hr.
 
 ### B. LLM Intelligence (Summaries & Chat)
-*Code Audit: Defaults to `gemini-2.5-flash`.*
+*Code Audit: Defaults to `gemini-2.5-pro`.*
 
 | Task | Model Used | Cost / Meeting | Notes |
 | :--- | :--- | :--- | :--- |
