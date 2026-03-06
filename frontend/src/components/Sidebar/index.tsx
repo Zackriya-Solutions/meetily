@@ -827,14 +827,13 @@ const Sidebar: React.FC = () => {
 
             <button
               onClick={() => router.push('/shared-notes')}
-              className={`w-full flex items-center justify-between px-3 py-1.5 mt-1 mb-1 text-sm font-medium rounded-lg transition-colors shadow-sm ${pathname === '/shared-notes' ? 'bg-gray-300 text-gray-800' : 'text-gray-700 bg-gray-200 hover:bg-gray-300'}`}
+              className={`w-full flex items-center justify-center relative px-3 py-1.5 mt-1 mb-1 text-sm font-medium rounded-lg transition-colors shadow-sm ${pathname === '/shared-notes' ? 'text-gray-800 bg-gray-300' : 'text-gray-700 bg-gray-200 hover:bg-gray-300'}`}
             >
-              <div className="flex items-center">
-                <Share2 className="w-4 h-4 mr-2" />
-                <span>Shared with Me</span>
-              </div>
+              <Share2 className="w-4 h-4 mr-2" />
+              <span>Shared with Me</span>
+              
               {sharedNotesCount > 0 && (
-                <span className="bg-blue-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">
+                <span className="absolute right-3 bg-blue-500 text-white text-xs font-bold px-1.5 py-0.5 rounded-full">
                   {sharedNotesCount}
                 </span>
               )}
