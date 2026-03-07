@@ -139,7 +139,7 @@ impl ParakeetEngine {
                 dirs::data_dir()
                     .or_else(|| dirs::home_dir())
                     .ok_or_else(|| anyhow!("Could not find system data directory"))?
-                    .join("Meetily")
+                    .join("Clearminutes")
                     .join("models")
                     .join("parakeet")
             }
@@ -595,7 +595,7 @@ impl ParakeetEngine {
             "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v2-onnx/resolve/main"
         } else {
             // Default to v3 for v3 models
-            "https://meetily.towardsgeneralintelligence.com/models/parakeet-tdt-0.6b-v3-onnx"
+            "https://clearminutes.towardsgeneralintelligence.com/models/parakeet-tdt-0.6b-v3-onnx"
         };
 
         // Determine which files to download based on quantization

@@ -126,22 +126,22 @@ fn get_ffmpeg_url_for_target(target: &str) -> Result<String, String> {
     // Platform-specific URLs
     let url = if target.contains("windows") {
         // Windows
-        "https://github.com/Zackriya-Solutions/ffmpeg-binaries/releases/download/0.0.1/ffmpeg-8.0.1-essentials_build.zip"
+        "https://github.com/jgibbarduk/ffmpeg-binaries/releases/download/0.0.1/ffmpeg-8.0.1-essentials_build.zip"
     } else if target.contains("apple") {
         if target.contains("aarch64") {
             // Apple Silicon (M1/M2/M3)
-            "https://github.com/Zackriya-Solutions/ffmpeg-binaries/releases/download/0.0.1/ffmpeg80arm.zip"
+            "https://github.com/jgibbarduk/ffmpeg-binaries/releases/download/0.0.1/ffmpeg80arm.zip"
         } else {
             // Intel Mac
-            "https://github.com/Zackriya-Solutions/ffmpeg-binaries/releases/download/0.0.1/ffmpeg-8.0.1.zip"
+            "https://github.com/jgibbarduk/ffmpeg-binaries/releases/download/0.0.1/ffmpeg-8.0.1.zip"
         }
     } else if target.contains("linux") {
         if target.contains("aarch64") || target.contains("arm") {
             // Linux ARM64
-            "https://github.com/Zackriya-Solutions/ffmpeg-binaries/releases/download/0.0.1/ffmpeg-release-arm64-static.tar.xz"
+            "https://github.com/jgibbarduk/ffmpeg-binaries/releases/download/0.0.1/ffmpeg-release-arm64-static.tar.xz"
         } else {
             // Linux x86_64
-            "https://github.com/Zackriya-Solutions/ffmpeg-binaries/releases/download/0.0.1/ffmpeg-release-amd64-static.tar.xz"
+            "https://github.com/jgibbarduk/ffmpeg-binaries/releases/download/0.0.1/ffmpeg-release-amd64-static.tar.xz"
         }
     } else {
         return Err(format!("Unsupported target platform: {}", target));

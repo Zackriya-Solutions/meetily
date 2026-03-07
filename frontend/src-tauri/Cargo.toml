@@ -4,7 +4,7 @@ version = "1.0.0"
 description = "Clearminutes - real-time meeting notes and summaries that never leave your machine"
 authors = ["DevBytes"]
 license = "MIT"
-repository = "https://github.com/Zackriya-Solutions/meeting-minutes"
+repository = "https://github.com/jgibbarduk/clearminutes"
 edition = "2021"
 rust-version = "1.77"
 

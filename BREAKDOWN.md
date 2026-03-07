@@ -1,8 +1,8 @@
-# Meetily Repository Breakdown
+# Clearminutes Repository Breakdown
 
 ## 1. High-Level Overview
 
-**Meetily** is a privacy-first AI-powered meeting assistant that captures, transcribes, and summarizes meetings entirely on your local machine. It combines desktop UI, real-time audio processing, and GPU-accelerated transcription via Whisper.cpp.
+**Clearminutes** is a privacy-first AI-powered meeting assistant that captures, transcribes, and summarizes meetings entirely on your local machine. It combines desktop UI, real-time audio processing, and GPU-accelerated transcription via Whisper.cpp.
 
 ### Problem Solved
 - **Privacy**: No cloud processing—all audio stays on your device
@@ -21,7 +21,7 @@
 ## 2. Repository Structure
 
 ```
-meetily/
+clearminutes/
 ├── frontend/                    # Tauri + React/TypeScript desktop app
 │   ├── src/                     # React components
 │   │   ├── App.tsx              # Main app shell
@@ -533,7 +533,7 @@ NODE_ENV=development                # React env
 
 ### Backend Deployment (Optional)
 
-**Docker** (for server deployment, if Meetily runs as service):
+**Docker** (for server deployment, if Clearminutes runs as service):
 - `backend/Dockerfile.app` — FastAPI + Whisper
 - `backend/Dockerfile.server-cpu` — CPU-only backend
 - `backend/Dockerfile.server-gpu` — NVIDIA GPU backend
@@ -633,7 +633,7 @@ services:
 │                         User's Machine                            │
 │                                                                   │
 │  ┌─────────────────────────────────────────────────────────────┐ │
-│  │              Meetily Desktop App (Tauri + React)            │ │
+│  │              Clearminutes Desktop App (Tauri + React)            │ │
 │  │  ┌───────────────────────────────────────────────────────┐  │ │
 │  │  │  React UI                                             │  │ │
 │  │  │  - Recording controls  - Transcript display           │  │ │
@@ -697,7 +697,7 @@ Audio Input Stream (OS Audio Device)
          │
          ▼
     Buffer → Temp File
-    ~/.config/meetily/temp_recording.wav
+    ~/.config/clearminutes/temp_recording.wav
          │
          ▼
     User Clicks "Stop Recording"
@@ -777,7 +777,7 @@ Audio Input Stream (OS Audio Device)
 ### Dependency Tree (Simplified)
 
 ```
-Meetily App (Tauri)
+Clearminutes App (Tauri)
 ├─ React UI
 ├─ Tauri Runtime
 │  ├─ tokio (async)
@@ -936,8 +936,8 @@ Want to add search, export, or analytics?
 
 ```bash
 # Clone repo
-git clone <meetily-repo>
-cd meetily
+git clone <clearminutes-repo>
+cd clearminutes
 
 # Install frontend deps
 cd frontend

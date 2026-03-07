@@ -1,4 +1,4 @@
-# Meetily Backend
+# Clearminutes Backend
 
 FastAPI backend for meeting transcription and analysis with **Docker distribution system** for easy deployment.
 
@@ -199,8 +199,8 @@ The simplest and fastest way to get started is using the pre-built backend relea
 - No additional dependencies required
 
 **Installation Steps:**
-1. Download the latest backend zip file from [releases](https://github.com/Zackriya-Solutions/meeting-minutes/releases/latest)
-2. Extract to a folder (e.g., `C:\meetily_backend\`)
+1. Download the latest backend zip file from [releases](https://github.com/jgibbarduk/clearminutes/releases/latest)
+2. Extract to a folder (e.g., `C:\clearminutes_backend\`)
 3. Open PowerShell and navigate to the extracted folder
 4. Unblock all files (Windows security requirement):
    ```powershell
@@ -602,9 +602,9 @@ DEBUG=true                     # Debug output
 
 **Auto-Discovery Paths (macOS/Linux):**
 ```
-/opt/homebrew/Cellar/meetily-backend/*/backend/meeting_minutes.db
-$HOME/.meetily/meeting_minutes.db
-$HOME/Documents/meetily/meeting_minutes.db
+/opt/homebrew/Cellar/clearminutes-backend/*/backend/meeting_minutes.db
+$HOME/.clearminutes/meeting_minutes.db
+$HOME/Documents/clearminutes/meeting_minutes.db
 $HOME/Desktop/meeting_minutes.db
 ./meeting_minutes.db
 $SCRIPT_DIR/data/meeting_minutes.db
@@ -637,4 +637,4 @@ $SCRIPT_DIR/data/meeting_minutes.db
 - Settings persistence and reuse
 - Configuration validation
 
-This comprehensive guide covers all deployment options and provides clear instructions for getting the Meetily backend running in any environment.
+This comprehensive guide covers all deployment options and provides clear instructions for getting the Clearminutes backend running in any environment.

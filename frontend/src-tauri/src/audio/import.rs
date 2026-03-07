@@ -265,6 +265,7 @@ pub async fn start_import<R: Runtime>(
     // Reset cancellation flag
     IMPORT_CANCELLED.store(false, Ordering::SeqCst);
 
+    let use_parakeet = provider.as_deref() == Some("parakeet");
     let result = run_import(
         app.clone(),
         source_path,
@@ -274,6 +275,9 @@ pub async fn start_import<R: Runtime>(
         provider,
     )
     .await;
+
+    // Unload the engine after the batch job (success, failure, or cancellation)
+    super::common::unload_engine_after_batch(use_parakeet).await;
 
     // Guard will automatically clear flag on drop
     // No need for manual: IMPORT_IN_PROGRESS.store(false, Ordering::SeqCst);
@@ -596,7 +600,7 @@ async fn run_import<R: Runtime>(
             debug!(
                 "Segment {}/{}: {:.1}s, conf={:.2}, text='{}'",
                 i + 1, processable_count, segment_duration_sec, conf,
-                if trimmed.len() > 80 { &trimmed[..trimmed.floor_char_boundary(80)] } else { trimmed }
+                if trimmed.len() > 80 { let mut end = 80; while !trimmed.is_char_boundary(end) { end -= 1; } &trimmed[..end] } else { trimmed }
             );
             all_transcripts.push((text, segment.start_timestamp_ms, segment.end_timestamp_ms));
             total_confidence += conf;

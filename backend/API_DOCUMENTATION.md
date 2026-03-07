@@ -1,4 +1,4 @@
-# Meetily API Documentation
+# Clearminutes API Documentation
 
 ## Prerequisites
 

@@ -479,8 +479,8 @@ start_whisper_server.cmd [MODEL_NAME]
 ```
 
 **Search Locations**:
-- HomeBrew installations: `/opt/homebrew/Cellar/meetily-backend/*/`
-- User directories: `~/.meetily/`, `~/Documents/meetily/`, `~/Desktop/`
+- HomeBrew installations: `/opt/homebrew/Cellar/clearminutes-backend/*/`
+- User directories: `~/.clearminutes/`, `~/Documents/clearminutes/`, `~/Desktop/`
 - Current directory and data directory
 - Custom paths with validation
 

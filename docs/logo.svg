@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#25272f"/>
+      <stop offset="100%" stop-color="#2c2e38"/>
+    </linearGradient>
+    <linearGradient id="arc" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#00d4aa"/>
+      <stop offset="100%" stop-color="#0099ff"/>
+    </linearGradient>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="2.5" result="c"/>
+      <feMerge><feMergeNode in="c"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect width="120" height="120" rx="27" fill="url(#bg)"/>
+  <circle cx="60" cy="60" r="36" fill="none" stroke="#0099ff" stroke-width="1" stroke-dasharray="4 3" opacity="0.35"/>
+  <path d="M 60 28 A 32 32 0 1 1 28 60" fill="none" stroke="url(#arc)" stroke-width="3.5" stroke-linecap="round" filter="url(#glow)"/>
+  <polygon points="60,38 74,46 74,62 60,70 46,62 46,46" fill="none" stroke="#00d4aa" stroke-width="1.5" stroke-opacity="0.35"/>
+  <line x1="60" y1="25" x2="60" y2="31" stroke="#00d4aa" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="60" cy="60" r="4" fill="url(#arc)" filter="url(#glow)"/>
+  <circle cx="60" cy="28" r="2" fill="#00d4aa"/>
+</svg>
+

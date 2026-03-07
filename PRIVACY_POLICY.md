@@ -1,10 +1,10 @@
-# Meetily Privacy Policy
+# Clearminutes Privacy Policy
 
-*Last updated: [Current Date]*
+*Last updated: March 7, 2026*
 
 ## Our Privacy-First Commitment
 
-Meetily is built on the principle that your meeting data should remain private and under your control. This privacy policy explains how we handle data in our open-source meeting assistant.
+Clearminutes is built on the principle that your meeting data should remain private and under your control. This privacy policy explains how we handle data in our open-source meeting assistant.
 
 ## Data Processing Philosophy
 
@@ -23,7 +23,7 @@ Meetily is built on the principle that your meeting data should remain private a
 ## Usage Analytics
 
 ### What We Collect
-To improve Meetily and ensure optimal performance, we collect minimal, anonymized usage data:
+To improve Clearminutes and ensure optimal performance, we collect minimal, anonymized usage data:
 
 **Application Usage:**
 - Feature usage patterns (which tools you use most)
@@ -108,7 +108,7 @@ We will notify users of any material changes to this privacy policy through:
 ## Contact Us
 
 For privacy-related questions or concerns:
-- **GitHub Issues**: [Create an issue](https://github.com/Zackriya-Solutions/meeting-minutes/issues)
+- **GitHub Issues**: [Create an issue](https://github.com/jgibbarduk/clearminutes/issues)
 - **Email**: [Contact form](https://www.zackriya.com/service-interest-form/)
 - **Community**: [Discord](https://discord.gg/crRymMQBFH)
 
@@ -122,4 +122,4 @@ As an open-source project under MIT license, you can:
 
 ---
 
-*This privacy policy applies to Meetily v0.0.5 and later versions. For enterprise deployments, additional privacy controls may be available.*
+*This privacy policy applies to Clearminutes v0.0.5 and later versions. For enterprise deployments, additional privacy controls may be available.*

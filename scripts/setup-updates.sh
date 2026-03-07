@@ -66,7 +66,7 @@ cmd_setup() {
   # Prompt for repo if not provided
   if [[ -z "$REPO" ]]; then
     local detected; detected=$(get_repo_from_conf || true)
-    if [[ -n "$detected" && "$detected" != "Zackriya-Solutions/meeting-minutes" ]]; then
+    if [[ -n "$detected" && "$detected" != "jgibbarduk/clearminutes" ]]; then
       REPO="$detected"
       ok "Detected repo from config: $REPO"
     else
@@ -170,7 +170,7 @@ cmd_release() {
     [[ -n "$REPO" ]] || { read -rp "Enter your GitHub repo (e.g. jamesgibbard/clearminutes): " REPO; }
     [[ -n "$REPO" ]] || die "Repo cannot be empty"
   fi
-  [[ "$REPO" != "Zackriya-Solutions/meeting-minutes" ]] || \
+  [[ "$REPO" != "jgibbarduk/clearminutes" ]] || \
     warn "Repo still points to upstream — did you run setup first?"
 
   require pnpm node gh
