@@ -7,6 +7,7 @@ import { invoke as invokeTauri } from '@tauri-apps/api/core';
 import { save } from '@tauri-apps/plugin-dialog';
 import { generatePdfFromMarkdown } from '@/lib/pdfExport';
 import { exportToOutline, loadOutlineConfig } from '@/lib/outlineExport';
+import { copyToClipboard } from '@/lib/clipboard';
 
 interface UseCopyOperationsProps {
   meeting: any;
@@ -86,13 +87,19 @@ export function useCopyOperations({
       return `[${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}]`;
     };
 
+    const speakerPrefix = (speaker?: Transcript['speaker']): string => {
+      if (speaker === 'mic') return '[You] ';
+      if (speaker === 'system') return '[System] ';
+      return '';
+    };
+
     const header = `# Transcript of the Meeting: ${meeting.id} - ${meetingTitle ?? meeting.title}\n\n`;
     const date = `## Date: ${new Date(meeting.created_at).toLocaleDateString()}\n\n`;
     const fullTranscript = allTranscripts
-      .map(t => `${formatTime(t.audio_start_time, t.timestamp)} ${t.text}  `)
+      .map(t => `${formatTime(t.audio_start_time, t.timestamp)} ${speakerPrefix(t.speaker)}${t.text}  `)
       .join('\n');
 
-    await navigator.clipboard.writeText(header + date + fullTranscript);
+    await copyToClipboard(header + date + fullTranscript);
     toast.success("Transcript copied to clipboard");
 
     // Track copy analytics
@@ -176,7 +183,7 @@ export function useCopyOperations({
       })}\n\n---\n\n`;
 
       const fullMarkdown = header + metadata + summaryMarkdown;
-      await navigator.clipboard.writeText(fullMarkdown);
+      await copyToClipboard(fullMarkdown);
 
       console.log('✅ Successfully copied to clipboard!');
       toast.success("Summary copied to clipboard");

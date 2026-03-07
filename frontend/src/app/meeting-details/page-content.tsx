@@ -1,13 +1,15 @@
 "use client";
 import { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
-import { Summary, SummaryResponse } from '@/types';
+import { Summary } from '@/types';
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
 import Analytics from '@/lib/analytics';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { toast } from 'sonner';
 import { TranscriptPanel } from '@/components/MeetingDetails/TranscriptPanel';
 import { SummaryPanel } from '@/components/MeetingDetails/SummaryPanel';
+import { SpeakerManager } from '@/components/MeetingDetails/SpeakerManager';
 import { ModelConfig } from '@/components/ModelSettingsModal';
 
 // Custom hooks
@@ -17,6 +19,7 @@ import { useTemplates } from '@/hooks/meeting-details/useTemplates';
 import { useCopyOperations } from '@/hooks/meeting-details/useCopyOperations';
 import { useMeetingOperations } from '@/hooks/meeting-details/useMeetingOperations';
 import { useConfig } from '@/contexts/ConfigContext';
+import { useSpeakers } from '@/contexts/SpeakerContext';
 
 export default function PageContent({
   meeting,
@@ -56,7 +59,23 @@ export default function PageContent({
   // State
   const [customPrompt, setCustomPrompt] = useState<string>('');
   const [isRecording] = useState(false);
-  const [summaryResponse] = useState<SummaryResponse | null>(null);
+  const [transcriptCollapsed, setTranscriptCollapsed] = useState(false);
+
+  // Shared speaker context — set meetingId so all consumers (SpeakerManager, TranscriptPanel) share state
+  const { speakerMap, setMeetingId: setSpeakerMeetingId, reload: reloadSpeakers } = useSpeakers();
+  useEffect(() => {
+    setSpeakerMeetingId(meeting.id);
+  }, [meeting.id, setSpeakerMeetingId]);
+
+  useEffect(() => {
+    // Reload after retranscription completes
+    const unlisten = listen('retranscription-complete', (event: any) => {
+      if (event.payload?.meeting_id === meeting.id) {
+        reloadSpeakers();
+      }
+    });
+    return () => { unlisten.then(fn => fn()); };
+  }, [meeting.id, reloadSpeakers]);
 
   // Ref to store the modal open function from SummaryGeneratorButtonGroup
   const openModelSettingsRef = useRef<(() => void) | null>(null);
@@ -134,6 +153,15 @@ export default function PageContent({
     meeting,
   });
 
+  // Auto-collapse transcript panel when a summary is present or being generated
+  useEffect(() => {
+    const hasSummary = !!meetingData.aiSummary;
+    const isGenerating = ['processing', 'summarizing', 'regenerating'].includes(summaryGeneration.summaryStatus);
+    if (hasSummary || isGenerating) {
+      setTranscriptCollapsed(true);
+    }
+  }, [meetingData.aiSummary, summaryGeneration.summaryStatus]);
+
   // Track page view
   useEffect(() => {
     Analytics.trackPageView('meeting_details');
@@ -171,27 +199,64 @@ export default function PageContent({
       className="flex flex-col h-screen bg-gray-50"
     >
       <div className="flex flex-1 overflow-hidden">
-        <TranscriptPanel
-          transcripts={meetingData.transcripts}
-          customPrompt={customPrompt}
-          onPromptChange={setCustomPrompt}
-          onCopyTranscript={copyOperations.handleCopyTranscript}
-          onOpenMeetingFolder={meetingOperations.handleOpenMeetingFolder}
-          isRecording={isRecording}
-          disableAutoScroll={true}
-          // Pagination props for efficient loading
-          usePagination={true}
-          segments={segments}
-          hasMore={hasMore}
-          isLoadingMore={isLoadingMore}
-          totalCount={totalCount}
-          loadedCount={loadedCount}
-          onLoadMore={onLoadMore}
-          // Retranscription props
-          meetingId={meeting.id}
-          meetingFolderPath={meeting.folder_path}
-          onRefetchTranscripts={onRefetchTranscripts}
-        />
+
+        {/* Transcript panel — collapses to a sliver when summary is shown */}
+        <motion.div
+          animate={{ width: transcriptCollapsed && (segments?.length ?? 0) > 0 ? '2.25rem' : undefined }}
+          transition={{ duration: 0.25, ease: 'easeInOut' }}
+          className={transcriptCollapsed && (segments?.length ?? 0) > 0
+            ? 'relative flex-shrink-0 flex flex-col border-r border-gray-200 bg-background cursor-pointer select-none overflow-hidden'
+            : 'contents'
+          }
+          onClick={transcriptCollapsed && (segments?.length ?? 0) > 0 ? () => setTranscriptCollapsed(false) : undefined}
+          title={transcriptCollapsed && (segments?.length ?? 0) > 0 ? 'Expand transcript' : undefined}
+        >
+          {transcriptCollapsed && (segments?.length ?? 0) > 0 ? (
+            /* Sliver: vertical label + expand icon */
+            <div className="flex flex-col items-center justify-center h-full gap-4 py-4">
+              {/* Expand chevron at top */}
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'hsl(var(--theme-accent))' }}>
+                <polyline points="9 18 15 12 9 6"/>
+              </svg>
+              {/* Vertical "Transcript" text */}
+              <span
+                className="text-[11px] font-black uppercase tracking-widest"
+                style={{
+                  writingMode: 'vertical-rl',
+                  textOrientation: 'mixed',
+                  transform: 'rotate(180deg)',
+                  letterSpacing: '0.3em',
+                  color: 'hsl(var(--theme-accent))',
+                }}
+              >
+                Transcript
+              </span>
+            </div>
+          ) : (
+            <TranscriptPanel
+              transcripts={meetingData.transcripts}
+              customPrompt={customPrompt}
+              onPromptChange={setCustomPrompt}
+              onCopyTranscript={copyOperations.handleCopyTranscript}
+              isRecording={isRecording}
+              disableAutoScroll={true}
+              speakerMap={speakerMap}
+              usePagination={true}
+              segments={segments}
+              hasMore={hasMore}
+              isLoadingMore={isLoadingMore}
+              totalCount={totalCount}
+              loadedCount={loadedCount}
+              onLoadMore={onLoadMore}
+              meetingId={meeting.id}
+              meetingFolderPath={meeting.folder_path}
+              onRefetchTranscripts={onRefetchTranscripts}
+              onSpeakerUpdated={reloadSpeakers}
+              onCollapse={() => setTranscriptCollapsed(true)}
+            />
+          )}
+        </motion.div>
+
         <SummaryPanel
           meeting={meeting}
           meetingTitle={meetingData.meetingTitle}
@@ -215,7 +280,6 @@ export default function PageContent({
           onGenerateSummary={summaryGeneration.handleGenerateSummary}
           onStopGeneration={summaryGeneration.handleStopGeneration}
           customPrompt={customPrompt}
-          summaryResponse={summaryResponse}
           onSaveSummary={meetingData.handleSaveSummary}
           onSummaryChange={meetingData.handleSummaryChange}
           onDirtyChange={meetingData.setIsSummaryDirty}

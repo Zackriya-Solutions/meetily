@@ -69,10 +69,10 @@ export function OutlineSettings() {
   };
 
   return (
-    <div className="mt-6 space-y-6 max-w-xl">
+    <div className="space-y-6">
       <div>
-        <h2 className="text-lg font-semibold mb-1">Outline Integration</h2>
-        <p className="text-sm text-gray-500">
+        <h2 className="text-lg font-semibold text-gray-900 dark:text-foreground mb-1">Outline Integration</h2>
+        <p className="text-sm text-gray-600 dark:text-muted-foreground">
           Export meeting summaries directly to your{" "}
           <a
             href="https://www.getoutline.com"

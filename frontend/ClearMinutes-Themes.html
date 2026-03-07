@@ -1,0 +1,856 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Clearminutes — Theme System</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+  /* ── THEME TOKENS ─────────────────────────────────────────── */
+  :root {
+    --font-display: 'Syne', sans-serif;
+    --font-mono:    'DM Mono', monospace;
+  }
+
+  [data-theme="dark"] {
+    --bg:          #1e2028;
+    --bg2:         #25272f;
+    --bg3:         #2c2e38;
+    --border:      #33363f;
+    --accent:      #00d4aa;
+    --accent2:     #0099ff;
+    --accent-muted:#00d4aa33;
+    --text:        #dde1f0;
+    --muted:       #7a7f99;
+    --tag:         "DARK";
+    --tag-color:   #00d4aa;
+  }
+
+  [data-theme="dracula"] {
+    --bg:          #282a36;
+    --bg2:         #2d2f3d;
+    --bg3:         #343746;
+    --border:      #44475a;
+    --accent:      #bd93f9;
+    --accent2:     #ff79c6;
+    --accent-muted:#bd93f933;
+    --text:        #f8f8f2;
+    --muted:       #6272a4;
+    --tag:         "DRACULA";
+    --tag-color:   #bd93f9;
+  }
+
+  [data-theme="midnight"] {
+    --bg:          #0f1117;
+    --bg2:         #141720;
+    --bg3:         #1a1e2a;
+    --border:      #232840;
+    --accent:      #60a5fa;
+    --accent2:     #818cf8;
+    --accent-muted:#60a5fa33;
+    --text:        #e2e8f0;
+    --muted:       #64748b;
+    --tag:         "MIDNIGHT";
+    --tag-color:   #60a5fa;
+  }
+
+  [data-theme="light"] {
+    --bg:          #f8f8fc;
+    --bg2:         #ffffff;
+    --bg3:         #f0f0f8;
+    --border:      #e2e2ec;
+    --accent:      #00a884;
+    --accent2:     #0077cc;
+    --accent-muted:#00a88415;
+    --text:        #1a1c28;
+    --muted:       #6b6b88;
+    --tag:         "LIGHT";
+    --tag-color:   #00a884;
+  }
+
+  /* ── GLOBAL RESET ─────────────────────────────────────────── */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: #111318;
+    font-family: var(--font-display);
+    min-height: 100vh;
+    padding: 48px 40px;
+    color: #dde1f0;
+  }
+
+  /* ── PAGE HEADER ──────────────────────────────────────────── */
+  .page-eyebrow {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.35em;
+    text-transform: uppercase;
+    color: #5a5e7a;
+    margin-bottom: 6px;
+  }
+
+  .page-title {
+    font-size: 44px;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    background: linear-gradient(135deg, #00d4aa 0%, #0099ff 60%, #7b5ea7 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin-bottom: 4px;
+  }
+
+  .page-sub {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: #5a5e7a;
+    margin-bottom: 56px;
+  }
+
+  /* ── SECTION ──────────────────────────────────────────────── */
+  .section { margin-bottom: 64px; }
+
+  .section-label {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.35em;
+    text-transform: uppercase;
+    color: #5a5e7a;
+    margin-bottom: 24px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .section-label::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: #2a2c36;
+  }
+
+  /* ── THEME GRID ───────────────────────────────────────────── */
+  .theme-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 20px;
+  }
+
+  @media (max-width: 1200px) {
+    .theme-grid { grid-template-columns: repeat(2, 1fr); }
+  }
+
+  @media (max-width: 600px) {
+    .theme-grid { grid-template-columns: 1fr; }
+  }
+
+  /* ── THEME CARD ───────────────────────────────────────────── */
+  .theme-card {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    overflow: hidden;
+    transition: transform 0.2s ease;
+  }
+
+  .theme-card:hover { transform: translateY(-2px); }
+
+  .card-header {
+    padding: 16px 20px 14px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: var(--bg2);
+  }
+
+  .card-dots { display: flex; gap: 6px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; }
+  .dot-r { background: #ff5f56; }
+  .dot-y { background: #febc2e; }
+  .dot-g { background: #27c840; }
+
+  .card-tag {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--tag-color);
+    background: var(--accent-muted);
+    padding: 3px 8px;
+    border-radius: 4px;
+  }
+
+  .card-body { padding: 20px; }
+
+  /* Logo row */
+  .logo-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 20px;
+  }
+
+  .logo-text {
+    font-size: 18px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    color: var(--text);
+  }
+
+  /* Palette strip */
+  .palette-strip {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 20px;
+  }
+
+  .chip {
+    flex: 1;
+    height: 28px;
+    border-radius: 5px;
+    position: relative;
+    cursor: default;
+  }
+
+  /* Mini UI */
+  .mini-ui {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    margin-bottom: 20px;
+  }
+
+  .mini-tabs {
+    display: flex;
+    gap: 2px;
+    padding: 0 12px;
+    background: var(--bg3);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .mini-tab {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    padding: 8px 10px;
+    color: var(--muted);
+    border-bottom: 2px solid transparent;
+    letter-spacing: 0.05em;
+  }
+
+  .mini-tab.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+  }
+
+  .mini-content { padding: 14px; }
+
+  .mini-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 3px;
+  }
+
+  .mini-meta {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--muted);
+    margin-bottom: 12px;
+  }
+
+  .mini-summary {
+    background: var(--bg3);
+    border-left: 2px solid var(--accent);
+    border-radius: 4px;
+    padding: 8px 10px;
+    margin-bottom: 10px;
+  }
+
+  .mini-summary-label {
+    font-family: var(--font-mono);
+    font-size: 8px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 4px;
+  }
+
+  .mini-summary-text {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    line-height: 1.6;
+    color: var(--muted);
+  }
+
+  .mini-action {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 5px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .mini-action:last-child { border-bottom: none; }
+
+  .mini-check {
+    width: 12px;
+    height: 12px;
+    border: 1.5px solid var(--border);
+    border-radius: 3px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 8px;
+    font-weight: 700;
+  }
+
+  .mini-check.done {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--bg);
+  }
+
+  .mini-action-text {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--muted);
+  }
+
+  .mini-action-text .who { color: var(--accent2); }
+
+  /* Btn row */
+  .btn-row {
+    display: flex;
+    gap: 8px;
+  }
+
+  .btn {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    letter-spacing: 0.1em;
+    padding: 6px 12px;
+    border-radius: 6px;
+    border: none;
+    cursor: default;
+  }
+
+  .btn-primary {
+    background: var(--accent);
+    color: var(--bg);
+    font-weight: 500;
+  }
+
+  .btn-secondary {
+    background: var(--bg3);
+    color: var(--muted);
+    border: 1px solid var(--border);
+  }
+
+  /* Colour tokens table */
+  .token-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: var(--font-mono);
+    font-size: 10px;
+  }
+
+  .token-table tr {
+    border-bottom: 1px solid var(--border);
+  }
+  .token-table tr:last-child { border-bottom: none; }
+
+  .token-table td {
+    padding: 7px 4px;
+    color: var(--muted);
+    vertical-align: middle;
+  }
+
+  .token-table td:first-child {
+    color: var(--text);
+    width: 45%;
+  }
+
+  .token-swatch {
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    display: inline-block;
+    border: 1px solid rgba(255,255,255,0.08);
+    vertical-align: middle;
+    margin-right: 6px;
+  }
+
+  /* ── CSS VARS BLOCK ───────────────────────────────────────── */
+  .code-block {
+    background: #0e0f14;
+    border: 1px solid #22242e;
+    border-radius: 12px;
+    padding: 28px 32px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.9;
+    overflow-x: auto;
+    color: #8892b0;
+  }
+
+  .code-block .comment  { color: #4a5170; }
+  .code-block .selector { color: #ff79c6; }
+  .code-block .property { color: #8be9fd; }
+  .code-block .value-teal   { color: #00d4aa; }
+  .code-block .value-blue   { color: #60a5fa; }
+  .code-block .value-purple { color: #bd93f9; }
+  .code-block .value-str    { color: #f1fa8c; }
+  .code-block .value-dim    { color: #6272a4; }
+
+  /* ── ICON COMPARISON ──────────────────────────────────────── */
+  .icon-theme-row {
+    display: flex;
+    gap: 32px;
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  .icon-theme-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .icon-bg-swatch {
+    width: 88px;
+    height: 88px;
+    border-radius: 20%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .icon-label {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: #5a5e7a;
+    letter-spacing: 0.1em;
+  }
+
+  /* ── TAILWIND OVERRIDE NOTE ───────────────────────────────── */
+  .note-box {
+    background: #1a1c26;
+    border: 1px solid #2a2c3e;
+    border-left: 3px solid #60a5fa;
+    border-radius: 10px;
+    padding: 20px 24px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.8;
+    color: #7a7f99;
+    margin-bottom: 24px;
+  }
+  .note-box strong { color: #dde1f0; font-weight: 500; }
+  .note-box code {
+    background: #0e0f14;
+    color: #00d4aa;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 11px;
+  }
+</style>
+</head>
+<body>
+
+  <p class="page-eyebrow">Brand × Theme System</p>
+  <h1 class="page-title">Clearminutes</h1>
+  <p class="page-sub">// How the brand adapts across Dark, Dracula, and Midnight themes</p>
+
+  <!-- THEME CARDS -->
+  <div class="section">
+    <p class="section-label">Theme Previews</p>
+    <div class="theme-grid">
+
+      <!-- DARK -->
+      <div class="theme-card" data-theme="dark">
+        <div class="card-header">
+          <div class="card-dots"><div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div></div>
+          <span class="card-tag">Dark</span>
+        </div>
+        <div class="card-body">
+          <div class="logo-row">
+            <svg width="28" height="28" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
+              <defs>
+                <linearGradient id="dkbg" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#25272f"/><stop offset="100%" style="stop-color:#2c2e38"/></linearGradient>
+                <linearGradient id="dkarc" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" style="stop-color:#00d4aa"/><stop offset="100%" style="stop-color:#0099ff"/></linearGradient>
+                <filter id="dkglow"><feGaussianBlur stdDeviation="2.5" result="c"/><feMerge><feMergeNode in="c"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+              </defs>
+              <rect width="120" height="120" rx="27" fill="url(#dkbg)"/>
+              <circle cx="60" cy="60" r="36" fill="none" stroke="#0099ff" stroke-width="1" stroke-dasharray="4 3" opacity="0.35"/>
+              <path d="M 60 28 A 32 32 0 1 1 28 60" fill="none" stroke="url(#dkarc)" stroke-width="3.5" stroke-linecap="round" filter="url(#dkglow)"/>
+              <polygon points="60,38 74,46 74,62 60,70 46,62 46,46" fill="none" stroke="#00d4aa" stroke-width="1.5" stroke-opacity="0.35"/>
+              <line x1="60" y1="25" x2="60" y2="31" stroke="#00d4aa" stroke-width="2" stroke-linecap="round"/>
+              <circle cx="60" cy="60" r="4" fill="url(#dkarc)" filter="url(#dkglow)"/>
+              <circle cx="60" cy="28" r="2" fill="#00d4aa"/>
+            </svg>
+            <span class="logo-text">clearminutes</span>
+          </div>
+          <div class="palette-strip">
+            <div class="chip" style="background:#1e2028;" title="#1e2028"></div>
+            <div class="chip" style="background:#25272f;" title="#25272f"></div>
+            <div class="chip" style="background:#00d4aa;" title="#00d4aa"></div>
+            <div class="chip" style="background:#0099ff;" title="#0099ff"></div>
+            <div class="chip" style="background:#dde1f0;" title="#dde1f0"></div>
+            <div class="chip" style="background:#7a7f99;" title="#7a7f99"></div>
+          </div>
+          <div class="mini-ui">
+            <div class="mini-tabs">
+              <span class="mini-tab active">Summary</span>
+              <span class="mini-tab">Actions</span>
+              <span class="mini-tab">Transcript</span>
+            </div>
+            <div class="mini-content">
+              <div class="mini-title">Platform Sync</div>
+              <div class="mini-meta">Today · 34 min · 4 participants</div>
+              <div class="mini-summary">
+                <div class="mini-summary-label">AI Summary</div>
+                <div class="mini-summary-text">Team agreed to defer Flux CD upgrade. Budget confirmed for observability tooling.</div>
+              </div>
+              <div class="mini-action"><div class="mini-check done">✓</div><div class="mini-action-text">Draft DORA baseline — <span class="who">@sarah</span></div></div>
+              <div class="mini-action"><div class="mini-check"></div><div class="mini-action-text">Risk assessment — <span class="who">@james</span></div></div>
+            </div>
+          </div>
+          <div class="btn-row">
+            <div class="btn btn-primary">New Recording</div>
+            <div class="btn btn-secondary">View All</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- DRACULA -->
+      <div class="theme-card" data-theme="dracula">
+        <div class="card-header">
+          <div class="card-dots"><div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div></div>
+          <span class="card-tag">Dracula</span>
+        </div>
+        <div class="card-body">
+          <div class="logo-row">
+            <svg width="28" height="28" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
+              <defs>
+                <linearGradient id="drbg" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#2d2f3d"/><stop offset="100%" style="stop-color:#343746"/></linearGradient>
+                <linearGradient id="drarc" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" style="stop-color:#bd93f9"/><stop offset="100%" style="stop-color:#ff79c6"/></linearGradient>
+                <filter id="drglow"><feGaussianBlur stdDeviation="2.5" result="c"/><feMerge><feMergeNode in="c"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+              </defs>
+              <rect width="120" height="120" rx="27" fill="url(#drbg)"/>
+              <circle cx="60" cy="60" r="36" fill="none" stroke="#ff79c6" stroke-width="1" stroke-dasharray="4 3" opacity="0.3"/>
+              <path d="M 60 28 A 32 32 0 1 1 28 60" fill="none" stroke="url(#drarc)" stroke-width="3.5" stroke-linecap="round" filter="url(#drglow)"/>
+              <polygon points="60,38 74,46 74,62 60,70 46,62 46,46" fill="none" stroke="#bd93f9" stroke-width="1.5" stroke-opacity="0.35"/>
+              <line x1="60" y1="25" x2="60" y2="31" stroke="#bd93f9" stroke-width="2" stroke-linecap="round"/>
+              <circle cx="60" cy="60" r="4" fill="url(#drarc)" filter="url(#drglow)"/>
+              <circle cx="60" cy="28" r="2" fill="#bd93f9"/>
+            </svg>
+            <span class="logo-text">clearminutes</span>
+          </div>
+          <div class="palette-strip">
+            <div class="chip" style="background:#282a36;" title="#282a36"></div>
+            <div class="chip" style="background:#343746;" title="#343746"></div>
+            <div class="chip" style="background:#bd93f9;" title="#bd93f9"></div>
+            <div class="chip" style="background:#ff79c6;" title="#ff79c6"></div>
+            <div class="chip" style="background:#f8f8f2;" title="#f8f8f2"></div>
+            <div class="chip" style="background:#6272a4;" title="#6272a4"></div>
+          </div>
+          <div class="mini-ui">
+            <div class="mini-tabs">
+              <span class="mini-tab active">Summary</span>
+              <span class="mini-tab">Actions</span>
+              <span class="mini-tab">Transcript</span>
+            </div>
+            <div class="mini-content">
+              <div class="mini-title">Platform Sync</div>
+              <div class="mini-meta">Today · 34 min · 4 participants</div>
+              <div class="mini-summary">
+                <div class="mini-summary-label">AI Summary</div>
+                <div class="mini-summary-text">Team agreed to defer Flux CD upgrade. Budget confirmed for observability tooling.</div>
+              </div>
+              <div class="mini-action"><div class="mini-check done">✓</div><div class="mini-action-text">Draft DORA baseline — <span class="who">@sarah</span></div></div>
+              <div class="mini-action"><div class="mini-check"></div><div class="mini-action-text">Risk assessment — <span class="who">@james</span></div></div>
+            </div>
+          </div>
+          <div class="btn-row">
+            <div class="btn btn-primary">New Recording</div>
+            <div class="btn btn-secondary">View All</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- MIDNIGHT -->
+      <div class="theme-card" data-theme="midnight">
+        <div class="card-header">
+          <div class="card-dots"><div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div></div>
+          <span class="card-tag">Midnight</span>
+        </div>
+        <div class="card-body">
+          <div class="logo-row">
+            <svg width="28" height="28" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
+              <defs>
+                <linearGradient id="mnbg" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#141720"/><stop offset="100%" style="stop-color:#1a1e2a"/></linearGradient>
+                <linearGradient id="mnarc" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" style="stop-color:#60a5fa"/><stop offset="100%" style="stop-color:#818cf8"/></linearGradient>
+                <filter id="mnglow"><feGaussianBlur stdDeviation="2.5" result="c"/><feMerge><feMergeNode in="c"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+              </defs>
+              <rect width="120" height="120" rx="27" fill="url(#mnbg)"/>
+              <circle cx="60" cy="60" r="36" fill="none" stroke="#818cf8" stroke-width="1" stroke-dasharray="4 3" opacity="0.3"/>
+              <path d="M 60 28 A 32 32 0 1 1 28 60" fill="none" stroke="url(#mnarc)" stroke-width="3.5" stroke-linecap="round" filter="url(#mnglow)"/>
+              <polygon points="60,38 74,46 74,62 60,70 46,62 46,46" fill="none" stroke="#60a5fa" stroke-width="1.5" stroke-opacity="0.35"/>
+              <line x1="60" y1="25" x2="60" y2="31" stroke="#60a5fa" stroke-width="2" stroke-linecap="round"/>
+              <circle cx="60" cy="60" r="4" fill="url(#mnarc)" filter="url(#mnglow)"/>
+              <circle cx="60" cy="28" r="2" fill="#60a5fa"/>
+            </svg>
+            <span class="logo-text">clearminutes</span>
+          </div>
+          <div class="palette-strip">
+            <div class="chip" style="background:#0f1117;" title="#0f1117"></div>
+            <div class="chip" style="background:#1a1e2a;" title="#1a1e2a"></div>
+            <div class="chip" style="background:#60a5fa;" title="#60a5fa"></div>
+            <div class="chip" style="background:#818cf8;" title="#818cf8"></div>
+            <div class="chip" style="background:#e2e8f0;" title="#e2e8f0"></div>
+            <div class="chip" style="background:#64748b;" title="#64748b"></div>
+          </div>
+          <div class="mini-ui">
+            <div class="mini-tabs">
+              <span class="mini-tab active">Summary</span>
+              <span class="mini-tab">Actions</span>
+              <span class="mini-tab">Transcript</span>
+            </div>
+            <div class="mini-content">
+              <div class="mini-title">Platform Sync</div>
+              <div class="mini-meta">Today · 34 min · 4 participants</div>
+              <div class="mini-summary">
+                <div class="mini-summary-label">AI Summary</div>
+                <div class="mini-summary-text">Team agreed to defer Flux CD upgrade. Budget confirmed for observability tooling.</div>
+              </div>
+              <div class="mini-action"><div class="mini-check done">✓</div><div class="mini-action-text">Draft DORA baseline — <span class="who">@sarah</span></div></div>
+              <div class="mini-action"><div class="mini-check"></div><div class="mini-action-text">Risk assessment — <span class="who">@james</span></div></div>
+            </div>
+          </div>
+          <div class="btn-row">
+            <div class="btn btn-primary">New Recording</div>
+            <div class="btn btn-secondary">View All</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- LIGHT -->
+      <div class="theme-card" data-theme="light">
+        <div class="card-header" style="background:var(--bg3);">
+          <div class="card-dots"><div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div></div>
+          <span class="card-tag">Light</span>
+        </div>
+        <div class="card-body">
+          <div class="logo-row">
+            <svg width="28" height="28" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
+              <defs>
+                <linearGradient id="ltbg" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#ffffff"/><stop offset="100%" style="stop-color:#f0f0f8"/></linearGradient>
+                <linearGradient id="ltarc" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" style="stop-color:#00a884"/><stop offset="100%" style="stop-color:#0077cc"/></linearGradient>
+                <filter id="ltglow"><feGaussianBlur stdDeviation="2" result="c"/><feMerge><feMergeNode in="c"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+              </defs>
+              <rect width="120" height="120" rx="27" fill="url(#ltbg)" stroke="#e2e2ec" stroke-width="2"/>
+              <circle cx="60" cy="60" r="36" fill="none" stroke="#0077cc" stroke-width="1" stroke-dasharray="4 3" opacity="0.2"/>
+              <path d="M 60 28 A 32 32 0 1 1 28 60" fill="none" stroke="url(#ltarc)" stroke-width="3.5" stroke-linecap="round" filter="url(#ltglow)"/>
+              <polygon points="60,38 74,46 74,62 60,70 46,62 46,46" fill="none" stroke="#00a884" stroke-width="1.5" stroke-opacity="0.3"/>
+              <line x1="60" y1="25" x2="60" y2="31" stroke="#00a884" stroke-width="2" stroke-linecap="round"/>
+              <circle cx="60" cy="60" r="4" fill="url(#ltarc)" filter="url(#ltglow)"/>
+              <circle cx="60" cy="28" r="2" fill="#00a884"/>
+            </svg>
+            <span class="logo-text">clearminutes</span>
+          </div>
+          <div class="palette-strip">
+            <div class="chip" style="background:#f8f8fc; border:1px solid #e2e2ec;" title="#f8f8fc"></div>
+            <div class="chip" style="background:#ffffff; border:1px solid #e2e2ec;" title="#ffffff"></div>
+            <div class="chip" style="background:#00a884;" title="#00a884"></div>
+            <div class="chip" style="background:#0077cc;" title="#0077cc"></div>
+            <div class="chip" style="background:#1a1c28;" title="#1a1c28"></div>
+            <div class="chip" style="background:#6b6b88;" title="#6b6b88"></div>
+          </div>
+          <div class="mini-ui">
+            <div class="mini-tabs">
+              <span class="mini-tab active">Summary</span>
+              <span class="mini-tab">Actions</span>
+              <span class="mini-tab">Transcript</span>
+            </div>
+            <div class="mini-content">
+              <div class="mini-title">Platform Sync</div>
+              <div class="mini-meta">Today · 34 min · 4 participants</div>
+              <div class="mini-summary">
+                <div class="mini-summary-label">AI Summary</div>
+                <div class="mini-summary-text">Team agreed to defer Flux CD upgrade. Budget confirmed for observability tooling.</div>
+              </div>
+              <div class="mini-action"><div class="mini-check done">✓</div><div class="mini-action-text">Draft DORA baseline — <span class="who">@sarah</span></div></div>
+              <div class="mini-action"><div class="mini-check"></div><div class="mini-action-text">Risk assessment — <span class="who">@james</span></div></div>
+            </div>
+          </div>
+          <div class="btn-row">
+            <div class="btn btn-primary">New Recording</div>
+            <div class="btn btn-secondary">View All</div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+  <div class="section">
+    <p class="section-label">Icon Across Themes</p>
+    <div class="icon-theme-row">
+
+      <div class="icon-theme-item">
+        <div class="icon-bg-swatch" style="background:#1e2028;">
+          <svg width="56" height="56" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
+            <defs><linearGradient id="ia1" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" style="stop-color:#00d4aa"/><stop offset="100%" style="stop-color:#0099ff"/></linearGradient><filter id="igA"><feGaussianBlur stdDeviation="2.5" result="c"/><feMerge><feMergeNode in="c"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>
+            <rect width="120" height="120" rx="27" fill="#25272f"/>
+            <circle cx="60" cy="60" r="36" fill="none" stroke="#0099ff" stroke-width="1" stroke-dasharray="4 3" opacity="0.35"/>
+            <path d="M 60 28 A 32 32 0 1 1 28 60" fill="none" stroke="url(#ia1)" stroke-width="3.5" stroke-linecap="round" filter="url(#igA)"/>
+            <polygon points="60,38 74,46 74,62 60,70 46,62 46,46" fill="none" stroke="#00d4aa" stroke-width="1.5" stroke-opacity="0.35"/>
+            <line x1="60" y1="25" x2="60" y2="31" stroke="#00d4aa" stroke-width="2" stroke-linecap="round"/>
+            <circle cx="60" cy="60" r="4" fill="url(#ia1)" filter="url(#igA)"/>
+            <circle cx="60" cy="28" r="2" fill="#00d4aa"/>
+          </svg>
+        </div>
+        <span class="icon-label">Dark</span>
+      </div>
+
+      <div class="icon-theme-item">
+        <div class="icon-bg-swatch" style="background:#282a36;">
+          <svg width="56" height="56" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
+            <defs><linearGradient id="ib1" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" style="stop-color:#bd93f9"/><stop offset="100%" style="stop-color:#ff79c6"/></linearGradient><filter id="igB"><feGaussianBlur stdDeviation="2.5" result="c"/><feMerge><feMergeNode in="c"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>
+            <rect width="120" height="120" rx="27" fill="#343746"/>
+            <circle cx="60" cy="60" r="36" fill="none" stroke="#ff79c6" stroke-width="1" stroke-dasharray="4 3" opacity="0.3"/>
+            <path d="M 60 28 A 32 32 0 1 1 28 60" fill="none" stroke="url(#ib1)" stroke-width="3.5" stroke-linecap="round" filter="url(#igB)"/>
+            <polygon points="60,38 74,46 74,62 60,70 46,62 46,46" fill="none" stroke="#bd93f9" stroke-width="1.5" stroke-opacity="0.35"/>
+            <line x1="60" y1="25" x2="60" y2="31" stroke="#bd93f9" stroke-width="2" stroke-linecap="round"/>
+            <circle cx="60" cy="60" r="4" fill="url(#ib1)" filter="url(#igB)"/>
+            <circle cx="60" cy="28" r="2" fill="#bd93f9"/>
+          </svg>
+        </div>
+        <span class="icon-label">Dracula</span>
+      </div>
+
+      <div class="icon-theme-item">
+        <div class="icon-bg-swatch" style="background:#0f1117;">
+          <svg width="56" height="56" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
+            <defs><linearGradient id="ic1" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" style="stop-color:#60a5fa"/><stop offset="100%" style="stop-color:#818cf8"/></linearGradient><filter id="igC"><feGaussianBlur stdDeviation="2.5" result="c"/><feMerge><feMergeNode in="c"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>
+            <rect width="120" height="120" rx="27" fill="#1a1e2a"/>
+            <circle cx="60" cy="60" r="36" fill="none" stroke="#818cf8" stroke-width="1" stroke-dasharray="4 3" opacity="0.3"/>
+            <path d="M 60 28 A 32 32 0 1 1 28 60" fill="none" stroke="url(#ic1)" stroke-width="3.5" stroke-linecap="round" filter="url(#igC)"/>
+            <polygon points="60,38 74,46 74,62 60,70 46,62 46,46" fill="none" stroke="#60a5fa" stroke-width="1.5" stroke-opacity="0.35"/>
+            <line x1="60" y1="25" x2="60" y2="31" stroke="#60a5fa" stroke-width="2" stroke-linecap="round"/>
+            <circle cx="60" cy="60" r="4" fill="url(#ic1)" filter="url(#igC)"/>
+            <circle cx="60" cy="28" r="2" fill="#60a5fa"/>
+          </svg>
+        </div>
+        <span class="icon-label">Midnight</span>
+      </div>
+
+      <div class="icon-theme-item">
+        <div class="icon-bg-swatch" style="background:#f8f8fc; border: 1px solid #e2e2ec;">
+          <svg width="56" height="56" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
+            <defs><linearGradient id="id1" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" style="stop-color:#00a884"/><stop offset="100%" style="stop-color:#0077cc"/></linearGradient><filter id="ltglow2"><feGaussianBlur stdDeviation="1.5" result="c"/><feMerge><feMergeNode in="c"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>
+            <rect width="120" height="120" rx="27" fill="#ffffff" stroke="#e2e2ec" stroke-width="2"/>
+            <circle cx="60" cy="60" r="36" fill="none" stroke="#0077cc" stroke-width="1" stroke-dasharray="4 3" opacity="0.18"/>
+            <path d="M 60 28 A 32 32 0 1 1 28 60" fill="none" stroke="url(#id1)" stroke-width="3.5" stroke-linecap="round" filter="url(#ltglow2)"/>
+            <polygon points="60,38 74,46 74,62 60,70 46,62 46,46" fill="none" stroke="#00a884" stroke-width="1.5" stroke-opacity="0.25"/>
+            <line x1="60" y1="25" x2="60" y2="31" stroke="#00a884" stroke-width="2" stroke-linecap="round"/>
+            <line x1="87" y1="33" x2="83.8" y2="37.5" stroke="#0077cc" stroke-width="2" stroke-linecap="round" opacity="0.6"/>
+            <circle cx="60" cy="60" r="4" fill="url(#id1)" filter="url(#ltglow2)"/>
+            <circle cx="60" cy="28" r="2" fill="#00a884"/>
+          </svg>
+        </div>
+        <span class="icon-label">Light</span>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- CSS VARIABLES -->
+  <div class="section">
+    <p class="section-label">CSS Token System</p>
+
+    <div class="note-box">
+      <strong>Key principle:</strong> the app icon SVG references <code>--accent</code> and <code>--accent2</code> directly, so it recolours automatically with the theme. For the <strong>Dracula</strong> theme, the icon arc shifts to <code>#bd93f9</code> → <code>#ff79c6</code> — it's no longer the brand teal, but it <em>is</em> coherent and on-theme. The wordmark text always uses <code>--text</code> so it's readable on every background. For the <strong>Tailwind overrides</strong>, map Tailwind's semantic classes to these tokens — both dark <em>and</em> light themes are covered so the same components work across all four modes.
+    </div>
+
+    <div class="code-block">
+<span class="comment">/* ── Clearminutes Theme Tokens ──────────────────────────── */</span>
+
+<span class="selector">:root</span> {
+  <span class="comment">/* Brand identity — always teal/blue, used in logo/marketing */</span>
+  <span class="property">--brand-primary</span>:   <span class="value-teal">#00d4aa</span>;
+  <span class="property">--brand-secondary</span>: <span class="value-blue">#0099ff</span>;
+  <span class="property">--brand-tertiary</span>:  <span class="value-purple">#7b5ea7</span>;
+}
+
+<span class="selector">[data-theme="light"]</span> {
+  <span class="property">--bg</span>:             <span class="value-str">#f8f8fc</span>;  <span class="comment">/* cool off-white, not harsh pure white */</span>
+  <span class="property">--bg-surface</span>:     <span class="value-str">#ffffff</span>;
+  <span class="property">--bg-elevated</span>:    <span class="value-str">#f0f0f8</span>;
+  <span class="property">--border</span>:         <span class="value-str">#e2e2ec</span>;
+  <span class="property">--accent</span>:         <span class="value-teal">#00a884</span>;  <span class="comment">/* teal darkened ~15% for contrast on white */</span>
+  <span class="property">--accent-2</span>:       <span class="value-blue">#0077cc</span>;  <span class="comment">/* blue darkened for light bg */</span>
+  <span class="property">--accent-muted</span>:   <span class="value-str">#00a88415</span>;
+  <span class="property">--text</span>:           <span class="value-str">#1a1c28</span>;  <span class="comment">/* near-black with cool tint */</span>
+  <span class="property">--text-muted</span>:     <span class="value-str">#6b6b88</span>;
+}
+
+<span class="selector">[data-theme="dark"]</span> {
+  <span class="property">--bg</span>:             <span class="value-str">#1e2028</span>;  <span class="comment">/* warm charcoal */</span>
+  <span class="property">--bg-surface</span>:     <span class="value-str">#25272f</span>;
+  <span class="property">--bg-elevated</span>:    <span class="value-str">#2c2e38</span>;
+  <span class="property">--border</span>:         <span class="value-str">#33363f</span>;
+  <span class="property">--accent</span>:         <span class="value-teal">#00d4aa</span>;  <span class="comment">/* brand teal — full brightness on dark */</span>
+  <span class="property">--accent-2</span>:       <span class="value-blue">#0099ff</span>;
+  <span class="property">--accent-muted</span>:   <span class="value-str">#00d4aa22</span>;
+  <span class="property">--text</span>:           <span class="value-str">#dde1f0</span>;
+  <span class="property">--text-muted</span>:     <span class="value-str">#7a7f99</span>;
+}
+
+<span class="selector">[data-theme="dracula"]</span> {
+  <span class="property">--bg</span>:             <span class="value-str">#282a36</span>;
+  <span class="property">--bg-surface</span>:     <span class="value-str">#2d2f3d</span>;
+  <span class="property">--bg-elevated</span>:    <span class="value-str">#343746</span>;
+  <span class="property">--border</span>:         <span class="value-str">#44475a</span>;
+  <span class="property">--accent</span>:         <span class="value-purple">#bd93f9</span>;  <span class="comment">/* theme purple — UI chrome only */</span>
+  <span class="property">--accent-2</span>:       <span class="value-str">#ff79c6</span>;
+  <span class="property">--accent-muted</span>:   <span class="value-str">#bd93f922</span>;
+  <span class="property">--text</span>:           <span class="value-str">#f8f8f2</span>;
+  <span class="property">--text-muted</span>:     <span class="value-str">#6272a4</span>;
+}
+
+<span class="selector">[data-theme="midnight"]</span> {
+  <span class="property">--bg</span>:             <span class="value-str">#0f1117</span>;
+  <span class="property">--bg-surface</span>:     <span class="value-str">#141720</span>;
+  <span class="property">--bg-elevated</span>:    <span class="value-str">#1a1e2a</span>;
+  <span class="property">--border</span>:         <span class="value-str">#232840</span>;
+  <span class="property">--accent</span>:         <span class="value-blue">#60a5fa</span>;  <span class="comment">/* blue — close to brand, fits naturally */</span>
+  <span class="property">--accent-2</span>:       <span class="value-str">#818cf8</span>;
+  <span class="property">--accent-muted</span>:   <span class="value-str">#60a5fa22</span>;
+  <span class="property">--text</span>:           <span class="value-str">#e2e8f0</span>;
+  <span class="property">--text-muted</span>:     <span class="value-str">#64748b</span>;
+}
+
+<span class="comment">/* ── Tailwind light theme overrides ─────────────────────── */</span>
+<span class="selector">.light .bg-gray-900</span>    { <span class="property">background-color</span>: <span class="value-dim">var(--bg-surface)</span> !important; }
+<span class="selector">.light .bg-gray-800</span>    { <span class="property">background-color</span>: <span class="value-dim">var(--bg-elevated)</span> !important; }
+<span class="selector">.light .text-white</span>     { <span class="property">color</span>: <span class="value-dim">var(--text)</span> !important; }
+<span class="selector">.light .text-gray-100</span>  { <span class="property">color</span>: <span class="value-dim">var(--text)</span> !important; }
+<span class="selector">.light .border-gray-700</span>{ <span class="property">border-color</span>: <span class="value-dim">var(--border)</span> !important; }
+
+<span class="comment">/* ── Tailwind dark theme overrides ──────────────────────── */</span>
+<span class="selector">.dark .bg-white</span>        { <span class="property">background-color</span>: <span class="value-dim">var(--bg-surface)</span> !important; }
+<span class="selector">.dark .bg-gray-50</span>      { <span class="property">background-color</span>: <span class="value-dim">var(--bg-elevated)</span> !important; }
+<span class="selector">.dark .bg-gray-100</span>     { <span class="property">background-color</span>: <span class="value-dim">var(--bg-elevated)</span> !important; }
+<span class="selector">.dark .text-gray-900</span>   { <span class="property">color</span>: <span class="value-dim">var(--text)</span> !important; }
+<span class="selector">.dark .text-gray-700</span>   { <span class="property">color</span>: <span class="value-dim">var(--text)</span> !important; }
+<span class="selector">.dark .text-gray-500</span>   { <span class="property">color</span>: <span class="value-dim">var(--text-muted)</span> !important; }
+<span class="selector">.dark .border-gray-200</span> { <span class="property">border-color</span>: <span class="value-dim">var(--border)</span> !important; }
+<span class="selector">.dark .border-gray-300</span> { <span class="property">border-color</span>: <span class="value-dim">var(--border)</span> !important; }
+<span class="selector">.dark .shadow</span>          { <span class="property">box-shadow</span>: <span class="value-dim">0 1px 3px rgba(0,0,0,0.4)</span> !important; }
+    </div>
+  </div>
+
+</body>
+</html>

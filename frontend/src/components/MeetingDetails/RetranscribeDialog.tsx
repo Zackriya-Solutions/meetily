@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { RefreshCw, Globe, Loader2, AlertCircle, CheckCircle2, X, Cpu } from 'lucide-react';
+import { RefreshCw, Globe, Loader2, AlertCircle, CheckCircle2, X, Cpu, Users } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -63,6 +63,8 @@ export function RetranscribeDialog({
   const [progress, setProgress] = useState<RetranscriptionProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedLang, setSelectedLang] = useState(selectedLanguage || 'auto');
+  const [diarize, setDiarize] = useState(false);
+  const [diarizationAvailable, setDiarizationAvailable] = useState(false);
 
   // Use centralized model fetching hook
   const {
@@ -112,6 +114,16 @@ export function RetranscribeDialog({
       setProgress(null);
       setError(null);
       setSelectedLang(selectedLanguage || 'auto');
+      // Check if diarization models are available and default the toggle accordingly
+      invoke<boolean>('diarization_is_available')
+        .then((available) => {
+          setDiarizationAvailable(available);
+          setDiarize(available);
+        })
+        .catch(() => {
+          setDiarizationAvailable(false);
+          setDiarize(false);
+        });
 
       // Fetch available models using centralized hook
       fetchModels();
@@ -220,6 +232,7 @@ export function RetranscribeDialog({
         language: languageToSend,
         model: selectedModelDetails?.name || null,
         provider: selectedModelDetails?.provider || null,
+        diarize: diarizationAvailable ? diarize : false,
       });
     } catch (err: any) {
       setIsProcessing(false);
@@ -357,6 +370,36 @@ export function RetranscribeDialog({
               <p className="text-xs text-muted-foreground">
                 Choose a transcription model
               </p>
+            </div>
+          )}
+
+          {/* Diarization toggle */}
+          {!isProcessing && !error && (
+            <div className={`flex items-center justify-between rounded-lg border p-3 ${diarizationAvailable ? 'border-gray-100' : 'border-amber-100 bg-amber-50/50'}`}>
+              <div className="flex items-center gap-2">
+                <Users className={`h-4 w-4 ${diarizationAvailable ? 'text-indigo-500' : 'text-amber-500'}`} />
+                <div>
+                  <p className={`text-sm font-medium ${!diarizationAvailable ? 'text-gray-400' : ''}`}>Identify speakers</p>
+                  {diarizationAvailable ? (
+                    <p className="text-xs text-muted-foreground">
+                      Automatically label different speakers (adds ~1 min)
+                    </p>
+                  ) : (
+                    <p className="text-xs text-amber-700">
+                      Speaker models not downloaded — go to{' '}
+                      <span className="font-medium">Settings → Speaker Identification</span>{' '}
+                      to download them.
+                    </p>
+                  )}
+                </div>
+              </div>
+              <input
+                type="checkbox"
+                checked={diarize}
+                disabled={!diarizationAvailable}
+                onChange={e => setDiarize(e.target.checked)}
+                className="w-4 h-4 accent-indigo-500 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
+              />
             </div>
           )}
 

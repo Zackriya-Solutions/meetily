@@ -2,7 +2,7 @@
 
 use crate::audio::decoder::decode_audio_file;
 use crate::audio::vad::get_speech_chunks_with_progress;
-use super::common::{create_transcript_segments, split_segment_at_silence, write_transcripts_json};
+use super::common::{create_transcript_segments_with_speakers, split_segment_at_silence, write_transcripts_json};
 use super::constants::AUDIO_EXTENSIONS;
 use crate::config::{DEFAULT_WHISPER_MODEL, DEFAULT_PARAKEET_MODEL};
 use crate::parakeet_engine::ParakeetEngine;
@@ -94,6 +94,7 @@ pub async fn start_retranscription<R: Runtime>(
     language: Option<String>,
     model: Option<String>,
     provider: Option<String>,
+    diarize: Option<bool>,
 ) -> Result<RetranscriptionResult> {
     // Acquire guard - ensures flag is cleared even on panic/early return
     let _guard = RetranscriptionGuard::acquire().map_err(|e| anyhow!(e))?;
@@ -101,7 +102,7 @@ pub async fn start_retranscription<R: Runtime>(
     // Reset cancellation flag
     RETRANSCRIPTION_CANCELLED.store(false, Ordering::SeqCst);
 
-    let result = run_retranscription(app.clone(), meeting_id.clone(), meeting_folder_path, language, model, provider).await;
+    let result = run_retranscription(app.clone(), meeting_id.clone(), meeting_folder_path, language, model, provider, diarize).await;
 
     // Guard will automatically clear flag on drop
     // No need for manual: RETRANSCRIPTION_IN_PROGRESS.store(false, Ordering::SeqCst);
@@ -172,6 +173,7 @@ async fn run_retranscription<R: Runtime>(
     language: Option<String>,
     model: Option<String>,
     provider: Option<String>,
+    diarize: Option<bool>,
 ) -> Result<RetranscriptionResult> {
     let folder_path = PathBuf::from(&meeting_folder_path);
     let audio_path = find_audio_file(&folder_path)?;
@@ -233,6 +235,13 @@ async fn run_retranscription<R: Runtime>(
     // For large files (35+ minutes), VAD processing can take several minutes
     let app_for_vad = app.clone();
     let meeting_id_for_vad = meeting_id.clone();
+
+    // Keep a clone for potential diarization after VAD (only paid when diarize=true)
+    let audio_samples_for_diarization = if diarize.unwrap_or(false) {
+        Some(audio_samples.clone())
+    } else {
+        None
+    };
 
     let speech_segments = tokio::task::spawn_blocking(move || {
         get_speech_chunks_with_progress(
@@ -412,10 +421,49 @@ async fn run_retranscription<R: Runtime>(
         return Err(anyhow!("Retranscription cancelled"));
     }
 
-    emit_progress(&app, &meeting_id, "saving", 80, "Saving transcripts...");
+    // -----------------------------------------------------------------------
+    // Optional speaker diarization
+    // -----------------------------------------------------------------------
+    let should_diarize = diarize.unwrap_or(false)
+        && crate::audio::diarization::diarization_models_available();
+
+    let speaker_assignments: Option<Vec<Option<String>>> = if should_diarize {
+        if let Some(samples_for_diar) = audio_samples_for_diarization {
+            emit_progress(&app, &meeting_id, "diarization", 80, "Identifying speakers...");
+            info!("Running speaker diarization on {} samples", samples_for_diar.len());
+            match tokio::task::spawn_blocking(move || {
+                crate::audio::diarization::run_diarization(&samples_for_diar, 10, 0.5)
+            })
+            .await
+            {
+                Ok(Ok(diar_segs)) => {
+                    info!("Diarization found {} segments", diar_segs.len());
+                    let assignments = crate::audio::diarization::assign_speakers_to_transcripts(
+                        &all_transcripts,
+                        &diar_segs,
+                    );
+                    Some(assignments)
+                }
+                Ok(Err(e)) => {
+                    warn!("Diarization failed (will use 'audio' fallback): {}", e);
+                    None
+                }
+                Err(e) => {
+                    warn!("Diarization task panicked: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    emit_progress(&app, &meeting_id, "saving", 85, "Saving transcripts...");
 
     // Create transcript segments with proper timestamps from VAD
-    let segments = create_transcript_segments(&all_transcripts);
+    let segments = create_transcript_segments_with_speakers(&all_transcripts, speaker_assignments.as_deref());
 
     // Save to database
     let app_state = app
@@ -437,13 +485,14 @@ async fn run_retranscription<R: Runtime>(
 
     for segment in &segments {
         sqlx::query(
-            "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration)
-             VALUES (?, ?, ?, ?, ?, ?, ?)"
+            "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, speaker, audio_start_time, audio_end_time, duration)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
         )
         .bind(&segment.id)
         .bind(&meeting_id)
         .bind(&segment.text)
         .bind(&segment.timestamp)
+        .bind(&segment.speaker)
         .bind(segment.audio_start_time)
         .bind(segment.audio_end_time)
         .bind(segment.duration)
@@ -778,6 +827,7 @@ pub async fn start_retranscription_command<R: Runtime>(
     language: Option<String>,
     model: Option<String>,
     provider: Option<String>,
+    diarize: Option<bool>,
 ) -> Result<RetranscriptionStarted, String> {
 
     // Check if retranscription is already in progress (guard will be acquired in start_retranscription)
@@ -797,6 +847,7 @@ pub async fn start_retranscription_command<R: Runtime>(
             language,
             model,
             provider,
+            diarize,
         )
         .await;
 

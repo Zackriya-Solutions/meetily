@@ -103,33 +103,109 @@
     --chart-3: 197 37% 24%;
     --chart-4: 43 74% 66%;
     --chart-5: 27 87% 67%;
+    /* Brand accent — teal #00d4aa. Used for interactive chrome: active states,
+       focus rings, highlighted buttons. Each dark theme can override this.     */
+    --theme-accent: 168 100% 42%;       /* #00d4aa brand teal */
+    --theme-accent-fg: 0 0% 100%;
+    --theme-accent-muted: 168 60% 92%;  /* light teal tint for hover/bg */
   }
 
+  /* ── Dark (warm charcoal) ─────────────────────────────── */
   .dark {
-    --background: 0 0% 3.9%;
-    --foreground: 0 0% 98%;
-    --card: 0 0% 3.9%;
-    --card-foreground: 0 0% 98%;
-    --popover: 0 0% 3.9%;
-    --popover-foreground: 0 0% 98%;
-    --primary: 0 0% 98%;
-    --primary-foreground: 0 0% 9%;
-    --secondary: 0 0% 14.9%;
-    --secondary-foreground: 0 0% 98%;
-    --muted: 0 0% 14.9%;
-    --muted-foreground: 0 0% 63.9%;
-    --accent: 0 0% 14.9%;
-    --accent-foreground: 0 0% 98%;
-    --destructive: 0 62.8% 30.6%;
+    --background: 225 13% 12%;        /* #1e2028 */
+    --foreground: 215 25% 90%;        /* #e2e8f0 */
+    --card: 225 13% 15%;              /* #252830 */
+    --card-foreground: 215 25% 90%;
+    --popover: 225 13% 14%;
+    --popover-foreground: 215 25% 90%;
+    --primary: 168 100% 42%;          /* teal — brand primary on dark bg */
+    --primary-foreground: 225 13% 10%;
+    --secondary: 225 10% 20%;
+    --secondary-foreground: 215 25% 88%;
+    --muted: 225 10% 20%;
+    --muted-foreground: 215 15% 58%;
+    --accent: 225 10% 22%;
+    --accent-foreground: 215 25% 88%;
+    --destructive: 0 72% 51%;
     --destructive-foreground: 0 0% 98%;
-    --border: 0 0% 14.9%;
-    --input: 0 0% 14.9%;
-    --ring: 0 0% 83.1%;
-    --chart-1: 220 70% 50%;
-    --chart-2: 160 60% 45%;
+    --border: 225 10% 22%;
+    --input: 225 10% 20%;
+    --ring: 168 100% 42%;
+    --chart-1: 168 100% 42%;
+    --chart-2: 220 70% 55%;
     --chart-3: 30 80% 55%;
     --chart-4: 280 65% 60%;
     --chart-5: 340 75% 55%;
+    /* Teal accent carries brand identity into dark chrome */
+    --theme-accent: 168 100% 42%;       /* #00d4aa */
+    --theme-accent-fg: 225 13% 10%;
+    --theme-accent-muted: 168 60% 15%;  /* dark teal tint */
+  }
+
+  /* ── Dracula ──────────────────────────────────────────── */
+  /* Brand icon stays teal — UI chrome (buttons, active states) adopt Dracula purple */
+  .dark[data-theme="dracula"] {
+    --background: 231 15% 18%;        /* #282a36 */
+    --foreground: 60 30% 96%;         /* #f8f8f2 */
+    --card: 232 14% 22%;              /* #343746 */
+    --card-foreground: 60 30% 96%;
+    --popover: 232 14% 20%;
+    --popover-foreground: 60 30% 96%;
+    --primary: 265 89% 78%;           /* #bd93f9 purple */
+    --primary-foreground: 231 15% 18%;
+    --secondary: 232 14% 28%;         /* #44475a */
+    --secondary-foreground: 60 30% 96%;
+    --muted: 232 14% 28%;
+    --muted-foreground: 240 8% 65%;   /* #6272a4 */
+    --accent: 265 89% 78%;
+    --accent-foreground: 231 15% 18%;
+    --destructive: 0 100% 67%;        /* #ff5555 */
+    --destructive-foreground: 60 30% 96%;
+    --border: 232 14% 30%;
+    --input: 232 14% 26%;
+    --ring: 265 89% 78%;
+    --chart-1: 191 97% 77%;           /* #8be9fd cyan */
+    --chart-2: 135 94% 65%;           /* #50fa7b green */
+    --chart-3: 65 92% 76%;            /* #f1fa8c yellow */
+    --chart-4: 326 100% 74%;          /* #ff79c6 pink */
+    --chart-5: 265 89% 78%;           /* #bd93f9 purple */
+    /* UI chrome yields to Dracula purple */
+    --theme-accent: 265 89% 78%;      /* #bd93f9 */
+    --theme-accent-fg: 231 15% 18%;
+    --theme-accent-muted: 265 40% 25%;
+  }
+
+  /* ── Midnight (deep navy) ─────────────────────────────── */
+  /* #60a5fa is close enough to brand #0099ff — harmonious, no conflict */
+  .dark[data-theme="midnight"] {
+    --background: 224 41% 7%;         /* #0f1117 */
+    --foreground: 213 27% 84%;        /* #cbd5e1 */
+    --card: 222 38% 10%;              /* #161b27 */
+    --card-foreground: 213 27% 84%;
+    --popover: 222 38% 10%;
+    --popover-foreground: 213 27% 84%;
+    --primary: 213 94% 68%;           /* #60a5fa blue */
+    --primary-foreground: 224 41% 7%;
+    --secondary: 222 30% 15%;
+    --secondary-foreground: 213 27% 84%;
+    --muted: 222 30% 15%;
+    --muted-foreground: 215 20% 48%;
+    --accent: 213 94% 68%;
+    --accent-foreground: 224 41% 7%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 222 28% 18%;
+    --input: 222 30% 14%;
+    --ring: 213 94% 68%;
+    --chart-1: 213 94% 68%;
+    --chart-2: 160 84% 39%;
+    --chart-3: 38 92% 50%;
+    --chart-4: 280 65% 60%;
+    --chart-5: 326 78% 60%;
+    /* Blue accent — close to brand teal in feel, harmonious */
+    --theme-accent: 213 94% 68%;      /* #60a5fa */
+    --theme-accent-fg: 224 41% 7%;
+    --theme-accent-muted: 213 60% 15%;
   }
 }
 
@@ -224,4 +300,164 @@
   [data-node-type] {
     overflow: visible !important;
   }
+
+  /* Reduce BlockNote editor internal padding in the summary panel */
+  .bn-editor.bn-default-styles {
+    padding-left: 0.5rem !important;
+    padding-right: 0.5rem !important;
+    padding-top: 0.25rem !important;
+    padding-bottom: 0.25rem !important;
+  }
+
+  /* ── Global dark mode surface overrides ──────────────────
+     Covers components that use hardcoded Tailwind color classes
+     (bg-white, bg-gray-50, bg-gray-100, border-gray-200 etc.)
+     so we don't need to touch every individual component.
+     Interactive chrome (blue buttons, active states, focus rings)
+     use --theme-accent so each theme's accent carries through.  */
+  .dark {
+    color-scheme: dark;
+  }
+
+  /* Surfaces */
+  .dark .bg-white          { background-color: hsl(var(--card)) !important; }
+  .dark .bg-gray-50        { background-color: hsl(var(--background)) !important; }
+  .dark .bg-gray-100       { background-color: hsl(var(--secondary)) !important; }
+  .dark .bg-gray-200       { background-color: hsl(var(--muted)) !important; }
+
+  /* Text */
+  .dark .text-gray-900     { color: hsl(var(--foreground)) !important; }
+  .dark .text-gray-800     { color: hsl(var(--foreground)) !important; }
+  .dark .text-gray-700     { color: hsl(var(--muted-foreground)) !important; }
+  .dark .text-gray-600     { color: hsl(var(--muted-foreground)) !important; }
+  .dark .text-gray-500     { color: hsl(var(--muted-foreground)) !important; }
+  .dark .text-gray-400     { color: color-mix(in srgb, hsl(var(--muted-foreground)) 65%, transparent) !important; }
+
+  /* Borders */
+  .dark .border-gray-100   { border-color: hsl(var(--border)) !important; }
+  .dark .border-gray-200   { border-color: hsl(var(--border)) !important; }
+  .dark .border-gray-300   { border-color: hsl(var(--border)) !important; }
+
+  /* Hover states */
+  .dark .hover\:bg-gray-50:hover  { background-color: hsl(var(--accent)) !important; }
+  .dark .hover\:bg-gray-100:hover { background-color: hsl(var(--accent)) !important; }
+
+  /* ── Interactive accent elements ─────────────────────────
+     All blue-* hardcodes are replaced by --theme-accent so
+     active states, focus rings, and highlighted buttons follow
+     whichever theme is active (teal / purple / blue).          */
+
+  /* Active nav / highlighted items */
+  .dark .bg-blue-100,
+  .dark .bg-blue-50         { background-color: hsl(var(--theme-accent-muted)) !important; }
+  .dark .text-blue-600,
+  .dark .text-blue-700      { color: hsl(var(--theme-accent)) !important; }
+  .dark .text-blue-800      { color: hsl(var(--theme-accent)) !important; }
+  .dark .border-blue-500    { border-color: hsl(var(--theme-accent)) !important; }
+
+  /* Dark-mode sidebar active item */
+  .dark .bg-blue-900        { background-color: hsl(var(--theme-accent-muted)) !important; }
+  .dark .text-blue-300,
+  .dark .text-blue-400      { color: hsl(var(--theme-accent)) !important; }
+
+  /* Focus ring / selection ring */
+  .dark .ring-blue-500\/20  { --tw-ring-color: hsl(var(--theme-accent) / 0.2) !important; }
+  .dark .focus\:ring-blue-500:focus { --tw-ring-color: hsl(var(--theme-accent)) !important; }
+
+  /* Primary action buttons (bg-blue-600, bg-blue-500) */
+  .dark .bg-blue-600        { background-color: hsl(var(--theme-accent)) !important; }
+  .dark .bg-blue-500        { background-color: hsl(var(--theme-accent)) !important; }
+  .dark .hover\:bg-blue-700:hover,
+  .dark .hover\:bg-blue-600:hover { background-color: color-mix(in srgb, hsl(var(--theme-accent)) 85%, black) !important; }
+
+  /* data-[state=active] text on tabs (blue-600) */
+  .dark [data-state=active] { color: hsl(var(--theme-accent)) !important; }
+  .dark .bg-blue-600.animate-pulse,
+  .dark .bg-blue-500.animate-pulse { background-color: hsl(var(--theme-accent)) !important; }
+
+  /* Underline / indicator */
+  .dark .bg-blue-600[style],
+  .dark .h-0\.5.bg-blue-600  { background-color: hsl(var(--theme-accent)) !important; }
+
+  /* Info / note boxes */
+  .dark .bg-amber-50         { background-color: color-mix(in srgb, hsl(var(--secondary)) 90%, #92400e 10%) !important; }
+  .dark .border-amber-100    { border-color: color-mix(in srgb, hsl(var(--border)) 70%, #92400e 30%) !important; }
+  .dark .text-amber-700      { color: #fbbf24 !important; }
+  .dark .text-amber-600      { color: #f59e0b !important; }
+
+  /* ── Action button helpers ───────────────────────────────
+     .btn-accent  — primary action (Generate Summary, Enhance)
+     .btn-stop    — destructive action (Stop generation)
+     Both use CSS variables so they follow the active theme.   */
+  .btn-accent {
+    background-color: hsl(var(--theme-accent-muted));
+    border-color: hsl(var(--theme-accent) / 0.4);
+    color: hsl(var(--theme-accent));
+  }
+  .btn-accent:hover {
+    background-color: hsl(var(--theme-accent) / 0.2);
+    border-color: hsl(var(--theme-accent) / 0.6);
+  }
+  .btn-accent:disabled {
+    opacity: 0.5;
+  }
+
+  .btn-stop {
+    background-color: hsl(var(--destructive) / 0.08);
+    border-color: hsl(var(--destructive) / 0.35);
+    color: hsl(var(--destructive));
+  }
+  .btn-stop:hover {
+    background-color: hsl(var(--destructive) / 0.18);
+    border-color: hsl(var(--destructive) / 0.5);
+  }
 }
+
+/* ── BlockNote editor — fill vertical space ──────────────────────────────── */
+.bn-container {
+  height: 100% !important;
+  display: flex !important;
+  flex-direction: column !important;
+  background-color: hsl(var(--background)) !important;
+}
+.bn-editor {
+  flex: 1 !important;
+  min-height: 0 !important;
+  background-color: hsl(var(--background)) !important;
+}
+.bn-editor .ProseMirror {
+  min-height: 100% !important;
+  background-color: hsl(var(--background)) !important;
+}
+
+/* BlockNote ships its own --background / --foreground inside .bn-shadcn which
+   overrides the app theme. Re-declare them here with the app's actual values
+   so they win regardless of load order or specificity. */
+.bn-shadcn {
+  --background: 0 0% 100%;
+  --foreground: 0 0% 3.9%;
+}
+.dark .bn-shadcn {
+  --background: 225 13% 12%;
+  --foreground: 215 25% 90%;
+}
+.dark[data-theme="dracula"] .bn-shadcn {
+  --background: 231 15% 18%;
+  --foreground: 60 30% 96%;
+}
+.dark[data-theme="midnight"] .bn-shadcn {
+  --background: 224 41% 7%;
+  --foreground: 213 27% 84%;
+}
+
+/* Toolbar / formatting menu */
+.bn-toolbar,
+.bn-formatting-toolbar {
+  border-color: hsl(var(--border)) !important;
+}
+
+/* Slash menu / suggestion menu */
+.bn-suggestion-menu {
+  border-color: hsl(var(--border)) !important;
+}
+

@@ -263,35 +263,42 @@ impl SummaryService {
                 );
                 info!("final markdown is {}", &final_markdown);
 
-                // Extract and update meeting name if present
-                if let Some(name) = extract_meeting_name_from_markdown(&final_markdown) {
-                    if !name.is_empty() {
-                        info!(
-                            "Updating meeting name to '{}' for meeting_id: {}",
-                            name, meeting_id
-                        );
-                        if let Err(e) =
-                            MeetingsRepository::update_meeting_title(&pool, &meeting_id, &name).await
-                        {
+                // Extract real meeting name (placeholders are filtered out by extract_meeting_name_from_markdown)
+                let extracted_name = extract_meeting_name_from_markdown(&final_markdown);
+
+                // Always strip the first h1 line so it never renders in the BlockNote editor
+                if let Some(hash_pos) = final_markdown.find("# ") {
+                    if hash_pos == 0 || final_markdown[..hash_pos].chars().all(|c| c == '\n') {
+                        let body_start = if let Some(line_end) = final_markdown[hash_pos..].find('\n') {
+                            hash_pos + line_end
+                        } else {
+                            final_markdown.len()
+                        };
+                        final_markdown = final_markdown[body_start..].trim_start().to_string();
+                        info!("Stripped h1 title line from markdown");
+                    }
+                }
+
+                // Update meeting title only if we got a real non-placeholder name
+                // AND the current title is still blank or an auto-generated timestamp
+                if let Some(name) = extracted_name {
+                    let should_update = match MeetingsRepository::get_meeting(&pool, &meeting_id).await {
+                        Ok(Some(meeting)) => {
+                            let current_title = meeting.title.trim().to_string();
+                            current_title.is_empty()
+                                || current_title.to_lowercase().starts_with("meeting ")
+                                || current_title.to_lowercase().starts_with("meeting_")
+                        }
+                        _ => true, // If we can't fetch, update anyway
+                    };
+
+                    if should_update {
+                        info!("Updating meeting name to '{}' for meeting_id: {}", name, meeting_id);
+                        if let Err(e) = MeetingsRepository::update_meeting_title(&pool, &meeting_id, &name).await {
                             error!("Failed to update meeting name for {}: {}", meeting_id, e);
                         }
-
-                        // Strip the title line from markdown
-                        info!("Stripping title from final_markdown");
-                        if let Some(hash_pos) = final_markdown.find('#') {
-                            // Find end of first line after '#'
-                            let body_start =
-                                if let Some(line_end) = final_markdown[hash_pos..].find('\n') {
-                                    hash_pos + line_end
-                                } else {
-                                    final_markdown.len() // No newline, whole string is title
-                                };
-
-                            final_markdown = final_markdown[body_start..].trim_start().to_string();
-                        } else {
-                            // No '#' found, clear the string
-                            final_markdown.clear();
-                        }
+                    } else {
+                        info!("Skipping meeting title update — title was already set by user for meeting_id: {}", meeting_id);
                     }
                 }
 

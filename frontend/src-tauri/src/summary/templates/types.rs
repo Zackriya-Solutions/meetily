@@ -72,7 +72,7 @@ impl Template {
 
     /// Generates a clean markdown template structure
     pub fn to_markdown_structure(&self) -> String {
-        let mut markdown = String::from("# <Add Title here>\n\n");
+        let mut markdown = String::from("# [Meeting Title]\n\n");
 
         for section in &self.sections {
             markdown.push_str(&format!("**{}**\n\n", section.title));

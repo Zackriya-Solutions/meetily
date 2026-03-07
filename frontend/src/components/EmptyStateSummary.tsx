@@ -1,7 +1,7 @@
 'use client';
 
 import { motion } from 'framer-motion';
-import { FileQuestion, Sparkles } from 'lucide-react';
+import { FileQuestion, Sparkles, FileText, Check, ChevronDown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Tooltip,
@@ -9,14 +9,32 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 
 interface EmptyStateSummaryProps {
   onGenerate: () => void;
   hasModel: boolean;
   isGenerating?: boolean;
+  availableTemplates?: Array<{ id: string; name: string; description: string }>;
+  selectedTemplate?: string;
+  onTemplateSelect?: (templateId: string, templateName: string) => void;
 }
 
-export function EmptyStateSummary({ onGenerate, hasModel, isGenerating = false }: EmptyStateSummaryProps) {
+export function EmptyStateSummary({
+  onGenerate,
+  hasModel,
+  isGenerating = false,
+  availableTemplates = [],
+  selectedTemplate = '',
+  onTemplateSelect,
+}: EmptyStateSummaryProps) {
+  const selectedTemplateName = availableTemplates.find((t) => t.id === selectedTemplate)?.name;
+
   return (
     <motion.div
       initial={{ opacity: 0, scale: 0.95 }}
@@ -53,6 +71,35 @@ export function EmptyStateSummary({ onGenerate, hasModel, isGenerating = false }
           )}
         </Tooltip>
       </TooltipProvider>
+
+      {availableTemplates.length > 0 && onTemplateSelect && (
+        <div className="mt-4">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm" className="gap-2 text-gray-600">
+                <FileText className="w-4 h-4" />
+                {selectedTemplateName ?? 'Select Template'}
+                <ChevronDown className="w-3 h-3 opacity-60" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="center">
+              {availableTemplates.map((template) => (
+                <DropdownMenuItem
+                  key={template.id}
+                  onClick={() => onTemplateSelect(template.id, template.name)}
+                  title={template.description}
+                  className="flex items-center justify-between gap-2"
+                >
+                  <span>{template.name}</span>
+                  {selectedTemplate === template.id && (
+                    <Check className="h-4 w-4 text-green-600" />
+                  )}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      )}
 
       {!hasModel && (
         <p className="text-xs text-amber-600 mt-3">

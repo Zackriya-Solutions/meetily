@@ -7,17 +7,34 @@ use uuid::Uuid;
 /// Create transcript segments from transcription results.
 /// Each tuple is (text, start_ms, end_ms) from VAD timestamps.
 pub(crate) fn create_transcript_segments(transcripts: &[(String, f64, f64)]) -> Vec<TranscriptSegment> {
+    create_transcript_segments_with_speakers(transcripts, None)
+}
+
+/// Create transcript segments, optionally assigning per-segment speaker IDs from diarization.
+/// `speakers` must be `None` or have the same length as `transcripts`.
+/// Falls back to `"audio"` when no speaker assignment is available.
+pub(crate) fn create_transcript_segments_with_speakers(
+    transcripts: &[(String, f64, f64)],
+    speakers: Option<&[Option<String>]>,
+) -> Vec<TranscriptSegment> {
     transcripts
         .iter()
-        .map(|(text, start_ms, end_ms)| {
+        .enumerate()
+        .map(|(i, (text, start_ms, end_ms))| {
             let start_seconds = start_ms / 1000.0;
             let end_seconds = end_ms / 1000.0;
             let duration = end_seconds - start_seconds;
+
+            let speaker = speakers
+                .and_then(|s| s.get(i))
+                .and_then(|opt| opt.clone())
+                .or_else(|| Some("audio".to_string()));
 
             TranscriptSegment {
                 id: format!("transcript-{}", Uuid::new_v4()),
                 text: text.trim().to_string(),
                 timestamp: chrono::Utc::now().to_rfc3339(),
+                speaker,
                 audio_start_time: Some(start_seconds),
                 audio_end_time: Some(end_seconds),
                 duration: Some(duration),
@@ -40,6 +57,7 @@ pub(crate) fn write_transcripts_json(folder: &Path, segments: &[TranscriptSegmen
                 "id": s.id,
                 "text": s.text,
                 "timestamp": s.timestamp,
+                "speaker": s.speaker,
                 "audio_start_time": s.audio_start_time,
                 "audio_end_time": s.audio_end_time,
                 "duration": s.duration,

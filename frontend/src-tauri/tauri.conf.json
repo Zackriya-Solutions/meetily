@@ -1,24 +1,27 @@
 {
     "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-    "productName": "meetily",
+    "productName": "Clearminutes",
     "version": "0.3.1",
-    "identifier": "com.meetily.ai",
+    "identifier": "co.uk.devbytes.clearminutes",
     "build": {
         "frontendDist": "../out",
         "devUrl": "http://localhost:3118",
-        "beforeDevCommand": "pnpm dev",
+        "beforeDevCommand": "pnpm dev:clean",
         "beforeBuildCommand": "pnpm build"
     },
     "app": {
         "windows": [
             {
-                "title": "meetily",
+                "title": "Clearminutes",
                 "width": 1100,
                 "height": 700,
                 "resizable": true,
                 "fullscreen": false,
                 "theme": "Light",
-                "decorations": true
+                "decorations": true,
+                "titleBarStyle": "Overlay",
+                "transparent": true,
+                "hiddenTitle": true
             }
         ],
         "macOSPrivateApi": true,
@@ -66,6 +69,8 @@
                         "updater:default",
                         "process:default",
                         "dialog:default",
+                        "clipboard-manager:allow-write-text",
+                        "clipboard-manager:allow-read-text",
         {
                             "identifier": "fs:scope",
                             "allow": [
@@ -96,7 +101,9 @@
             "icons/app_icon.ico"
         ],
         "resources": [
-            "templates/*.json"
+            "templates/*.json",
+            "icons/tray-icon.png",
+            "icons/tray-icon@2x.png"
         ],
         "externalBin": [
             "binaries/llama-helper",

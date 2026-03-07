@@ -29,8 +29,6 @@ macro_rules! perf_trace {
 }
 
 // Make these macros available to other modules
-pub(crate) use perf_debug;
-pub(crate) use perf_trace;
 
 // Re-export async logging macros for external use (removed due to macro conflicts)
 
@@ -106,6 +104,7 @@ async fn start_recording<R: Runtime>(
         mic_device_name,
         system_device_name,
         meeting_name.clone(),
+        None,
     )
     .await
     {
@@ -301,48 +300,31 @@ async fn start_recording_with_devices<R: Runtime>(
     mic_device_name: Option<String>,
     system_device_name: Option<String>,
 ) -> Result<(), String> {
-    start_recording_with_devices_and_meeting(app, mic_device_name, system_device_name, None).await
+    start_recording_with_devices_and_meeting(app, mic_device_name, system_device_name, None, None).await
 }
 
-#[tauri::command]
 async fn start_recording_with_devices_and_meeting<R: Runtime>(
     app: AppHandle<R>,
     mic_device_name: Option<String>,
     system_device_name: Option<String>,
     meeting_name: Option<String>,
+    transcription_enabled: Option<bool>,
 ) -> Result<(), String> {
     log_info!("🚀 CALLED start_recording_with_devices_and_meeting - Mic: {:?}, System: {:?}, Meeting: {:?}",
              mic_device_name, system_device_name, meeting_name);
 
-    // Clone meeting_name for notification use later
     let meeting_name_for_notification = meeting_name.clone();
 
-    // Call the recording module functions that support meeting names
-    let recording_result = match (mic_device_name.clone(), system_device_name.clone()) {
-        (None, None) => {
-            log_info!(
-                "No devices specified, starting with defaults and meeting: {:?}",
-                meeting_name
-            );
-            audio::recording_commands::start_recording_with_meeting_name(app.clone(), meeting_name)
-                .await
-        }
-        _ => {
-            log_info!(
-                "Starting with specified devices: mic={:?}, system={:?}, meeting={:?}",
-                mic_device_name,
-                system_device_name,
-                meeting_name
-            );
-            audio::recording_commands::start_recording_with_devices_and_meeting(
-                app.clone(),
-                mic_device_name,
-                system_device_name,
-                meeting_name,
-            )
-            .await
-        }
-    };
+    // Route all start paths through the same backend command so transcription_enabled
+    // is honored even when both devices are None (default device selection).
+    let recording_result = audio::recording_commands::start_recording_with_devices_and_meeting(
+        app.clone(),
+        mic_device_name,
+        system_device_name,
+        meeting_name,
+        transcription_enabled,
+    )
+    .await;
 
     match recording_result {
         Ok(_) => {
@@ -397,6 +379,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .manage(whisper_engine::parallel_commands::ParallelProcessorState::new())
         .manage(Arc::new(RwLock::new(
             None::<notifications::manager::NotificationManager<tauri::Wry>>,
@@ -449,6 +432,9 @@ pub fn run() {
 
             // Set Parakeet models directory
             parakeet_engine::commands::set_models_directory(&_app.handle());
+
+            // Set diarization models directory
+            audio::diarization::set_diarization_models_directory(&_app.handle());
 
             // Initialize Parakeet engine on startup
             tauri::async_runtime::spawn(async {
@@ -581,6 +567,8 @@ pub fn run() {
             audio::recording_commands::is_recording_paused,
             audio::recording_commands::get_recording_state,
             audio::recording_commands::get_meeting_folder_path,
+            audio::recording_commands::start_transcription_now,
+            audio::recording_commands::set_live_transcription_enabled,
             // Reload sync commands (retrieve transcript history and meeting name)
             audio::recording_commands::get_transcript_history,
             audio::recording_commands::get_recording_meeting_name,
@@ -612,8 +600,8 @@ pub fn run() {
             api::api_get_model_config,
             api::api_save_model_config,
             api::api_get_api_key,
-            // api::api_get_auto_generate_setting,
-            // api::api_save_auto_generate_setting,
+            api::api_get_auto_generate_setting,
+            api::api_save_auto_generate_setting,
             api::api_get_transcript_config,
             api::api_save_transcript_config,
             api::api_get_transcript_api_key,
@@ -716,6 +704,21 @@ pub fn run() {
             audio::retranscription::start_retranscription_command,
             audio::retranscription::cancel_retranscription_command,
             audio::retranscription::is_retranscription_in_progress_command,
+            // Diarization model commands
+            audio::diarization_commands::diarization_is_available,
+            audio::diarization_commands::diarization_check_models,
+            audio::diarization_commands::diarization_download_model,
+            // Speaker profile & mapping commands
+            database::speaker_commands::get_speaker_profiles,
+            database::speaker_commands::get_self_profile,
+            database::speaker_commands::create_speaker_profile,
+            database::speaker_commands::update_speaker_profile,
+            database::speaker_commands::delete_speaker_profile,
+            database::speaker_commands::set_speaker_mapping,
+            database::speaker_commands::remove_speaker_mapping,
+            database::speaker_commands::get_meeting_speakers,
+            database::speaker_commands::detect_speaker_names,
+            database::speaker_commands::ensure_mic_mapping,
             // Import audio commands
             audio::import::select_and_validate_audio_command,
             audio::import::validate_audio_file_command,

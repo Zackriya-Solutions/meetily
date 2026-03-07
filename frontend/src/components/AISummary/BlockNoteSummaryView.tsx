@@ -9,6 +9,7 @@ import { useCreateBlockNote } from '@blocknote/react';
 import { BlockNoteView } from '@blocknote/shadcn';
 import "@blocknote/shadcn/style.css";
 import { useTheme } from '@/contexts/ThemeContext';
+import { getBlockNoteTheme } from '@/lib/blockNoteTheme';
 
 // Dynamically import BlockNote Editor to avoid SSR issues
 const Editor = dynamic(() => import('../BlockNoteEditor/Editor'), { ssr: false });
@@ -221,8 +222,8 @@ export const BlockNoteSummaryView = forwardRef<BlockNoteSummaryViewRef, BlockNot
   if (format === 'blocknote') {
     console.log('🎨 Rendering BLOCKNOTE format (direct)');
     return (
-      <div className="flex flex-col w-full">
-        <div className="w-full">
+      <div className="flex flex-col w-full h-full flex-1 bg-background">
+        <div className="w-full h-full flex-1 bg-background">
           <Editor
             initialContent={data.summary_json}
             onChange={(blocks) => {
@@ -240,8 +241,8 @@ export const BlockNoteSummaryView = forwardRef<BlockNoteSummaryViewRef, BlockNot
   if (format === 'markdown') {
     console.log('🎨 Rendering MARKDOWN format (parsed to BlockNote)');
     return (
-      <div className="flex flex-col w-full">
-        <div className="w-full">
+      <div className="flex flex-col w-full h-full flex-1 bg-background">
+        <div className="w-full h-full flex-1 bg-background">
           <BlockNoteView
             editor={editor}
             editable={true}
@@ -250,7 +251,7 @@ export const BlockNoteSummaryView = forwardRef<BlockNoteSummaryViewRef, BlockNot
                 handleEditorChange(editor.document);
               }
             }}
-            theme={theme}
+            theme={getBlockNoteTheme(theme)}
           />
         </div>
       </div>

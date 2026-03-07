@@ -2,11 +2,12 @@
 
 import { useEffect, useState, useRef } from "react"
 import { Switch } from "./ui/switch"
-import { FolderOpen } from "lucide-react"
+import { FolderOpen, Check } from "lucide-react"
 import { invoke } from "@tauri-apps/api/core"
 import Analytics from "@/lib/analytics"
 import AnalyticsConsentSwitch from "./AnalyticsConsentSwitch"
 import { useConfig, NotificationSettings } from "@/contexts/ConfigContext"
+import { useTheme, THEME_OPTIONS, ThemeVariant } from "@/contexts/ThemeContext"
 
 export function PreferenceSettings() {
   const {
@@ -16,6 +17,7 @@ export function PreferenceSettings() {
     loadPreferences,
     updateNotificationSettings
   } = useConfig();
+  const { theme, setTheme } = useTheme();
 
   const [notificationsEnabled, setNotificationsEnabled] = useState<boolean | null>(null);
   const [isInitialLoad, setIsInitialLoad] = useState(true);
@@ -148,64 +150,100 @@ export function PreferenceSettings() {
 
   return (
     <div className="space-y-6">
+
+      {/* Appearance Section */}
+      <div className="bg-white dark:bg-card rounded-lg border border-gray-200 dark:border-border p-6 shadow-sm">
+        <h3 className="text-lg font-semibold text-gray-900 dark:text-foreground mb-1">Appearance</h3>
+        <p className="text-sm text-gray-600 dark:text-muted-foreground mb-5">Choose your preferred colour theme</p>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {THEME_OPTIONS.map((opt) => {
+            const active = theme === opt.value;
+            const [bg, card, accent] = opt.preview;
+            return (
+              <button
+                key={opt.value}
+                onClick={() => setTheme(opt.value as ThemeVariant)}
+                className={`relative rounded-xl border-2 p-3 text-left transition-all focus:outline-none ${
+                  active ? 'ring-2' : 'border-gray-200 dark:border-border hover:border-gray-300 dark:hover:border-muted-foreground'
+                }`}
+                style={active ? {
+                  borderColor: 'hsl(var(--theme-accent))',
+                  '--tw-ring-color': 'hsl(var(--theme-accent) / 0.2)',
+                } as React.CSSProperties : {}}
+              >
+                {/* Mini UI preview */}
+                <div
+                  className="w-full h-12 rounded-lg mb-2 overflow-hidden relative border border-black/10"
+                  style={{ backgroundColor: bg }}
+                >
+                  {/* Simulated sidebar strip */}
+                  <div className="absolute left-0 top-0 bottom-0 w-3" style={{ backgroundColor: card }} />
+                  {/* Simulated card */}
+                  <div
+                    className="absolute left-4 top-2 right-2 h-4 rounded-sm"
+                    style={{ backgroundColor: card }}
+                  />
+                  {/* Simulated text lines */}
+                  <div
+                    className="absolute left-5 top-3.5 w-6 h-1 rounded-full opacity-60"
+                    style={{ backgroundColor: accent }}
+                  />
+                  <div
+                    className="absolute left-5 top-5.5 right-3 h-1 rounded-full opacity-30"
+                    style={{ backgroundColor: accent }}
+                  />
+                  {/* Accent dot (active indicator / button) */}
+                  <div
+                    className="absolute bottom-1.5 right-2 w-3 h-3 rounded-full"
+                    style={{ backgroundColor: accent }}
+                  />
+                </div>
+
+                <div className="text-sm font-medium text-gray-900 dark:text-foreground">{opt.label}</div>
+                <div className="text-xs text-gray-500 dark:text-muted-foreground mt-0.5 leading-tight">{opt.description}</div>
+
+                {active && (
+                  <div
+                    className="absolute top-2 right-2 w-5 h-5 rounded-full flex items-center justify-center"
+                    style={{ backgroundColor: 'hsl(var(--theme-accent))' }}
+                  >
+                    <Check className="w-3 h-3" style={{ color: 'hsl(var(--theme-accent-fg))' }} />
+                  </div>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
       {/* Notifications Section */}
-      <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm">
+      <div className="bg-white dark:bg-card rounded-lg border border-gray-200 dark:border-border p-6 shadow-sm">
         <div className="flex items-center justify-between">
           <div>
-            <h3 className="text-lg font-semibold text-gray-900 mb-2">Notifications</h3>
-            <p className="text-sm text-gray-600">Enable or disable notifications of start and end of meeting</p>
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-foreground mb-2">Notifications</h3>
+            <p className="text-sm text-gray-600 dark:text-muted-foreground">Enable or disable notifications of start and end of meeting</p>
           </div>
           <Switch checked={notificationsEnabledValue} onCheckedChange={setNotificationsEnabled} />
         </div>
       </div>
 
       {/* Data Storage Locations Section */}
-      <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm">
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">Data Storage Locations</h3>
-        <p className="text-sm text-gray-600 mb-6">
-          View and access where Meetily stores your data
+      <div className="bg-white dark:bg-card rounded-lg border border-gray-200 dark:border-border p-6 shadow-sm">
+        <h3 className="text-lg font-semibold text-gray-900 dark:text-foreground mb-4">Data Storage Locations</h3>
+        <p className="text-sm text-gray-600 dark:text-muted-foreground mb-6">
+          View and access where Clearminutes stores your data
         </p>
 
         <div className="space-y-4">
-          {/* Database Location */}
-          {/* <div className="p-4 border rounded-lg bg-gray-50">
-            <div className="font-medium mb-2">Database</div>
-            <div className="text-sm text-gray-600 mb-3 break-all font-mono text-xs">
-              {storageLocations?.database || 'Loading...'}
-            </div>
-            <button
-              onClick={() => handleOpenFolder('database')}
-              className="flex items-center gap-2 px-3 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-100 transition-colors"
-            >
-              <FolderOpen className="w-4 h-4" />
-              Open Folder
-            </button>
-          </div> */}
-
-          {/* Models Location */}
-          {/* <div className="p-4 border rounded-lg bg-gray-50">
-            <div className="font-medium mb-2">Whisper Models</div>
-            <div className="text-sm text-gray-600 mb-3 break-all font-mono text-xs">
-              {storageLocations?.models || 'Loading...'}
-            </div>
-            <button
-              onClick={() => handleOpenFolder('models')}
-              className="flex items-center gap-2 px-3 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-100 transition-colors"
-            >
-              <FolderOpen className="w-4 h-4" />
-              Open Folder
-            </button>
-          </div> */}
-
           {/* Recordings Location */}
-          <div className="p-4 border rounded-lg bg-gray-50">
-            <div className="font-medium mb-2">Meeting Recordings</div>
-            <div className="text-sm text-gray-600 mb-3 break-all font-mono text-xs">
+          <div className="p-4 border border-gray-200 dark:border-border rounded-lg bg-gray-50 dark:bg-secondary">
+            <div className="font-medium mb-2 text-gray-900 dark:text-foreground">Meeting Recordings</div>
+            <div className="text-sm text-gray-600 dark:text-muted-foreground mb-3 break-all font-mono text-xs">
               {storageLocations?.recordings || 'Loading...'}
             </div>
             <button
               onClick={() => handleOpenFolder('recordings')}
-              className="flex items-center gap-2 px-3 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-100 transition-colors"
+              className="flex items-center gap-2 px-3 py-2 text-sm border border-gray-300 dark:border-border rounded-md hover:bg-gray-100 dark:hover:bg-accent dark:text-foreground transition-colors"
             >
               <FolderOpen className="w-4 h-4" />
               Open Folder
@@ -213,15 +251,15 @@ export function PreferenceSettings() {
           </div>
         </div>
 
-        <div className="mt-4 p-3 bg-blue-50 rounded-md">
-          <p className="text-xs text-blue-800">
+        <div className="mt-4 p-3 bg-blue-50 dark:bg-secondary rounded-md">
+          <p className="text-xs text-blue-800 dark:text-primary">
             <strong>Note:</strong> Database and models are stored together in your application data directory for unified management.
           </p>
         </div>
       </div>
 
       {/* Analytics Section */}
-      <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm">
+      <div className="bg-white dark:bg-card rounded-lg border border-gray-200 dark:border-border p-6 shadow-sm">
         <AnalyticsConsentSwitch />
       </div>
     </div>

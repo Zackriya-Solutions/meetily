@@ -130,6 +130,8 @@ pub struct MeetingTranscript {
     pub id: String,
     pub text: String,
     pub timestamp: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speaker: Option<String>,
     // Recording-relative timestamps for audio-transcript synchronization
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audio_start_time: Option<f64>,
@@ -181,6 +183,8 @@ pub struct TranscriptSegment {
     pub id: String,
     pub text: String,
     pub timestamp: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speaker: Option<String>,
     // NEW: Recording-relative timestamps for playback synchronization
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audio_start_time: Option<f64>,
@@ -875,6 +879,7 @@ pub async fn api_get_meeting_transcripts<R: Runtime>(
                     id: t.id,
                     text: t.transcript,
                     timestamp: t.timestamp,
+                    speaker: t.speaker,
                     audio_start_time: t.audio_start_time,
                     audio_end_time: t.audio_end_time,
                     duration: t.duration,
@@ -963,8 +968,9 @@ pub async fn api_save_transcript<R: Runtime>(
 
     // Log parsed segments count and first segment details
     if let Some(first_seg) = transcripts_to_save.first() {
-        log_debug!("First parsed segment: text='{}', audio_start_time={:?}, audio_end_time={:?}, duration={:?}",
+        log_debug!("First parsed segment: text='{}', speaker={:?}, audio_start_time={:?}, audio_end_time={:?}, duration={:?}",
                    first_seg.text.chars().take(50).collect::<String>(),
+                   first_seg.speaker,
                    first_seg.audio_start_time,
                    first_seg.audio_end_time,
                    first_seg.duration);
@@ -1381,3 +1387,39 @@ pub async fn api_test_custom_openai_connection<R: Runtime>(
         }
     }
 }
+
+#[tauri::command]
+pub async fn api_get_auto_generate_setting<R: Runtime>(
+    _app: AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+) -> Result<bool, String> {
+    let pool = state.db_manager.pool();
+    let row: Option<(String,)> = sqlx::query_as(
+        "SELECT value FROM global_speaker_defaults WHERE key = 'auto_generate_summary'",
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(row.map(|(v,)| v == "true").unwrap_or(true))
+}
+
+#[tauri::command]
+pub async fn api_save_auto_generate_setting<R: Runtime>(
+    _app: AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+    enabled: bool,
+) -> Result<(), String> {
+    let pool = state.db_manager.pool();
+    let value = if enabled { "true" } else { "false" };
+    sqlx::query(
+        "INSERT INTO global_speaker_defaults (key, value) VALUES ('auto_generate_summary', ?) \
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    )
+    .bind(value)
+    .execute(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+

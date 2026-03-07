@@ -5,6 +5,7 @@ import { PartialBlock, Block } from "@blocknote/core";
 import "@blocknote/shadcn/style.css";
 import "@blocknote/core/fonts/inter.css";
 import { useTheme } from "@/contexts/ThemeContext";
+import { getBlockNoteTheme } from "@/lib/blockNoteTheme";
 
 interface EditorProps {
   initialContent?: Block[];
@@ -62,5 +63,7 @@ export default function Editor({ initialContent, onChange, editable = true }: Ed
     };
   }, [editor, onChange]);
 
-  return <BlockNoteView editor={editor} editable={editable} theme={theme} />;
+  const blockNoteTheme = getBlockNoteTheme(theme);
+
+  return <BlockNoteView editor={editor} editable={editable} theme={blockNoteTheme} style={{ height: '100%' }} />;
 }

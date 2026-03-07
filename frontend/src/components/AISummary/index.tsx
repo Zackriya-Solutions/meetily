@@ -5,6 +5,7 @@ import { Summary, Block } from '@/types';
 import { Section } from './Section';
 import { EditableTitle } from '../EditableTitle';
 import { ExclamationTriangleIcon, CheckCircleIcon, ClipboardDocumentCheckIcon } from '@heroicons/react/24/outline';
+import { copyToClipboard } from '@/lib/clipboard';
 
 interface Props {
   summary: Summary | null;
@@ -67,6 +68,21 @@ export const AISummary = ({ summary, status, error, onSummaryChange, onRegenerat
   const [isDragging, setIsDragging] = useState(false);
   const [dragStartBlock, setDragStartBlock] = useState<string | null>(null);
   const hiddenInputRef = useRef<HTMLTextAreaElement>(null);
+
+  // Section ordering for drag-and-drop reorder
+  const [sectionOrder, setSectionOrder] = useState<string[]>(() =>
+    Object.keys(currentSummary).filter(k => currentSummary[k]?.blocks?.length > 0)
+  );
+
+  // Keep sectionOrder in sync when summary keys change
+  useEffect(() => {
+    const newKeys = Object.keys(currentSummary).filter(k => currentSummary[k]?.blocks?.length > 0);
+    setSectionOrder(prev => {
+      const existing = prev.filter(k => newKeys.includes(k));
+      const added = newKeys.filter(k => !prev.includes(k));
+      return [...existing, ...added];
+    });
+  }, [currentSummary]);
 
   // History management
   const [history, setHistory] = useState<Summary[]>([currentSummary]);
@@ -423,7 +439,7 @@ export const AISummary = ({ summary, status, error, onSummaryChange, onRegenerat
             return '';
           }).filter(Boolean);
 
-          navigator.clipboard.writeText(blockContents.join('\n'));
+          copyToClipboard(blockContents.join('\n'));
         }
       } else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedBlocks.length > 1) {
         e.preventDefault();
@@ -520,7 +536,7 @@ export const AISummary = ({ summary, status, error, onSummaryChange, onRegenerat
 
   const handleCopyBlocks = useCallback(() => {
     const content = getSelectedBlocksContent();
-    navigator.clipboard.writeText(content);
+    copyToClipboard(content);
     setContextMenu(prev => ({ ...prev, visible: false }));
   }, [getSelectedBlocksContent]);
 
@@ -744,7 +760,7 @@ export const AISummary = ({ summary, status, error, onSummaryChange, onRegenerat
               strokeLinejoin="round"
             >
               <path d="M21 7v6h-6" />
-              <path d="M3 17a9 9 0 019-9 9 9 0 016 2.3l3 2.7" />
+              <path d="M3 17a9 9 0 009-9 9 9 0 016 2.3l3 2.7" />
             </svg>
           </button>
           <button
@@ -770,7 +786,7 @@ export const AISummary = ({ summary, status, error, onSummaryChange, onRegenerat
           <button
             onClick={() => {
               const markdown = convertToMarkdown();
-              navigator.clipboard.writeText(markdown);
+              copyToClipboard(markdown);
             }}
             className="px-2 py-1 text-sm bg-gray-100 hover:bg-gray-200 rounded-md flex items-center space-x-1"
           >
@@ -790,29 +806,48 @@ export const AISummary = ({ summary, status, error, onSummaryChange, onRegenerat
         </div>
       </div> */}
 
-      {Object.keys(currentSummary)
+      {sectionOrder
         .filter(key => currentSummary[key]?.blocks?.length > 0)
         .map(key => {
           const section = currentSummary[key];
           return (
-            <Section
+            <div
               key={key}
-              section={section}
-              sectionKey={key}
-              selectedBlocks={selectedBlocks}
-              onBlockTypeChange={handleBlockTypeChange}
-              onBlockChange={(blockId, content) => handleBlockChange(key, blockId, content)}
-              onBlockMouseDown={(blockId, e) => handleBlockMouseDown(blockId, key, e)}
-              onBlockMouseEnter={(blockId) => handleBlockMouseEnter(blockId, key)}
-              onBlockMouseUp={(blockId, e) => handleBlockMouseUp(blockId, key, e)}
-              onKeyDown={handleKeyDown}
-              onTitleChange={handleTitleChange}
-              onSectionDelete={handleSectionDelete}
-              onBlockDelete={(blockId, mergeContent) => handleBlockDelete(blockId, mergeContent)}
-              onContextMenu={handleContextMenu}
-              onBlockNavigate={(blockId, direction) => handleBlockNavigate(blockId, direction)}
-              onCreateNewBlock={handleCreateNewBlock}
-            />
+              onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }}
+              onDrop={(e) => {
+                e.preventDefault();
+                const draggedKey = e.dataTransfer.getData('text/plain');
+                if (!draggedKey || draggedKey === key) return;
+                setSectionOrder(prev => {
+                  const next = [...prev];
+                  const from = next.indexOf(draggedKey);
+                  const to = next.indexOf(key);
+                  if (from === -1 || to === -1) return prev;
+                  next.splice(from, 1);
+                  next.splice(to, 0, draggedKey);
+                  return next;
+                });
+              }}
+            >
+              <Section
+                section={section}
+                sectionKey={key}
+                selectedBlocks={selectedBlocks}
+                onGripDragStart={(e) => { e.dataTransfer.setData('text/plain', key); e.dataTransfer.effectAllowed = 'move'; }}
+                onBlockTypeChange={handleBlockTypeChange}
+                onBlockChange={(blockId, content) => handleBlockChange(key, blockId, content)}
+                onBlockMouseDown={(blockId, e) => handleBlockMouseDown(blockId, key, e)}
+                onBlockMouseEnter={(blockId) => handleBlockMouseEnter(blockId, key)}
+                onBlockMouseUp={(blockId, e) => handleBlockMouseUp(blockId, key, e)}
+                onKeyDown={handleKeyDown}
+                onTitleChange={handleTitleChange}
+                onSectionDelete={handleSectionDelete}
+                onBlockDelete={(blockId, mergeContent) => handleBlockDelete(blockId, mergeContent)}
+                onContextMenu={handleContextMenu}
+                onBlockNavigate={(blockId, direction) => handleBlockNavigate(blockId, direction)}
+                onCreateNewBlock={handleCreateNewBlock}
+              />
+            </div>
           );
         })}
 

@@ -1,10 +1,12 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { listen } from '@tauri-apps/api/event';
+import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
 import { useTranscripts } from '@/contexts/TranscriptContext';
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
 import { useRecordingState, RecordingStatus } from '@/contexts/RecordingStateContext';
+import { useConfig } from '@/contexts/ConfigContext';
 import { storageService } from '@/services/storageService';
 import { transcriptService } from '@/services/transcriptService';
 import Analytics from '@/lib/analytics';
@@ -46,6 +48,8 @@ export function useRecordingStop(
     isProcessing: isProcessingTranscript,
     isSaving: isSavingTranscript
   } = recordingState;
+
+  const { liveTranscription } = useConfig();
 
   const {
     transcriptsRef,
@@ -145,10 +149,16 @@ export function useRecordingStop(
       setStatus(RecordingStatus.PROCESSING_TRANSCRIPTS, 'Waiting for transcription...');
       console.log('Waiting for transcription to complete...');
 
-      const MAX_WAIT_TIME = 60000; // 60 seconds maximum wait (increased for longer processing)
-      const POLL_INTERVAL = 500; // Check every 500ms
+      const MAX_WAIT_TIME = 60000;
+      const POLL_INTERVAL = 500;
       let elapsedTime = 0;
       let transcriptionComplete = false;
+
+      if (!liveTranscription) {
+        // Live transcription display was disabled, but backend still transcribes.
+        // Still need to wait for transcription to finish so all segments are saved.
+        console.log('📝 Live transcription display was off, but still waiting for background transcription to complete...');
+      }
 
       // Listen for transcription-complete event
       const unlistenComplete = await listen('transcription-complete', () => {
@@ -162,27 +172,23 @@ export function useRecordingStop(
           const status = await transcriptService.getTranscriptionStatus();
           console.log('Transcription status:', status);
 
-          // Check if transcription is complete
           if (!status.is_processing && status.chunks_in_queue === 0) {
             console.log('Transcription complete - no active processing and no chunks in queue');
             transcriptionComplete = true;
             break;
           }
 
-          // If no activity for more than 8 seconds and no chunks in queue, consider it done (increased from 5s to 8s)
           if (status.last_activity_ms > 8000 && status.chunks_in_queue === 0) {
             console.log('Transcription likely complete - no recent activity and empty queue');
             transcriptionComplete = true;
             break;
           }
 
-          // Update user with current status
           if (status.chunks_in_queue > 0) {
             console.log(`Processing ${status.chunks_in_queue} remaining audio chunks...`);
             setStatus(RecordingStatus.PROCESSING_TRANSCRIPTS, `Processing ${status.chunks_in_queue} remaining chunks...`);
           }
 
-          // Wait before next check
           await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL));
           elapsedTime += POLL_INTERVAL;
         } catch (error) {
@@ -191,7 +197,6 @@ export function useRecordingStop(
         }
       }
 
-      // Clean up listener
       console.log('🧹 CLEANUP: Cleaning up transcription-complete listener');
       unlistenComplete();
 
@@ -199,7 +204,6 @@ export function useRecordingStop(
         console.warn('⏰ Transcription wait timeout reached after', elapsedTime, 'ms');
       } else {
         console.log('✅ Transcription completed after', elapsedTime, 'ms');
-        // Wait longer for any late transcript segments (increased from 1s to 4s)
         console.log('⏳ Waiting for late transcript segments...');
         await new Promise(resolve => setTimeout(resolve, 4000));
       }
@@ -304,7 +308,7 @@ export function useRecordingStop(
                 Analytics.trackButtonClick('view_meeting_from_toast', 'recording_complete');
               }
             },
-            duration: 10000,
+            duration: 3000,
           });
 
           // Auto-navigate after a short delay with source parameter
@@ -396,6 +400,7 @@ export function useRecordingStop(
     setIsRecording,
     setIsRecordingDisabled,
     setStatus,
+    liveTranscription,
     transcriptsRef,
     flushBuffer,
     clearTranscripts,

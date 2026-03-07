@@ -3,6 +3,7 @@ import { Lock, Sparkles, Cpu } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { OnboardingContainer } from '../OnboardingContainer';
 import { useOnboarding } from '@/contexts/OnboardingContext';
+import { ClearMinutesIcon } from '@/components/ClearMinutesLogo';
 
 export function WelcomeStep() {
   const { goNext } = useOnboarding();
@@ -24,14 +25,22 @@ export function WelcomeStep() {
 
   return (
     <OnboardingContainer
-      title="Welcome to Meetily"
+      title=""
       description="Record. Transcribe. Summarize. All on your device."
       step={1}
       hideProgress={true}
     >
       <div className="flex flex-col items-center space-y-10">
-        {/* Divider */}
-        <div className="w-16 h-px bg-gray-300" />
+        {/* Full-colour logo + wordmark */}
+        <div className="flex flex-col items-center gap-3">
+          <ClearMinutesIcon size={72} />
+          <span
+            className="text-2xl font-extrabold tracking-tight text-gray-900 dark:text-foreground"
+            style={{ fontFamily: 'var(--font-syne, system-ui)', letterSpacing: '-0.03em' }}
+          >
+            clearminutes
+          </span>
+        </div>
 
         {/* Features Card */}
         <div className="w-full max-w-md bg-white rounded-lg border border-gray-200 shadow-sm p-6 space-y-4">
@@ -54,7 +63,8 @@ export function WelcomeStep() {
         <div className="w-full max-w-xs space-y-3">
           <Button
             onClick={goNext}
-            className="w-full h-11 bg-gray-900 hover:bg-gray-800 text-white"
+            className="w-full h-11 text-white hover:opacity-90 transition-opacity"
+            style={{ backgroundColor: 'hsl(var(--theme-accent))' }}
           >
             Get Started
           </Button>

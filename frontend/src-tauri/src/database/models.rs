@@ -31,6 +31,7 @@ pub struct Transcript {
     pub summary: Option<String>,
     pub action_items: Option<String>,
     pub key_points: Option<String>,
+    pub speaker: Option<String>,
     // Recording-relative timestamps for audio-transcript synchronization
     pub audio_start_time: Option<f64>,
     pub audio_end_time: Option<f64>,

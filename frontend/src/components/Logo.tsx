@@ -1,8 +1,8 @@
 import React from "react";
-import Image from "next/image";
 import { Dialog, DialogContent, DialogTitle, DialogTrigger } from "./ui/dialog";
 import { VisuallyHidden } from "./ui/visually-hidden";
 import { About } from "./About";
+import { ClearMinutesIcon, ClearMinutesWordmark } from "./ClearMinutesLogo";
 
 interface LogoProps {
     isCollapsed: boolean;
@@ -14,19 +14,19 @@ const Logo = React.forwardRef<HTMLButtonElement, LogoProps>(({ isCollapsed }, re
       {isCollapsed ? (
         <DialogTrigger asChild>
           <button ref={ref} className="flex items-center justify-start mb-2 cursor-pointer bg-transparent border-none p-0 hover:opacity-80 transition-opacity">
-            <Image src="/logo-collapsed.png" alt="Logo" width={40} height={32} />
+            <ClearMinutesIcon size={36} />
           </button>
         </DialogTrigger>
       ) : (
         <DialogTrigger asChild>
-          <span className="text-lg text-center border rounded-full bg-blue-50 border-white font-semibold text-gray-700 mb-2 block items-center cursor-pointer hover:opacity-80 transition-opacity">
-            <span>Meetily</span>
-          </span>
+          <button ref={ref} className="flex items-center mb-2 cursor-pointer bg-transparent border-none p-0 hover:opacity-80 transition-opacity w-full">
+            <ClearMinutesWordmark iconSize={28} />
+          </button>
         </DialogTrigger>
       )}
       <DialogContent>
         <VisuallyHidden>
-          <DialogTitle>About Meetily</DialogTitle>
+          <DialogTitle>About Clearminutes</DialogTitle>
         </VisuallyHidden>
         <About />
       </DialogContent>

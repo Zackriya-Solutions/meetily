@@ -21,5 +21,7 @@ pub use engine::{
 pub use worker::{
     start_transcription_task,
     reset_speech_detected_flag,
+    set_live_transcription_enabled,
+    is_live_transcription_enabled,
     TranscriptUpdate
 };

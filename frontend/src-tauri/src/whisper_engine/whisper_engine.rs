@@ -589,8 +589,8 @@ impl WhisperEngine {
             // Suppressor dropped here, stderr restored
         };
         let mut result = String::new();
-        let mut total_confidence = 0.0;
-        let mut segment_count = 0;
+        let mut total_token_prob = 0.0f32;
+        let mut total_token_count = 0usize;
 
         let num_segments = num_segments?;
         for i in 0..num_segments {
@@ -599,15 +599,15 @@ impl WhisperEngine {
                 Err(_) => continue,
             };
 
-            // Calculate confidence based on segment length and duration (simplified approach)
-            let segment_length = segment_text.len() as f32;
-            let segment_confidence = if segment_length > 0.0 {
-                (segment_length / 100.0).min(0.9) + 0.1 // 0.1 to 1.0 confidence based on text length
-            } else {
-                0.1
-            };
-            total_confidence += segment_confidence;
-            segment_count += 1;
+            // Calculate confidence using actual token probabilities from whisper
+            if let Ok(n_tokens) = state.full_n_tokens(i) {
+                for j in 0..n_tokens {
+                    if let Ok(prob) = state.full_get_token_prob(i, j) {
+                        total_token_prob += prob;
+                        total_token_count += 1;
+                    }
+                }
+            }
 
             let cleaned_text = segment_text.trim();
             if !cleaned_text.is_empty() {
@@ -621,10 +621,10 @@ impl WhisperEngine {
         let final_result = result.trim().to_string();
         let cleaned_result = Self::clean_repetitive_text(&final_result);
 
-        let avg_confidence = if segment_count > 0 {
-            total_confidence / segment_count as f32
+        let avg_confidence = if total_token_count > 0 {
+            total_token_prob / total_token_count as f32
         } else {
-            0.0
+            0.85 // Default high confidence if no token data (fallback)
         };
 
         Ok((cleaned_result, avg_confidence, is_partial))

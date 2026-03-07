@@ -3,13 +3,15 @@
 import { invoke } from '@tauri-apps/api/core';
 import { appDataDir } from '@tauri-apps/api/path';
 import { useCallback, useEffect, useState, useRef } from 'react';
-import { Play, Pause, Square, Mic, AlertCircle, X } from 'lucide-react';
+import { Play, Pause, Square, Mic, AlertCircle, X, FileText } from 'lucide-react';
 import { ProcessRequest, SummaryResponse } from '@/types/summary';
 import { listen } from '@tauri-apps/api/event';
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import Analytics from '@/lib/analytics';
 import { useRecordingState } from '@/contexts/RecordingStateContext';
+import { useConfig } from '@/contexts/ConfigContext';
+import { toast } from 'sonner';
 
 interface RecordingControlsProps {
   isRecording: boolean;
@@ -44,6 +46,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
   // Use global recording state context for pause state (syncs with tray operations)
   const recordingState = useRecordingState();
   const isPaused = recordingState.isPaused;
+  const { liveTranscription, toggleLiveTranscription } = useConfig();
 
   const [showPlayback, setShowPlayback] = useState(false);
   const [recordingPath, setRecordingPath] = useState<string | null>(null);
@@ -53,6 +56,8 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
   const [isStopping, setIsStopping] = useState(false);
   const [isPausing, setIsPausing] = useState(false);
   const [isResuming, setIsResuming] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [isLiveTranscriptionActive, setIsLiveTranscriptionActive] = useState(liveTranscription);
   const MIN_RECORDING_DURATION = 2000; // 2 seconds minimum recording time
   const [transcriptionErrors, setTranscriptionErrors] = useState(0);
   const [isValidatingModel, setIsValidatingModel] = useState(false);
@@ -339,14 +344,21 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
     };
   }, [onRecordingStop, onTranscriptionError]);
 
+  useEffect(() => {
+    if (!isRecording) {
+      // Reset to preference for the next session
+      setIsLiveTranscriptionActive(liveTranscription);
+    }
+  }, [isRecording, liveTranscription]);
+
   return (
     <TooltipProvider>
       <div className="flex flex-col space-y-2">
-        <div className="flex items-center space-x-2 bg-white rounded-full shadow-lg px-4 py-2">
+        <div className="flex items-center space-x-2 bg-white dark:bg-card rounded-full shadow-lg dark:shadow-black/40 px-4 py-2">
           {isProcessing && !isParentProcessing ? (
             <div className="flex items-center space-x-2">
-              <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-gray-900"></div>
-              <span className="text-sm text-gray-600">Processing recording...</span>
+              <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-gray-900 dark:border-foreground"></div>
+              <span className="text-sm text-gray-600 dark:text-muted-foreground">Processing recording...</span>
             </div>
           ) : (
             <>
@@ -359,21 +371,21 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
                     <Mic size={16} />
                   </button>
 
-                  <div className="w-px h-6 bg-gray-200 mx-1" />
+                  <div className="w-px h-6 bg-gray-200 dark:bg-border mx-1" />
 
                   <div className="flex items-center space-x-1 mx-2">
-                    <div className="text-sm text-gray-600 min-w-[40px]">
+                    <div className="text-sm text-gray-600 dark:text-muted-foreground min-w-[40px]">
                       {formatTime(currentTime)}
                     </div>
                     <div
-                      className="relative w-24 h-1 bg-gray-200 rounded-full"
+                      className="relative w-24 h-1 bg-gray-200 dark:bg-muted rounded-full"
                     >
                       <div
                         className="absolute h-full bg-blue-500 rounded-full"
                         style={{ width: `${progress}%` }}
                       />
                     </div>
-                    <div className="text-sm text-gray-600 min-w-[40px]">
+                    <div className="text-sm text-gray-600 dark:text-muted-foreground min-w-[40px]">
                       {formatTime(duration)}
                     </div>
                   </div>
@@ -414,6 +426,36 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
                   ) : (
                     // Recording controls (pause/resume + stop)
                     <>
+                      {/* Live transcription toggle during active recording */}
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <button
+                            onClick={async () => {
+                              const nextEnabled = !isLiveTranscriptionActive;
+                              setIsLiveTranscriptionActive(nextEnabled);
+                              toggleLiveTranscription(nextEnabled);
+                              toast.success(nextEnabled ? 'Live transcription display enabled' : 'Live transcription display hidden');
+                              Analytics.trackButtonClick(
+                                nextEnabled ? 'live_transcription_enable_runtime' : 'live_transcription_disable_runtime',
+                                'recording_controls'
+                              );
+                            }}
+                            disabled={isStopping}
+                            className={`flex items-center gap-1 px-3 h-10 rounded-full text-sm font-medium transition-colors ${
+                              isLiveTranscriptionActive
+                                ? 'bg-blue-500 hover:bg-blue-600 text-white'
+                                : 'bg-gray-100 hover:bg-gray-200 text-gray-700 dark:bg-secondary dark:hover:bg-accent dark:text-secondary-foreground'
+                            }`}
+                          >
+                            <FileText size={14} />
+                            {isLiveTranscriptionActive ? 'Transcription On' : 'Transcription Off'}
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p>{isLiveTranscriptionActive ? 'Hide live transcript display' : 'Show live transcript display'}</p>
+                        </TooltipContent>
+                      </Tooltip>
+
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <button
@@ -428,13 +470,13 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
                             }}
                             disabled={isPausing || isResuming || isStopping}
                             className={`w-10 h-10 flex items-center justify-center ${isPausing || isResuming || isStopping
-                              ? 'bg-gray-200 border-2 border-gray-300 text-gray-400'
-                              : 'bg-white border-2 border-gray-300 text-gray-600 hover:border-gray-400 hover:bg-gray-50'
+                              ? 'bg-gray-200 border-2 border-gray-300 text-gray-400 dark:bg-muted dark:border-border dark:text-muted-foreground'
+                              : 'bg-white border-2 border-gray-300 text-gray-600 hover:border-gray-400 hover:bg-gray-50 dark:bg-secondary dark:border-border dark:text-foreground dark:hover:bg-accent'
                               } rounded-full transition-colors relative`}
                           >
                             {isPaused ? <Play size={16} /> : <Pause size={16} />}
                             {(isPausing || isResuming) && (
-                              <div className="absolute -top-8 text-gray-600 font-medium text-xs">
+                              <div className="absolute -top-8 text-gray-600 dark:text-muted-foreground font-medium text-xs">
                                 {isPausing ? 'Pausing...' : 'Resuming...'}
                               </div>
                             )}
@@ -458,7 +500,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
                           >
                             <Square size={16} />
                             {isStopping && (
-                              <div className="absolute -top-8 text-gray-600 font-medium text-xs">
+                              <div className="absolute -top-8 text-gray-600 dark:text-muted-foreground font-medium text-xs">
                                 Stopping...
                               </div>
                             )}
@@ -492,7 +534,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
 
         {/* Show validation status only */}
         {isValidatingModel && (
-          <div className="text-xs text-gray-600 text-center mt-2">
+          <div className="text-xs text-gray-600 dark:text-muted-foreground text-center mt-2">
             Validating speech recognition...
           </div>
         )}
@@ -530,3 +572,4 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
     </TooltipProvider>
   );
 };
+

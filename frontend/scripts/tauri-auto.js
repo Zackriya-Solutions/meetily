@@ -1,12 +1,40 @@
 #!/usr/bin/env node
 /**
- * Auto-detect GPU and run Tauri with appropriate features
+ * Auto-detect GPU and run Tauri with appropriate features.
+ * Kills any stale process on the Next.js dev port before starting.
  */
 
-const { execSync } = require('child_process');
+const { execSync, spawnSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+
+// Kill anything already bound to port 3118 so a stale Next.js server
+// from a previous run never blocks the new one.
+const DEV_PORT = 3118;
+try {
+  const platform = os.platform();
+  if (platform === 'win32') {
+    // netstat + taskkill on Windows
+    const result = spawnSync('cmd', ['/c', `for /f "tokens=5" %a in ('netstat -aon ^| findstr :${DEV_PORT}') do taskkill /F /PID %a`], { encoding: 'utf8' });
+    if (result.stdout && result.stdout.includes('SUCCESS')) {
+      console.log(`🧹 Killed stale process on port ${DEV_PORT}`);
+    }
+  } else {
+    // lsof on macOS/Linux
+    const pids = spawnSync('lsof', ['-ti', `tcp:${DEV_PORT}`], { encoding: 'utf8' }).stdout.trim();
+    if (pids) {
+      pids.split('\n').filter(Boolean).forEach(pid => {
+        try {
+          process.kill(parseInt(pid, 10), 'SIGKILL');
+          console.log(`🧹 Killed stale process ${pid} on port ${DEV_PORT}`);
+        } catch (_) {}
+      });
+    }
+  }
+} catch (_) {
+  // Non-fatal — if nothing is running the kill is a no-op
+}
 
 // Get the command (dev or build)
 const command = process.argv[2];

@@ -35,6 +35,9 @@ pub use super::transcription::TranscriptUpdate;
 // GLOBAL STATE
 // ============================================================================
 
+use tokio::sync::mpsc;
+use super::recording_state::AudioChunk;
+
 // Simple recording state tracking
 static IS_RECORDING: AtomicBool = AtomicBool::new(false);
 
@@ -44,6 +47,9 @@ static TRANSCRIPTION_TASK: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
 
 // Listener ID for proper cleanup - prevents microphone from staying active after recording stops
 static TRANSCRIPT_LISTENER_ID: Mutex<Option<tauri::EventId>> = Mutex::new(None);
+
+// Deferred transcription receiver — set when recording starts with live transcription disabled
+static DEFERRED_TRANSCRIPTION_RECEIVER: Mutex<Option<mpsc::UnboundedReceiver<AudioChunk>>> = Mutex::new(None);
 
 // ============================================================================
 // PUBLIC TYPES
@@ -87,30 +93,13 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
         return Err("Recording already in progress".to_string());
     }
 
-    // Validate that transcription models are available before starting recording
-    info!("🔍 Validating transcription model availability before starting recording...");
-    if let Err(validation_error) = transcription::validate_transcription_model_ready(&app).await {
-        error!("Model validation failed: {}", validation_error);
-
-        // Emit error event for frontend - actionable: false to show toast instead of modal
-        // (download progress is already shown in top-right toast)
-        let _ = app.emit("transcription-error", serde_json::json!({
-            "error": validation_error,
-            "userMessage": "Recording cannot start: Transcription model is still downloading. Please wait for the download to complete.",
-            "actionable": false
-        }));
-
-        return Err(validation_error);
-    }
-    info!("✅ Transcription model validation passed");
-
     // Async-first approach - no more blocking operations!
     info!("🚀 Starting async recording initialization");
 
     // Create new recording manager
     let mut manager = RecordingManager::new();
 
-    // Load recording preferences to get auto_save AND device preferences
+    // Load recording preferences to get auto_save and device preferences
     let (auto_save, preferred_mic_name, preferred_system_name) =
         match super::recording_preferences::load_recording_preferences(&app).await {
             Ok(prefs) => {
@@ -123,6 +112,19 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
                 (true, None, None)
             }
         };
+
+    // Validate that transcription models are available before starting recording
+    info!("🔍 Validating transcription model availability before starting recording...");
+    if let Err(validation_error) = transcription::validate_transcription_model_ready(&app).await {
+        error!("Model validation failed: {}", validation_error);
+        let _ = app.emit("transcription-error", serde_json::json!({
+            "error": validation_error,
+            "userMessage": "Recording cannot start: Transcription model is still downloading. Please wait for the download to complete.",
+            "actionable": false
+        }));
+        return Err(validation_error);
+    }
+    info!("✅ Transcription model validation passed");
 
     // ============================================================================
     // MICROPHONE DEVICE RESOLUTION: Preference → Default → Error
@@ -247,6 +249,10 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
     IS_RECORDING.store(true, Ordering::SeqCst);
     reset_speech_detected_flag(); // Reset for new recording session
 
+    // Transcription always runs so audio is captured and saved.
+    // The liveTranscription setting only controls frontend display visibility.
+    transcription::set_live_transcription_enabled(true);
+
     // Start optimized parallel transcription task and store handle
     let task_handle = transcription::start_transcription_task(app.clone(), transcription_receiver);
     {
@@ -272,6 +278,7 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
                     display_time: update.timestamp.clone(), // Use wall-clock timestamp for display
                     confidence: update.confidence,
                     sequence_id: update.sequence_id,
+                    speaker: update.speaker.clone(),
                 };
 
                 // Save to recording manager
@@ -308,19 +315,22 @@ pub async fn start_recording_with_devices<R: Runtime>(
     mic_device_name: Option<String>,
     system_device_name: Option<String>,
 ) -> Result<(), String> {
-    start_recording_with_devices_and_meeting(app, mic_device_name, system_device_name, None).await
+    start_recording_with_devices_and_meeting(app, mic_device_name, system_device_name, None, None).await
 }
 
 /// Start recording with specific devices and optional meeting name
+#[tauri::command]
 pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
     app: AppHandle<R>,
     mic_device_name: Option<String>,
     system_device_name: Option<String>,
     meeting_name: Option<String>,
+    transcription_enabled: Option<bool>,
 ) -> Result<(), String> {
+    let transcription_enabled = transcription_enabled.unwrap_or(true);
     info!(
-        "Starting recording with specific devices: mic={:?}, system={:?}, meeting={:?}",
-        mic_device_name, system_device_name, meeting_name
+        "Starting recording with specific devices: mic={:?}, system={:?}, meeting={:?}, transcription_enabled={}",
+        mic_device_name, system_device_name, meeting_name, transcription_enabled
     );
 
     // Check if already recording
@@ -331,29 +341,40 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
     }
 
     // Validate that transcription models are available before starting recording
-    info!("🔍 Validating transcription model availability before starting recording...");
-    if let Err(validation_error) = transcription::validate_transcription_model_ready(&app).await {
-        error!("Model validation failed: {}", validation_error);
-
-        // Emit error event for frontend - actionable: false to show toast instead of modal
-        // (download progress is already shown in top-right toast)
-        let _ = app.emit("transcription-error", serde_json::json!({
-            "error": validation_error,
-            "userMessage": "Recording cannot start: Transcription model is still downloading. Please wait for the download to complete.",
-            "actionable": false
-        }));
-
-        return Err(validation_error);
+    // (only needed when live transcription is enabled)
+    if transcription_enabled {
+        info!("🔍 Validating transcription model availability before starting recording...");
+        if let Err(validation_error) = transcription::validate_transcription_model_ready(&app).await {
+            error!("Model validation failed: {}", validation_error);
+            let _ = app.emit("transcription-error", serde_json::json!({
+                "error": validation_error,
+                "userMessage": "Recording cannot start: Transcription model is still downloading. Please wait for the download to complete.",
+                "actionable": false
+            }));
+            return Err(validation_error);
+        }
+        info!("✅ Transcription model validation passed");
+    } else {
+        info!("⏭️  Live transcription disabled — skipping model validation");
     }
-    info!("✅ Transcription model validation passed");
 
-    // Parse devices
+    // Parse devices. If no explicit devices are provided, fall back to system defaults
+    // so recording can still start with the same behavior users expect.
     let mic_device = if let Some(ref name) = mic_device_name {
         Some(Arc::new(parse_audio_device(name).map_err(|e| {
             format!("Invalid microphone device '{}': {}", name, e)
         })?))
     } else {
-        None
+        match default_input_device() {
+            Ok(device) => {
+                info!("🎤 No microphone explicitly selected, using default input device: '{}'", device.name);
+                Some(Arc::new(device))
+            }
+            Err(e) => {
+                warn!("No default microphone available: {}", e);
+                None
+            }
+        }
     };
 
     let system_device = if let Some(ref name) = system_device_name {
@@ -361,8 +382,21 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
             format!("Invalid system device '{}': {}", name, e)
         })?))
     } else {
-        None
+        match default_output_device() {
+            Ok(device) => {
+                info!("🔊 No system audio device explicitly selected, using default output device: '{}'", device.name);
+                Some(Arc::new(device))
+            }
+            Err(e) => {
+                warn!("No default system audio device available: {}", e);
+                None
+            }
+        }
     };
+
+    if mic_device.is_none() && system_device.is_none() {
+        return Err("No audio streams could be created: no valid input or output device available".to_string());
+    }
 
     // Async-first approach for custom devices - no more blocking operations!
     info!("🚀 Starting async recording initialization with custom devices");
@@ -378,17 +412,14 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
         }
         Err(e) => {
             warn!("Failed to load recording preferences, defaulting to auto_save=true: {}", e);
-            true // Default to saving if preferences can't be loaded
+            true
         }
     };
 
     // Always ensure a meeting name is set so incremental saver initializes
     let effective_meeting_name = meeting_name.clone().unwrap_or_else(|| {
         let now = chrono::Local::now();
-        format!(
-            "Meeting {}",
-            now.format("%Y-%m-%d_%H-%M-%S")
-        )
+        format!("Meeting {}", now.format("%Y-%m-%d_%H-%M-%S"))
     });
     manager.set_meeting_name(Some(effective_meeting_name));
 
@@ -413,14 +444,17 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
     // Set recording flag and reset speech detection flag
     info!("🔍 Setting IS_RECORDING to true and resetting SPEECH_DETECTED_EMITTED");
     IS_RECORDING.store(true, Ordering::SeqCst);
-    reset_speech_detected_flag(); // Reset for new recording session
+    reset_speech_detected_flag();
 
-    // Start optimized parallel transcription task and store handle
+    // Transcription always runs so audio is captured and saved.
+    // The liveTranscription setting only controls frontend display visibility.
+    transcription::set_live_transcription_enabled(true);
     let task_handle = transcription::start_transcription_task(app.clone(), transcription_receiver);
     {
         let mut global_task = TRANSCRIPTION_TASK.lock().unwrap();
         *global_task = Some(task_handle);
     }
+    info!("✅ Recording started with custom devices using async-first approach");
 
     // CRITICAL: Listen for transcript-update events and save to recording manager
     // This enables transcript history persistence for page reload sync
@@ -440,6 +474,7 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
                     display_time: update.timestamp.clone(), // Use wall-clock timestamp for display
                     confidence: update.confidence,
                     sequence_id: update.sequence_id,
+                    speaker: update.speaker.clone(),
                 };
 
                 // Save to recording manager
@@ -473,6 +508,76 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
     Ok(())
 }
 
+/// Toggle live transcription during an active recording.
+///
+/// - `enabled = true`: starts transcription if deferred, or resumes processing if already running.
+/// - `enabled = false`: keeps task alive but skips transcription work for new chunks.
+#[tauri::command]
+pub async fn set_live_transcription_enabled<R: Runtime>(
+    app: AppHandle<R>,
+    enabled: bool,
+) -> Result<String, String> {
+    if !IS_RECORDING.load(Ordering::SeqCst) {
+        return Err("No active recording".to_string());
+    }
+
+    if enabled {
+        // If we already have a running worker, just re-enable runtime processing.
+        if TRANSCRIPTION_TASK.lock().unwrap().is_some() {
+            transcription::set_live_transcription_enabled(true);
+            return Ok("Live transcription enabled".to_string());
+        }
+
+        // Otherwise, start from deferred receiver.
+        if let Err(e) = transcription::validate_transcription_model_ready(&app).await {
+            error!("Model validation failed: {}", e);
+            return Err(e);
+        }
+
+        let receiver = {
+            let mut deferred = DEFERRED_TRANSCRIPTION_RECEIVER.lock().unwrap();
+            deferred.take()
+        };
+
+        match receiver {
+            Some(rx) => {
+                transcription::set_live_transcription_enabled(true);
+                let task_handle = transcription::start_transcription_task(app.clone(), rx);
+                let mut global_task = TRANSCRIPTION_TASK.lock().unwrap();
+                *global_task = Some(task_handle);
+                Ok("Live transcription enabled".to_string())
+            }
+            None => {
+                // Nothing deferred and no running task means we cannot resume mid-stream.
+                Err("No deferred transcription stream available".to_string())
+            }
+        }
+    } else {
+        // Keep worker alive, but skip work on future chunks.
+        transcription::set_live_transcription_enabled(false);
+        Ok("Live transcription disabled".to_string())
+    }
+}
+
+/// Start transcription on a recording that was started with live transcription disabled.
+/// Validates the model, then consumes the deferred audio receiver to begin transcription.
+#[tauri::command]
+pub async fn start_transcription_now<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    info!("🎙️ start_transcription_now called");
+
+    match set_live_transcription_enabled(app, true).await {
+        Ok(msg) => {
+            info!("{}", msg);
+            Ok(())
+        }
+        Err(e) if e == "No deferred transcription stream available" => {
+            info!("Transcription already running — nothing to do");
+            Ok(())
+        }
+        Err(e) => Err(e),
+    }
+}
+
 /// Stop recording with optimized graceful shutdown ensuring NO transcript chunks are lost
 pub async fn stop_recording<R: Runtime>(
     app: AppHandle<R>,
@@ -486,6 +591,15 @@ pub async fn stop_recording<R: Runtime>(
     if !IS_RECORDING.load(Ordering::SeqCst) {
         info!("Recording was not active");
         return Ok(());
+    }
+
+    // Clear any deferred transcription receiver (recording with live transcription off that was never started)
+    {
+        let mut deferred = DEFERRED_TRANSCRIPTION_RECEIVER.lock().unwrap();
+        if deferred.is_some() {
+            info!("🗑️ Discarding unused deferred transcription receiver");
+            *deferred = None;
+        }
     }
 
     // Emit shutdown progress to frontend

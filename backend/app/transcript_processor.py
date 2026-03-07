@@ -66,7 +66,7 @@ class People(BaseModel):
 
 class SummaryResponse(BaseModel):
     """Represents the meeting summary response based on a section of the transcript"""
-    MeetingName : str
+    MeetingName: str  # Smart contextual title — see prompt for format rules
     People : People
     SessionSummary : Section
     CriticalDeadlines: Section
@@ -84,7 +84,7 @@ class TranscriptProcessor:
         logger.info("TranscriptProcessor initialized.")
         self.db = DatabaseManager()
         self.active_clients = []  # Track active Ollama client sessions
-    async def process_transcript(self, text: str, model: str, model_name: str, chunk_size: int = 5000, overlap: int = 1000, custom_prompt: str = "") -> Tuple[int, List[str]]:
+    async def process_transcript(self, text: str, model: str, model_name: str, chunk_size: int = 5000, overlap: int = 1000, custom_prompt: str = "", meeting_date: str = "") -> Tuple[int, List[str]]:
         """
         Process transcript text into chunks and generate structured summaries for each chunk using an AI model.
 
@@ -181,6 +181,16 @@ class TranscriptProcessor:
                             
                             For the color field, use 'gray' for less important content or '' (empty string) for default.
 
+                            MEETING TITLE (MeetingName) RULES — follow these precisely:
+                            - The date to use is: {meeting_date if meeting_date else "today"}
+                            - The date goes at the START of the title, formatted like "7 Mar 2026"
+                            - For 2-person meetings (1:1s): "<Date> – FirstName/FirstName 1:1" e.g. "7 Mar 2026 – James/Dan 1:1"
+                            - For project or topic meetings: "<Date> – <Project or Topic>: <Meeting Type>" e.g. "7 Mar 2026 – Project BigHouse: Status Update"
+                            - For general team meetings: "<Date> – <Team> <Meeting Type>" e.g. "7 Mar 2026 – Engineering All-Hands"
+                            - Infer names, project names, and topics from the transcript; correct spelling if needed
+                            - Never use timestamp-style names like "Meeting_07_03_26"
+                            - Keep the title concise (under 60 characters)
+
                             Transcript Chunk:
                             ---
                         {chunk}
@@ -197,8 +207,8 @@ class TranscriptProcessor:
                     )
                     else:
                         logger.info(f"Using Ollama model: {model_name} and chunk size: {chunk_size} with overlap: {overlap}")
-                        response = await self.chat_ollama_model(model_name, chunk, custom_prompt)
-                        
+                        response = await self.chat_ollama_model(model_name, chunk, custom_prompt, meeting_date)
+
                         # Check if response is already a SummaryResponse object or a string that needs validation
                         if isinstance(response, SummaryResponse):
                             summary_result = response
@@ -232,11 +242,21 @@ class TranscriptProcessor:
             logger.error(f"Error during transcript processing: {str(e)}", exc_info=True)
             raise
     
-    async def chat_ollama_model(self, model_name: str, transcript: str, custom_prompt: str):
+    async def chat_ollama_model(self, model_name: str, transcript: str, custom_prompt: str, meeting_date: str = ""):
         message = {
         'role': 'system',
         'content': f'''
         Given the following meeting transcript chunk, extract the relevant information according to the required JSON structure. If a specific section (like Critical Deadlines) has no relevant information in this chunk, return an empty list for its 'blocks'. Ensure the output is only the JSON data.
+
+        MEETING TITLE (MeetingName) RULES — follow these precisely:
+        - The date to use is: {meeting_date if meeting_date else "today"}
+        - The date goes at the START of the title, formatted like "7 Mar 2026"
+        - For 2-person meetings (1:1s): "<Date> – FirstName/FirstName 1:1" e.g. "7 Mar 2026 – James/Dan 1:1"
+        - For project or topic meetings: "<Date> – <Project or Topic>: <Meeting Type>" e.g. "7 Mar 2026 – Project BigHouse: Status Update"
+        - For general team meetings: "<Date> – <Team> <Meeting Type>" e.g. "7 Mar 2026 – Engineering All-Hands"
+        - Infer names, project names, and topics from the transcript; correct spelling if needed
+        - Never use timestamp-style names like "Meeting_07_03_26"
+        - Keep the title concise (under 60 characters)
 
         Transcript Chunk:
             ---

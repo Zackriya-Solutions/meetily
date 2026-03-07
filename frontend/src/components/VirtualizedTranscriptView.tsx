@@ -8,7 +8,9 @@ import { ConfidenceIndicator } from "./ConfidenceIndicator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { RecordingStatusBar } from "./RecordingStatusBar";
 import { motion, AnimatePresence } from "framer-motion";
-import { TranscriptSegmentData } from "@/types";
+import { TranscriptSegmentData, TranscriptSpeaker } from "@/types";
+import { Pencil, Check, X } from "lucide-react";
+import { ClearMinutesIcon } from "@/components/ClearMinutesLogo";
 
 export interface VirtualizedTranscriptViewProps {
     /** Transcript segments to display */
@@ -27,6 +29,10 @@ export interface VirtualizedTranscriptViewProps {
     showConfidence?: boolean;
     /** Completely disable auto-scroll behavior (for meeting details page) */
     disableAutoScroll?: boolean;
+    /** Map of speaker_id -> { display_name, color } for diarization labels */
+    speakerMap?: Record<string, { display_name: string; color: string }>;
+    /** Called when the user renames a speaker inline */
+    onRenameSpeaker?: (speakerId: string, newName: string) => void;
 
     // Pagination props (infinite scroll)
     hasMore?: boolean;
@@ -69,17 +75,53 @@ const TranscriptSegment = memo(function TranscriptSegment({
     timestamp,
     text,
     confidence,
+    speaker,
     isStreaming,
     showConfidence,
+    speakerDisplayName,
+    speakerColor,
+    onRenameSpeaker,
 }: {
     id: string;
     timestamp: number;
     text: string;
     confidence?: number;
+    speaker?: TranscriptSpeaker;
     isStreaming: boolean;
     showConfidence: boolean;
+    speakerDisplayName?: string;
+    speakerColor?: string;
+    onRenameSpeaker?: (speakerId: string, newName: string) => void;
 }) {
+    const [isEditing, setIsEditing] = useState(false);
+    const [editValue, setEditValue] = useState('');
+    const inputRef = useRef<HTMLInputElement>(null);
+
     const displayText = cleanStopWords(text) || (text.trim() === '' ? '[Silence]' : text);
+    const deviceLabel = speaker === 'mic' ? 'Speaker 1 (You)' : speaker === 'system' ? 'System' : null;
+    const isDiarizationSpeaker = typeof speaker === 'string' && speaker.startsWith('speaker_');
+    const rawFallback = isDiarizationSpeaker
+        ? speaker.replace('speaker_', 'Speaker ')
+        : deviceLabel;
+    const speakerLabel = speakerDisplayName || rawFallback;
+    const labelColor = (isDiarizationSpeaker || speaker === 'mic') ? (speakerColor || '#6366f1') : undefined;
+    const canRename = !!onRenameSpeaker && (speaker === 'mic' || isDiarizationSpeaker);
+
+    const startEdit = () => {
+        setEditValue(speakerLabel || '');
+        setIsEditing(true);
+        setTimeout(() => inputRef.current?.focus(), 0);
+    };
+
+    const commitEdit = () => {
+        const trimmed = editValue.trim();
+        if (trimmed && trimmed !== speakerLabel && speaker) {
+            onRenameSpeaker?.(speaker, trimmed);
+        }
+        setIsEditing(false);
+    };
+
+    const cancelEdit = () => setIsEditing(false);
 
     return (
         <div id={`segment-${id}`} className="mb-3">
@@ -97,8 +139,48 @@ const TranscriptSegment = memo(function TranscriptSegment({
                     </TooltipContent>
                 </Tooltip>
                 <div className="flex-1">
+                    {speakerLabel && (
+                        <div className="flex items-center gap-1 mb-1 group">
+                            {isEditing ? (
+                                <>
+                                    <input
+                                        ref={inputRef}
+                                        value={editValue}
+                                        onChange={e => setEditValue(e.target.value)}
+                                        onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') cancelEdit(); }}
+                                        className="text-[11px] font-semibold uppercase tracking-wide border-b border-gray-400 bg-transparent outline-none w-28"
+                                        style={{ color: labelColor || '#6b7280' }}
+                                    />
+                                    <button onClick={commitEdit} className="text-green-500 hover:text-green-600">
+                                        <Check className="w-3 h-3" />
+                                    </button>
+                                    <button onClick={cancelEdit} className="text-red-400 hover:text-red-500">
+                                        <X className="w-3 h-3" />
+                                    </button>
+                                </>
+                            ) : (
+                                <>
+                                    <span
+                                        className="text-[11px] font-semibold uppercase tracking-wide"
+                                        style={{ color: labelColor || '#6b7280' }}
+                                    >
+                                        {speakerLabel}
+                                    </span>
+                                    {canRename && (
+                                        <button
+                                            onClick={startEdit}
+                                            className="opacity-0 group-hover:opacity-100 transition-opacity text-gray-400 hover:text-gray-600 ml-0.5"
+                                            title="Rename speaker"
+                                        >
+                                            <Pencil className="w-2.5 h-2.5" />
+                                        </button>
+                                    )}
+                                </>
+                            )}
+                        </div>
+                    )}
                     {isStreaming ? (
-                        <div className="bg-gray-100 border border-gray-200 rounded-lg px-3 py-2">
+                        <div className="bg-gray-100 dark:bg-secondary border border-gray-200 dark:border-border rounded-lg px-3 py-2">
                             <p className="text-base text-gray-800 leading-relaxed">{displayText}</p>
                         </div>
                     ) : (
@@ -119,6 +201,8 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
     enableStreaming = false,
     showConfidence = true,
     disableAutoScroll = false,
+    speakerMap,
+    onRenameSpeaker,
     hasMore = false,
     isLoadingMore = false,
     totalCount = 0,
@@ -223,12 +307,48 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
     // Use simple rendering for small lists, virtualization for large lists
     const useVirtualization = segments.length >= VIRTUALIZATION_THRESHOLD;
 
+    // Empty state — suppressed when live transcription is off (TranscriptPanel shows its own notice)
+    const emptyState = isRecording && !enableStreaming ? null : (
+        <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="text-center text-gray-500 mt-8"
+        >
+            {isRecording ? (
+                <>
+                    <div className="flex items-center justify-center mb-3">
+                        <div className={`w-3 h-3 rounded-full ${isPaused ? 'bg-orange-500' : 'bg-blue-500 animate-pulse'}`}></div>
+                    </div>
+                    <p className="text-sm text-gray-600">
+                        {isPaused ? 'Recording paused' : 'Listening for speech...'}
+                    </p>
+                    <p className="text-xs mt-1 text-gray-400">
+                        {isPaused ? 'Click resume to continue recording' : 'Speak to see live transcription'}
+                    </p>
+                </>
+            ) : (
+                <>
+                    <div className="flex flex-col items-center gap-3 mb-3">
+                        <ClearMinutesIcon size={72} />
+                        <span
+                            className="text-2xl font-extrabold tracking-tight text-gray-700 dark:text-foreground"
+                            style={{ fontFamily: 'var(--font-syne, system-ui)', letterSpacing: '-0.03em' }}
+                        >
+                            clearminutes
+                        </span>
+                    </div>
+                    <p className="text-sm mt-1 text-gray-400 dark:text-muted-foreground">Start recording to see live transcription</p>
+                </>
+            )}
+        </motion.div>
+    );
+
     return (
         <div ref={scrollRef} className="flex flex-col h-full overflow-y-auto px-4 py-2">
             {/* Recording Status Bar - Sticky at top, always visible when recording */}
             <AnimatePresence>
                 {isRecording && (
-                    <div className="sticky top-0 z-10 bg-white pb-2">
+                    <div className="sticky top-0 z-10 bg-white dark:bg-card pb-2">
                         <RecordingStatusBar isPaused={isPaused} />
                     </div>
                 )}
@@ -236,33 +356,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
 
             {/* Content - add padding when recording to prevent overlap */}
             <div className={isRecording ? 'pt-2' : ''}>
-            {segments.length === 0 ? (
-                // Empty state
-                <motion.div
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    className="text-center text-gray-500 mt-8"
-                >
-                    {isRecording ? (
-                        <>
-                            <div className="flex items-center justify-center mb-3">
-                                <div className={`w-3 h-3 rounded-full ${isPaused ? 'bg-orange-500' : 'bg-blue-500 animate-pulse'}`}></div>
-                            </div>
-                            <p className="text-sm text-gray-600">
-                                {isPaused ? 'Recording paused' : 'Listening for speech...'}
-                            </p>
-                            <p className="text-xs mt-1 text-gray-400">
-                                {isPaused ? 'Click resume to continue recording' : 'Speak to see live transcription'}
-                            </p>
-                        </>
-                    ) : (
-                        <>
-                            <p className="text-lg font-semibold">Welcome to meetily!</p>
-                            <p className="text-xs mt-1">Start recording to see live transcription</p>
-                        </>
-                    )}
-                </motion.div>
-            ) : useVirtualization ? (
+            {segments.length === 0 ? emptyState : useVirtualization ? (
                 // Virtualized rendering for large lists
                 <>
                     <div
@@ -294,8 +388,12 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                         timestamp={segment.timestamp}
                                         text={getDisplayText(segment)}
                                         confidence={segment.confidence}
+                                        speaker={segment.speaker}
                                         isStreaming={isStreaming}
                                         showConfidence={showConfidence}
+                                        speakerDisplayName={segment.speaker && speakerMap?.[segment.speaker]?.display_name}
+                                        speakerColor={segment.speaker && speakerMap?.[segment.speaker]?.color}
+                                        onRenameSpeaker={onRenameSpeaker}
                                     />
                                 </div>
                             );
@@ -350,8 +448,12 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                         timestamp={segment.timestamp}
                                         text={getDisplayText(segment)}
                                         confidence={segment.confidence}
+                                        speaker={segment.speaker}
                                         isStreaming={isStreaming}
                                         showConfidence={showConfidence}
+                                        speakerDisplayName={segment.speaker && speakerMap?.[segment.speaker]?.display_name}
+                                        speakerColor={segment.speaker && speakerMap?.[segment.speaker]?.color}
+                                        onRenameSpeaker={onRenameSpeaker}
                                     />
                                 </motion.div>
                             );

@@ -5,11 +5,13 @@ import { BlockComponent } from './Block';
 import { EditableTitle } from '../EditableTitle';
 import { useState, useRef } from 'react';
 import { motion } from 'framer-motion';
+import { GripVertical } from 'lucide-react';
 
 interface SectionProps {
   section: SectionType;
   sectionKey: string;
   selectedBlocks: string[];
+  onGripDragStart?: (e: React.DragEvent<HTMLDivElement>) => void;
   onBlockTypeChange: (blockId: string, type: Block['type']) => void;
   onBlockChange: (blockId: string, content: string) => void;
   onBlockMouseDown: (blockId: string, e: React.MouseEvent<HTMLDivElement>) => void;
@@ -28,6 +30,7 @@ export const Section: React.FC<SectionProps> = ({
   section,
   sectionKey,
   selectedBlocks,
+  onGripDragStart,
   onBlockTypeChange,
   onBlockChange,
   onBlockMouseDown,
@@ -64,6 +67,16 @@ export const Section: React.FC<SectionProps> = ({
       className="mb-8"
     >
       <div className="flex items-center justify-between mb-4">
+        {onGripDragStart && (
+          <div
+            draggable
+            onDragStart={onGripDragStart}
+            className="cursor-grab active:cursor-grabbing p-1 mr-1 text-gray-300 hover:text-gray-500 dark:text-gray-600 dark:hover:text-gray-400 touch-none flex-shrink-0"
+            title="Drag to reorder"
+          >
+            <GripVertical className="h-4 w-4" />
+          </div>
+        )}
         <EditableTitle
           title={section.title}
           isEditing={isEditingTitle}

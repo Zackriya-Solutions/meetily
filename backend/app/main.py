@@ -120,7 +120,7 @@ class SummaryProcessor:
             logger.error(f"Failed to initialize SummaryProcessor: {str(e)}", exc_info=True)
             raise
 
-    async def process_transcript(self, text: str, model: str, model_name: str, chunk_size: int = 5000, overlap: int = 1000, custom_prompt: str = "Generate a summary of the meeting transcript.") -> tuple:
+    async def process_transcript(self, text: str, model: str, model_name: str, chunk_size: int = 5000, overlap: int = 1000, custom_prompt: str = "Generate a summary of the meeting transcript.", meeting_date: str = "") -> tuple:
         """Process a transcript text"""
         try:
             if not text:
@@ -146,7 +146,8 @@ class SummaryProcessor:
                 model_name=model_name,
                 chunk_size=chunk_size,
                 overlap=overlap,
-                custom_prompt=custom_prompt
+                custom_prompt=custom_prompt,
+                meeting_date=meeting_date
             )
             logger.info(f"Successfully processed transcript into {num_chunks} chunks")
 
@@ -216,6 +217,25 @@ async def delete_meeting(data: DeleteMeetingRequest):
         logger.error(f"Error deleting meeting: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
+async def _get_meeting_date(meeting_id: str) -> str:
+    """Return a human-readable date string for the meeting (e.g. '7 Mar 2026')."""
+    try:
+        meeting = await db.get_meeting(meeting_id)
+        if meeting and meeting.get("created_at"):
+            from datetime import datetime as _dt
+            raw = meeting["created_at"]
+            # Handle both ISO strings and SQLite localtime strings
+            for fmt in ("%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+                try:
+                    dt = _dt.strptime(raw, fmt)
+                    return dt.strftime("%-d %b %Y")  # e.g. "7 Mar 2026"
+                except ValueError:
+                    continue
+    except Exception as e:
+        logger.warning(f"Could not fetch meeting date for {meeting_id}: {e}")
+    from datetime import datetime as _dt
+    return _dt.now().strftime("%-d %b %Y")
+
 async def process_transcript_background(process_id: str, transcript: TranscriptRequest, custom_prompt: str):
     """Background task to process transcript"""
     try:
@@ -238,7 +258,8 @@ async def process_transcript_background(process_id: str, transcript: TranscriptR
             model_name=transcript.model_name,
             chunk_size=transcript.chunk_size,
             overlap=transcript.overlap,
-            custom_prompt=custom_prompt
+            custom_prompt=custom_prompt,
+            meeting_date=await _get_meeting_date(transcript.meeting_id)
         )
 
         # Create final summary structure by aggregating chunk results
@@ -296,9 +317,14 @@ async def process_transcript_background(process_id: str, transcript: TranscriptR
             except Exception as e:
                 logger.error(f"Error processing chunk data for {process_id}: {e}. Chunk: {json_str[:100]}...")
 
-        # Update database with meeting name using meeting_id
-        if final_summary["MeetingName"]:
-            await processor.db.update_meeting_name(transcript.meeting_id, final_summary["MeetingName"])
+        # Update database with meeting name — only if title is blank or still a raw timestamp
+        import re as _re
+        current_meeting = await processor.db.get_meeting(transcript.meeting_id)
+        current_title = (current_meeting.get("title", "") if current_meeting else "")
+        is_timestamp_title = not current_title or bool(_re.match(r'^Meeting[\s_]\d', current_title))
+        if is_timestamp_title:
+            new_title = final_summary["MeetingName"] or await _get_meeting_date(transcript.meeting_id)
+            await processor.db.update_meeting_name(transcript.meeting_id, new_title)
 
         # Save final result
         if all_json_data:

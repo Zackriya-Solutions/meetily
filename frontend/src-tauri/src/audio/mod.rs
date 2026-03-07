@@ -48,6 +48,10 @@ pub mod constants;
 // Retranscription module (re-process stored audio with different settings)
 pub mod retranscription;
 
+// Diarization module (speaker identification from mixed audio)
+pub mod diarization;
+pub mod diarization_commands;
+
 // Import module (import external audio files as new meetings)
 pub mod import;
 

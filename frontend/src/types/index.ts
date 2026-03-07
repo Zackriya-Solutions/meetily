@@ -8,6 +8,7 @@ export interface Transcript {
   id: string;
   text: string;
   timestamp: string; // Wall-clock time (e.g., "14:30:05")
+  speaker?: TranscriptSpeaker;
   sequence_id?: number;
   chunk_start_time?: number; // Legacy field
   is_partial?: boolean;
@@ -22,6 +23,7 @@ export interface TranscriptUpdate {
   text: string;
   timestamp: string; // Wall-clock time for reference
   source: string;
+  speaker?: TranscriptSpeaker;
   sequence_id: number;
   chunk_start_time: number; // Legacy field
   is_partial: boolean;
@@ -107,4 +109,29 @@ export interface TranscriptSegmentData {
   endTime?: number; // audio_end_time in seconds
   text: string;
   confidence?: number;
+  speaker?: TranscriptSpeaker;
+}
+
+export type TranscriptSpeaker = 'mic' | 'system' | 'unknown' | string;
+
+export interface SpeakerProfile {
+  id: string;
+  name: string;
+  color: string;
+  created_at: string;
+  is_self: boolean;
+  global_auto_apply: boolean;
+}
+
+export interface ResolvedSpeaker {
+  speaker_id: string;
+  display_name: string;
+  color: string;
+  profile_id: string | null;
+}
+
+export interface NameSuggestion {
+  speaker_id: string;
+  name: string;
+  pattern: string;
 }

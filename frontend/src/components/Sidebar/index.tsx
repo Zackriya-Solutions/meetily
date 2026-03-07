@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
-import { ChevronDown, ChevronRight, File, Settings, ChevronLeftCircle, ChevronRightCircle, Calendar, StickyNote, Home, Trash2, Mic, Square, Plus, Search, Pencil, NotebookPen, SearchIcon, X, Upload, Sun, Moon } from 'lucide-react';
+import { ChevronDown, ChevronRight, File, Settings, ChevronLeftCircle, ChevronRightCircle, Calendar, StickyNote, Home, Trash2, Mic, Square, Plus, Search, Pencil, NotebookPen, SearchIcon, X, Upload, FolderOpen } from 'lucide-react';
 import { useRouter, usePathname } from 'next/navigation';
 import { useSidebar } from './SidebarProvider';
 import type { CurrentMeeting } from '@/components/Sidebar/SidebarProvider';
@@ -62,7 +62,7 @@ const Sidebar: React.FC = () => {
   const { isRecording } = useRecordingState();
   const { openImportDialog } = useImportDialog();
   const { betaFeatures } = useConfig();
-  const { theme, toggleTheme } = useTheme();
+  const { theme } = useTheme();
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set(['meetings']));
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [showModelSettings, setShowModelSettings] = useState(false);
@@ -541,24 +541,6 @@ const Sidebar: React.FC = () => {
             </TooltipContent>
           </Tooltip>
 
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                onClick={toggleTheme}
-                className="p-2 rounded-lg transition-colors duration-150 hover:bg-gray-100 dark:hover:bg-gray-700"
-                aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-              >
-                {theme === 'dark' ? (
-                  <Sun className="w-5 h-5 text-gray-400" />
-                ) : (
-                  <Moon className="w-5 h-5 text-gray-600" />
-                )}
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="right">
-              <p>{theme === 'dark' ? 'Light mode' : 'Dark mode'}</p>
-            </TooltipContent>
-          </Tooltip>
 
           <Info isCollapsed={isCollapsed} />
         </div>
@@ -574,7 +556,6 @@ const Sidebar: React.FC = () => {
 
   const renderItem = (item: SidebarItem, depth = 0) => {
     const isExpanded = expandedFolders.has(item.id);
-    const paddingLeft = `${depth * 12 + 12}px`;
     const isActive = item.type === 'file' && currentMeeting?.id === item.id;
     const isMeetingItem = item.id.includes('-') && !item.id.startsWith('intro-call');
 
@@ -589,11 +570,10 @@ const Sidebar: React.FC = () => {
         <div
           className={`flex items-center transition-all duration-150 group ${item.type === 'folder' && depth === 0
             ? 'p-3 text-lg font-semibold h-10 mx-3 mt-3 rounded-lg'
-            : `px-3 py-2 my-0.5 rounded-md text-sm ${isActive ? 'bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 font-medium' :
+            : `px-2 py-1 my-0.5 rounded-md text-sm ${isActive ? 'bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 font-medium' :
               hasTranscriptMatch ? 'bg-yellow-50 dark:bg-yellow-900/20' : 'hover:bg-gray-50 dark:hover:bg-gray-800'
             } cursor-pointer`
             }`}
-          style={item.type === 'folder' && depth === 0 ? {} : { paddingLeft }}
           onClick={() => {
             if (item.type === 'folder') {
               toggleFolder(item.id);
@@ -626,39 +606,56 @@ const Sidebar: React.FC = () => {
             </>
           ) : (
             <div className="flex flex-col w-full">
-              <div className="flex items-center w-full">
+              <div className="relative flex items-start w-full">
                 {isMeetingItem ? (
-                  <div className="flex-shrink-0 flex items-center justify-center w-6 h-6 rounded-full mr-2 bg-gray-100 dark:bg-gray-700">
-                    <File className="w-3.5 h-3.5 text-gray-600 dark:text-gray-400" />
+                  <div className="flex-shrink-0 flex items-center justify-center w-5 h-5 rounded-full mr-1.5 mt-0.5 bg-gray-100 dark:bg-gray-700">
+                    <File className="w-3 h-3 text-gray-600 dark:text-gray-400" />
                   </div>
                 ) : (
-                  <div className="flex-shrink-0 flex items-center justify-center w-6 h-6 rounded-full mr-2 bg-blue-100 dark:bg-blue-900">
-                    <Plus className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
+                  <div className="flex-shrink-0 flex items-center justify-center w-5 h-5 rounded-full mr-1.5 mt-0.5 bg-blue-100 dark:bg-blue-900">
+                    <Plus className="w-3 h-3 text-blue-600 dark:text-blue-400" />
                   </div>
                 )}
-                <span className="flex-1 break-words">{item.title}</span>
+                <span className="w-full text-sm leading-snug break-words">{item.title}</span>
                 {isMeetingItem && (
-                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleEditStart(item.id, item.title);
-                      }}
-                      className="hover:text-blue-600 p-1 rounded-md hover:bg-blue-50 dark:hover:bg-blue-900 flex-shrink-0"
-                      aria-label="Edit meeting title"
-                    >
-                      <Pencil className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setDeleteModalState({ isOpen: true, itemId: item.id });
-                      }}
-                      className="hover:text-red-600 p-1 rounded-md hover:bg-red-50 dark:hover:bg-red-900 flex-shrink-0"
-                      aria-label="Delete meeting"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                  <div className="absolute right-0 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
+                    <div className="flex items-center gap-0.5 bg-gray-200/90 dark:bg-gray-600/90 backdrop-blur-sm rounded-full px-1 py-0.5 shadow-sm">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          invoke('open_meeting_folder', { meetingId: item.id }).catch((err) => {
+                            toast.error(err as string || 'Failed to open recording folder');
+                          });
+                        }}
+                        className="p-0.5 rounded-full text-[hsl(var(--theme-accent))] hover:bg-white dark:hover:bg-gray-500 transition-colors"
+                        aria-label="Open recording folder"
+                        title="Open recording folder"
+                      >
+                        <FolderOpen className="w-3 h-3" />
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleEditStart(item.id, item.title);
+                        }}
+                        className="p-0.5 rounded-full text-[hsl(var(--theme-accent))] hover:bg-white dark:hover:bg-gray-500 transition-colors"
+                        aria-label="Edit meeting title"
+                        title="Edit meeting title"
+                      >
+                        <Pencil className="w-3 h-3" />
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setDeleteModalState({ isOpen: true, itemId: item.id });
+                        }}
+                        className="p-0.5 rounded-full text-red-500 hover:bg-white dark:hover:bg-gray-500 transition-colors"
+                        aria-label="Delete meeting"
+                        title="Delete meeting"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>
@@ -673,7 +670,7 @@ const Sidebar: React.FC = () => {
           )}
         </div>
         {item.type === 'folder' && isExpanded && item.children && (
-          <div className="ml-1">
+          <div>
             {item.children.map(child => renderItem(child, depth + 1))}
           </div>
         )}
@@ -683,28 +680,19 @@ const Sidebar: React.FC = () => {
 
   return (
     <div className="fixed top-0 left-0 h-screen z-40">
-      {/* Floating collapse button */}
-      <button
-        onClick={toggleCollapse}
-        className="absolute -right-6 top-20 z-50 p-1 bg-white dark:bg-gray-900 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full shadow-lg border dark:border-gray-700"
-        style={{ transform: 'translateX(50%)' }}
-      >
-        {isCollapsed ? (
-          <ChevronRightCircle className="w-6 h-6" />
-        ) : (
-          <ChevronLeftCircle className="w-6 h-6" />
-        )}
-      </button>
-
       <div
-        className={`h-screen bg-white dark:bg-gray-900 border-r dark:border-gray-800 shadow-sm flex flex-col transition-all duration-300 ${isCollapsed ? 'w-16' : 'w-64'
-          }`}
+        className={`h-screen bg-white dark:bg-gray-900 border-r dark:border-gray-800 shadow-sm flex flex-col transition-all duration-300 ${isCollapsed ? 'w-16' : 'w-64'}`}
       >
+        {/* macOS traffic-light drag region — always present so window is draggable */}
+        <div
+          data-tauri-drag-region
+          className={`flex-shrink-0 ${isCollapsed ? 'h-8' : 'h-8'}`}
+        />
+
         {/*  Header with traffic light spacing */}
-        <div className="flex-shrink-0 h-22 flex items-center">
+        <div className="flex-shrink-0 flex items-center">
 
           {/* Title container */}
-
 
 
           <div className="flex-1">
@@ -744,13 +732,16 @@ const Sidebar: React.FC = () => {
           {/* Fixed navigation items */}
           <div className="flex-shrink-0">
             {!isCollapsed && (
-              <div
-                onClick={() => router.push('/')}
-                className="p-3  text-lg font-semibold items-center hover:bg-gray-100 dark:hover:bg-gray-800 h-10   flex mx-3 mt-3 rounded-lg cursor-pointer"
-              >
-                <Home className="w-4 h-4 mr-2" />
-                <span>Home</span>
-              </div>
+              <>
+                <div
+                  onClick={() => router.push('/')}
+                  className="flex items-center px-3 py-1.5 mx-3 text-sm font-medium hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg cursor-pointer"
+                >
+                  <Home className="w-4 h-4 mr-2" />
+                  <span>Home</span>
+                </div>
+                <div className="mx-3 mt-1.5 border-b border-gray-100 dark:border-gray-800" />
+              </>
             )}
           </div>
 
@@ -763,10 +754,10 @@ const Sidebar: React.FC = () => {
                 {filteredSidebarItems.filter(item => item.type === 'folder').map(item => (
                   <div key={item.id}>
                     <div
-                      className="flex items-center transition-all duration-150 p-3 text-lg font-semibold h-10 mx-3 mt-3 rounded-lg"
+                      className="flex items-center px-3 pt-3 pb-1"
                     >
-                      <NotebookPen className="w-4 h-4 mr-2 text-gray-600 dark:text-gray-400" />
-                      <span className="text-gray-700 dark:text-gray-300">{item.title}</span>
+                      <NotebookPen className="w-4 h-4 mr-2 text-gray-500 dark:text-gray-400" />
+                      <span className="text-sm font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wide">{item.title}</span>
                       {searchQuery && item.id === 'meetings' && isSearching && (
                         <span className="ml-2 text-xs text-blue-500 animate-pulse">Searching...</span>
                       )}
@@ -791,10 +782,28 @@ const Sidebar: React.FC = () => {
           </div>
         </div>
 
+        {/* Collapse toggle — always visible at bottom of sidebar */}
+        <div className="flex-shrink-0 border-t border-gray-100 px-2 py-1.5">
+          <button
+            onClick={toggleCollapse}
+            className="w-full flex items-center gap-2 px-2 py-1.5 text-xs text-gray-500 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition-colors"
+            title={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          >
+            {isCollapsed ? (
+              <ChevronRightCircle className="w-4 h-4 flex-shrink-0" />
+            ) : (
+              <>
+                <ChevronLeftCircle className="w-4 h-4 flex-shrink-0" />
+                <span>Collapse</span>
+              </>
+            )}
+          </button>
+        </div>
+
         {/* Footer */}
         {!isCollapsed && (
 
-          <div className="flex-shrink-0 p-2 border-t border-gray-100 dark:border-gray-800">
+          <div className="flex-shrink-0 p-2 border-t border-gray-100 dark:border-gray-800 flex flex-col gap-1">
             <button
               onClick={handleRecordingToggle}
               disabled={isRecording}
@@ -816,35 +825,23 @@ const Sidebar: React.FC = () => {
             {betaFeatures.importAndRetranscribe && (
               <button
                 onClick={() => openImportDialog()}
-                className="w-full flex items-center justify-center px-3 py-2 mt-1 text-sm font-medium text-gray-700 dark:text-gray-300 bg-blue-100 dark:bg-blue-900 hover:bg-blue-200 dark:hover:bg-blue-800 rounded-lg transition-colors shadow-sm"
+                className="w-full flex items-center justify-center px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-blue-100 dark:bg-blue-900 hover:bg-blue-200 dark:hover:bg-blue-800 rounded-lg transition-colors shadow-sm"
               >
                 <Upload className="w-4 h-4 mr-2" />
                 <span>Import Audio</span>
               </button>
             )}
 
-            <div className="flex gap-1 mt-1">
-              <button
-                onClick={() => router.push('/settings')}
-                className="flex-1 flex items-center justify-center px-3 py-1.5 mb-1 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 rounded-lg transition-colors shadow-sm"
-              >
-                <Settings className="w-4 h-4 mr-2" />
-                <span>Settings</span>
-              </button>
-              <button
-                onClick={toggleTheme}
-                className="flex items-center justify-center px-2 py-1.5 mb-1 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 rounded-lg transition-colors shadow-sm"
-                aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-                title={theme === 'dark' ? 'Light mode' : 'Dark mode'}
-              >
-                {theme === 'dark' ? (
-                  <Sun className="w-4 h-4" />
-                ) : (
-                  <Moon className="w-4 h-4" />
-                )}
-              </button>
-            </div>
+            <button
+              onClick={() => router.push('/settings')}
+              className="w-full flex items-center justify-center px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 rounded-lg transition-colors shadow-sm"
+            >
+              <Settings className="w-4 h-4 mr-2" />
+              <span>Settings</span>
+            </button>
+
             <Info isCollapsed={isCollapsed} />
+
             <div className="w-full flex items-center justify-center px-3 py-1 text-xs text-gray-400 dark:text-gray-500">
               v0.3.0
             </div>

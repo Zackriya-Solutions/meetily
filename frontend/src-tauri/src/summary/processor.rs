@@ -129,10 +129,17 @@ pub fn clean_llm_markdown_output(markdown: &str) -> String {
 /// # Returns
 /// Meeting name if found, None otherwise
 pub fn extract_meeting_name_from_markdown(markdown: &str) -> Option<String> {
+    // Placeholder strings that the LLM was supposed to replace but didn't
+    const PLACEHOLDERS: &[&str] = &["[meeting title]", "<add title here>", "[ai-generated title]", "[title]"];
+
     markdown
         .lines()
         .find(|line| line.starts_with("# "))
         .map(|line| line.trim_start_matches("# ").trim().to_string())
+        .filter(|name| {
+            let lower = name.to_lowercase();
+            !name.is_empty() && !PLACEHOLDERS.iter().any(|p| lower == *p)
+        })
 }
 
 /// Generates a complete meeting summary with conditional chunking strategy

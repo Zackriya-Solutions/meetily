@@ -1,8 +1,8 @@
 [package]
-name = "meetily"
+name = "clearminutes"
 version = "0.3.1"
-description = "A Tauri App for meeting minutes"
-authors = ["Sujith S"]
+description = "Clearminutes - real-time meeting notes and summaries that never leave your machine"
+authors = ["DevBytes"]
 license = "MIT"
 repository = "https://github.com/Zackriya-Solutions/meeting-minutes"
 edition = "2021"
@@ -106,6 +106,9 @@ silero_rs = { git = "https://github.com/emotechlab/silero-rs", rev = "26a6460", 
 ort = { version = "2.0.0-rc.10" }  # ONNX Runtime for Parakeet models
 thiserror = "2.0.16"                # Error handling for Parakeet
 
+# Speaker diarization (pyannote-rs uses same ort version)
+pyannote-rs = "0.3.3"
+
 # Async
 tokio = { version = "1.32.0", features = ["full", "tracing"] }
 tokio-util = "0.7"  # Utilities for tokio including CancellationToken
@@ -147,12 +150,14 @@ sqlx = { version = "0.8", features = [ "runtime-tokio", "sqlite", "chrono"] }
 
 # Common Tauri configuration
 tauri = { version = "2.6.2", features = [ "macos-private-api", "protocol-asset", "tray-icon"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
 tauri-plugin-fs = "2.4.0"
 tauri-plugin-dialog = "2.3.0"
 tauri-plugin-store = "2.4.0"
 tauri-plugin-notification = "2.3.1"
 tauri-plugin-updater = "2.3.0"
 tauri-plugin-process = "2.3.0"
+tauri-plugin-clipboard-manager = "2.3.0"
 
 # macOS-specific dependencies with Metal GPU acceleration
 [target.'cfg(target_os = "macos")'.dependencies]

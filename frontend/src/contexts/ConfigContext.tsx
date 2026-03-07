@@ -76,6 +76,10 @@ interface ConfigContextType {
   isAutoSummary: boolean;
   toggleIsAutoSummary: (checked: boolean) => void;
 
+  // Transcription mode
+  liveTranscription: boolean;
+  toggleLiveTranscription: (checked: boolean) => void;
+
   // Provider-specific API keys
   providerApiKeys: {
     claude: string | null;
@@ -163,6 +167,15 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     return false;
   });
 
+  // Live transcription mode (default: true)
+  const [liveTranscription, setLiveTranscription] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('liveTranscription');
+      return saved !== null ? saved === 'true' : true;
+    }
+    return true;
+  });
+
   // Beta features state (localStorage)
   const [betaFeatures, setBetaFeatures] = useState<BetaFeatures>(() => {
     return loadBetaFeatures();
@@ -222,7 +235,7 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
           console.error('[ConfigContext] Failed to sync language preference to Rust on startup:', err);
         });
     }
-  }, []); 
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load model configuration on mount
   useEffect(() => {
@@ -389,6 +402,13 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
+  const toggleLiveTranscription = useCallback((checked: boolean) => {
+    setLiveTranscription(checked);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('liveTranscription', checked.toString());
+    }
+  }, []);
+
   // Toggle beta feature with localStorage persistence and analytics
   const toggleBetaFeature = useCallback((featureKey: BetaFeatureKey, enabled: boolean) => {
     setBetaFeatures(prev => {
@@ -487,6 +507,8 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     setModelConfig,
     isAutoSummary,
     toggleIsAutoSummary,
+    liveTranscription,
+    toggleLiveTranscription,
     providerApiKeys,
     updateProviderApiKey,
     transcriptModelConfig,
@@ -511,6 +533,8 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     modelConfig,
     isAutoSummary,
     toggleIsAutoSummary,
+    liveTranscription,
+    toggleLiveTranscription,
     providerApiKeys,
     updateProviderApiKey,
     transcriptModelConfig,

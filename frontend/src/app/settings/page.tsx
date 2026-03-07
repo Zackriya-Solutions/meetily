@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
-import { ArrowLeft, Settings2, Mic, Database as DatabaseIcon, SparkleIcon, Plug, FlaskConical } from 'lucide-react';
+import { ArrowLeft, Settings2, Mic, Database as DatabaseIcon, SparkleIcon, Plug } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { invoke } from '@tauri-apps/api/core';
 import { motion } from 'framer-motion';
@@ -9,8 +9,8 @@ import { TranscriptSettings } from '@/components/TranscriptSettings';
 import { RecordingSettings } from '@/components/RecordingSettings';
 import { PreferenceSettings } from '@/components/PreferenceSettings';
 import { SummaryModelSettings } from '@/components/SummaryModelSettings';
+import { DiarizationSettings } from '@/components/DiarizationSettings';
 import { OutlineSettings } from '@/components/OutlineSettings';
-import { BetaSettings } from '@/components/BetaSettings';
 import { useConfig } from '@/contexts/ConfigContext';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 
@@ -21,7 +21,6 @@ const TABS = [
   { value: 'Transcriptionmodels', label: 'Transcription', icon: DatabaseIcon },
   { value: 'summaryModels', label: 'Summary', icon: SparkleIcon },
   { value: 'integrations', label: 'Integrations', icon: Plug },
-  { value: 'beta', label: 'Beta', icon: FlaskConical }
 ] as const;
 
 export default function SettingsPage() {
@@ -95,7 +94,8 @@ export default function SettingsPage() {
                     key={tab.value}
                     value={tab.value}
                     ref={el => { tabRefs.current[index] = el }}
-                    className="flex items-center gap-2 px-6 py-4 bg-transparent rounded-none border-0 data-[state=active]:bg-transparent data-[state=active]:text-blue-600 data-[state=active]:shadow-none text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 relative z-10"
+                    className="flex items-center gap-2 px-6 py-4 bg-transparent rounded-none border-0 data-[state=active]:bg-transparent data-[state=active]:shadow-none text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 relative z-10"
+                    style={activeTab === tab.value ? { color: 'hsl(var(--theme-accent))' } : {}}
                   >
                     <Icon className="w-4 h-4" />
                     {tab.label}
@@ -104,33 +104,44 @@ export default function SettingsPage() {
               })}
 
               <motion.div
-                className="absolute bottom-0 z-20 h-0.5 bg-blue-600"
+                className="absolute bottom-0 z-20 h-0.5"
+                style={{ backgroundColor: 'hsl(var(--theme-accent))' }}
                 layoutId="underline"
-                style={{ left: underlineStyle.left, width: underlineStyle.width }}
                 transition={{ type: 'spring', stiffness: 400, damping: 40 }}
+                animate={{ left: underlineStyle.left, width: underlineStyle.width }}
               />
             </TabsList>
 
-            <TabsContent value="general">
+            <TabsContent value="general" className="mt-6">
               <PreferenceSettings />
             </TabsContent>
             <TabsContent value="recording">
-              <RecordingSettings />
+              <div className="mt-6 p-6 border border-gray-200 dark:border-border rounded-lg bg-white dark:bg-card shadow-sm">
+                <RecordingSettings />
+              </div>
             </TabsContent>
             <TabsContent value="Transcriptionmodels">
-              <TranscriptSettings
-                transcriptModelConfig={transcriptModelConfig}
-                setTranscriptModelConfig={setTranscriptModelConfig}
-              />
+              <div className="mt-6 space-y-4">
+                <div className="p-6 border border-gray-200 dark:border-border rounded-lg bg-white dark:bg-card shadow-sm">
+                  <h3 className="text-lg font-semibold text-gray-900 dark:text-foreground mb-1">Transcription Model</h3>
+                  <p className="text-sm text-gray-600 dark:text-muted-foreground mb-6">Choose the engine used to transcribe your meetings.</p>
+                  <TranscriptSettings
+                    transcriptModelConfig={transcriptModelConfig}
+                    setTranscriptModelConfig={setTranscriptModelConfig}
+                  />
+                </div>
+                <div className="p-6 border border-gray-200 dark:border-border rounded-lg bg-white dark:bg-card shadow-sm">
+                  <DiarizationSettings />
+                </div>
+              </div>
             </TabsContent>
-            <TabsContent value="summaryModels">
+            <TabsContent value="summaryModels" className="mt-6">
               <SummaryModelSettings />
             </TabsContent>
             <TabsContent value="integrations">
-              <OutlineSettings />
-            </TabsContent>
-            <TabsContent value="beta" className="mt-6">
-              <BetaSettings />
+              <div className="mt-6 p-6 border border-gray-200 dark:border-border rounded-lg bg-white dark:bg-card shadow-sm">
+                <OutlineSettings />
+              </div>
             </TabsContent>
           </Tabs>
         </div>

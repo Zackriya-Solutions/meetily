@@ -1,5 +1,6 @@
 use tauri::{
     Emitter,
+    image::Image,
     menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem},
     tray::TrayIconBuilder,
     AppHandle, Manager, Runtime,
@@ -17,21 +18,36 @@ pub enum RecordingState {
 }
 
 pub fn create_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
-    // Start with default menu, will update with actual state after initialization
-    // Pass can_record=true initially, will be updated by update_tray_menu immediately
     let menu = build_menu(app, RecordingState::Stopped, true)?;
+
+    // Load monochrome template icon for the macOS menu bar.
+    // Falls back to the default app icon if the resource isn't found.
+    let tray_icon = app
+        .path()
+        .resource_dir()
+        .ok()
+        .and_then(|dir| load_tray_icon(dir.join("icons/tray-icon.png")))
+        .unwrap_or_else(|| app.default_window_icon().unwrap().clone());
 
     TrayIconBuilder::with_id("main-tray")
         .menu(&menu)
-        .tooltip("Meetily")
-        .icon(app.default_window_icon().unwrap().clone())
+        .tooltip("Clearminutes")
+        .icon(tray_icon)
+        .icon_as_template(true)
         .on_menu_event(|app, event| handle_menu_event(app, event.id.as_ref()))
         .build(app)?;
 
-    // Update tray menu with actual recording state after creation
     update_tray_menu(app);
 
     Ok(())
+}
+
+fn load_tray_icon(path: std::path::PathBuf) -> Option<Image<'static>> {
+    let bytes = std::fs::read(&path).ok()?;
+    let img = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png).ok()?;
+    let rgba = img.into_rgba8();
+    let (width, height) = (rgba.width(), rgba.height());
+    Some(Image::new_owned(rgba.into_raw(), width, height))
 }
 
 fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, item_id: &str) {

@@ -7,6 +7,7 @@ import { load } from '@tauri-apps/plugin-store';
 import { invoke } from '@tauri-apps/api/core';
 import { Analytics } from '@/lib/analytics';
 import AnalyticsDataModal from './AnalyticsDataModal';
+import { copyToClipboard } from '@/lib/clipboard';
 
 
 export default function AnalyticsConsentSwitch() {
@@ -38,7 +39,7 @@ export default function AnalyticsConsentSwitch() {
     if (!userId) return;
 
     try {
-      await navigator.clipboard.writeText(userId);
+      await copyToClipboard(userId);
       setIsCopied(true);
       setTimeout(() => setIsCopied(false), 2000);
 
@@ -158,7 +159,7 @@ export default function AnalyticsConsentSwitch() {
         <div>
           <h3 className="text-base font-semibold text-gray-800 mb-2">Usage Analytics</h3>
           <p className="text-sm text-gray-600 mb-4">
-            Help us improve Meetily by sharing anonymous usage data. No personal content is collected—everything stays on your device.
+            Help us improve Clearminutes by sharing anonymous usage data. No personal content is collected—everything stays on your device.
           </p>
         </div>
 
