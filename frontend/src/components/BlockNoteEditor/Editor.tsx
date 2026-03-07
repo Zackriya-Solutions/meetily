@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { PartialBlock, Block } from "@blocknote/core";
 import "@blocknote/shadcn/style.css";
 import "@blocknote/core/fonts/inter.css";
+import { useTheme } from "@/contexts/ThemeContext";
 
 interface EditorProps {
   initialContent?: Block[];
@@ -17,6 +18,8 @@ export default function Editor({ initialContent, onChange, editable = true }: Ed
     blocksCount: initialContent?.length || 0,
     editable
   });
+
+  const { theme } = useTheme();
 
   // Lazy import to avoid SSR issues
   const { useCreateBlockNote } = require("@blocknote/react");
@@ -59,5 +62,5 @@ export default function Editor({ initialContent, onChange, editable = true }: Ed
     };
   }, [editor, onChange]);
 
-  return <BlockNoteView editor={editor} editable={editable} theme="light" />;
+  return <BlockNoteView editor={editor} editable={editable} theme={theme} />;
 }

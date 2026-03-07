@@ -180,6 +180,19 @@
     scrollbar-color: #d1d5db transparent;
   }
 
+  /* Dark mode scrollbar */
+  .dark .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: #4b5563;
+  }
+
+  .dark .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: #6b7280;
+  }
+
+  .dark .custom-scrollbar {
+    scrollbar-color: #4b5563 transparent;
+  }
+
   /* BlockNote Editor - Override fixed dimensions for responsive layout */
   .bn-container {
     width: 100% !important;
