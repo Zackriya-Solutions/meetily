@@ -683,11 +683,8 @@ const Sidebar: React.FC = () => {
       <div
         className={`h-screen bg-white dark:bg-gray-900 border-r dark:border-gray-800 shadow-sm flex flex-col transition-all duration-300 ${isCollapsed ? 'w-16' : 'w-64'}`}
       >
-        {/* macOS traffic-light drag region — always present so window is draggable */}
-        <div
-          data-tauri-drag-region
-          className={`flex-shrink-0 ${isCollapsed ? 'h-8' : 'h-8'}`}
-        />
+        {/* Space for macOS traffic lights */}
+        <div className="flex-shrink-0 h-8" />
 
         {/*  Header with traffic light spacing */}
         <div className="flex-shrink-0 flex items-center">
@@ -843,7 +840,7 @@ const Sidebar: React.FC = () => {
             <Info isCollapsed={isCollapsed} />
 
             <div className="w-full flex items-center justify-center px-3 py-1 text-xs text-gray-400 dark:text-gray-500">
-              v0.3.0
+              v1.0.0
             </div>
           </div>
         )}

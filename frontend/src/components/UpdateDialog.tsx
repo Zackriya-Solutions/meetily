@@ -174,9 +174,9 @@ export function UpdateDialog({ open, onOpenChange, updateInfo }: UpdateDialogPro
     }
   };
 
-  if (!updateInfo?.available) {
-    return null;
-  }
+  // Derive display mode
+  const isChecking = open && updateInfo === null && !error;
+  const isUpToDate = open && updateInfo !== null && !updateInfo.available && !error;
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
@@ -187,7 +187,17 @@ export function UpdateDialog({ open, onOpenChange, updateInfo }: UpdateDialogPro
       >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            {isDownloading ? (
+            {isChecking ? (
+              <>
+                <Loader2 className="h-5 w-5 animate-spin text-blue-600" />
+                Checking for Updates
+              </>
+            ) : isUpToDate ? (
+              <>
+                <CheckCircle2 className="h-5 w-5 text-green-600" />
+                You're up to date
+              </>
+            ) : isDownloading ? (
               <>
                 <Loader2 className="h-5 w-5 animate-spin text-blue-600" />
                 Downloading Update
@@ -205,16 +215,32 @@ export function UpdateDialog({ open, onOpenChange, updateInfo }: UpdateDialogPro
             )}
           </DialogTitle>
           <DialogDescription>
-            {isDownloading
+            {isChecking
+              ? 'Looking for a newer version…'
+              : isUpToDate
+              ? `You are running the latest version (${updateInfo?.currentVersion}).`
+              : isDownloading
               ? 'Downloading the latest version...'
               : error
               ? 'An error occurred while updating'
-              : `A new version (${updateInfo.version}) is available`}
+              : `A new version (${updateInfo?.version}) is available`}
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4 py-4">
-          {!isDownloading && !error && (
+          {isChecking && (
+            <div className="flex justify-center py-4">
+              <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+            </div>
+          )}
+
+          {isUpToDate && (
+            <div className="flex justify-center py-4">
+              <CheckCircle2 className="h-12 w-12 text-green-500" />
+            </div>
+          )}
+
+          {!isChecking && !isUpToDate && !isDownloading && !error && updateInfo?.available && (
             <>
               <div className="space-y-2">
                 <div className="flex justify-between text-sm">
@@ -275,7 +301,12 @@ export function UpdateDialog({ open, onOpenChange, updateInfo }: UpdateDialogPro
         </div>
 
         <DialogFooter>
-          {!isDownloading && !error && (
+          {(isChecking || isUpToDate) && (
+            <Button variant="outline" onClick={() => handleOpenChange(false)}>
+              Close
+            </Button>
+          )}
+          {!isChecking && !isUpToDate && !isDownloading && !error && updateInfo?.available && (
             <>
               <Button variant="outline" onClick={() => handleOpenChange(false)}>
                 Later

@@ -17,6 +17,8 @@ const UpdateCheckContext = createContext<UpdateCheckContextType | undefined>(und
 
 export function UpdateCheckProvider({ children }: { children: React.ReactNode }) {
   const [showDialog, setShowDialog] = useState(false);
+  // Separate state for what the dialog displays — can be cleared to show loading state
+  const [dialogUpdateInfo, setDialogUpdateInfo] = useState<UpdateInfo | null>(null);
 
   const handleShowDialog = useCallback(() => {
     setShowDialog(true);
@@ -26,24 +28,29 @@ export function UpdateCheckProvider({ children }: { children: React.ReactNode })
     checkOnMount: true,
     showNotification: true,
     onUpdateAvailable: (info) => {
-      // Show notification, dialog will be shown when user clicks notification
       showUpdateNotification(info, handleShowDialog);
     },
   });
 
+  // Keep dialogUpdateInfo in sync with the hook result when dialog is open
   useEffect(() => {
-    // Register the callback so UpdateNotification can trigger the dialog
+    if (showDialog) {
+      setDialogUpdateInfo(updateInfo);
+    }
+  }, [updateInfo, showDialog]);
+
+  useEffect(() => {
     setUpdateDialogCallback(handleShowDialog);
-    return () => {
-      setUpdateDialogCallback(() => {});
-    };
+    return () => { setUpdateDialogCallback(() => {}); };
   }, [handleShowDialog]);
 
   // Listen for tray menu events
   useEffect(() => {
-    const handleTrayCheck = () => {
-      checkForUpdates(true); // Force check from tray
+    const handleTrayCheck = async () => {
+      // Clear first so dialog shows loading state immediately
+      setDialogUpdateInfo(null);
       setShowDialog(true);
+      await checkForUpdates(true);
     };
 
     window.addEventListener('check-updates-from-tray', handleTrayCheck);
@@ -63,7 +70,7 @@ export function UpdateCheckProvider({ children }: { children: React.ReactNode })
       <UpdateDialog
         open={showDialog}
         onOpenChange={setShowDialog}
-        updateInfo={updateInfo}
+        updateInfo={dialogUpdateInfo}
       />
     </UpdateCheckContext.Provider>
   );

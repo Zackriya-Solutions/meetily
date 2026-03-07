@@ -215,11 +215,11 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                               <DownloadProgressToastProvider />
                               {showOnboarding ? (
                                 <OnboardingFlow onComplete={handleOnboardingComplete} />
-                              ) : (
-                                <div className="flex">
-                                  <Sidebar />
-                                  <MainContent>{children}</MainContent>
-                                </div>
+              ) : (
+                <div className="flex">
+                  <Sidebar />
+                  <MainContent>{children}</MainContent>
+                </div>
                               )}
                               <ImportDropOverlay visible={showDropOverlay} />
                               <ConditionalImportDialog

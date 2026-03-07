@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { updateService, UpdateInfo } from '@/services/updateService';
 import { showUpdateNotification } from '@/components/UpdateNotification';
 
@@ -15,10 +15,14 @@ export function useUpdateCheck(options: UseUpdateCheckOptions = {}) {
     onUpdateAvailable,
   } = options;
 
+  // Keep a ref to the latest callback so checkForUpdates doesn't need it as a dep
+  const onUpdateAvailableRef = useRef(onUpdateAvailable);
+  useEffect(() => { onUpdateAvailableRef.current = onUpdateAvailable; }, [onUpdateAvailable]);
+
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [isChecking, setIsChecking] = useState(false);
 
-  const checkForUpdates = async (force = false) => {
+  const checkForUpdates = useCallback(async (force = false) => {
     // Skip if checked recently (unless forced)
     if (!force && updateService.wasCheckedRecently()) {
       return;
@@ -30,21 +34,18 @@ export function useUpdateCheck(options: UseUpdateCheckOptions = {}) {
       setUpdateInfo(info);
 
       if (info.available) {
-        if (onUpdateAvailable) {
-          onUpdateAvailable(info);
+        if (onUpdateAvailableRef.current) {
+          onUpdateAvailableRef.current(info);
         } else if (showNotification) {
-          showUpdateNotification(info, () => {
-            // This will be handled by the component that uses this hook
-          });
+          showUpdateNotification(info, () => {});
         }
       }
     } catch (error) {
       console.error('Failed to check for updates:', error);
-      // Silently fail on startup checks to avoid disrupting user experience
     } finally {
       setIsChecking(false);
     }
-  };
+  }, [showNotification]); // stable — callbacks accessed via ref
 
   useEffect(() => {
     if (checkOnMount) {

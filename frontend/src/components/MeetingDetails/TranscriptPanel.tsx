@@ -80,7 +80,7 @@ export function TranscriptPanel({
   return (
     <div className="hidden md:flex w-[303px] min-w-[303px] border-r border-gray-200 bg-background flex-col relative shrink-0">
       {/* Title area */}
-      <div className="px-4 py-3 border-b border-gray-200 relative flex items-center justify-center">
+      <div className="px-4 border-b border-gray-200 relative flex items-center justify-center min-h-[56px]">
         <TranscriptButtonGroup
           transcriptCount={usePagination ? (totalCount ?? convertedSegments.length) : (transcripts?.length || 0)}
           onCopyTranscript={onCopyTranscript}
