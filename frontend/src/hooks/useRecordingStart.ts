@@ -84,26 +84,28 @@ export function useRecordingStart(
     try {
       console.log('handleRecordingStart called - liveTranscription:', liveTranscription);
 
-      // Always check Parakeet model — transcription runs in background regardless of display setting
-      const parakeetReady = await checkParakeetReady();
-      if (!parakeetReady) {
-        const isDownloading = await checkIfModelDownloading();
-        if (isDownloading) {
-          toast.info('Model download in progress', {
-            description: 'Please wait for the transcription model to finish downloading before recording.',
-            duration: 5000,
-          });
-          Analytics.trackButtonClick('start_recording_blocked_downloading', 'home_page');
-        } else {
-          toast.error('Transcription model not ready', {
-            description: 'Please download a transcription model before recording.',
-            duration: 5000,
-          });
-          showModal?.('modelSelector', 'Transcription model setup required');
-          Analytics.trackButtonClick('start_recording_blocked_missing', 'home_page');
+      // Check if transcription model is ready only when live transcription is enabled
+      if (liveTranscription) {
+        const parakeetReady = await checkParakeetReady();
+        if (!parakeetReady) {
+          const isDownloading = await checkIfModelDownloading();
+          if (isDownloading) {
+            toast.info('Model download in progress', {
+              description: 'Please wait for the transcription model to finish downloading before recording.',
+              duration: 5000,
+            });
+            Analytics.trackButtonClick('start_recording_blocked_downloading', 'home_page');
+          } else {
+            toast.error('Transcription model not ready', {
+              description: 'Please download a transcription model before recording.',
+              duration: 5000,
+            });
+            showModal?.('modelSelector', 'Transcription model setup required');
+            Analytics.trackButtonClick('start_recording_blocked_missing', 'home_page');
+          }
+          setStatus(RecordingStatus.IDLE);
+          return;
         }
-        setStatus(RecordingStatus.IDLE);
-        return;
       }
 
       const randomTitle = generateMeetingTitle();

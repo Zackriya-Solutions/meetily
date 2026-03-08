@@ -244,14 +244,19 @@ EOF
     -o -name "*.deb"    -o -name "*.deb.sig" \
   \) -print0 2>/dev/null)
 
-  local NOTES_FLAG=""
-  [[ -n "$NOTES" ]] && NOTES_FLAG="--notes $NOTES" || NOTES_FLAG="--generate-notes"
-
-  gh release create "$TAG" \
-    --repo "$REPO" \
-    --title "v$VERSION" \
-    $NOTES_FLAG \
-    "${UPLOAD_FILES[@]}"
+  if [[ -n "$NOTES" ]]; then
+    gh release create "$TAG" \
+      --repo "$REPO" \
+      --title "v$VERSION" \
+      --notes "$NOTES" \
+      "${UPLOAD_FILES[@]}"
+  else
+    gh release create "$TAG" \
+      --repo "$REPO" \
+      --title "v$VERSION" \
+      --generate-notes \
+      "${UPLOAD_FILES[@]}"
+  fi
 
   # Rename latest.json asset to ensure it's named exactly 'latest.json'
   # (gh upload uses the filename, so it should already be correct)

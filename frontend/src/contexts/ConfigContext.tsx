@@ -3,7 +3,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, ReactNode, useRef } from 'react';
 import { TranscriptModelProps } from '@/components/TranscriptSettings';
 import { SelectedDevices } from '@/components/DeviceSelection';
-import { configService, ModelConfig } from '@/services/configService';
+import { configService, ModelConfig, RecordingPreferences } from '@/services/configService';
 import { invoke } from '@tauri-apps/api/core';
 import Analytics from '@/lib/analytics';
 import { BetaFeatures, BetaFeatureKey, loadBetaFeatures, saveBetaFeatures } from '@/types/betaFeatures';
@@ -237,6 +237,23 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Sync liveTranscription to Rust RecordingPreferences on mount so the backend
+  // store is never stale relative to the localStorage value (e.g. after reinstall
+  // or if a previous toggle failed to persist).
+  useEffect(() => {
+    invoke<RecordingPreferences>('get_recording_preferences')
+      .then(prefs => {
+        if (prefs.live_transcription !== liveTranscription) {
+          return invoke('set_recording_preferences', {
+            preferences: { ...prefs, live_transcription: liveTranscription },
+          });
+        }
+      })
+      .catch(err => {
+        console.error('[ConfigContext] Failed to sync liveTranscription to Rust on startup:', err);
+      });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Load model configuration on mount
   useEffect(() => {
     const fetchModelConfig = async () => {
@@ -407,6 +424,17 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     if (typeof window !== 'undefined') {
       localStorage.setItem('liveTranscription', checked.toString());
     }
+    // Sync to Rust RecordingPreferences so the backend store never diverges from
+    // the frontend setting (mirrors the set_language_preference pattern).
+    invoke<RecordingPreferences>('get_recording_preferences')
+      .then(prefs =>
+        invoke('set_recording_preferences', {
+          preferences: { ...prefs, live_transcription: checked },
+        })
+      )
+      .catch(err =>
+        console.error('[ConfigContext] Failed to sync liveTranscription to Rust:', err)
+      );
   }, []);
 
   // Toggle beta feature with localStorage persistence and analytics

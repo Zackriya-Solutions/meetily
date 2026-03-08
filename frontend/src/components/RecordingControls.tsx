@@ -56,7 +56,6 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
   const [isStopping, setIsStopping] = useState(false);
   const [isPausing, setIsPausing] = useState(false);
   const [isResuming, setIsResuming] = useState(false);
-  const [isTranscribing, setIsTranscribing] = useState(false);
   const [isLiveTranscriptionActive, setIsLiveTranscriptionActive] = useState(liveTranscription);
   const MIN_RECORDING_DURATION = 2000; // 2 seconds minimum recording time
   const [transcriptionErrors, setTranscriptionErrors] = useState(0);

@@ -60,6 +60,9 @@ export default function PageContent({
   const [customPrompt, setCustomPrompt] = useState<string>('');
   const [isRecording] = useState(false);
   const [transcriptCollapsed, setTranscriptCollapsed] = useState(false);
+  // Track whether we've already done the one-time auto-collapse so a user's
+  // manual expansion is never immediately reversed by the effect re-running.
+  const hasAutoCollapsedRef = useRef(false);
 
   // Shared speaker context — set meetingId so all consumers (SpeakerManager, TranscriptPanel) share state
   const { speakerMap, setMeetingId: setSpeakerMeetingId, reload: reloadSpeakers } = useSpeakers();
@@ -153,12 +156,16 @@ export default function PageContent({
     meeting,
   });
 
-  // Auto-collapse transcript panel when a summary is present or being generated
+  // Auto-collapse transcript panel when a summary is first present or being generated.
+  // Only fires once per meeting load — subsequent changes (e.g. user manually expanding)
+  // are left alone.
   useEffect(() => {
+    if (hasAutoCollapsedRef.current) return;
     const hasSummary = !!meetingData.aiSummary;
     const isGenerating = ['processing', 'summarizing', 'regenerating'].includes(summaryGeneration.summaryStatus);
     if (hasSummary || isGenerating) {
       setTranscriptCollapsed(true);
+      hasAutoCollapsedRef.current = true;
     }
   }, [meetingData.aiSummary, summaryGeneration.summaryStatus]);
 

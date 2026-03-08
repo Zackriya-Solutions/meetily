@@ -1395,7 +1395,7 @@ pub async fn api_get_auto_generate_setting<R: Runtime>(
 ) -> Result<bool, String> {
     let pool = state.db_manager.pool();
     let row: Option<(String,)> = sqlx::query_as(
-        "SELECT value FROM global_speaker_defaults WHERE key = 'auto_generate_summary'",
+        "SELECT value FROM app_settings WHERE key = 'auto_generate_summary'",
     )
     .fetch_optional(pool)
     .await
@@ -1413,7 +1413,7 @@ pub async fn api_save_auto_generate_setting<R: Runtime>(
     let pool = state.db_manager.pool();
     let value = if enabled { "true" } else { "false" };
     sqlx::query(
-        "INSERT INTO global_speaker_defaults (key, value) VALUES ('auto_generate_summary', ?) \
+        "INSERT INTO app_settings (key, value) VALUES ('auto_generate_summary', ?) \
          ON CONFLICT(key) DO UPDATE SET value = excluded.value",
     )
     .bind(value)

@@ -87,16 +87,18 @@ export function SpeakerProvider({ children }: { children: ReactNode }) {
 
     try {
       const existing = resolvedSpeakers.find(s => s.speaker_id === speakerId);
-      let profileId = existing?.profile_id ?? null;
+      const existingProfileId: string | null = existing?.profile_id ?? null;
+      let profileId: string;
 
-      if (profileId) {
+      if (existingProfileId) {
         await invoke('update_speaker_profile', {
-          id: profileId,
+          id: existingProfileId,
           name,
           color: chosenColor,
           isSelf: isSelfVal,
           globalAutoApply: isSelfVal,
         });
+        profileId = existingProfileId;
       } else {
         const profile = await invoke<SpeakerProfile>('create_speaker_profile', {
           name,
@@ -107,6 +109,7 @@ export function SpeakerProvider({ children }: { children: ReactNode }) {
         profileId = profile.id;
       }
 
+      // profileId is guaranteed string here — both branches above assign it
       await invoke('set_speaker_mapping', { meetingId, speakerId, profileId });
 
       // Reload both profiles and resolved speakers so all consumers update

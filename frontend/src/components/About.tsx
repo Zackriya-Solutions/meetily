@@ -90,7 +90,7 @@ export function About() {
                 <div className="grid grid-cols-2 gap-2">
                     <div className="bg-gray-50 dark:bg-secondary rounded p-3 hover:bg-gray-100 dark:hover:bg-accent transition-colors">
                         <h3 className="font-bold text-sm text-gray-900 dark:text-foreground mb-1">Privacy-first</h3>
-                        <p className="text-xs text-gray-600 dark:text-muted-foreground leading-relaxed">Your data &amp; AI processing workflow can now stay within your premise. No cloud, no leaks.</p>
+                        <p className="text-xs text-gray-600 dark:text-muted-foreground leading-relaxed">Your data & AI processing workflow can now stay within your premise. No cloud, no leaks.</p>
                     </div>
                     <div className="bg-gray-50 dark:bg-secondary rounded p-3 hover:bg-gray-100 dark:hover:bg-accent transition-colors">
                         <h3 className="font-bold text-sm text-gray-900 dark:text-foreground mb-1">Use Any Model</h3>

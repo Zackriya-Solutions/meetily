@@ -228,13 +228,14 @@ async def _get_meeting_date(meeting_id: str) -> str:
             for fmt in ("%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
                 try:
                     dt = _dt.strptime(raw, fmt)
-                    return dt.strftime("%-d %b %Y")  # e.g. "7 Mar 2026"
+                    return f"{dt.day} {dt.strftime('%b %Y')}"  # e.g. "7 Mar 2026"
                 except ValueError:
                     continue
     except Exception as e:
         logger.warning(f"Could not fetch meeting date for {meeting_id}: {e}")
     from datetime import datetime as _dt
-    return _dt.now().strftime("%-d %b %Y")
+    now = _dt.now()
+    return f"{now.day} {now.strftime('%b %Y')}"
 
 async def process_transcript_background(process_id: str, transcript: TranscriptRequest, custom_prompt: str):
     """Background task to process transcript"""
