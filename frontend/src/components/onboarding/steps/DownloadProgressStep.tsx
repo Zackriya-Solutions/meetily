@@ -8,6 +8,7 @@ import { useOnboarding } from '@/contexts/OnboardingContext';
 import { toast } from 'sonner';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ClearMinutesIcon } from '@/components/ClearMinutesLogo';
+import Analytics from '@/lib/analytics';
 
 const PARAKEET_MODEL = 'parakeet-tdt-0.6b-v3-int8';
 
@@ -270,6 +271,7 @@ export function DownloadProgressStep() {
         await startBackgroundDownloads(true);
       } catch (error) {
         console.error('Failed to start downloads:', error);
+        Analytics.captureException(error, { handled: true, context: 'onboarding_model_download' });
         if (!parakeetDownloaded) setParakeetState(prev => ({ ...prev, status: 'error', error: String(error) }));
       }
     }
@@ -284,6 +286,7 @@ export function DownloadProgressStep() {
         }
       } catch (error) {
         console.error('Failed to start diarization downloads:', error);
+        Analytics.captureException(error, { handled: true, context: 'onboarding_diarization_download' });
         setDiarizationState(prev => prev.status !== 'completed' ? { ...prev, status: 'error', error: String(error) } : prev);
       }
     }
@@ -324,6 +327,7 @@ export function DownloadProgressStep() {
         window.location.reload();
       } catch (error) {
         console.error('Failed to complete onboarding:', error);
+        Analytics.captureException(error, { handled: true, context: 'onboarding_complete' });
         toast.error('Failed to complete setup', { description: 'Please try again.' });
         setIsCompleting(false);
       }

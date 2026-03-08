@@ -3,6 +3,7 @@ import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'sonner';
+import Analytics from '@/lib/analytics';
 import {
   ParakeetModelInfo,
   ModelStatus,
@@ -58,6 +59,7 @@ export function ParakeetModelManager({
         setInitialized(true);
       } catch (err) {
         console.error('Failed to initialize Parakeet:', err);
+        Analytics.captureException(err, { handled: true, context: 'parakeet_init' });
         setError(err instanceof Error ? err.message : 'Failed to load models');
         toast.error('Failed to load transcription models', {
           description: err instanceof Error ? err.message : 'Unknown error',
@@ -268,6 +270,7 @@ export function ParakeetModelManager({
       await ParakeetAPI.downloadModel(modelName);
     } catch (err) {
       console.error('Download failed:', err);
+      Analytics.captureException(err, { handled: true, context: 'parakeet_model_download', model: modelName });
       setDownloadingModels(prev => {
         const newSet = new Set(prev);
         newSet.delete(modelName);

@@ -2,6 +2,7 @@
 
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { recordingService } from '@/services/recordingService';
+import Analytics from '@/lib/analytics';
 
 /**
  * Recording state synchronized with backend
@@ -204,6 +205,7 @@ export function RecordingStateProvider({ children }: { children: React.ReactNode
         console.log('[RecordingStateContext] Event listeners set up successfully');
       } catch (error) {
         console.error('[RecordingStateContext] Failed to set up event listeners:', error);
+        Analytics.captureException(error, { handled: true, context: 'recording_state_listeners' });
       }
     };
 

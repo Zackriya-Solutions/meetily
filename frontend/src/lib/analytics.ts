@@ -26,6 +26,18 @@ export class Analytics {
   private static meetingsInSession: number = 0;
   private static deviceInfo: DeviceInfo | null = null;
   private static currentSessionId: string | null = null;
+  private static appVersion: string | null = null;
+
+  static async getAppVersion(): Promise<string> {
+    if (this.appVersion) return this.appVersion;
+    try {
+      const { getVersion } = await import('@tauri-apps/api/app');
+      this.appVersion = await getVersion();
+    } catch {
+      this.appVersion = 'unknown';
+    }
+    return this.appVersion;
+  }
 
   static async init(): Promise<void> {
     // Prevent duplicate initialization
@@ -300,14 +312,18 @@ export class Analytics {
     }
   }
 
-  // Shared helper — returns device info + browser language + session ID merged with any extra properties
+  // Shared helper — returns device info + browser language + session ID + app version merged with any extra properties
   private static async enrichProperties(extra?: AnalyticsProperties): Promise<AnalyticsProperties> {
-    const deviceInfo = await this.getDeviceInfo();
+    const [deviceInfo, appVersion] = await Promise.all([
+      this.getDeviceInfo(),
+      this.getAppVersion(),
+    ]);
     return {
       platform: deviceInfo.platform,
       os_version: deviceInfo.os_version,
       architecture: deviceInfo.architecture,
       $browser_language: navigator.language,
+      app_version: appVersion,
       ...(this.currentSessionId ? { $session_id: this.currentSessionId } : {}),
       ...extra,
     };

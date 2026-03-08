@@ -62,6 +62,7 @@ export function SummaryModelSettings({ refetchTrigger }: SummaryModelSettingsPro
       }
     } catch (error) {
       console.error('Failed to fetch model config:', error);
+      Analytics.captureException(error, { handled: true, context: 'fetch_model_config' });
       toast.error('Failed to load model settings');
     }
   }, []);
@@ -128,6 +129,7 @@ export function SummaryModelSettings({ refetchTrigger }: SummaryModelSettingsPro
       toast.success('Model settings saved successfully');
     } catch (error) {
       console.error('Error saving model config:', error);
+      Analytics.captureException(error, { handled: true, context: 'save_model_config' });
       toast.error('Failed to save model settings');
     }
   };

@@ -46,6 +46,7 @@ export default function AnalyticsProvider({ children }: AnalyticsProviderProps) 
       await Analytics.init();
 
       const deviceInfo = await Analytics.getDeviceInfo();
+      const appVersion = await Analytics.getAppVersion();
 
       const store = await load('analytics.json', { autoSave: false, defaults: { analyticsOptedIn: true } });
       await store.set('platform', deviceInfo.platform);
@@ -57,7 +58,7 @@ export default function AnalyticsProvider({ children }: AnalyticsProviderProps) 
       await store.save();
 
       await Analytics.identify(userId, {
-        app_version: '0.3.0',
+        app_version: appVersion,
         platform: deviceInfo.platform,
         os_version: deviceInfo.os_version,
         architecture: deviceInfo.architecture,
@@ -95,15 +96,19 @@ export default function AnalyticsProvider({ children }: AnalyticsProviderProps) 
       // Use Tauri's window close event — more reliable than beforeunload in a Tauri app
       const appWindow = getCurrentWindow();
       const unlistenClose = await appWindow.onCloseRequested(async (event) => {
-        window.removeEventListener('error', handleError);
-        window.removeEventListener('unhandledrejection', handleRejection);
-        if (sessionIdRef.current) {
-          await Analytics.trackSessionEnded(sessionIdRef.current);
-        }
-        await Analytics.trackAppClosed();
-        await Analytics.cleanup();
         event.preventDefault();
-        setTimeout(() => appWindow.destroy(), 300);
+
+        // Flush analytics with a hard 1s timeout — never block the user from closing
+        const flush = async () => {
+          window.removeEventListener('error', handleError);
+          window.removeEventListener('unhandledrejection', handleRejection);
+          if (sessionIdRef.current) await Analytics.trackSessionEnded(sessionIdRef.current);
+          await Analytics.trackAppClosed();
+          await Analytics.cleanup();
+        };
+        await Promise.race([flush(), new Promise(resolve => setTimeout(resolve, 1000))]);
+
+        appWindow.destroy();
       });
 
       return () => {

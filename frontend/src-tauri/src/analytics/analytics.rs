@@ -126,8 +126,22 @@ impl AnalyticsClient {
         let event_name = event_name.to_string();
         let mut properties = properties.unwrap_or_default();
 
-        // Add app version to all events
-        properties.insert("app_version".to_string(), env!("CARGO_PKG_VERSION").to_string());
+        // Enrich all events with app version, OS and architecture
+        properties.entry("app_version".to_string())
+            .or_insert_with(|| env!("CARGO_PKG_VERSION").to_string());
+        {
+            use sysinfo::System;
+            properties.entry("platform".to_string())
+                .or_insert_with(|| System::name().unwrap_or_else(|| "unknown".to_string()));
+            properties.entry("os_version".to_string())
+                .or_insert_with(|| {
+                    let name = System::name().unwrap_or_else(|| "unknown".to_string());
+                    let ver  = System::os_version().unwrap_or_else(|| "unknown".to_string());
+                    format!("{} {}", name, ver)
+                });
+            properties.entry("architecture".to_string())
+                .or_insert_with(|| std::env::consts::ARCH.to_string());
+        }
 
         // Add session information to all events
         if let Some(session) = self.current_session.lock().await.as_ref() {
@@ -447,7 +461,21 @@ impl AnalyticsClient {
             log::warn!("Failed to set $exception_list: {}", e);
         }
 
-        // Add app version and any extra context
+        // OS / device info via sysinfo
+        {
+            use sysinfo::System;
+            let os_name = System::name().unwrap_or_else(|| "unknown".to_string());
+            let os_version = System::os_version().unwrap_or_else(|| "unknown".to_string());
+            let arch = std::env::consts::ARCH;
+            let _ = event.insert_prop("platform", &os_name);
+            let _ = event.insert_prop("os_version", format!("{} {}", os_name, os_version));
+            let _ = event.insert_prop("architecture", arch);
+            // PostHog's own OS property used by the UI
+            let _ = event.insert_prop("$os", &os_name);
+            let _ = event.insert_prop("$os_version", &os_version);
+        }
+
+        // App version
         if let Err(e) = event.insert_prop("app_version", env!("CARGO_PKG_VERSION")) {
             log::warn!("Failed to set app_version: {}", e);
         }

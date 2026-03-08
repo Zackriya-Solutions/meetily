@@ -127,6 +127,7 @@ export function useRecordingStart(
       console.error('Failed to start recording:', error);
       setStatus(RecordingStatus.ERROR, error instanceof Error ? error.message : 'Failed to start recording');
       setIsRecording(false);
+      Analytics.captureException(error, { handled: true, context: 'start_recording_manual' });
       Analytics.trackButtonClick('start_recording_error', 'home_page');
       throw error;
     }
@@ -197,6 +198,7 @@ export function useRecordingStart(
             console.error('Failed to auto-start recording:', error);
             setStatus(RecordingStatus.ERROR, error instanceof Error ? error.message : 'Failed to auto-start recording');
             alert('Failed to start recording. Check console for details.');
+            Analytics.captureException(error, { handled: true, context: 'start_recording_sidebar_auto' });
             Analytics.trackButtonClick('start_recording_error', 'sidebar_auto');
           } finally {
             setIsAutoStarting(false);
@@ -287,6 +289,7 @@ export function useRecordingStart(
         console.error('Failed to start recording from sidebar:', error);
         setStatus(RecordingStatus.ERROR, error instanceof Error ? error.message : 'Failed to start recording from sidebar');
         alert('Failed to start recording. Check console for details.');
+        Analytics.captureException(error, { handled: true, context: 'start_recording_sidebar_direct' });
         Analytics.trackButtonClick('start_recording_error', 'sidebar_direct');
       } finally {
         setIsAutoStarting(false);

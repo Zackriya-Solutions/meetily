@@ -391,3 +391,45 @@ pub async fn capture_exception(
     }
 }
 
+/// Fire-and-forget helper for use inside Rust background tasks where no Tauri
+/// command invocation is available (e.g. summary service, recording pipeline).
+/// Falls back to creating a minimal PostHog client if the global one isn't
+/// initialized yet, so errors are never silently dropped.
+pub fn capture_exception_bg(
+    exception_type: impl Into<String> + Send + 'static,
+    message: impl Into<String> + Send + 'static,
+    context: Option<HashMap<String, String>>,
+) {
+    let client = {
+        let guard = ANALYTICS_CLIENT.lock().unwrap();
+        guard.as_ref().cloned()
+    };
+
+    let exception_type = exception_type.into();
+    let message = message.into();
+
+    tokio::spawn(async move {
+        if let Some(client) = client {
+            // Happy path — use the already-initialized client (has user_id set)
+            if let Err(e) = client.capture_exception(&exception_type, &message, true, context).await {
+                log::warn!("[Analytics] capture_exception_bg failed: {}", e);
+            }
+        } else {
+            // Fallback — global client not ready yet, send directly via a fresh client
+            // Uses an anonymous distinct_id so the event still appears in PostHog
+            log::warn!("[Analytics] capture_exception_bg: no client, using fallback for '{}'", exception_type);
+            let config = crate::analytics::AnalyticsConfig {
+                api_key: "phc_C0jjok4wryj2U4Sh8A2YamCegW3bQXRt495Fj5cPh5d".to_string(),
+                host: Some("https://t.clearminutes.app".to_string()),
+                enabled: true,
+            };
+            let fallback = crate::analytics::AnalyticsClient::new(config).await;
+            // Identify with a stable anonymous ID so events aren't orphaned
+            let _ = fallback.identify("rust_backend".to_string(), None).await;
+            if let Err(e) = fallback.capture_exception(&exception_type, &message, true, context).await {
+                log::warn!("[Analytics] capture_exception_bg fallback failed: {}", e);
+            }
+        }
+    });
+}
+

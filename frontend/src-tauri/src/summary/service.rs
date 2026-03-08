@@ -1,3 +1,4 @@
+use crate::analytics::commands::capture_exception_bg;
 use crate::database::repositories::{
     meeting::MeetingsRepository, setting::SettingsRepository, summary::SummaryProcessesRepository,
 };
@@ -353,6 +354,25 @@ impl SummaryService {
             "Processing failed for meeting_id {}: {}",
             meeting_id, error_msg
         );
+
+        // Classify the error type for PostHog grouping
+        let exception_type = if error_msg.contains("authentication_error") || error_msg.contains("invalid x-api-key") {
+            "LLMAuthenticationError"
+        } else if error_msg.contains("Connection refused") || error_msg.contains("connection refused") {
+            "LLMConnectionError"
+        } else if error_msg.contains("model") && error_msg.contains("required") {
+            "LLMModelMissingError"
+        } else if error_msg.contains("rate_limit") {
+            "LLMRateLimitError"
+        } else {
+            "LLMProcessingError"
+        };
+
+        let mut context = std::collections::HashMap::new();
+        context.insert("meeting_id".to_string(), meeting_id.to_string());
+        context.insert("raw_error".to_string(), error_msg.to_string());
+        capture_exception_bg(exception_type.to_string(), error_msg.to_string(), Some(context));
+
         if let Err(e) =
             SummaryProcessesRepository::update_process_failed(pool, meeting_id, error_msg).await
         {

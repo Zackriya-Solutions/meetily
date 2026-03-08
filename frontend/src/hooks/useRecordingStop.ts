@@ -373,6 +373,7 @@ export function useRecordingStop(
 
         } catch (saveError) {
           console.error('Failed to save meeting to database:', saveError);
+          Analytics.captureException(saveError, { handled: true, context: 'save_meeting_after_stop' });
           setStatus(RecordingStatus.ERROR, saveError instanceof Error ? saveError.message : 'Unknown error');
           toast.error('Failed to save meeting', {
             description: saveError instanceof Error ? saveError.message : 'Unknown error'
@@ -389,6 +390,7 @@ export function useRecordingStop(
       setIsRecordingDisabled(false);
     } catch (error) {
       console.error('Error in handleRecordingStop:', error);
+      Analytics.captureException(error, { handled: true, context: 'handle_recording_stop' });
       setStatus(RecordingStatus.ERROR, error instanceof Error ? error.message : 'Unknown error');
       // isRecording already set to false at function start
       setIsRecordingDisabled(false);

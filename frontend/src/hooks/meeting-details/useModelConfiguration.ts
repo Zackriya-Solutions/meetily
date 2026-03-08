@@ -156,6 +156,7 @@ export function useModelConfiguration({ serverAddress }: UseModelConfigurationPr
       toast.success("Summary settings Saved successfully");
     } catch (error) {
       console.error('Failed to save model config:', error);
+      Analytics.captureException(error, { handled: true, context: 'save_model_config' });
       toast.error("Failed to save summary settings", { description: String(error) });
       if (error instanceof Error) {
         setError(error.message);

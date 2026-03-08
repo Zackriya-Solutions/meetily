@@ -43,6 +43,7 @@ export function UpdateDialog({ open, onOpenChange, updateInfo }: UpdateDialogPro
         }
       }).catch((err) => {
         console.error('Failed to get update object:', err);
+        Analytics.captureException(err, { handled: true, context: 'update_check' });
         setError('Failed to prepare update: ' + (err.message || 'Unknown error'));
       });
     } else {
@@ -141,6 +142,7 @@ export function UpdateDialog({ open, onOpenChange, updateInfo }: UpdateDialogPro
       await relaunch();
     } catch (err: any) {
       console.error('Update failed:', err);
+      Analytics.captureException(err, { handled: true, context: 'update_download_install', version: updateInfo?.version ?? 'unknown' });
       setError(err.message || 'Failed to download or install update');
       setIsDownloading(false);
       toast.error('Update failed: ' + (err.message || 'Unknown error'));
