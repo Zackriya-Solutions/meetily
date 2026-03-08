@@ -5,6 +5,7 @@ import { ExternalLink, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import Analytics from "@/lib/analytics";
 import {
   OutlineConfig,
   fetchOutlineCollections,
@@ -53,6 +54,10 @@ export function OutlineSettings() {
       }
       if (cols.length === 0) {
         setFetchError('No collections found. Check your API key has the right permissions.');
+      } else {
+        Analytics.trackIntegrationUsed('outline_connected', true, {
+          collections_count: cols.length.toString(),
+        });
       }
     } catch (e: any) {
       const msg = e?.message ?? String(e);
@@ -66,6 +71,9 @@ export function OutlineSettings() {
   const handleSave = () => {
     saveOutlineConfig(config);
     setSaved(true);
+    Analytics.trackIntegrationUsed('outline_configured', true, {
+      has_collection: (!!config.collectionId).toString(),
+    });
   };
 
   return (

@@ -2,6 +2,10 @@
 mod ffmpeg;
 
 fn main() {
+    // Rebuild if PostHog analytics credentials change
+    println!("cargo:rerun-if-env-changed=NEXT_PUBLIC_POSTHOG_KEY");
+    println!("cargo:rerun-if-env-changed=NEXT_PUBLIC_POSTHOG_HOST");
+
     // GPU Acceleration Detection and Build Guidance
     detect_and_report_gpu_capabilities();
 

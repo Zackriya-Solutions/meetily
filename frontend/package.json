@@ -25,7 +25,9 @@
         "tauri:build:coreml": "tauri build -- --features coreml",
         "tauri:build:openblas": "tauri build -- --features openblas",
         "tauri:build:hipblas": "tauri build -- --features hipblas",
-        "lint": "next lint"
+        "lint": "next lint",
+        "cargo:clean": "rm -rf ../target/debug",
+        "cargo:clean:all": "rm -rf ../target"
     },
     "dependencies": {
         "@blocknote/core": "0.36.0",

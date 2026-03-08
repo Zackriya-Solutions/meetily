@@ -25,6 +25,7 @@ export class Analytics {
   private static sessionStartTime: number | null = null;
   private static meetingsInSession: number = 0;
   private static deviceInfo: DeviceInfo | null = null;
+  private static currentSessionId: string | null = null;
 
   static async init(): Promise<void> {
     // Prevent duplicate initialization
@@ -299,6 +300,19 @@ export class Analytics {
     }
   }
 
+  // Shared helper — returns device info + browser language + session ID merged with any extra properties
+  private static async enrichProperties(extra?: AnalyticsProperties): Promise<AnalyticsProperties> {
+    const deviceInfo = await this.getDeviceInfo();
+    return {
+      platform: deviceInfo.platform,
+      os_version: deviceInfo.os_version,
+      architecture: deviceInfo.architecture,
+      $browser_language: navigator.language,
+      ...(this.currentSessionId ? { $session_id: this.currentSessionId } : {}),
+      ...extra,
+    };
+  }
+
   // Helper methods for analytics.json store
   static async calculateDaysSince(dateKey: string): Promise<number | null> {
     try {
@@ -382,28 +396,28 @@ export class Analytics {
   }
 
   // Enhanced session tracking with platform info
+  private static heartbeatInterval: ReturnType<typeof setInterval> | null = null;
+
   static async trackSessionStarted(sessionId: string): Promise<void> {
     if (!this.initialized) return;
 
-    try {
-      const deviceInfo = await this.getDeviceInfo();
-      const daysSinceLast = await this.calculateDaysSince('last_meeting_date');
+    this.currentSessionId = sessionId;
+    this.sessionStartTime = Date.now();
+    this.meetingsInSession = 0;
 
+    try {
+      const daysSinceLast = await this.calculateDaysSince('last_meeting_date');
       const { Store } = await import('@tauri-apps/plugin-store');
       const store = await Store.load('analytics.json');
       const totalMeetings = await store.get<number>('total_meetings') || 0;
 
-      this.sessionStartTime = Date.now();
-      this.meetingsInSession = 0;
-
-      await this.track('session_started', {
+      await this.track('session_started', await this.enrichProperties({
         session_id: sessionId,
-        days_since_last_meeting: daysSinceLast?.toString() || 'null',
+        days_since_last_meeting: daysSinceLast?.toString() ?? 'null',
         total_meetings: totalMeetings.toString(),
-        platform: deviceInfo.platform,
-        os_version: deviceInfo.os_version,
-        architecture: deviceInfo.architecture
-      });
+      }));
+
+      this.startSessionHeartbeat(sessionId);
     } catch (error) {
       console.error('Failed to track session started:', error);
     }
@@ -412,19 +426,45 @@ export class Analytics {
   static async trackSessionEnded(sessionId: string): Promise<void> {
     if (!this.initialized || !this.sessionStartTime) return;
 
-    try {
-      const deviceInfo = await this.getDeviceInfo();
-      const sessionDuration = (Date.now() - this.sessionStartTime) / 1000; // seconds
+    this.stopSessionHeartbeat();
 
-      await this.track('session_ended', {
+    try {
+      const sessionDuration = (Date.now() - this.sessionStartTime) / 1000;
+
+      await this.track('session_ended', await this.enrichProperties({
         session_id: sessionId,
-        session_duration_seconds: sessionDuration.toString(),
+        session_duration_seconds: sessionDuration.toFixed(0),
         meetings_in_session: this.meetingsInSession.toString(),
-        platform: deviceInfo.platform,
-        os_version: deviceInfo.os_version
-      });
+      }));
     } catch (error) {
       console.error('Failed to track session ended:', error);
+    } finally {
+      this.currentSessionId = null;
+      this.sessionStartTime = null;
+    }
+  }
+
+  // Sends a heartbeat every 5 minutes so PostHog can accurately measure session length
+  // even if beforeunload doesn't fire (common in Tauri)
+  private static startSessionHeartbeat(sessionId: string): void {
+    this.stopSessionHeartbeat();
+    this.heartbeatInterval = setInterval(async () => {
+      if (!this.initialized || !this.sessionStartTime) return;
+      try {
+        const elapsed = ((Date.now() - this.sessionStartTime) / 1000).toFixed(0);
+        await this.track('session_heartbeat', await this.enrichProperties({
+          session_id: sessionId,
+          elapsed_seconds: elapsed,
+          meetings_in_session: this.meetingsInSession.toString(),
+        }));
+      } catch { /* silent — heartbeat is best-effort */ }
+    }, 5 * 60 * 1000);
+  }
+
+  private static stopSessionHeartbeat(): void {
+    if (this.heartbeatInterval !== null) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
     }
   }
 
@@ -591,9 +631,62 @@ export class Analytics {
     }
   }
 
+  // Error tracking — sends a $exception event to PostHog's Error Tracking UI
+  static async captureException(
+    error: unknown,
+    context?: { handled?: boolean } & AnalyticsProperties
+  ): Promise<void> {
+    const isInitialized = await this.waitForInitialization();
+    if (!isInitialized) return;
+
+    try {
+      const { handled = true, ...extraContext } = context ?? {};
+      const exceptionType = error instanceof Error ? error.constructor.name : 'UnknownError';
+      const message = error instanceof Error ? error.message : String(error);
+
+      await invoke('capture_exception', {
+        exceptionType,
+        message,
+        handled,
+        context: Object.keys(extraContext).length > 0 ? extraContext : null,
+      });
+    } catch (e) {
+      console.error('Failed to capture exception:', e);
+    }
+  }
+
+  // Integration tracking
+  static async trackIntegrationUsed(
+    integrationName: string,
+    success: boolean,
+    extra?: AnalyticsProperties
+  ): Promise<void> {
+    const isInitialized = await this.waitForInitialization();
+    if (!isInitialized) return;
+
+    try {
+      await this.track('integration_used', await this.enrichProperties({
+        integration: integrationName,
+        success: success.toString(),
+        ...extra,
+      }));
+    } catch (error) {
+      console.error(`Failed to track integration_used (${integrationName}):`, error);
+    }
+  }
+
   // Convenience methods for common events
   static async trackPageView(pageName: string): Promise<void> {
-    await this.track(`page_view_${pageName}`, { page: pageName });
+    // Wait for analytics to be ready — page views often fire before init completes
+    const isInitialized = await this.waitForInitialization();
+    if (!isInitialized) return;
+
+    await this.track('$pageview', await this.enrichProperties({
+      page: pageName,
+      $current_url: `app://clearminutes/${pageName}`,
+      $pathname: `/${pageName}`,
+      $host: 'clearminutes',
+    }));
   }
 
   static async trackButtonClick(buttonName: string, location?: string): Promise<void> {
@@ -610,9 +703,27 @@ export class Analytics {
   }
 
   static async trackAppStarted(): Promise<void> {
-    await this.track('app_started', { 
-      timestamp: new Date().toISOString() 
-    });
+    try {
+      await this.track('app_started', await this.enrichProperties({
+        timestamp: new Date().toISOString(),
+      }));
+    } catch (error) {
+      console.error('Failed to track app started:', error);
+    }
+  }
+
+  static async trackAppClosed(): Promise<void> {
+    try {
+      const uptimeSeconds = this.sessionStartTime
+        ? ((Date.now() - this.sessionStartTime) / 1000).toFixed(0)
+        : 'unknown';
+      await this.track('app_closed', await this.enrichProperties({
+        timestamp: new Date().toISOString(),
+        uptime_seconds: uptimeSeconds,
+      }));
+    } catch (error) {
+      console.error('Failed to track app closed:', error);
+    }
   }
 
   // Cleanup method for app shutdown
@@ -622,8 +733,11 @@ export class Analytics {
 
   // Reset initialization state (useful for testing)
   static reset(): void {
+    this.stopSessionHeartbeat();
     this.initialized = false;
     this.currentUserId = null;
+    this.currentSessionId = null;
+    this.sessionStartTime = null;
     this.initializationPromise = null;
   }
 
@@ -717,120 +831,152 @@ export class Analytics {
     transcriptLength: number,
     timeSinceRecordingMinutes?: number
   ) {
-    if (!this.initialized) {
-      console.warn('Analytics not initialized, skipping summary generation started tracking');
-      return;
-    }
+    const isInitialized = await this.waitForInitialization();
+    if (!isInitialized) return;
 
     try {
-      const deviceInfo = await this.getDeviceInfo();
-      console.log('Tracking summary generation started event:', {
-        modelProvider,
-        modelName,
-        transcriptLength,
-        timeSinceRecordingMinutes
-      });
-
-      const properties: AnalyticsProperties = {
+      const props = await this.enrichProperties({
         model_provider: modelProvider,
         model_name: modelName,
         transcript_length: transcriptLength.toString(),
-        platform: deviceInfo.platform,
-        os_version: deviceInfo.os_version
-      };
-
-      if (timeSinceRecordingMinutes !== undefined) {
-        properties.time_since_recording_minutes = timeSinceRecordingMinutes.toFixed(2);
-      }
-
-      await this.track('summary_generation_started', properties);
-      console.log('Summary generation started event tracked successfully');
+        ...(timeSinceRecordingMinutes !== undefined && {
+          time_since_recording_minutes: timeSinceRecordingMinutes.toFixed(2),
+        }),
+      });
+      await invoke('track_event', { eventName: 'summary_generation_started', properties: props });
     } catch (error) {
       console.error('Failed to track summary generation started:', error);
     }
   }
 
   static async trackSummaryGenerationCompleted(
-    modelProvider: string, 
-    modelName: string, 
-    success: boolean, 
-    durationSeconds?: number, 
+    modelProvider: string,
+    modelName: string,
+    success: boolean,
+    durationSeconds?: number,
     errorMessage?: string
   ) {
-    if (!this.initialized) {
-      console.warn('Analytics not initialized, skipping summary generation completed tracking');
-      return;
-    }
+    const isInitialized = await this.waitForInitialization();
+    if (!isInitialized) return;
 
     try {
-      console.log('Tracking summary generation completed event:', { modelProvider, modelName, success, durationSeconds, errorMessage });
-      await invoke('track_summary_generation_completed', {
-        modelProvider,
-        modelName,
-        success,
-        durationSeconds,
-        errorMessage
+      const props = await this.enrichProperties({
+        model_provider: modelProvider,
+        model_name: modelName,
+        success: success.toString(),
+        ...(durationSeconds !== undefined && { duration_seconds: durationSeconds.toString() }),
+        ...(errorMessage && { error_message: errorMessage }),
       });
-      console.log('Summary generation completed event tracked successfully');
+      await invoke('track_event', { eventName: 'summary_generation_completed', properties: props });
     } catch (error) {
       console.error('Failed to track summary generation completed:', error);
     }
   }
 
   static async trackSummaryRegenerated(modelProvider: string, modelName: string) {
-    if (!this.initialized) {
-      console.warn('Analytics not initialized, skipping summary regenerated tracking');
-      return;
-    }
+    const isInitialized = await this.waitForInitialization();
+    if (!isInitialized) return;
 
     try {
-      console.log('Tracking summary regenerated event:', { modelProvider, modelName });
-      await invoke('track_summary_regenerated', {
-        modelProvider,
-        modelName
+      const props = await this.enrichProperties({
+        model_provider: modelProvider,
+        model_name: modelName,
       });
-      console.log('Summary regenerated event tracked successfully');
+      await invoke('track_event', { eventName: 'summary_regenerated', properties: props });
     } catch (error) {
       console.error('Failed to track summary regenerated:', error);
     }
   }
 
   static async trackModelChanged(oldProvider: string, oldModel: string, newProvider: string, newModel: string) {
-    if (!this.initialized) {
-      console.warn('Analytics not initialized, skipping model changed tracking');
-      return;
-    }
+    const isInitialized = await this.waitForInitialization();
+    if (!isInitialized) return;
 
     try {
-      console.log('Tracking model changed event:', { oldProvider, oldModel, newProvider, newModel });
-      await invoke('track_model_changed', {
-        oldProvider,
-        oldModel,
-        newProvider,
-        newModel
+      const props = await this.enrichProperties({
+        old_provider: oldProvider,
+        old_model: oldModel,
+        new_provider: newProvider,
+        new_model: newModel,
       });
-      console.log('Model changed event tracked successfully');
+      await invoke('track_event', { eventName: 'model_changed', properties: props });
     } catch (error) {
       console.error('Failed to track model changed:', error);
     }
   }
 
   static async trackCustomPromptUsed(promptLength: number) {
-    if (!this.initialized) {
-      console.warn('Analytics not initialized, skipping custom prompt used tracking');
-      return;
-    }
+    const isInitialized = await this.waitForInitialization();
+    if (!isInitialized) return;
 
     try {
-      console.log('Tracking custom prompt used event:', { promptLength });
-      await invoke('track_custom_prompt_used', {
-        promptLength
+      const props = await this.enrichProperties({
+        prompt_length: promptLength.toString(),
       });
-      console.log('Custom prompt used event tracked successfully');
+      await invoke('track_event', { eventName: 'custom_prompt_used', properties: props });
     } catch (error) {
       console.error('Failed to track custom prompt used:', error);
     }
   }
+
+  // Onboarding analytics
+  static async trackOnboardingCompleted(selectedSummaryModel: string): Promise<void> {
+    const isInitialized = await this.waitForInitialization();
+    if (!isInitialized) return;
+
+    try {
+      await this.track('onboarding_completed', await this.enrichProperties({
+        selected_summary_model: selectedSummaryModel,
+        timestamp: new Date().toISOString(),
+      }));
+    } catch (error) {
+      console.error('Failed to track onboarding completed:', error);
+    }
+  }
+
+  // App update analytics
+  static async trackUpdateAvailable(version: string, currentVersion?: string): Promise<void> {
+    const isInitialized = await this.waitForInitialization();
+    if (!isInitialized) return;
+
+    try {
+      await this.track('update_available', await this.enrichProperties({
+        new_version: version,
+        current_version: currentVersion ?? 'unknown',
+        timestamp: new Date().toISOString(),
+      }));
+    } catch (error) {
+      console.error('Failed to track update available:', error);
+    }
+  }
+
+  static async trackUpdateDownloadStarted(version: string): Promise<void> {
+    const isInitialized = await this.waitForInitialization();
+    if (!isInitialized) return;
+
+    try {
+      await this.track('update_download_started', await this.enrichProperties({
+        version,
+        timestamp: new Date().toISOString(),
+      }));
+    } catch (error) {
+      console.error('Failed to track update download started:', error);
+    }
+  }
+
+  static async trackUpdateInstalled(version: string): Promise<void> {
+    const isInitialized = await this.waitForInitialization();
+    if (!isInitialized) return;
+
+    try {
+      await this.track('update_installed', await this.enrichProperties({
+        version,
+        timestamp: new Date().toISOString(),
+      }));
+    } catch (error) {
+      console.error('Failed to track update installed:', error);
+    }
+  }
 }
 
-export default Analytics; 
+export default Analytics;

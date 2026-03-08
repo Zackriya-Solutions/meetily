@@ -9,8 +9,8 @@ static ANALYTICS_CLIENT: std::sync::Mutex<Option<Arc<AnalyticsClient>>> = std::s
 #[command]
 pub async fn init_analytics() -> Result<(), String> {
     let config = AnalyticsConfig {
-        api_key: "phc_cohhHPgfQfnNWl33THRRpCftuRtWx2k5svtKrkpFb04".to_string(),
-        host: Some("https://us.i.posthog.com".to_string()),
+        api_key: "phc_C0jjok4wryj2U4Sh8A2YamCegW3bQXRt495Fj5cPh5d".to_string(),
+        host: Some("https://t.clearminutes.app".to_string()),
         enabled: true,
     };
     
@@ -371,3 +371,23 @@ pub async fn is_analytics_session_active() -> bool {
         false
     }
 }
+
+#[command]
+pub async fn capture_exception(
+    exception_type: String,
+    message: String,
+    handled: bool,
+    context: Option<HashMap<String, String>>,
+) -> Result<(), String> {
+    let client = {
+        let guard = ANALYTICS_CLIENT.lock().unwrap();
+        guard.as_ref().cloned()
+    };
+
+    if let Some(client) = client {
+        client.capture_exception(&exception_type, &message, handled, context).await
+    } else {
+        Err("Analytics client not initialized".to_string())
+    }
+}
+

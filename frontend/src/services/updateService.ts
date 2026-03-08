@@ -78,6 +78,17 @@ export class UpdateService {
         currentVersion,
       };
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      // Silently swallow "no release found" errors — expected before first release is published
+      if (
+        message.includes('Could not fetch') ||
+        message.includes('release JSON') ||
+        message.includes('404') ||
+        message.includes('No releases')
+      ) {
+        console.info('[UpdateService] No releases found yet — skipping update check.');
+        return { available: false, currentVersion: await getVersion() };
+      }
       console.error('Failed to check for updates:', error);
       throw error;
     } finally {

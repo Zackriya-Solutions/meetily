@@ -263,11 +263,15 @@ export function useCopyOperations({
       await invokeTauri('write_bytes_to_file', { path: filePath, data: Array.from(bytes) });
       toast.success('PDF document exported successfully');
 
-      // Track export analytics
-      await Analytics.trackButtonClick('export_pdf', 'meeting_details');
+      await Analytics.trackIntegrationUsed('pdf_export', true, {
+        content_length: summaryMarkdown.length.toString(),
+      });
     } catch (error) {
       console.error('Failed to export PDF document:', error);
       toast.error('Failed to export PDF document');
+      await Analytics.trackIntegrationUsed('pdf_export', false, {
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }, [meeting, meetingTitle, aiSummary, blockNoteSummaryRef]);
 
@@ -319,11 +323,16 @@ export function useCopyOperations({
         description: 'Document created successfully.',
         action: docUrl ? { label: 'Open', onClick: () => invokeTauri('open_url', { url: docUrl }) } : undefined,
       });
-      await Analytics.trackButtonClick('export_outline', 'meeting_details');
+      await Analytics.trackIntegrationUsed('outline', true, {
+        content_length: fullMarkdown.length.toString(),
+      });
     } catch (error: any) {
       toast.dismiss(loadingToastId);
       console.error('Failed to export to Outline:', error);
       toast.error(`Failed to export to Outline: ${error?.message ?? error}`);
+      await Analytics.trackIntegrationUsed('outline', false, {
+        error: error?.message ?? String(error),
+      });
     }
   }, [meeting, meetingTitle, aiSummary, blockNoteSummaryRef]);
 

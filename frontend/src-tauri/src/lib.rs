@@ -506,6 +506,7 @@ pub fn run() {
             analytics::commands::track_daily_active_user,
             analytics::commands::track_user_first_launch,
             analytics::commands::is_analytics_session_active,
+            analytics::commands::capture_exception,
             analytics::commands::track_summary_generation_started,
             analytics::commands::track_summary_generation_completed,
             analytics::commands::track_summary_regenerated,

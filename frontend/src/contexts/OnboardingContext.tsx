@@ -4,6 +4,7 @@ import React, { createContext, useContext, useState, useEffect, useRef, useCallb
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { PermissionStatus, OnboardingPermissions } from '@/types/onboarding';
+import Analytics from '@/lib/analytics';
 
 const PARAKEET_MODEL = 'parakeet-tdt-0.6b-v3-int8';
 
@@ -411,6 +412,7 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
       });
       setCompleted(true);
       console.log('[OnboardingContext] Onboarding completed with model:', selectedSummaryModel);
+      Analytics.trackOnboardingCompleted(selectedSummaryModel).catch(console.error);
 
       // Reset the flag so subsequent state updates can be saved
       isCompletingRef.current = false;

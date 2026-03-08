@@ -91,7 +91,14 @@ export function useModelConfiguration({ serverAddress }: UseModelConfigurationPr
       const { listen } = await import('@tauri-apps/api/event');
       const unlisten = await listen<ModelConfig>('model-config-updated', (event) => {
         console.log('Meeting details received model-config-updated event:', event.payload);
-        setModelConfig(event.payload);
+        setModelConfig(prev => {
+          const next = event.payload;
+          if (prev.provider !== next.provider || prev.model !== next.model) {
+            // Fire-and-forget — we're inside a sync setState callback
+            Analytics.trackModelChanged(prev.provider, prev.model, next.provider, next.model);
+          }
+          return next;
+        });
       });
 
       return unlisten;
@@ -118,7 +125,7 @@ export function useModelConfiguration({ serverAddress }: UseModelConfigurationPr
       };
       console.log('Saving model config with payload:', payload);
 
-      // Track model configuration change
+      // Track model configuration change — never include API keys
       if (updatedConfig && (
         updatedConfig.provider !== modelConfig.provider ||
         updatedConfig.model !== modelConfig.model
@@ -147,8 +154,6 @@ export function useModelConfiguration({ serverAddress }: UseModelConfigurationPr
       await emit('model-config-updated', payload);
 
       toast.success("Summary settings Saved successfully");
-
-      await Analytics.trackSettingsChanged('model_config', `${payload.provider}_${payload.model}`);
     } catch (error) {
       console.error('Failed to save model config:', error);
       toast.error("Failed to save summary settings", { description: String(error) });

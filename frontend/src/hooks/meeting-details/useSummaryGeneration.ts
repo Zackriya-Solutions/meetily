@@ -248,6 +248,9 @@ export function useSummaryGeneration({
               modelConfig.model,
               true
             );
+            if (isRegeneration) {
+              await Analytics.trackSummaryRegenerated(modelConfig.provider, modelConfig.model);
+            }
             return;
           }
 
@@ -318,6 +321,9 @@ export function useSummaryGeneration({
             modelConfig.model,
             true
           );
+          if (isRegeneration) {
+            await Analytics.trackSummaryRegenerated(modelConfig.provider, modelConfig.model);
+          }
 
           if (meetingName && onMeetingUpdated) {
             await onMeetingUpdated();

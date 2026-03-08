@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
 import { ModelConfig, ModelSettingsModal } from '@/components/ModelSettingsModal';
+import Analytics from '@/lib/analytics';
 import { Switch } from './ui/switch';
 import { useConfig } from '@/contexts/ConfigContext';
 
@@ -100,6 +101,16 @@ export function SummaryModelSettings({ refetchTrigger }: SummaryModelSettingsPro
   // Save handler
   const handleSaveModelConfig = async (config: ModelConfig) => {
     try {
+      // Track model change — never include API keys
+      if (config.provider !== modelConfig.provider || config.model !== modelConfig.model) {
+        await Analytics.trackModelChanged(
+          modelConfig.provider,
+          modelConfig.model,
+          config.provider,
+          config.model
+        );
+      }
+
       await invoke('api_save_model_config', {
         provider: config.provider,
         model: config.model,

@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { updateService, UpdateInfo } from '@/services/updateService';
 import { showUpdateNotification } from '@/components/UpdateNotification';
+import Analytics from '@/lib/analytics';
 
 interface UseUpdateCheckOptions {
   checkOnMount?: boolean;
@@ -34,6 +35,7 @@ export function useUpdateCheck(options: UseUpdateCheckOptions = {}) {
       setUpdateInfo(info);
 
       if (info.available) {
+        Analytics.trackUpdateAvailable(info.version || 'unknown', info.currentVersion).catch(console.error);
         if (onUpdateAvailableRef.current) {
           onUpdateAvailableRef.current(info);
         } else if (showNotification) {
@@ -41,7 +43,10 @@ export function useUpdateCheck(options: UseUpdateCheckOptions = {}) {
         }
       }
     } catch (error) {
-      console.error('Failed to check for updates:', error);
+      const message = error instanceof Error ? error.message : String(error);
+      if (!message.includes('Could not fetch') && !message.includes('release JSON')) {
+        console.error('Failed to check for updates:', error);
+      }
     } finally {
       setIsChecking(false);
     }

@@ -1,4 +1,4 @@
-use posthog_rs::{Client, Event};
+use posthog_rs::{client, Client, ClientOptionsBuilder, Event};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -17,7 +17,7 @@ impl Default for AnalyticsConfig {
     fn default() -> Self {
         Self {
             api_key: String::new(),
-            host: Some("https://us.i.posthog.com".to_string()),
+            host: Some("https://t.clearminutes.app".to_string()),
             enabled: false,
         }
     }
@@ -57,7 +57,13 @@ pub struct AnalyticsClient {
 impl AnalyticsClient {
     pub async fn new(config: AnalyticsConfig) -> Self {
         let client = if config.enabled && !config.api_key.is_empty() {
-            Some(Arc::new(posthog_rs::client(config.api_key.as_str()).await))
+            let host = config.host.clone().unwrap_or_else(|| "https://t.clearminutes.app".to_string());
+            let options = ClientOptionsBuilder::default()
+                .api_key(config.api_key.clone())
+                .host(host)
+                .build()
+                .expect("Failed to build PostHog client options");
+            Some(Arc::new(client(options).await))
         } else {
             None
         };
@@ -90,8 +96,10 @@ impl AnalyticsClient {
             }
         }
         
-        if let Err(e) = client.capture(event).await {
-            eprintln!("Failed to identify user: {}", e);
+        log::debug!("[Analytics] Sending $identify for user_id={}", user_id);
+        match client.capture(event).await {
+            Ok(_) => log::debug!("[Analytics] $identify sent successfully"),
+            Err(e) => log::error!("[Analytics] Failed to identify user: {}", e),
         }
         
         Ok(())
@@ -100,7 +108,10 @@ impl AnalyticsClient {
     pub async fn track_event(&self, event_name: &str, properties: Option<HashMap<String, String>>) -> Result<(), String> {
         let client = match &self.client {
             Some(client) => Arc::clone(client),
-            None => return Ok(()),
+            None => {
+                log::debug!("[Analytics] Client not initialised, skipping event '{}'", event_name);
+                return Ok(());
+            }
         };
 
         let user_id = match self.user_id.lock().await.clone() {
@@ -127,14 +138,16 @@ impl AnalyticsClient {
         let mut event = Event::new(&event_name, &user_id);
         
         // Add event properties
-        for (key, value) in properties {
-            if let Err(e) = event.insert_prop(&key, value) {
+        log::debug!("[Analytics] Sending event='{}' user_id={} props={:?}", event_name, user_id, properties);
+
+        for (key, value) in &properties {
+            if let Err(e) = event.insert_prop(key, value) {
                 log::warn!("Failed to add property {}: {}", key, e);
             }
         }
-        
-        if let Err(e) = client.capture(event).await {
-            log::warn!("Failed to track event {}: {}", event_name, e);
+        match client.capture(event).await {
+            Ok(_) => log::debug!("[Analytics] Event '{}' sent successfully", event_name),
+            Err(e) => log::error!("[Analytics] Failed to send event '{}': {}", event_name, e),
         }
         
         Ok(())
@@ -395,6 +408,71 @@ impl AnalyticsClient {
 
     pub fn is_enabled(&self) -> bool {
         self.config.enabled && self.client.is_some()
+    }
+
+    /// Sends a `$exception` event in the shape PostHog's Error Tracking UI expects.
+    /// See: https://posthog.com/docs/error-tracking/installation/manual
+    pub async fn capture_exception(
+        &self,
+        exception_type: &str,
+        message: &str,
+        handled: bool,
+        context: Option<HashMap<String, String>>,
+    ) -> Result<(), String> {
+        let client = match &self.client {
+            Some(client) => Arc::clone(client),
+            None => return Ok(()),
+        };
+
+        let user_id = match self.user_id.lock().await.clone() {
+            Some(id) => id,
+            None => {
+                log::warn!("capture_exception called before user identification — skipping");
+                return Ok(());
+            }
+        };
+
+        let exception_list = serde_json::json!([{
+            "type": exception_type,
+            "value": message,
+            "mechanism": {
+                "handled": handled,
+                "synthetic": false
+            }
+        }]);
+
+        let mut event = Event::new("$exception", &user_id);
+
+        if let Err(e) = event.insert_prop("$exception_list", exception_list) {
+            log::warn!("Failed to set $exception_list: {}", e);
+        }
+
+        // Add app version and any extra context
+        if let Err(e) = event.insert_prop("app_version", env!("CARGO_PKG_VERSION")) {
+            log::warn!("Failed to set app_version: {}", e);
+        }
+
+        // Add session ID if active
+        if let Some(session) = self.current_session.lock().await.as_ref() {
+            if let Err(e) = event.insert_prop("$session_id", &session.session_id) {
+                log::warn!("Failed to set $session_id: {}", e);
+            }
+        }
+
+        if let Some(ctx) = context {
+            for (key, value) in &ctx {
+                if let Err(e) = event.insert_prop(key, value) {
+                    log::warn!("Failed to set exception context key {}: {}", key, e);
+                }
+            }
+        }
+
+        match client.capture(event).await {
+            Ok(_) => log::debug!("[Analytics] $exception '{}' sent successfully", exception_type),
+            Err(e) => log::error!("[Analytics] Failed to send $exception '{}': {}", exception_type, e),
+        }
+
+        Ok(())
     }
 
     pub async fn set_user_properties(&self, properties: HashMap<String, String>) -> Result<(), String> {

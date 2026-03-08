@@ -1,5 +1,6 @@
 import React from 'react';
 import { Clock, Users, Calendar, Tag } from 'lucide-react';
+import { NotePageViewTracker } from './NotePageViewTracker';
 
 interface PageProps {
   params: Promise<{
@@ -135,6 +136,7 @@ Quarterly product review session with stakeholders.
 
   return (
     <div className="p-8 max-w-4xl mx-auto">
+      <NotePageViewTracker noteId={id} noteTitle={note.title} />
       <div className="mb-8">
         <h1 className="text-3xl font-bold mb-4">{note.title}</h1>
         

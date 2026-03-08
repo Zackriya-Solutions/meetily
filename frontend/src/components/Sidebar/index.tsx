@@ -187,6 +187,16 @@ const Sidebar: React.FC = () => {
   // Handle model config save
   const handleSaveModelConfig = async (config: ModelConfig) => {
     try {
+      // Track model change — never include API keys
+      if (config.provider !== modelConfig.provider || config.model !== modelConfig.model) {
+        await Analytics.trackModelChanged(
+          modelConfig.provider,
+          modelConfig.model,
+          config.provider,
+          config.model
+        );
+      }
+
       await invoke('api_save_model_config', {
         provider: config.provider,
         model: config.model,
@@ -202,9 +212,6 @@ const Sidebar: React.FC = () => {
       // Emit event to sync other components
       const { emit } = await import('@tauri-apps/api/event');
       await emit('model-config-updated', config);
-
-      // Track settings change
-      await Analytics.trackSettingsChanged('model_config', `${config.provider}_${config.model}`);
     } catch (error) {
       console.error('Error saving model config:', error);
       setSettingsSaveSuccess(false);

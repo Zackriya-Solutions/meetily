@@ -13,6 +13,7 @@ import { updateService, UpdateInfo, UpdateProgress } from '@/services/updateServ
 import { check, Update } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { toast } from 'sonner';
+import Analytics from '@/lib/analytics';
 
 interface UpdateDialogProps {
   open: boolean;
@@ -81,6 +82,8 @@ export function UpdateDialog({ open, onOpenChange, updateInfo }: UpdateDialogPro
     setError(null);
     setProgress({ downloaded: 0, total: 0, percentage: 0 });
 
+    Analytics.trackUpdateDownloadStarted(updateInfo?.version || 'unknown').catch(console.error);
+
     try {
       let downloaded = 0;
       let contentLength = 0;
@@ -130,6 +133,9 @@ export function UpdateDialog({ open, onOpenChange, updateInfo }: UpdateDialogPro
 
       // Close dialog before relaunch
       handleOpenChange(false);
+
+      // Track before relaunching (fire-and-forget)
+      await Analytics.trackUpdateInstalled(updateInfo?.version || 'unknown').catch(console.error);
 
       // Relaunch the app
       await relaunch();

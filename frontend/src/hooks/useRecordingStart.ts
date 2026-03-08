@@ -121,7 +121,6 @@ export function useRecordingStart(
       setIsRecording(true);
       clearTranscripts();
       setIsMeetingActive(true);
-      Analytics.trackButtonClick('start_recording', 'home_page');
 
       await showRecordingNotification();
     } catch (error) {
@@ -191,7 +190,6 @@ export function useRecordingStart(
             setIsRecording(true);
             clearTranscripts();
             setIsMeetingActive(true);
-            Analytics.trackButtonClick('start_recording', 'sidebar_auto');
 
             // Show recording notification if enabled
             await showRecordingNotification();
@@ -282,7 +280,6 @@ export function useRecordingStart(
         setIsRecording(true);
         clearTranscripts();
         setIsMeetingActive(true);
-        Analytics.trackButtonClick('start_recording', 'sidebar_direct');
 
         // Show recording notification if enabled
         await showRecordingNotification();
