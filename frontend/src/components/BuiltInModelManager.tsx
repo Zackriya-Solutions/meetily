@@ -8,6 +8,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { cn } from '@/lib/utils';
 import { Download, RefreshCw, BadgeAlert, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
+import Analytics from '@/lib/analytics';
 
 interface ModelInfo {
   name: string;
@@ -122,6 +123,11 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
           // Refresh models list
           fetchModels();
           toast.success(`Model ${model} downloaded successfully`);
+          Analytics.track('model_download_completed', {
+            model_name: model,
+            model_type: 'builtin-ai',
+            success: 'true',
+          });
         }
 
         // Handle cancelled status
@@ -179,6 +185,11 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
 
           // Don't show error toast here - DownloadProgressToast already handles it
           // Don't call fetchModels() - it would overwrite error status with not_downloaded
+          Analytics.track('model_download_completed', {
+            model_name: model,
+            model_type: 'builtin-ai',
+            success: 'false',
+          });
         }
       });
     };
@@ -196,6 +207,11 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
     try {
       // Optimistically add to downloadingModels for immediate UI feedback
       setDownloadingModels((prev) => new Set([...prev, modelName]));
+
+      await Analytics.track('model_download_started', {
+        model_name: modelName,
+        model_type: 'builtin-ai',
+      });
 
       await invoke('builtin_ai_download_model', { modelName });
     } catch (error) {

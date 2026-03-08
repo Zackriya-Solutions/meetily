@@ -222,8 +222,9 @@ export function RetranscribeDialog({
       const languageToSend = isParakeetModel ? null : selectedLang === 'auto' ? null : selectedLang;
       await Analytics.track('enhance_transcript_started', {
         language: isParakeetModel ? 'auto' : (selectedLang === 'auto' ? 'auto' : selectedLang),
-        model_provider: selectedModelDetails?.provider || '',
-        model_name: selectedModelDetails?.name || ''
+        model_provider: selectedModelDetails?.provider  '',
+        model_name: selectedModelDetails?.name  '',
+        diarize: (diarizationAvailable ? diarize : false).toString(),
       });
 
       await invoke('start_retranscription_command', {

@@ -7,6 +7,7 @@ import { Download, CheckCircle2, Loader2, AlertCircle, Users } from 'lucide-reac
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { toast } from 'sonner';
+import Analytics from '@/lib/analytics';
 
 interface DiarizationModelStatus {
   segmentation_available: boolean;
@@ -92,6 +93,11 @@ export function DiarizationSettings() {
           both_available: modelType === 'segmentation' ? prev.embedding_available : prev.segmentation_available,
         }));
         toast.success(`Speaker ${modelType === 'segmentation' ? 'segmentation' : 'embedding'} model downloaded`);
+        Analytics.track('model_download_completed', {
+          model_name: modelType,
+          model_type: 'diarization',
+          success: 'true',
+        });
         loadStatus();
       });
       unlisteners.push(unlistenComplete);
@@ -105,10 +111,20 @@ export function DiarizationSettings() {
     const setState = modelType === 'segmentation' ? setSegState : setEmbState;
     setState(prev => ({ ...prev, status: 'downloading', progress: 0, error: undefined }));
     try {
+      await Analytics.track('model_download_started', {
+        model_name: modelType,
+        model_type: 'diarization',
+      });
       await invoke('diarization_download_model', { modelType });
     } catch (err: any) {
       setState(prev => ({ ...prev, status: 'error', error: String(err) }));
       toast.error(`Failed to download ${modelType} model`, { description: String(err) });
+      Analytics.track('model_download_completed', {
+        model_name: modelType,
+        model_type: 'diarization',
+        success: 'false',
+        error: String(err),
+      });
     }
   };
 

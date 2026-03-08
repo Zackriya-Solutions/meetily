@@ -4,6 +4,7 @@ import { createContext, useContext, useState, useCallback, useEffect, useMemo, R
 import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
 import { NameSuggestion, ResolvedSpeaker, SpeakerProfile } from '@/types';
+import Analytics from '@/lib/analytics';
 
 export const PRESET_COLORS = [
   '#6366f1', '#f59e0b', '#10b981', '#ef4444', '#3b82f6',
@@ -115,6 +116,11 @@ export function SpeakerProvider({ children }: { children: ReactNode }) {
       // Reload both profiles and resolved speakers so all consumers update
       await Promise.all([loadProfiles(), loadResolved(meetingId)]);
 
+      await Analytics.track('speaker_name_modified', {
+        is_self: isSelfVal.toString(),
+        is_new_profile: (!existingProfileId).toString(),
+      });
+
       toast.success(`Speaker named "${name}"`);
     } catch (e) {
       toast.error('Failed to save speaker name');
@@ -127,6 +133,9 @@ export function SpeakerProvider({ children }: { children: ReactNode }) {
     try {
       const s = await invoke<NameSuggestion[]>('detect_speaker_names', { meetingId });
       setSuggestions(s);
+      await Analytics.track('speaker_names_auto_detected', {
+        suggestions_count: s.length.toString(),
+      });
       return s;
     } catch (e) {
       console.error('Name detection failed', e);
