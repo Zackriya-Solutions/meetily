@@ -2,9 +2,14 @@
 mod ffmpeg;
 
 fn main() {
-    // Rebuild if PostHog analytics credentials change
-    println!("cargo:rerun-if-env-changed=NEXT_PUBLIC_POSTHOG_KEY");
-    println!("cargo:rerun-if-env-changed=NEXT_PUBLIC_POSTHOG_HOST");
+    // Inject PostHog analytics credentials from environment / .env file.
+    // Priority: real env var > .env file > built-in fallback.
+    inject_posthog_env();
+
+    // Rebuild when any of these change
+    println!("cargo:rerun-if-env-changed=POSTHOG_API_KEY");
+    println!("cargo:rerun-if-env-changed=POSTHOG_PROXY_URL");
+    println!("cargo:rerun-if-changed=../.env");
 
     // GPU Acceleration Detection and Build Guidance
     detect_and_report_gpu_capabilities();
@@ -94,3 +99,43 @@ fn detect_and_report_gpu_capabilities() {
         println!("cargo:warning=📚 See README.md for GPU/BLAS setup instructions");
     }
 }
+
+/// Read POSTHOG_API_KEY and POSTHOG_PROXY_URL from the environment or the
+/// `frontend/.env` file and expose them to the Rust crate via `env!()`.
+fn inject_posthog_env() {
+    // Parse the .env file that lives one level up from src-tauri (i.e. frontend/.env).
+    // We do this manually to avoid a build-time dependency on a dotenv crate.
+    let env_file = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent() // frontend/
+        .map(|p| p.join(".env"));
+
+    let mut dotenv_vars: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    if let Some(path) = env_file {
+        if let Ok(contents) = std::fs::read_to_string(&path) {
+            for line in contents.lines() {
+                let line = line.trim();
+                if line.is_empty() || line.starts_with('#') {
+                    continue;
+                }
+                if let Some((key, val)) = line.split_once('=') {
+                    dotenv_vars.insert(key.trim().to_string(), val.trim().to_string());
+                }
+            }
+        }
+    }
+
+    let resolve = |name: &str, fallback: &str| -> String {
+        std::env::var(name)
+            .ok()
+            .filter(|v| !v.is_empty())
+            .or_else(|| dotenv_vars.get(name).cloned())
+            .unwrap_or_else(|| fallback.to_string())
+    };
+
+    let api_key = resolve("POSTHOG_API_KEY", "");
+    let proxy_url = resolve("POSTHOG_PROXY_URL", "https://t.clearminutes.app");
+
+    println!("cargo:rustc-env=POSTHOG_API_KEY={}", api_key);
+    println!("cargo:rustc-env=POSTHOG_PROXY_URL={}", proxy_url);
+}
+

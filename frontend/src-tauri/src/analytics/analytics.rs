@@ -17,7 +17,7 @@ impl Default for AnalyticsConfig {
     fn default() -> Self {
         Self {
             api_key: String::new(),
-            host: Some("https://t.clearminutes.app".to_string()),
+            host: Some(env!("POSTHOG_PROXY_URL").to_string()),
             enabled: false,
         }
     }
@@ -57,7 +57,7 @@ pub struct AnalyticsClient {
 impl AnalyticsClient {
     pub async fn new(config: AnalyticsConfig) -> Self {
         let client = if config.enabled && !config.api_key.is_empty() {
-            let host = config.host.clone().unwrap_or_else(|| "https://t.clearminutes.app".to_string());
+            let host = config.host.clone().unwrap_or_else(|| env!("POSTHOG_PROXY_URL").to_string());
             let options = ClientOptionsBuilder::default()
                 .api_key(config.api_key.clone())
                 .host(host)

@@ -38,11 +38,18 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
   const isUserAtBottomRef = useRef<boolean>(true);
   const transcriptContainerRef = useRef<HTMLDivElement>(null);
   const finalFlushRef = useRef<(() => void) | null>(null);
+  // Ref mirror of currentMeetingId so async listeners always see the latest value
+  // without being in the dependency array (which would re-register them on every meeting).
+  const currentMeetingIdRef = useRef<string | null>(null);
 
-  // Keep ref updated with current transcripts
+  // Keep refs updated with current state values
   useEffect(() => {
     transcriptsRef.current = transcripts;
   }, [transcripts]);
+
+  useEffect(() => {
+    currentMeetingIdRef.current = currentMeetingId;
+  }, [currentMeetingId]);
 
   // Smart auto-scroll: Track user scroll position
   useEffect(() => {
@@ -146,9 +153,12 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
         // Listen for recording-stopped event
         unlistenRecordingStopped = await recordingService.onRecordingStopped(async (payload) => {
           try {
-            if (currentMeetingId) {
+            // Use ref so this callback always sees the latest meeting ID
+            // without needing currentMeetingId in the effect's dependency array.
+            const meetingId = currentMeetingIdRef.current;
+            if (meetingId) {
               // Update folder path in IndexedDB
-              const metadata = await indexedDBService.getMeetingMetadata(currentMeetingId);
+              const metadata = await indexedDBService.getMeetingMetadata(meetingId);
 
               if (metadata && payload.folder_path) {
                 metadata.folderPath = payload.folder_path;
@@ -176,7 +186,7 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
         console.log('🧹 Recording stopped listener cleaned up');
       }
     };
-  }, [currentMeetingId]);
+  }, []); // Only register once — currentMeetingId is accessed via ref inside callbacks
 
   // Main transcript buffering logic with sequence_id ordering
   useEffect(() => {
@@ -323,9 +333,10 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
           transcriptBuffer.set(update.sequence_id, newTranscript);
           console.log(`✅ MAIN LISTENER: Buffered transcript with sequence_id ${update.sequence_id}. Buffer size: ${transcriptBuffer.size}, Last processed: ${lastProcessedSequence}`);
 
-          // Save to IndexedDB (non-blocking)
-          if (currentMeetingId) {
-            indexedDBService.saveTranscript(currentMeetingId, update)
+          // Save to IndexedDB (non-blocking). Use ref so this closure always
+          // sees the latest meetingId without the effect needing to re-register.
+          if (currentMeetingIdRef.current) {
+            indexedDBService.saveTranscript(currentMeetingIdRef.current, update)
               .catch(err => console.warn('IndexedDB save failed:', err));
           }
 
@@ -358,7 +369,7 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
         console.log('🧹 CLEANUP: MAIN transcript listener cleaned up');
       }
     };
-  }, [currentMeetingId]); // Add currentMeetingId dependency
+  }, []); // Only register once — currentMeetingId is accessed via ref inside the listener
 
   // Sync transcript history and meeting name from backend on reload
   // This fixes the issue where reloading during active recording causes state desync

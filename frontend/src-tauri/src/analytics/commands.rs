@@ -9,8 +9,8 @@ static ANALYTICS_CLIENT: std::sync::Mutex<Option<Arc<AnalyticsClient>>> = std::s
 #[command]
 pub async fn init_analytics() -> Result<(), String> {
     let config = AnalyticsConfig {
-        api_key: "phc_C0jjok4wryj2U4Sh8A2YamCegW3bQXRt495Fj5cPh5d".to_string(),
-        host: Some("https://t.clearminutes.app".to_string()),
+        api_key: env!("POSTHOG_API_KEY").to_string(),
+        host: Some(env!("POSTHOG_PROXY_URL").to_string()),
         enabled: true,
     };
     
@@ -419,8 +419,8 @@ pub fn capture_exception_bg(
             // Uses an anonymous distinct_id so the event still appears in PostHog
             log::warn!("[Analytics] capture_exception_bg: no client, using fallback for '{}'", exception_type);
             let config = crate::analytics::AnalyticsConfig {
-                api_key: "phc_C0jjok4wryj2U4Sh8A2YamCegW3bQXRt495Fj5cPh5d".to_string(),
-                host: Some("https://t.clearminutes.app".to_string()),
+                api_key: env!("POSTHOG_API_KEY").to_string(),
+                host: Some(env!("POSTHOG_PROXY_URL").to_string()),
                 enabled: true,
             };
             let fallback = crate::analytics::AnalyticsClient::new(config).await;
