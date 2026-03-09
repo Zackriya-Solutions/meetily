@@ -4,7 +4,7 @@
  */
 
 import { Preferences } from '@capacitor/preferences'
-import { UserProfile, AuthResponse } from '@/types'
+import { UserProfile, AuthResponse, DeviceSummary } from '@/types'
 
 // Cloud API URL — mobile always talks directly to the cloud
 const CLOUD_API_URL = process.env.NEXT_PUBLIC_CLOUD_API_URL || ''
@@ -266,4 +266,58 @@ export async function resendVerification(email: string): Promise<void> {
     const err = await res.json().catch(() => ({ detail: 'Request failed' }))
     throw new Error(err.detail || 'Request failed')
   }
+}
+
+// ── Change Password ──
+
+export async function changePassword(currentPassword: string, newPassword: string): Promise<void> {
+  const res = await authFetch('/api/auth/change-password', {
+    method: 'POST',
+    body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Failed to change password' }))
+    throw new Error(err.detail || 'Failed to change password')
+  }
+}
+
+// ── Profile Update ──
+
+export async function updateProfile(displayName: string): Promise<void> {
+  const res = await authFetch('/api/auth/profile', {
+    method: 'PUT',
+    body: JSON.stringify({ display_name: displayName }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Failed to update profile' }))
+    throw new Error(err.detail || 'Failed to update profile')
+  }
+}
+
+// ── Account Management ──
+
+export async function deactivateAccount(): Promise<void> {
+  const res = await authFetch('/api/auth/deactivate', { method: 'POST' })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Failed to deactivate account' }))
+    throw new Error(err.detail || 'Failed to deactivate account')
+  }
+  await clearTokens()
+}
+
+export async function deleteAccount(): Promise<void> {
+  const res = await authFetch('/api/auth/account', { method: 'DELETE' })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Failed to delete account' }))
+    throw new Error(err.detail || 'Failed to delete account')
+  }
+  await clearTokens()
+}
+
+// ── Device Management ──
+
+export async function getDevices(): Promise<DeviceSummary[]> {
+  const res = await authFetch('/api/auth/devices')
+  if (!res.ok) throw new Error('Failed to get devices')
+  return res.json()
 }
