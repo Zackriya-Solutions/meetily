@@ -22,6 +22,7 @@ class UsageEvent(BaseModel):
     value: float
     metadata: Optional[dict] = None
     session_id: Optional[str] = None
+    client_event_id: Optional[str] = None  # For deduplication on retry
     timestamp: str  # ISO format, client-generated
 
 

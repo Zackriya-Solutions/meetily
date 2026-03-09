@@ -29,35 +29,100 @@ def get_mongo_client() -> AsyncIOMotorClient:
     return _client
 
 
-def get_templates_collection():
-    """Get the templates collection from the iqcapture database.
-
-    Database name from MONGODB_DATABASE env var (default: iqcapture).
-    """
+def _get_db():
     client = get_mongo_client()
     db_name = os.getenv("MONGODB_DATABASE", "iqcapture")
-    return client[db_name]["templates"]
+    return client[db_name]
+
+
+def get_templates_collection():
+    """Get the templates collection from the iqcapture database."""
+    return _get_db()["templates"]
 
 
 def get_users_collection():
     """Get the users collection for authentication."""
-    client = get_mongo_client()
-    db_name = os.getenv("MONGODB_DATABASE", "iqcapture")
-    return client[db_name]["users"]
+    return _get_db()["users"]
 
 
 def get_usage_events_collection():
     """Get the usage_events collection for raw event storage."""
-    client = get_mongo_client()
-    db_name = os.getenv("MONGODB_DATABASE", "iqcapture")
-    return client[db_name]["usage_events"]
+    return _get_db()["usage_events"]
 
 
 def get_usage_summaries_collection():
     """Get the usage_summaries collection for pre-aggregated rollups."""
-    client = get_mongo_client()
-    db_name = os.getenv("MONGODB_DATABASE", "iqcapture")
-    return client[db_name]["usage_summaries"]
+    return _get_db()["usage_summaries"]
+
+
+def get_password_resets_collection():
+    """Get the password_resets collection for reset code storage."""
+    return _get_db()["password_resets"]
+
+
+def get_login_attempts_collection():
+    """Get the login_attempts collection for rate limiting."""
+    return _get_db()["login_attempts"]
+
+
+def get_token_families_collection():
+    """Get the token_families collection for refresh token revocation."""
+    return _get_db()["token_families"]
+
+
+def get_email_verifications_collection():
+    """Get the email_verifications collection."""
+    return _get_db()["email_verifications"]
+
+
+def get_audit_log_collection():
+    """Get the audit_log collection for structured auth event logging."""
+    return _get_db()["audit_log"]
+
+
+async def ensure_indexes():
+    """Create all required indexes. Call once at startup in cloud mode."""
+    db = _get_db()
+
+    # users — unique email
+    await db["users"].create_index("email", unique=True)
+
+    # password_resets — TTL auto-cleanup + rate limit query
+    await db["password_resets"].create_index("expires_at", expireAfterSeconds=0)
+    await db["password_resets"].create_index([("email", 1), ("created_at", -1)])
+
+    # email_verifications — TTL auto-cleanup
+    await db["email_verifications"].create_index("expires_at", expireAfterSeconds=0)
+    await db["email_verifications"].create_index([("email", 1), ("created_at", -1)])
+
+    # login_attempts — TTL auto-cleanup (1 hour) + query
+    await db["login_attempts"].create_index("attempted_at", expireAfterSeconds=3600)
+    await db["login_attempts"].create_index([("email", 1), ("attempted_at", -1)])
+
+    # token_families — lookup + user query
+    await db["token_families"].create_index("family_id", unique=True)
+    await db["token_families"].create_index("user_id")
+
+    # usage_events — query + aggregation + deduplication
+    await db["usage_events"].create_index([("user_id", 1), ("received_at", -1)])
+    await db["usage_events"].create_index([("user_id", 1), ("aggregated", 1)])
+    await db["usage_events"].create_index(
+        [("user_id", 1), ("device_id", 1), ("client_event_id", 1)],
+        unique=True,
+        sparse=True,
+    )
+
+    # usage_summaries — compound unique
+    await db["usage_summaries"].create_index(
+        [("user_id", 1), ("device_id", 1), ("period_type", 1), ("period_start", 1)],
+        unique=True,
+    )
+
+    # audit_log — query by user and event type
+    await db["audit_log"].create_index([("user_id", 1), ("timestamp", -1)])
+    await db["audit_log"].create_index("event_type")
+
+    logger.info("MongoDB indexes ensured")
 
 
 def get_meetings_collection():

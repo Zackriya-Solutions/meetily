@@ -12,4 +12,7 @@ motor==3.6.0
 argon2-cffi==23.1.0
 PyJWT==2.9.0
 deepgram-sdk==3.9.0
+sendgrid==6.11.0
+pytest==8.3.4
+pytest-asyncio==0.24.0
 httpx==0.28.1

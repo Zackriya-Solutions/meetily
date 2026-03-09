@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pymongo.errors import BulkWriteError
 
 from mongodb import get_usage_events_collection, get_usage_summaries_collection
 from auth_middleware import get_current_user
@@ -32,23 +33,34 @@ async def ingest_events(
     now = datetime.now(timezone.utc)
     docs = []
     for event in req.events:
-        docs.append(
-            {
-                "user_id": user_id,
-                "device_id": req.device_id,
-                "event_type": event.event_type.value,
-                "value": event.value,
-                "metadata": event.metadata or {},
-                "session_id": event.session_id,
-                "timestamp": event.timestamp,
-                "received_at": now,
-            }
-        )
+        doc = {
+            "user_id": user_id,
+            "device_id": req.device_id,
+            "event_type": event.event_type.value,
+            "value": event.value,
+            "metadata": event.metadata or {},
+            "session_id": event.session_id,
+            "timestamp": event.timestamp,
+            "received_at": now,
+        }
+        if event.client_event_id:
+            doc["client_event_id"] = event.client_event_id
+        docs.append(doc)
 
+    inserted = 0
     if docs:
-        await col.insert_many(docs)
+        try:
+            result = await col.insert_many(docs, ordered=False)
+            inserted = len(result.inserted_ids)
+        except BulkWriteError as bwe:
+            inserted = bwe.details.get("nInserted", 0)
+            dup_count = len(docs) - inserted
+            if dup_count > 0:
+                logger.info(
+                    f"Skipped {dup_count} duplicate events for user {user_id}"
+                )
         logger.info(
-            f"Ingested {len(docs)} usage events for user {user_id} "
+            f"Ingested {inserted} usage events for user {user_id} "
             f"device {req.device_id}"
         )
 
@@ -58,7 +70,7 @@ async def ingest_events(
     except Exception as e:
         logger.warning(f"Aggregation failed (non-fatal): {e}")
 
-    return {"ingested": len(docs)}
+    return {"ingested": inserted}
 
 
 @router.get("/summary", response_model=UsageSummaryResponse)

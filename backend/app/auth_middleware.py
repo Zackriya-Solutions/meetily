@@ -6,6 +6,7 @@ Provides dependencies for validating access and refresh tokens.
 
 import os
 import logging
+import uuid
 from typing import Optional
 
 import jwt
@@ -93,8 +94,10 @@ def create_access_token(user_id: str, device_id: str) -> str:
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 
-def create_refresh_token(user_id: str, device_id: str) -> str:
-    """Create a long-lived refresh token."""
+def create_refresh_token(
+    user_id: str, device_id: str, family_id: str | None = None
+) -> str:
+    """Create a long-lived refresh token with token family tracking."""
     import datetime
 
     now = datetime.datetime.now(datetime.timezone.utc)
@@ -102,6 +105,7 @@ def create_refresh_token(user_id: str, device_id: str) -> str:
         "sub": user_id,
         "device_id": device_id,
         "type": "refresh",
+        "family_id": family_id or str(uuid.uuid4()),
         "iat": now,
         "exp": now + datetime.timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS),
     }

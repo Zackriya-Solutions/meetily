@@ -48,14 +48,22 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Configure CORS
+# Configure CORS — locked down in cloud mode, permissive in local mode
+if DEPLOYMENT_MODE == "cloud":
+    _cors_raw = os.getenv("CORS_ORIGINS", "")
+    _allow_origins = [o.strip() for o in _cors_raw.split(",") if o.strip()] if _cors_raw else []
+    if not _allow_origins:
+        logger.warning("CORS_ORIGINS not set in cloud mode — no origins will be allowed")
+else:
+    _allow_origins = ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],     # Allow all origins for testing
+    allow_origins=_allow_origins,
     allow_credentials=True,
-    allow_methods=["*"],     # Allow all methods
-    allow_headers=["*"],     # Allow all headers
-    max_age=3600,            # Cache preflight requests for 1 hour
+    allow_methods=["*"],
+    allow_headers=["*"],
+    max_age=3600,
 )
 
 # Config endpoint available in all modes
@@ -83,6 +91,41 @@ else:
     app.include_router(release_router)
     app.include_router(device_router)
     logger.info("Running in LOCAL mode — meeting, transcript, summary routes active")
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Validate configuration and create indexes in cloud mode."""
+    if DEPLOYMENT_MODE != "cloud":
+        return
+
+    # Validate required environment variables
+    required_vars = {
+        "JWT_SECRET": os.getenv("JWT_SECRET", ""),
+        "MONGODB_URI": os.getenv("MONGODB_URI", ""),
+        "SENDGRID_API_KEY": os.getenv("SENDGRID_API_KEY", ""),
+    }
+    missing = [k for k, v in required_vars.items() if not v]
+    if missing:
+        raise RuntimeError(
+            f"FATAL: Missing required env vars for cloud mode: {', '.join(missing)}"
+        )
+
+    # Validate JWT secret strength
+    jwt_secret = required_vars["JWT_SECRET"]
+    if len(jwt_secret) < 32:
+        raise RuntimeError(
+            f"FATAL: JWT_SECRET must be at least 32 characters in cloud mode. "
+            f"Current length: {len(jwt_secret)}"
+        )
+
+    # Verify MongoDB is reachable
+    from mongodb import check_mongo_connection, ensure_indexes
+    if not await check_mongo_connection():
+        raise RuntimeError("FATAL: Cannot connect to MongoDB. Check MONGODB_URI.")
+
+    await ensure_indexes()
+    logger.info("Cloud startup checks passed")
 
 # Global database manager instance for meeting management endpoints
 db = DatabaseManager()
