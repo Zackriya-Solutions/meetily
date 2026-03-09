@@ -6,10 +6,12 @@ import { useAuth } from '@/contexts/AuthContext'
 interface LoginFormProps {
   deviceId: string
   onSwitchToRegister: () => void
+  onForgotPassword: () => void
+  onNeedsVerification: (email: string) => void
   onSuccess: () => void
 }
 
-export function LoginForm({ deviceId, onSwitchToRegister, onSuccess }: LoginFormProps) {
+export function LoginForm({ deviceId, onSwitchToRegister, onForgotPassword, onNeedsVerification, onSuccess }: LoginFormProps) {
   const { login, error, clearError } = useAuth()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -22,7 +24,11 @@ export function LoginForm({ deviceId, onSwitchToRegister, onSuccess }: LoginForm
     try {
       await login(email, password, deviceId)
       onSuccess()
-    } catch {
+    } catch (err: unknown) {
+      // Check if it's an email verification issue
+      if (err instanceof Error && err.message.toLowerCase().includes('not verified')) {
+        onNeedsVerification(email)
+      }
       // error is set in context
     } finally {
       setLoading(false)
@@ -61,6 +67,12 @@ export function LoginForm({ deviceId, onSwitchToRegister, onSuccess }: LoginForm
           className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           placeholder="Min 8 characters"
         />
+      </div>
+
+      <div className="text-right">
+        <button type="button" onClick={onForgotPassword} className="text-xs text-blue-600 hover:underline">
+          Forgot Password?
+        </button>
       </div>
 
       {error && (

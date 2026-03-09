@@ -6,10 +6,11 @@ import { useAuth } from '@/contexts/AuthContext'
 interface RegisterFormProps {
   deviceId: string
   onSwitchToLogin: () => void
+  onNeedsVerification: (email: string) => void
   onSuccess: () => void
 }
 
-export function RegisterForm({ deviceId, onSwitchToLogin, onSuccess }: RegisterFormProps) {
+export function RegisterForm({ deviceId, onSwitchToLogin, onNeedsVerification, onSuccess }: RegisterFormProps) {
   const { register, error, clearError } = useAuth()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -22,7 +23,8 @@ export function RegisterForm({ deviceId, onSwitchToLogin, onSuccess }: RegisterF
     setLoading(true)
     try {
       await register(email, password, deviceId, displayName || undefined)
-      onSuccess()
+      // After registration, redirect to email verification
+      onNeedsVerification(email)
     } catch {
       // error is set in context
     } finally {
@@ -75,6 +77,7 @@ export function RegisterForm({ deviceId, onSwitchToLogin, onSuccess }: RegisterF
           className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           placeholder="Min 8 characters"
         />
+        <p className="text-xs text-gray-400 mt-1">Min 8 chars, 1 uppercase, 1 lowercase, 1 digit</p>
       </div>
 
       {error && (
