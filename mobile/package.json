@@ -10,7 +10,10 @@
     "cap:open:ios": "npx cap open ios",
     "cap:open:android": "npx cap open android",
     "cap:run:ios": "npx cap run ios",
-    "cap:run:android": "npx cap run android"
+    "cap:run:android": "npx cap run android",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "@capacitor/android": "^6.2.0",
@@ -21,8 +24,6 @@
     "@capacitor/local-notifications": "^6.0.0",
     "@capacitor/network": "^6.0.0",
     "@capacitor/preferences": "^6.0.0",
-    "@aparajita/capacitor-biometric-auth": "^8.0.2",
-    "@capacitor-community/secure-storage": "^6.0.0",
     "@capacitor-community/sqlite": "^6.0.0",
     "@heroicons/react": "^2.2.0",
     "@radix-ui/react-dialog": "^1.1.14",
@@ -47,9 +48,15 @@
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
     "@types/uuid": "^10.0.0",
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.1.0",
+    "@testing-library/user-event": "^14.5.2",
+    "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.0.1",
+    "jsdom": "^25.0.1",
     "postcss": "^8",
     "tailwindcss": "^3.4.1",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
   }
 }
