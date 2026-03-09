@@ -1,7 +1,7 @@
 """Tests for usage event ingestion and deduplication."""
 
 import pytest
-from conftest import _register_payload
+from helpers import _register_payload
 
 pytestmark = pytest.mark.asyncio
 

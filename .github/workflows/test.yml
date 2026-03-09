@@ -63,38 +63,10 @@ jobs:
           cache: pip
           cache-dependency-path: backend/requirements.txt
 
-      - name: Wait for MongoDB
-        run: |
-          for i in $(seq 1 10); do
-            if mongosh --eval "db.runCommand({ ping: 1 })" --quiet 2>/dev/null; then
-              echo "MongoDB is ready"
-              break
-            fi
-            echo "Waiting for MongoDB... ($i)"
-            sleep 2
-          done
-
       - name: Install dependencies
         working-directory: backend
         run: pip install -r requirements.txt
 
-      - name: Verify imports
-        working-directory: backend
-        run: |
-          python -c "import sys; sys.path.insert(0, 'app'); import main; print('main.py OK')"
-          python -c "import sys; sys.path.insert(0, 'app'); import transcript_processor; print('transcript_processor OK')"
-
-      - name: Collect tests (dry run)
-        working-directory: backend
-        run: pytest tests/ --collect-only 2>&1 | tee test_output.txt || true
-
       - name: Run tests
         working-directory: backend
-        run: pytest tests/ -v --tb=long -p no:cacheprovider 2>&1 | tee -a test_output.txt; exit ${PIPESTATUS[0]}
-
-      - name: Upload test output
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: backend-test-output
-          path: backend/test_output.txt
+        run: pytest tests/ -v

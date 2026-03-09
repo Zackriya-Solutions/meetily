@@ -1,7 +1,7 @@
 """Tests for authentication endpoints."""
 
 import pytest
-from conftest import _register_payload, _login_payload
+from helpers import _register_payload, _login_payload
 
 pytestmark = pytest.mark.asyncio
 
