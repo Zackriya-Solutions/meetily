@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { TranscriptionStatus } from '@/types'
 import { pollTranscriptionStatus } from '@/services/transcriptionService'
 import { meetingRepository } from '@/services/meetingRepository'
+import { notifyTranscriptionComplete } from '@/services/pushNotifications'
 
 const POLL_INTERVAL_MS = 3000
 
@@ -38,12 +39,14 @@ export function useTranscription(transcriptionId: string | null, meetingId: stri
           stopPolling()
           // Update local meeting with transcript
           if (meetingId && result.transcript) {
+            const meeting = await meetingRepository.getMeeting(meetingId)
             await meetingRepository.updateMeeting(meetingId, {
               transcript_text: result.transcript.text,
               transcript_segments: result.transcript.segments,
               duration_seconds: result.transcript.duration_seconds,
               status: 'completed',
             })
+            notifyTranscriptionComplete(meeting?.title || 'Meeting', meetingId)
           }
         } else if (result.status === 'failed') {
           stopPolling()

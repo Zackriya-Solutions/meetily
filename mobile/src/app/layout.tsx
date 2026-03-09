@@ -3,10 +3,14 @@
 import './globals.css'
 import { Source_Sans_3 } from 'next/font/google'
 import { useEffect } from 'react'
+import { useRouter } from 'next/navigation'
 import { AuthProvider } from '@/contexts/AuthContext'
 import { SyncProvider } from '@/contexts/SyncContext'
 import { RecordingProvider } from '@/contexts/RecordingContext'
 import { initUsageService } from '@/services/usageService'
+import { checkBiometricOnResume } from '@/services/biometricAuth'
+import { initNotifications } from '@/services/pushNotifications'
+import { registerDeepLinkHandler, parseDeepLink } from '@/services/deepLinking'
 import { Toaster } from 'sonner'
 import TabBar from '@/components/TabBar'
 
@@ -21,9 +25,34 @@ export default function RootLayout({
 }: {
   children: React.ReactNode
 }) {
+  const router = useRouter()
+
   useEffect(() => {
     initUsageService()
-  }, [])
+    initNotifications()
+
+    // Deep linking
+    const unregister = registerDeepLinkHandler((path, params) => {
+      const route = parseDeepLink(path, params)
+      if (route) router.push(route)
+    })
+
+    // Biometric lock on app resume
+    const handleVisibilityChange = async () => {
+      if (document.visibilityState === 'visible') {
+        const passed = await checkBiometricOnResume()
+        if (!passed) {
+          // User failed biometric — could show a lock screen
+          // For now, the biometric prompt will re-appear on next resume
+        }
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      unregister()
+    }
+  }, [router])
 
   return (
     <html lang="en">

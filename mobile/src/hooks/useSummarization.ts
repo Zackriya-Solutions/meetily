@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { SummaryStatus } from '@/types'
 import { startSummarization, pollSummaryStatus } from '@/services/summarizationService'
 import { meetingRepository } from '@/services/meetingRepository'
+import { notifySummaryComplete } from '@/services/pushNotifications'
 
 const POLL_INTERVAL_MS = 3000
 
@@ -38,10 +39,12 @@ export function useSummarization(meetingId: string | null) {
           stopPolling()
           // Update local meeting with summary
           if (result.summary) {
+            const meeting = await meetingRepository.getMeeting(meetingId)
             await meetingRepository.updateMeeting(meetingId, {
               summary: result.summary,
               status: 'completed',
             })
+            notifySummaryComplete(meeting?.title || 'Meeting', meetingId)
           }
         } else if (result.status === 'failed') {
           stopPolling()

@@ -3,74 +3,42 @@
  * Replaces Tauri invoke() with Capacitor SecureStorage for token persistence.
  */
 
-import { Preferences } from '@capacitor/preferences'
 import { UserProfile, AuthResponse, DeviceSummary } from '@/types'
+import { secureGet, secureSet, secureRemove } from './secureStorage'
 
-// Cloud API URL — mobile always talks directly to the cloud
-const CLOUD_API_URL = process.env.NEXT_PUBLIC_CLOUD_API_URL || ''
+import { config } from './config'
 
 function getBaseUrl(): string {
-  return CLOUD_API_URL
+  return config.apiUrl
 }
 
-// ── Token storage (Capacitor Preferences — encrypted on device) ──
+// ── Token storage (Secure Storage → Preferences → localStorage) ──
 
 export async function getAccessToken(): Promise<string | null> {
-  try {
-    const { value } = await Preferences.get({ key: 'access_token' })
-    return value
-  } catch {
-    // Fallback for web/dev mode
-    return localStorage.getItem('access_token')
-  }
+  return secureGet('access_token')
 }
 
 export async function getRefreshToken(): Promise<string | null> {
-  try {
-    const { value } = await Preferences.get({ key: 'refresh_token' })
-    return value
-  } catch {
-    return localStorage.getItem('refresh_token')
-  }
+  return secureGet('refresh_token')
 }
 
 export async function saveTokens(accessToken: string, refreshToken: string): Promise<void> {
-  try {
-    await Preferences.set({ key: 'access_token', value: accessToken })
-    await Preferences.set({ key: 'refresh_token', value: refreshToken })
-  } catch {
-    localStorage.setItem('access_token', accessToken)
-    localStorage.setItem('refresh_token', refreshToken)
-  }
+  await secureSet('access_token', accessToken)
+  await secureSet('refresh_token', refreshToken)
 }
 
 export async function clearTokens(): Promise<void> {
-  try {
-    await Preferences.remove({ key: 'access_token' })
-    await Preferences.remove({ key: 'refresh_token' })
-    await Preferences.remove({ key: 'auth_user_id' })
-  } catch {
-    localStorage.removeItem('access_token')
-    localStorage.removeItem('refresh_token')
-    localStorage.removeItem('auth_user_id')
-  }
+  await secureRemove('access_token')
+  await secureRemove('refresh_token')
+  await secureRemove('auth_user_id')
 }
 
 export async function saveAuthUserId(userId: string): Promise<void> {
-  try {
-    await Preferences.set({ key: 'auth_user_id', value: userId })
-  } catch {
-    localStorage.setItem('auth_user_id', userId)
-  }
+  await secureSet('auth_user_id', userId)
 }
 
 export async function getAuthUserId(): Promise<string | null> {
-  try {
-    const { value } = await Preferences.get({ key: 'auth_user_id' })
-    return value
-  } catch {
-    return localStorage.getItem('auth_user_id')
-  }
+  return secureGet('auth_user_id')
 }
 
 // ── Authenticated fetch helper ──

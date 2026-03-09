@@ -6,7 +6,8 @@ import { useAuth } from '@/contexts/AuthContext'
 import { useSync } from '@/contexts/SyncContext'
 import { DeviceSummary } from '@/types'
 import * as authService from '@/services/authService'
-import { LogOut, User, Cloud, HardDrive, Key, Pencil, Trash2, Smartphone, Check, X, ChevronRight } from 'lucide-react'
+import { LogOut, User, Cloud, HardDrive, Key, Pencil, Trash2, Smartphone, Check, X, ChevronRight, Shield } from 'lucide-react'
+import { isBiometricAvailable, isBiometricEnabled, setBiometricEnabled, getBiometricType } from '@/services/biometricAuth'
 
 export default function SettingsScreen() {
   const { user, logout } = useAuth()
@@ -31,6 +32,11 @@ export default function SettingsScreen() {
   const [devices, setDevices] = useState<DeviceSummary[]>(user?.devices || [])
   const [showDevices, setShowDevices] = useState(false)
 
+  // Biometric
+  const [biometricSupported, setBiometricSupported] = useState(false)
+  const [biometricOn, setBiometricOn] = useState(false)
+  const [biometricLabel, setBiometricLabel] = useState('Biometrics')
+
   // Delete account
   const [showDelete, setShowDelete] = useState(false)
   const [deleteConfirm, setDeleteConfirm] = useState('')
@@ -44,6 +50,12 @@ export default function SettingsScreen() {
       authService.getDevices().then(setDevices).catch(() => {})
     }
   }, [showDevices])
+
+  useEffect(() => {
+    isBiometricAvailable().then(setBiometricSupported)
+    isBiometricEnabled().then(setBiometricOn)
+    getBiometricType().then(setBiometricLabel)
+  }, [])
 
   const handleSaveName = async () => {
     setNameSaving(true)
@@ -171,6 +183,25 @@ export default function SettingsScreen() {
             </div>
             <ChevronRight className={`w-4 h-4 text-gray-400 transition-transform ${showPassword ? 'rotate-90' : ''}`} />
           </button>
+
+          {biometricSupported && (
+            <div className="px-4 py-3 flex items-center justify-between border-t border-gray-100">
+              <div className="flex items-center gap-2">
+                <Shield className="w-4 h-4 text-gray-400" />
+                <span className="text-sm text-gray-700">{biometricLabel} Lock</span>
+              </div>
+              <button
+                onClick={async () => {
+                  const newVal = !biometricOn
+                  await setBiometricEnabled(newVal)
+                  setBiometricOn(newVal)
+                }}
+                className={`w-10 h-6 rounded-full transition-colors ${biometricOn ? 'bg-blue-600' : 'bg-gray-300'}`}
+              >
+                <div className={`w-5 h-5 bg-white rounded-full shadow transition-transform ${biometricOn ? 'translate-x-[18px]' : 'translate-x-[2px]'}`} />
+              </button>
+            </div>
+          )}
 
           {showPassword && (
             <form onSubmit={handleChangePassword} className="px-4 pb-3 space-y-3 border-t border-gray-100 pt-3">

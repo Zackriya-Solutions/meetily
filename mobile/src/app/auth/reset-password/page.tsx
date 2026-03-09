@@ -9,8 +9,9 @@ export default function ResetPasswordPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const emailParam = searchParams.get('email') || ''
+  const codeParam = searchParams.get('code') || ''
 
-  const [code, setCode] = useState('')
+  const [code, setCode] = useState(codeParam)
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [error, setError] = useState<string | null>(null)

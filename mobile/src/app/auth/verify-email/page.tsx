@@ -9,8 +9,9 @@ export default function VerifyEmailPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const emailParam = searchParams.get('email') || ''
+  const codeParam = searchParams.get('code') || ''
 
-  const [code, setCode] = useState('')
+  const [code, setCode] = useState(codeParam)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [resendMsg, setResendMsg] = useState<string | null>(null)

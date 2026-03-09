@@ -4,8 +4,7 @@
 
 import { authFetch, getAccessToken } from './authService'
 import { TranscriptionStatus } from '@/types'
-
-const CLOUD_API_URL = process.env.NEXT_PUBLIC_CLOUD_API_URL || ''
+import { config } from './config'
 
 /**
  * Upload audio file for transcription. Returns the transcription job ID.
@@ -28,7 +27,7 @@ export async function uploadForTranscription(
   if (options?.provider) formData.append('provider', options.provider)
   if (options?.language) formData.append('language', options.language)
 
-  const res = await fetch(`${CLOUD_API_URL}/api/transcription/upload`, {
+  const res = await fetch(`${config.apiUrl}/api/transcription/upload`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}` },
     body: formData,

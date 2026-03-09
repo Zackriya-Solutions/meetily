@@ -8,6 +8,7 @@
 import { getDatabase } from './database'
 import { authFetch, getAccessToken } from './authService'
 import { SyncQueueEntry } from '@/types'
+import { config } from './config'
 
 const SYNC_INTERVAL_MS = 60_000 // Sync every 60 seconds when online
 const MAX_RETRIES = 5
@@ -145,8 +146,7 @@ class SyncService {
         formData.append('provider', payload.provider || 'deepgram')
 
         const token = await getAccessToken()
-        const baseUrl = process.env.NEXT_PUBLIC_CLOUD_API_URL || ''
-        const uploadRes = await fetch(`${baseUrl}/api/transcription/upload`, {
+        const uploadRes = await fetch(`${config.apiUrl}/api/transcription/upload`, {
           method: 'POST',
           headers: { Authorization: `Bearer ${token}` },
           body: formData,

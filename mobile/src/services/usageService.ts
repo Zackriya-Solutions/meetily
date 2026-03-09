@@ -7,12 +7,14 @@
 
 import { authFetch, getAccessToken } from './authService'
 import { getDeviceId } from './deviceService'
+import { v4 as uuidv4 } from 'uuid'
 
 interface UsageEvent {
   event_type: string
   value: number
   metadata?: Record<string, any>
   timestamp: string
+  client_event_id: string
 }
 
 let eventBuffer: UsageEvent[] = []
@@ -30,6 +32,7 @@ export function trackEvent(
     value,
     metadata,
     timestamp: new Date().toISOString(),
+    client_event_id: uuidv4(),
   })
 }
 

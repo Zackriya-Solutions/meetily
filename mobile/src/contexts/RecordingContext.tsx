@@ -1,6 +1,9 @@
 'use client'
 
 import React, { createContext, useContext, useState, useCallback, useRef, useEffect } from 'react'
+import * as audioRecorder from '@/services/audioRecorder'
+import { meetingRepository } from '@/services/meetingRepository'
+import { trackMeetingCreated, trackEvent } from '@/services/usageService'
 
 interface RecordingContextValue {
   isRecording: boolean
@@ -25,6 +28,8 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
   const [isPaused, setIsPaused] = useState(false)
   const [duration, setDuration] = useState(0)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const meetingIdRef = useRef<string | null>(null)
+  const titleRef = useRef<string>('')
 
   // Duration timer
   useEffect(() => {
@@ -43,37 +48,71 @@ export function RecordingProvider({ children }: { children: React.ReactNode }) {
     }
   }, [isRecording, isPaused])
 
-  // TODO: Phase 5 — integrate with Capacitor microphone plugin
-  // and meetingRepository for local storage + sync queue
-
   const startRecording = useCallback(async (title?: string) => {
-    console.log('[Recording] Start recording:', title)
-    setDuration(0)
-    setIsPaused(false)
-    setIsRecording(true)
-    // Phase 5: Will call Capacitor microphone plugin
+    try {
+      const hasPermission = await audioRecorder.requestMicrophonePermission()
+      if (!hasPermission) {
+        throw new Error('Microphone permission denied')
+      }
+
+      titleRef.current = title || 'Untitled Meeting'
+
+      // Create meeting in local DB
+      const meeting = await meetingRepository.createMeeting(titleRef.current)
+      meetingIdRef.current = meeting.meeting_id
+      trackMeetingCreated(meeting.meeting_id)
+
+      // Start actual audio capture
+      await audioRecorder.startRecording()
+
+      setDuration(0)
+      setIsPaused(false)
+      setIsRecording(true)
+    } catch (e) {
+      console.error('[Recording] Failed to start:', e)
+      throw e
+    }
   }, [])
 
   const stopRecording = useCallback(async (): Promise<string | null> => {
-    console.log('[Recording] Stop recording, duration:', duration)
+    const meetingId = meetingIdRef.current
+    if (!meetingId) return null
+
+    try {
+      // Stop audio capture and save file
+      const audioUri = await audioRecorder.stopRecording(meetingId)
+
+      // Update meeting with duration and queue audio upload
+      await meetingRepository.updateMeeting(meetingId, {
+        duration_seconds: duration,
+        status: 'pending_upload',
+      })
+      await meetingRepository.queueAudioUpload(meetingId, audioUri)
+
+      trackEvent('recording_completed', duration, { meeting_id: meetingId })
+    } catch (e) {
+      console.error('[Recording] Failed to stop:', e)
+      // Still mark recording as stopped in UI
+      if (meetingId) {
+        await meetingRepository.updateMeeting(meetingId, { status: 'error' })
+      }
+    }
+
     setIsRecording(false)
     setIsPaused(false)
-    // Phase 5: Will stop microphone, save audio file,
-    // create meeting in SQLite, queue sync
-    // Return meeting_id for navigation
-    return null
+    meetingIdRef.current = null
+
+    return meetingId
   }, [duration])
 
   const pauseRecording = useCallback(async () => {
-    console.log('[Recording] Pause')
+    audioRecorder.pauseRecording()
     setIsPaused(true)
-    // Phase 5: Will pause Capacitor recording
   }, [])
 
   const resumeRecording = useCallback(async () => {
-    console.log('[Recording] Resume')
+    audioRecorder.resumeRecording()
     setIsPaused(false)
-    // Phase 5: Will resume Capacitor recording
   }, [])
 
   return (
