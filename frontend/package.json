@@ -25,7 +25,10 @@
         "tauri:build:coreml": "tauri build -- --features coreml",
         "tauri:build:openblas": "tauri build -- --features openblas",
         "tauri:build:hipblas": "tauri build -- --features hipblas",
-        "lint": "next lint"
+        "lint": "next lint",
+        "test": "vitest run",
+        "test:watch": "vitest",
+        "test:coverage": "vitest run --coverage"
     },
     "dependencies": {
         "@blocknote/core": "0.36.0",
@@ -73,14 +76,20 @@
     "devDependencies": {
         "@tailwindcss/typography": "^0.5.15",
         "@tauri-apps/cli": "^2.1.0",
+        "@testing-library/jest-dom": "^6.9.1",
+        "@testing-library/react": "^16.3.2",
+        "@testing-library/user-event": "^14.6.1",
         "@types/node": "^20",
         "@types/react": "^18.3.18",
         "@types/react-dom": "^18.3.5",
+        "@vitejs/plugin-react": "^5.1.4",
         "autoprefixer": "^10.0.1",
         "concurrently": "^8.2.2",
+        "jsdom": "^28.1.0",
         "postcss": "^8",
         "tailwindcss": "^3.4.1",
         "typescript": "^5.7.2",
+        "vitest": "^4.0.18",
         "wait-on": "^7.2.0"
     }
 }
