@@ -36,12 +36,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: pnpm
-          cache-dependency-path: frontend/pnpm-lock.yaml
 
       - name: Install dependencies
         working-directory: frontend
-        run: pnpm install --frozen-lockfile
+        run: pnpm install
 
       - name: Run tests
         working-directory: frontend
@@ -50,6 +48,12 @@ jobs:
   backend-tests:
     name: Backend Tests
     runs-on: ubuntu-latest
+    services:
+      mongodb:
+        image: mongo:7
+        ports:
+          - 27017:27017
+
     steps:
       - uses: actions/checkout@v4
 
