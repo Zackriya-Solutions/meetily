@@ -49,7 +49,7 @@ This file tracks high-impact bugs that are confirmed but intentionally deferred.
 
 ## BUG-NOTES-CTX-001: Notes generation not using calendar context deeply enough
 
-- Status: Deferred
+- Status: Fixed
 - Priority: High
 - Reported: 2026-02-20
 - Area: Notes Generation / Calendar Integration / Prompt Quality
@@ -86,7 +86,7 @@ This file tracks high-impact bugs that are confirmed but intentionally deferred.
 
 ## BUG-TEST-AUTO-001: Audio + AI regression coverage is too manual
 
-- Status: Deferred
+- Status: Fixed
 - Priority: High
 - Reported: 2026-02-22
 - Area: QA / Audio Pipeline / AI Endpoints / Reliability
@@ -123,7 +123,7 @@ This file tracks high-impact bugs that are confirmed but intentionally deferred.
 
 ## BUG-DIARIZATION-COST-001: Groq parallel baseline can exhaust free-tier ASPH limits
 
-- Status: Deferred
+- Status: Fixed
 - Priority: High
 - Reported: 2026-02-23
 - Area: Diarization / Transcription / Cost Control
@@ -310,7 +310,7 @@ Real meeting rule refinement:
 
 ## BUG-ASK-AI-001: Ask AI context handling and prompting issues
 
-- Status: Deferred
+- Status: Fixed
 - Priority: High
 - Reported: 2026-03-01
 - Area: AI Features / Context Awareness / Prompt Engineering

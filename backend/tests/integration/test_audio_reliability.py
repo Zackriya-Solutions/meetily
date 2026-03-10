@@ -29,6 +29,9 @@ async def test_finalize_session_is_idempotent(monkeypatch):
         def cleanup(self):
             return None
 
+        def get_stats(self):
+            return {}
+
     monkeypatch.setattr(audio_router, "stop_recorder", fake_stop_recorder)
     monkeypatch.setattr(
         audio_router,
@@ -96,6 +99,9 @@ async def test_backpressure_records_drops(monkeypatch):
         def cleanup(self):
             return None
 
+        def get_stats(self):
+            return {}
+
     class FakeRecorder:
         async def add_chunk(self, _chunk):
             return None
@@ -123,11 +129,17 @@ async def test_backpressure_records_drops(monkeypatch):
 
     monkeypatch.setenv("ENABLE_AUDIO_RECORDING", "true")
     monkeypatch.setattr(audio_router, "_authenticate_websocket", fake_auth)
-    monkeypatch.setattr(audio_router, "StreamingTranscriptionManager", lambda _k: SlowManager())
+    monkeypatch.setattr(
+        audio_router,
+        "StreamingTranscriptionManager",
+        lambda *args, **kwargs: SlowManager(),
+    )
     monkeypatch.setattr(audio_router, "get_or_create_recorder", fake_get_recorder)
     monkeypatch.setattr(audio_router, "stop_recorder", fake_stop)
     monkeypatch.setattr(audio_router.db, "get_user_api_key", fake_user_key)
-    monkeypatch.setattr(audio_router.db, "update_recording_session_counters", fake_update_counters)
+    monkeypatch.setattr(
+        audio_router.db, "update_recording_session_counters", fake_update_counters
+    )
     monkeypatch.setattr(audio_router.db, "get_recording_chunk_stats", fake_stats)
     monkeypatch.setattr(
         audio_router,

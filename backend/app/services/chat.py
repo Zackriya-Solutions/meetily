@@ -144,12 +144,16 @@ Answer ONLY "SEARCH" or "MEETING":
 - "MEETING" if question can be answered from meeting discussion, action items, decisions, or participants"""
 
             answer = (
-                generate_content_text_sync(
-                    api_key=api_key,
-                    model="gemini-3-pro-preview",
-                    contents=classifier_prompt,
+                (
+                    generate_content_text_sync(
+                        api_key=api_key,
+                        model="gemini-3-pro-preview",
+                        contents=classifier_prompt,
+                    )
                 )
-            ).strip().upper()
+                .strip()
+                .upper()
+            )
             needs_search = "SEARCH" in answer
             logger.info(
                 f"Web search classifier: '{answer}' -> needs_web_search={needs_search}"
@@ -172,6 +176,8 @@ Answer ONLY "SEARCH" or "MEETING":
         cross_meeting_keywords = [
             "search in linked meetings",
             "linked meetings",
+            "linked meeting",
+            "linked one",
             "search linked",
             "previous meeting",
             "last meeting",
@@ -518,20 +524,21 @@ Format: Provide a direct answer followed by supporting details without inline ci
             except Exception as e:
                 logger.warning(f"Failed to perform global meeting search: {e}")
 
-        # B. Linked Meetings (Full transcripts)
+        # B. Linked Meetings (Context Window Management)
         elif allowed_meeting_ids and len(allowed_meeting_ids) > 0:
-            needs_linked = await self._needs_linked_context(
-                logic_question, context[:1000] if context else ""
+            needs_linked = (
+                True  # If user manually linked meetings, assume they want to use them
             )
 
             if needs_linked:
                 logger.info(
-                    f"Fetching full transcripts for {len(allowed_meeting_ids)} linked meetings"
+                    f"Fetching context for {len(allowed_meeting_ids)} linked meetings"
                 )
                 try:
-                    cross_meeting_context += (
-                        "\n\nFULL TRANSCRIPTS FROM LINKED MEETINGS:\n"
-                    )
+                    linked_transcripts = []
+                    total_chars = 0
+                    MAX_LINKED_CHARS = 40000  # Cap around ~10k tokens for linked context to prevent context window blowup
+
                     for meeting_id in allowed_meeting_ids:
                         meeting_data = await self.db.get_meeting(meeting_id)
                         if meeting_data:
@@ -540,18 +547,77 @@ Format: Provide a direct answer followed by supporting details without inline ci
                                 "created_at", "Unknown Date"
                             )
                             transcripts = meeting_data.get("transcripts", [])
-
                             full_transcript = "\n".join(
                                 [t.get("text", "") for t in transcripts]
+                            ).strip()
+
+                            if full_transcript:
+                                linked_transcripts.append(
+                                    (meeting_title, meeting_date, full_transcript)
+                                )
+                                total_chars += len(full_transcript)
+
+                    if total_chars > MAX_LINKED_CHARS:
+                        # Fallback to vector search for linked meetings
+                        logger.info(
+                            f"Linked context too large ({total_chars} chars). Falling back to vector search."
+                        )
+                        vector_search_success = False
+                        try:
+                            from app.vector_store import (
+                                search_context,
+                                get_collection_stats,
                             )
 
-                            if full_transcript.strip():
-                                cross_meeting_context += (
-                                    f"\n=== [{meeting_title}] ({meeting_date}) ===\n"
+                            stats = get_collection_stats()
+                            if stats.get("status") == "available":
+                                results = await search_context(
+                                    query=logic_question,
+                                    n_results=15,
+                                    allowed_meeting_ids=allowed_meeting_ids,
                                 )
-                                cross_meeting_context += full_transcript + "\n"
+                                if results:
+                                    cross_meeting_context += "\n\n=== CROSS-MEETING CONTEXT (RELEVANT EXCERPTS) ===\n"
+                                    for r in results:
+                                        source = f"{r.get('meeting_title', 'Unknown')} ({r.get('meeting_date', 'Unknown')})"
+                                        text = r.get("text", "").strip()
+                                        cross_meeting_context += (
+                                            f"- [{source}]: {text}\n"
+                                        )
+                                    vector_search_success = True
+                        except ImportError:
+                            logger.warning(
+                                "Vector store missing during linked context fallback."
+                            )
+                        except Exception as ve:
+                            logger.warning(
+                                f"Vector search failed during linked context fallback: {ve}"
+                            )
+
+                        if not vector_search_success and linked_transcripts:
+                            logger.info(
+                                "Truncating linked transcripts proportionally as a last resort."
+                            )
+                            cross_meeting_context += "\n\n=== CROSS-MEETING CONTEXT (PARTIAL TRANSCRIPTS) ===\n"
+                            chars_per_meeting = MAX_LINKED_CHARS // len(
+                                linked_transcripts
+                            )
+                            for title, date, transcript in linked_transcripts:
+                                cross_meeting_context += f"\n[{title}] ({date})\n"
+                                cross_meeting_context += (
+                                    transcript[:chars_per_meeting]
+                                    + "\n...[TRUNCATED]...\n"
+                                )
+                    elif linked_transcripts:
+                        cross_meeting_context += (
+                            "\n\n=== CROSS-MEETING CONTEXT (FULL TRANSCRIPTS) ===\n"
+                        )
+                        for title, date, transcript in linked_transcripts:
+                            cross_meeting_context += f"\n[{title}] ({date})\n"
+                            cross_meeting_context += transcript + "\n"
+
                 except Exception as e:
-                    logger.warning(f"Failed to fetch linked meeting transcripts: {e}")
+                    logger.warning(f"Failed to fetch linked meeting context: {e}")
 
         # === 4. CONSTRUCT PROMPT ===
         history_text = ""
@@ -565,22 +631,23 @@ Format: Provide a direct answer followed by supporting details without inline ci
                 content = msg.get("content", "")[:1000]
                 history_text += f"{role.upper()}: {content}\n"
 
-        system_prompt = f"""You are a helpful meeting assistant. Use the provided context to answer questions accurately.
+        system_prompt = f"""You are an expert executive meeting assistant. Analyze the provided context meticulously to answer the user's questions.
 
-RULES:
-1. Answer based on the meeting context provided below - use ALL relevant information from both current and linked meetings.
-2. If EXTERNAL WEB CONTEXT is provided, use it to fact-check, elaborate, or answer questions not covered by the meeting.
-3. CITATIONS:
-   - If citing the meeting, use [Meeting].
-   - If citing a web source, use the format [Source N] or [Domain].
-   - If citing a linked meeting, use [Meeting Name].
-4. Do NOT invent information. If the answer isn't in any context, say "I don't have that information."
-5. Be helpful and thorough.
+CORE DIRECTIVES:
+1. SYNTHESIS: Answer by synthesizing information across the 'CURRENT MEETING CONTEXT' and any provided 'CROSS-MEETING CONTEXT' (which may contain full transcripts or relevant excerpts from past meetings).
+2. CONFLICT RESOLUTION: If current meeting decisions contradict past meetings, prioritize the CURRENT meeting as the source of truth, but explicitly note the change or progression.
+3. FACT-CHECKING: If 'EXTERNAL WEB CONTEXT' is present, use it to verify external claims, elaborate on subjects, or answer off-topic questions not covered by the meeting.
+4. CITATIONS: 
+   - When citing the current meeting, use [Current Meeting].
+   - When citing a past/linked meeting, explicitly use its title: [Meeting Title] (Date).
+   - When citing a web source, use [Source N] or [Domain].
+5. STRICT SCOPE: Do NOT hallucinate. If the answer cannot be confidently derived from the provided contexts, clearly state "I do not have enough information from the meeting context to answer that."
 
-CURRENT MEETING CONTEXT:
----
+CONTEXTS:
+
+=== CURRENT MEETING CONTEXT ===
 {context}
----
+================================
 {cross_meeting_context}
 {web_context}
 {history_text}

@@ -1,8 +1,8 @@
 'use client';
 
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
-import { ChevronDown, ChevronRight, File, Settings, ChevronLeftCircle, ChevronRightCircle, Calendar, StickyNote, Home, Trash2, Mic, Square, Plus, Search, Pencil, LogOut, Upload, MessageSquare, Activity, Share2 } from 'lucide-react';
-import { signOut } from 'next-auth/react';
+import { ChevronDown, ChevronRight, File, Settings, ChevronLeftCircle, ChevronRightCircle, Calendar, StickyNote, Home, Trash2, Mic, Square, Plus, Search, Pencil, LogOut, Upload, MessageSquare, Activity, Share2, BarChart2 } from 'lucide-react';
+import { signOut, useSession } from 'next-auth/react';
 import { authFetch } from '@/lib/api';
 import { useRouter, usePathname } from 'next/navigation';
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
@@ -40,6 +40,9 @@ interface SidebarItem {
 const Sidebar: React.FC = () => {
   const router = useRouter();
   const pathname = usePathname();
+  const { data: session } = useSession();
+  const isAdmin = session?.user?.email === 'gagan@appointy.com';
+
   const {
     currentMeeting,
     setCurrentMeeting,
@@ -548,6 +551,23 @@ const Sidebar: React.FC = () => {
             </TooltipContent>
           </Tooltip>
 
+          {isAdmin && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={() => router.push('/dashboard')}
+                  className={`p-2 rounded-lg transition-colors duration-150 ${pathname === '/dashboard' ? 'bg-gray-100' : 'hover:bg-gray-100'
+                    }`}
+                >
+                  <BarChart2 className="w-5 h-5 text-gray-600" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="right">
+                <p>Analytics</p>
+              </TooltipContent>
+            </Tooltip>
+          )}
+
           <Tooltip>
             <TooltipTrigger asChild>
               <button
@@ -861,6 +881,16 @@ const Sidebar: React.FC = () => {
               <Activity className="w-4 h-4 mr-2" />
               <span>Streaming SLO</span>
             </button>
+
+            {isAdmin && (
+              <button
+                onClick={() => router.push('/dashboard')}
+                className={`w-full flex items-center justify-center px-3 py-1.5 mt-1 mb-1 text-sm font-medium rounded-lg transition-colors shadow-sm ${pathname === '/dashboard' ? 'text-gray-800 bg-gray-300' : 'text-gray-700 bg-gray-200 hover:bg-gray-300'}`}
+              >
+                <BarChart2 className="w-4 h-4 mr-2" />
+                <span>Analytics</span>
+              </button>
+            )}
 
             <button
               onClick={() => { sessionStorage.clear(); localStorage.removeItem('calendarPromptSeen'); signOut(); }}

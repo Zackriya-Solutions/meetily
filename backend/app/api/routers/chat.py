@@ -312,11 +312,12 @@ Quick Catch-Up Summary:"""
             # Temporary implementation mimicking original main.py
             try:
                 if request.model == "groq":
-                    api_key = await db.get_api_key(
-                        "groq", user_email=current_user.email
-                    )
+                    # Prioritize Environment Variables over Database
+                    api_key = os.getenv("GROQ_API_KEY")
                     if not api_key:
-                        api_key = os.getenv("GROQ_API_KEY")
+                        api_key = await db.get_api_key(
+                            "groq", user_email=current_user.email
+                        )
                     if not api_key:
                         yield "Error: Groq API key not configured"
                         return
@@ -337,12 +338,11 @@ Quick Catch-Up Summary:"""
                             yield content
 
                 elif request.model == "gemini":
-                    api_key = await db.get_api_key(
-                        "gemini", user_email=current_user.email
-                    )
+                    # Prioritize Environment Variables over Database
+                    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
                     if not api_key:
-                        api_key = os.getenv("GOOGLE_API_KEY") or os.getenv(
-                            "GEMINI_API_KEY"
+                        api_key = await db.get_api_key(
+                            "gemini", user_email=current_user.email
                         )
                     if not api_key:
                         yield "Error: Gemini API key not configured"

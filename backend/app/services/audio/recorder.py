@@ -643,18 +643,8 @@ class AudioRecorder:
                 logger.error(f"Recording directory not found: {chunk_dir}")
                 return None
 
-            # Check for existing merged files first
-            merged_pcm = chunk_dir / "merged_recording.pcm"
-            if merged_pcm.exists():
-                logger.info(f"Found existing merged PCM file: {merged_pcm}")
-                async with aiofiles.open(merged_pcm, "rb") as f:
-                    return await f.read()
-
-            merged_wav = chunk_dir / "merged_recording.wav"
-            if merged_wav.exists():
-                logger.info(f"Found existing merged WAV file: {merged_wav}")
-                async with aiofiles.open(merged_wav, "rb") as f:
-                    return await f.read()
+            # Only merge actual chunks so we can append them to the final recording.wav in post_recording
+            # (Removed early return of merged_recording to prevent ignoring new chunks)
 
             # Sort chunks by filename (ensures correct order)
             chunks = sorted(chunk_dir.glob("chunk_*.pcm"))

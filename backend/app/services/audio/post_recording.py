@@ -313,6 +313,13 @@ class PostRecordingService:
                 wav_file.setsampwidth(2)
                 wav_file.setframerate(16000)
 
+                # Check for existing recording.wav to append to
+                existing_wav_path = f"{meeting_id}/recording.wav"
+                existing_wav_bytes = await StorageService.download_bytes(existing_wav_path)
+                if existing_wav_bytes and len(existing_wav_bytes) > 44:
+                    logger.info(f"Found existing GCP recording.wav for {meeting_id}, appending new PCM chunks.")
+                    wav_file.writeframes(existing_wav_bytes[44:])
+
                 for blob_name in chunk_files:
                     chunk = await StorageService.download_bytes(blob_name)
                     if chunk:
@@ -361,13 +368,21 @@ class PostRecordingService:
             return None
 
     async def _convert_to_wav(self, meeting_id: str, pcm_data: bytes) -> Optional[Path]:
-        """Convert PCM to WAV and save locally."""
+        """Convert PCM to WAV and append to existing WAV locally if present."""
         try:
-            wav_data = AudioRecorder.convert_pcm_to_wav(pcm_data)
-
             wav_path = self.storage_path / meeting_id / "recording.wav"
-
             import aiofiles
+            
+            existing_pcm = b""
+            if wav_path.exists():
+                logger.info(f"Found existing recording.wav for {meeting_id}, appending new PCM chunks.")
+                async with aiofiles.open(wav_path, "rb") as f:
+                    old_wav = await f.read()
+                    if len(old_wav) > 44:
+                        existing_pcm = old_wav[44:]
+            
+            total_pcm = existing_pcm + pcm_data
+            wav_data = AudioRecorder.convert_pcm_to_wav(total_pcm)
 
             async with aiofiles.open(wav_path, "wb") as f:
                 await f.write(wav_data)

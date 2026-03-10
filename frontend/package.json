@@ -54,6 +54,7 @@
         "react-dom": "^18.2.0",
         "react-hook-form": "^7.59.0",
         "react-markdown": "^9.0.1",
+        "recharts": "^3.8.0",
         "remark-gfm": "^4.0.1",
         "sonner": "^2.0.7",
         "tailwind-merge": "^3.3.1",
@@ -61,8 +62,8 @@
         "zod": "^3.25.71"
     },
     "devDependencies": {
-        "@tailwindcss/typography": "^0.5.15",
         "@playwright/test": "^1.54.2",
+        "@tailwindcss/typography": "^0.5.15",
         "@types/node": "^20",
         "@types/react": "^18.3.18",
         "@types/react-dom": "^18.3.5",

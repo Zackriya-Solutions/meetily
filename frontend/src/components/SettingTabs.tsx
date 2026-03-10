@@ -20,7 +20,7 @@ export function SettingTabs({
   setModelConfig,
   onSave,
   setSaveSuccess,
-  defaultTab = "transcriptSettings",
+  defaultTab = "personalKeys",
   transcriptModelConfig,
   setTranscriptModelConfig,
   onSaveTranscript,
@@ -33,32 +33,32 @@ export function SettingTabs({
   return (
     <Tabs defaultValue={defaultTab} className="w-full max-h-[calc(100vh-10rem)] overflow-y-auto" onValueChange={handleTabChange}>
       <TabsList>
-        <TabsTrigger value="transcriptSettings">Transcript</TabsTrigger>
-        <TabsTrigger value="modelSettings">Ai Summary</TabsTrigger>
+        {/* <TabsTrigger value="transcriptSettings">Transcript</TabsTrigger> */}
+        {/* <TabsTrigger value="modelSettings">Ai Summary</TabsTrigger> */}
         <TabsTrigger value="personalKeys">Personal Keys</TabsTrigger>
-        <TabsTrigger value="recordingSettings">Preferences</TabsTrigger>
+        {/* <TabsTrigger value="recordingSettings">Preferences</TabsTrigger> */}
       </TabsList>
-      <TabsContent value="modelSettings">
+      {/* <TabsContent value="modelSettings">
         <ModelSettingsModal
 
           modelConfig={modelConfig}
           setModelConfig={setModelConfig}
           onSave={onSave}
         />
-      </TabsContent>
+      </TabsContent> */}
       <TabsContent value="personalKeys">
         <PersonalKeysSettings />
       </TabsContent>
-      <TabsContent value="transcriptSettings">
+      {/* <TabsContent value="transcriptSettings">
         <TranscriptSettings
           transcriptModelConfig={transcriptModelConfig}
           setTranscriptModelConfig={setTranscriptModelConfig}
         // onSave={onSaveTranscript}
         />
-      </TabsContent>
-      <TabsContent value="recordingSettings">
+      </TabsContent> */}
+      {/* <TabsContent value="recordingSettings">
         <RecordingSettings />
-      </TabsContent>
+      </TabsContent> */}
     </Tabs>
   )
 }

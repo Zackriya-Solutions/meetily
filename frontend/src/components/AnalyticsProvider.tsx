@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, ReactNode, useRef, useState, createContext } from 'react';
+import { useSession } from 'next-auth/react';
 import Analytics from '@/lib/analytics';
 
 interface AnalyticsProviderProps {
@@ -18,12 +19,27 @@ export const AnalyticsContext = createContext<AnalyticsContextType>({
 });
 
 export default function AnalyticsProvider({ children }: AnalyticsProviderProps) {
+  const { data: session, status } = useSession();
   const [isAnalyticsOptedIn, setIsAnalyticsOptedIn] = useState(true);
   const initialized = useRef(false);
 
+  // Automatically update the Analytics internal user ID when the session loads
   useEffect(() => {
-    // Prevent duplicate initialization in React StrictMode
-    if (initialized.current) {
+    if (status === 'authenticated' && session?.user?.email) {
+      Analytics.identify(session.user.email, {
+        name: session.user.name || undefined
+      }).catch(console.error);
+    }
+  }, [status, session]);
+
+  useEffect(() => {
+    // Prevent duplicate initialization in React StrictMode unless the session email just loaded
+    if (initialized.current && session?.user?.email === Analytics.getCurrentUserId()) {
+      return;
+    }
+    // Update if the email just became available
+    if (initialized.current && session?.user?.email) {
+      Analytics.identify(session.user.email);
       return;
     }
 
@@ -49,11 +65,11 @@ export default function AnalyticsProvider({ children }: AnalyticsProviderProps) 
       // Mark as initialized to prevent duplicates
       initialized.current = true;
 
-      // Get persistent user ID
-      const userId = await Analytics.getPersistentUserId();
+      // Get persistent user ID or use session email if available
+      const userId = (session?.user?.email) || await Analytics.getPersistentUserId();
 
       // Initialize analytics
-      await Analytics.init();
+      await Analytics.init(userId);
 
       // Get device info
       const deviceInfo = await Analytics.getDeviceInfo();
@@ -106,7 +122,7 @@ export default function AnalyticsProvider({ children }: AnalyticsProviderProps) 
     };
 
     initAnalytics().catch(console.error);
-  }, []); // Run only once on mount to prevent infinite loops
+  }, [session?.user?.email]); // Re-run if email loads but keep inner initialized.current check so we don't spam
 
   // Separate effect to handle re-initialization when analytics is toggled
   useEffect(() => {

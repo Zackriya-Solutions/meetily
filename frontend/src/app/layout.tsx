@@ -46,7 +46,7 @@ export default function RootLayout({
                       {children}
                     </div>
                   ) : (
-                    <div className="flex">
+                    <div className="flex h-screen overflow-hidden">
                       <Sidebar />
                       <MainContent>
                         <CalendarConnectPrompt />

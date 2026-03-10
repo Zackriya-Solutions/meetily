@@ -310,6 +310,7 @@ export function ChatInterface({ meetingId, onClose, currentTranscripts }: ChatIn
                         <MeetingSelector
                             selectedIds={linkedMeetingIds}
                             onSelectionChange={setLinkedMeetingIds}
+                            onAttach={() => setShowLinkContext(false)}
                         />
                     </div>
                 )}

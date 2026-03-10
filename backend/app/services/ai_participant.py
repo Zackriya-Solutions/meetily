@@ -264,7 +264,7 @@ class AIParticipantEngine:
             "AI_PARTICIPANT_FALLBACK_MODELS", "gemini-3-pro-preview,gemini-3-flash-preview"
         )
         self.fallback_models = [
-            m.strip() for m in fallback_models.split(",") if (m or "").strip()
+            m.strip() for m in fallback_models.split(",") if (m or ""   ).strip()
         ]
         self.llm_timeout_seconds = float(
             os.getenv("AI_PARTICIPANT_LLM_TIMEOUT_SECONDS", "12")

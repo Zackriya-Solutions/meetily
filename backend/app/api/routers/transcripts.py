@@ -383,7 +383,8 @@ async def _resolve_notes_transcript(
 
     versions = await db.get_transcript_versions(meeting_id)
     diarized_version = next(
-        (v for v in versions if (v.get("source") or "").lower() in DIARIZED_SOURCES), None
+        (v for v in versions if (v.get("source") or "").lower() in DIARIZED_SOURCES),
+        None,
     )
     diarized_available = diarized_version is not None
 
@@ -425,20 +426,21 @@ async def process_transcript_background(
         if transcript.model in ["claude", "groq", "openai", "gemini"]:
             # Prioritize Environment Variables over Database
             import os
+
             env_keys = {
                 "gemini": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
                 "groq": ["GROQ_API_KEY"],
                 "openai": ["OPENAI_API_KEY"],
                 "claude": ["ANTHROPIC_API_KEY"],
             }
-            
+
             api_key = None
             possible_keys = env_keys.get(transcript.model, [])
             for k in possible_keys:
                 if os.getenv(k):
                     api_key = os.getenv(k)
                     break
-            
+
             if not api_key:
                 api_key = await db.get_api_key(transcript.model, user_email=user_email)
             if not api_key:
@@ -449,8 +451,8 @@ async def process_transcript_background(
                     "gemini": "Gemini",
                 }
                 raise ValueError(
-                        f"{provider_names.get(transcript.model, transcript.model)} API key not configured. Please set your API key in the environmental variables or settings."
-                    )
+                    f"{provider_names.get(transcript.model, transcript.model)} API key not configured. Please set your API key in the environmental variables or settings."
+                )
 
         # Use template-specific prompt if templateId is provided
         template_prompt = custom_prompt
@@ -754,7 +756,9 @@ async def generate_notes_with_gemini_background(
         meeting_id_local: str,
         mode: str,
         allow_audio: bool,
-    ) -> Tuple[Optional[str], Optional[bytes], Optional[str], Optional[int], Optional[str]]:
+    ) -> Tuple[
+        Optional[str], Optional[bytes], Optional[str], Optional[int], Optional[str]
+    ]:
         """
         Returns (asset_path, audio_bytes, mime_type, duration_sec, selected_mode).
         """
@@ -774,13 +778,19 @@ async def generate_notes_with_gemini_background(
         wav_path = f"{meeting_id_local}/recording.wav"
         primary_compressed_path = f"{meeting_id_local}/recording.opus"
         compressed_path = f"{meeting_id_local}/recording.notes.opus"
-        ordered_modes = ["compressed", "wav"] if normalized_mode in {"auto", "compressed"} else ["wav"]
+        ordered_modes = (
+            ["compressed", "wav"]
+            if normalized_mode in {"auto", "compressed"}
+            else ["wav"]
+        )
 
         if "compressed" in ordered_modes:
             try:
                 await _maybe_create_compressed_audio(meeting_id_local)
             except Exception as e:
-                logger.warning("Compressed audio prep failed for %s: %s", meeting_id_local, e)
+                logger.warning(
+                    "Compressed audio prep failed for %s: %s", meeting_id_local, e
+                )
 
         selected_path = None
         selected_mode = None
@@ -816,7 +826,13 @@ async def generate_notes_with_gemini_background(
             # PCM 16kHz mono 16-bit ~= 32000 bytes/s payload (rough estimate)
             approx_duration_sec = int(len(audio_bytes) / 32000)
 
-        return selected_path, audio_bytes, selected_mime, approx_duration_sec, selected_mode
+        return (
+            selected_path,
+            audio_bytes,
+            selected_mime,
+            approx_duration_sec,
+            selected_mode,
+        )
 
     async def _generate_multimodal_json(
         transcript_text: str,
@@ -830,7 +846,7 @@ async def generate_notes_with_gemini_background(
         api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
         if not api_key:
             api_key = await db.get_api_key("gemini", user_email=user_email_local)
-        
+
         if not api_key:
             logger.warning("Gemini API key missing for multimodal notes generation")
             return None
@@ -893,11 +909,19 @@ async def generate_notes_with_gemini_background(
         # 2. Try multimodal generation first (behind feature flag + request flags)
         notes_audio_enabled = os.getenv("NOTES_AUDIO_ENABLED", "true").lower() == "true"
         allow_audio = bool(use_audio_context) and notes_audio_enabled
-        effective_audio_mode = audio_mode or os.getenv("NOTES_AUDIO_DEFAULT_MODE", "auto")
+        effective_audio_mode = audio_mode or os.getenv(
+            "NOTES_AUDIO_DEFAULT_MODE", "auto"
+        )
 
         if allow_audio:
             try:
-                audio_source, audio_bytes, audio_mime, audio_duration_sec, selected_mode = await _resolve_audio_asset(
+                (
+                    audio_source,
+                    audio_bytes,
+                    audio_mime,
+                    audio_duration_sec,
+                    selected_mode,
+                ) = await _resolve_audio_asset(
                     meeting_id,
                     effective_audio_mode,
                     allow_audio=True,
@@ -907,11 +931,15 @@ async def generate_notes_with_gemini_background(
                 metadata["audio_duration_sec"] = audio_duration_sec
 
                 if audio_source and audio_mime == "audio/url":
-                    metadata["fallback_reason"] = "audio_url_override_not_supported_server_side"
+                    metadata["fallback_reason"] = (
+                        "audio_url_override_not_supported_server_side"
+                    )
                 elif audio_bytes and audio_mime:
                     max_minutes = max(1, int(max_audio_minutes or 120))
                     if audio_duration_sec and (audio_duration_sec / 60) > max_minutes:
-                        metadata["fallback_reason"] = f"audio_exceeds_max_minutes_{max_minutes}"
+                        metadata["fallback_reason"] = (
+                            f"audio_exceeds_max_minutes_{max_minutes}"
+                        )
                     else:
                         multimodal_json = await _generate_multimodal_json(
                             transcript_text=full_transcript_text,
@@ -1021,8 +1049,12 @@ async def generate_notes_with_gemini_background(
         # 7. Calendar post-processing hooks: recap email + optional writeback.
         try:
             settings = await db.get_calendar_automation_settings(user_email)
-            attendees = calendar_event_context.get("attendees", []) if calendar_event_context else []
-            
+            attendees = (
+                calendar_event_context.get("attendees", [])
+                if calendar_event_context
+                else []
+            )
+
             # RSVP filtering
             accepted_attendees = []
             for att in attendees:
@@ -1034,13 +1066,17 @@ async def generate_notes_with_gemini_background(
                             accepted_attendees.append(email)
                 else:
                     accepted_attendees.append(str(att).strip().lower())
-                    
+
             _, attendee_emails = _extract_attendee_names_emails(attendees)
             # Use accepted attendees if available, otherwise fallback to all extracted emails
-            final_attendees = accepted_attendees if accepted_attendees else attendee_emails
-            
+            final_attendees = (
+                accepted_attendees if accepted_attendees else attendee_emails
+            )
+
             # Ad-hoc meeting detection
-            is_proper_meeting = calendar_event_context is not None and len(final_attendees) >= 2
+            is_proper_meeting = (
+                calendar_event_context is not None and len(final_attendees) >= 2
+            )
 
             if is_proper_meeting and settings.get("recap_enabled", True):
                 # Extract TL;DR
@@ -1048,7 +1084,11 @@ async def generate_notes_with_gemini_background(
                 session_summary = final_result.get("SessionSummary", {})
                 if session_summary.get("blocks"):
                     tldr_block = session_summary["blocks"][0].get("content", "")
-                    tldr = (tldr_block[:200] + "...") if len(tldr_block) > 200 else tldr_block
+                    tldr = (
+                        (tldr_block[:200] + "...")
+                        if len(tldr_block) > 200
+                        else tldr_block
+                    )
 
                 # Extract Action Items
                 action_items = []
@@ -1059,39 +1099,44 @@ async def generate_notes_with_gemini_background(
 
                 # Check if this is a regeneration
                 existing_shares = await db.get_shared_notes_for_user(user_email)
-                # Wait, getting shared notes FOR user means notes shared WITH user. 
+                # Wait, getting shared notes FOR user means notes shared WITH user.
                 # We need to see if the host has already shared this meeting.
                 # Let's query using a custom check or get_shared_note for an attendee.
                 # A simple way: check if any shared note exists for this meeting.
                 async with db._get_connection() as conn:
                     existing_count = await conn.fetchval(
-                        "SELECT COUNT(*) FROM shared_meeting_notes WHERE meeting_id = $1", 
-                        meeting_id
+                        "SELECT COUNT(*) FROM shared_meeting_notes WHERE meeting_id = $1",
+                        meeting_id,
                     )
 
                 if existing_count > 0:
                     # Regeneration -> silent update, mark notes updated
                     await db.mark_shared_notes_updated(meeting_id)
-                    logger.info("Silent regeneration update for meeting %s. Did not resend email.", meeting_id)
+                    logger.info(
+                        "Silent regeneration update for meeting %s. Did not resend email.",
+                        meeting_id,
+                    )
                 else:
                     # First-time generation -> create shares and send email
-                    app_base_url = os.environ.get("APP_BASE_URL", "http://localhost:3118")
+                    app_base_url = os.environ.get(
+                        "APP_BASE_URL", "http://localhost:3118"
+                    )
                     share_config = {
                         "summary": settings.get("share_summary", True),
-                        "transcript": settings.get("share_transcript", False)
+                        "transcript": settings.get("share_transcript", False),
                     }
 
                     shared_tokens = []
                     for recipient in final_attendees:
-                        if recipient != user_email: # Don't share with self
+                        if recipient != user_email:  # Don't share with self
                             token = await db.create_shared_note(
                                 meeting_id=meeting_id,
                                 owner_email=user_email,
                                 shared_with_email=recipient,
-                                share_config=share_config
+                                share_config=share_config,
                             )
                             shared_tokens.append(token)
-                    
+
                     if shared_tokens:
                         # Use the first token to generate the URL (or wait, the email goes to all, but each needs a unique token?)
                         # Actually, send_post_meeting_recap sends ONE email to all BCC'd or individually?
@@ -1100,24 +1145,30 @@ async def generate_notes_with_gemini_background(
                         # Wait, the prompt says "{APP_BASE_URL}/shared/{meeting_id}?token={share_token}".
                         # But send_post_meeting_recap takes `attendees` and sends one email (or loops inside).
                         # Let's pass the first token just as a generic link, or if the email service expects a single app_notes_url.
-                        # Wait, the prompt says "app_notes_url parameter". So it assumes one URL. 
+                        # Wait, the prompt says "app_notes_url parameter". So it assumes one URL.
                         # Let's pass the URL for the first token, or let's create a generic view token?
                         # Actually, let's just pass `share_token` of the first created share, or since they all access the same meeting,
-                        # the token validates the user if they log in, OR the token grants access directly. 
+                        # the token validates the user if they log in, OR the token grants access directly.
                         # Let's just use the first token as the access URL in the email.
                         token_to_use = shared_tokens[0]
-                        app_notes_url = f"{app_base_url}/shared/{meeting_id}?token={token_to_use}"
-                        
+                        app_notes_url = (
+                            f"{app_base_url}/shared/{meeting_id}?token={token_to_use}"
+                        )
+
                         recap_service = CalendarReminderEmailService()
                         await recap_service.send_post_meeting_recap(
                             host_email=user_email,
-                            meeting_title=final_result.get("MeetingName", meeting_title),
+                            meeting_title=final_result.get(
+                                "MeetingName", meeting_title
+                            ),
                             tldr=tldr,
                             action_items=action_items,
                             app_notes_url=app_notes_url,
                             attendees=final_attendees,
-                            include_attendees=bool(settings.get("attendee_reminders_enabled", False)),
-                            accepted_only_emails=final_attendees
+                            include_attendees=bool(
+                                settings.get("attendee_reminders_enabled", False)
+                            ),
+                            accepted_only_emails=final_attendees,
                         )
 
             if calendar_event_context and settings.get("writeback_enabled", False):
@@ -1132,7 +1183,7 @@ async def generate_notes_with_gemini_background(
                 "Calendar post-processing failed for %s: %s",
                 meeting_id,
                 post_hook_error,
-                exc_info=True
+                exc_info=True,
             )
 
     except Exception as e:
@@ -1621,7 +1672,10 @@ async def save_transcript(
                     )
 
             if skip_post_finalize:
-                return {"message": "Transcript saved successfully", "meeting_id": meeting_id}
+                return {
+                    "message": "Transcript saved successfully",
+                    "meeting_id": meeting_id,
+                }
 
             try:
                 from ...services.audio.post_recording import get_post_recording_service
@@ -1692,10 +1746,14 @@ async def get_summary(meeting_id: str, current_user: User = Depends(get_current_
 
         # Transform summary data into frontend format if available
         transformed_data = {}
-        metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+        metadata = (
+            result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+        )
         notes_transcript_source = metadata.get("notes_transcript_source")
         recommend_regenerate_with_diarized = bool(
-            diarized_available and notes_transcript_source and notes_transcript_source != "diarized"
+            diarized_available
+            and notes_transcript_source
+            and notes_transcript_source != "diarized"
         )
         if isinstance(summary_data, dict) and status == "completed":
             transformed_data["MeetingName"] = summary_data.get("MeetingName", "")

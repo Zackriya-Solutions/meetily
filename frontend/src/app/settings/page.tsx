@@ -3,20 +3,27 @@
 import React, { useState, useEffect, Suspense } from 'react';
 import { ArrowLeft, Settings2, Mic, Database as DatabaseIcon, SparkleIcon, Key, Calendar } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { TranscriptSettings, TranscriptModelProps } from '@/components/TranscriptSettings';
-import { RecordingSettings } from '@/components/RecordingSettings';
-import { PreferenceSettings } from '@/components/PreferenceSettings';
-import { SummaryModelSettings } from '@/components/SummaryModelSettings';
+// import { TranscriptSettings, TranscriptModelProps } from '@/components/TranscriptSettings';
+// import { RecordingSettings } from '@/components/RecordingSettings';
+// import { PreferenceSettings } from '@/components/PreferenceSettings';
+// import { SummaryModelSettings } from '@/components/SummaryModelSettings';
 import { PersonalKeysSettings } from '@/components/PersonalKeysSettings';
 import { CalendarIntegrationSettings } from '@/components/CalendarIntegrationSettings';
 import { authFetch } from '@/lib/api';
 
 type SettingsTab = 'general' | 'recording' | 'Transcriptionmodels' | 'summaryModels' | 'personalKeys' | 'calendar';
 
+// Make a dummy type since we commented out the actual import
+type TranscriptModelProps = {
+  provider: string;
+  model: string;
+  apiKey: string | null;
+};
+
 function SettingsContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [activeTab, setActiveTab] = useState<SettingsTab>('general');
+  const [activeTab, setActiveTab] = useState<SettingsTab>('personalKeys');
   const [transcriptModelConfig, setTranscriptModelConfig] = useState<TranscriptModelProps>({
     provider: 'localWhisper',
     model: 'large-v3',
@@ -26,7 +33,7 @@ function SettingsContent() {
   useEffect(() => {
     const tabParam = searchParams.get('tab');
     if (tabParam) {
-      const validTabs: SettingsTab[] = ['general', 'recording', 'Transcriptionmodels', 'summaryModels', 'personalKeys', 'calendar'];
+      const validTabs: SettingsTab[] = [/* 'general', 'recording', 'Transcriptionmodels', 'summaryModels', */ 'personalKeys', 'calendar'];
       if (validTabs.includes(tabParam as SettingsTab)) {
         setActiveTab(tabParam as SettingsTab);
       }
@@ -34,10 +41,10 @@ function SettingsContent() {
   }, [searchParams]);
 
   const tabs = [
-    { id: 'general' as const, label: 'General', icon: <Settings2 className="w-4 h-4" /> },
-    { id: 'recording' as const, label: 'Recordings', icon: <Mic className="w-4 h-4" /> },
-    { id: 'Transcriptionmodels' as const, label: 'Transcription', icon: <DatabaseIcon className="w-4 h-4" /> },
-    { id: 'summaryModels' as const, label: 'Summary', icon: <SparkleIcon className="w-4 h-4" /> },
+    // { id: 'general' as const, label: 'General', icon: <Settings2 className="w-4 h-4" /> },
+    // { id: 'recording' as const, label: 'Recordings', icon: <Mic className="w-4 h-4" /> },
+    // { id: 'Transcriptionmodels' as const, label: 'Transcription', icon: <DatabaseIcon className="w-4 h-4" /> },
+    // { id: 'summaryModels' as const, label: 'Summary', icon: <SparkleIcon className="w-4 h-4" /> },
     { id: 'personalKeys' as const, label: 'Personal Keys', icon: <Key className="w-4 h-4" /> },
     { id: 'calendar' as const, label: 'Calendar', icon: <Calendar className="w-4 h-4" /> }
   ];
@@ -105,16 +112,16 @@ function SettingsContent() {
 
             {/* Tab Content */}
             <div className="p-6">
-              {activeTab === 'general' && <PreferenceSettings />}
-              {activeTab === 'recording' && <RecordingSettings />}
-              {activeTab === 'Transcriptionmodels' && (
+              {/* {activeTab === 'general' && <PreferenceSettings />} */}
+              {/* {activeTab === 'recording' && <RecordingSettings />} */}
+              {/* {activeTab === 'Transcriptionmodels' && (
                 <TranscriptSettings
                   transcriptModelConfig={transcriptModelConfig}
                   setTranscriptModelConfig={setTranscriptModelConfig}
                 // onSave={handleSaveConfig}
                 />
-              )}
-              {activeTab === 'summaryModels' && <SummaryModelSettings />}
+              )} */}
+              {/* {activeTab === 'summaryModels' && <SummaryModelSettings />} */}
               {activeTab === 'personalKeys' && <PersonalKeysSettings />}
               {activeTab === 'calendar' && <CalendarIntegrationSettings />}
             </div>

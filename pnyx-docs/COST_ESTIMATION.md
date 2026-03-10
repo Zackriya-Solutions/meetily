@@ -42,11 +42,11 @@ The primary expenses derive from **Infrastructure (GCP)** and **Audio Processing
 | **Groq (Optional)** | Llama 3 (Text) | **~$0.005** / meeting | Extremely fast logic processing, very low token cost. |
 
 ### C. Web Search & Grounding (RAG)
-*Code Audit: Grounded chat answers via RAG / RAG-Web.*
+*Code Audit: Grounded chat answers via Web Search (`chat.py`).*
 
 | Provider | Cost | Application |
 | :--- | :--- | :--- |
-| **Brave Search API** | **$3.00 / 1,000 queries** | General web scraping and fact-checking (`search_web` function). |
+| **SerpAPI (Google Search)** | **~$50.00 / 5,000 queries** (Developer Plan) | General web scraping and fact-checking (`search_web` function). |
 | **Gemini Grounding** | **~$35.00 / 1,000 queries**| Billed per grounded prompt if using native Google Grounding (confirm latest API pricing). |
 
 ---

@@ -6,9 +6,10 @@ import { authFetch } from '@/lib/api';
 interface MeetingSelectorProps {
     selectedIds: string[];
     onSelectionChange: (ids: string[]) => void;
+    onAttach?: () => void;
 }
 
-export function MeetingSelector({ selectedIds, onSelectionChange }: MeetingSelectorProps) {
+export function MeetingSelector({ selectedIds, onSelectionChange, onAttach }: MeetingSelectorProps) {
     const [meetings, setMeetings] = useState<Meeting[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [searchQuery, setSearchQuery] = useState('');
@@ -107,14 +108,32 @@ export function MeetingSelector({ selectedIds, onSelectionChange }: MeetingSelec
                 )}
             </div>
 
-            <div className="p-3 border-t border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/50 text-xs text-zinc-500 flex justify-between items-center">
-                <span>{selectedIds.length} linked</span>
-                {selectedIds.length > 0 && (
+            <div className="p-3 border-t border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/50 flex justify-between items-center">
+                <div className="text-xs text-zinc-500">
+                    <span>{selectedIds.length} linked</span>
+                    {selectedIds.length > 0 && (
+                        <>
+                            <span className="mx-2">•</span>
+                            <button
+                                onClick={() => onSelectionChange([])}
+                                className="text-blue-500 hover:text-blue-600 font-medium"
+                            >
+                                Clear All
+                            </button>
+                        </>
+                    )}
+                </div>
+                {onAttach && (
                     <button
-                        onClick={() => onSelectionChange([])}
-                        className="text-blue-500 hover:text-blue-600 font-medium"
+                        onClick={onAttach}
+                        disabled={selectedIds.length === 0}
+                        className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                            selectedIds.length > 0
+                                ? 'bg-blue-600 hover:bg-blue-700 text-white shadow-sm'
+                                : 'bg-zinc-200 text-zinc-400 cursor-not-allowed dark:bg-zinc-800 dark:text-zinc-600'
+                        }`}
                     >
-                        Clear All
+                        Attach
                     </button>
                 )}
             </div>

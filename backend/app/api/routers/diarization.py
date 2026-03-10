@@ -218,31 +218,49 @@ async def run_diarization_job(meeting_id: str, provider: str, user_email: str):
             if status == "stopped":
                 return
 
-        # 3. Parallel Diarization & Gold Whisper Transcription
-        logger.info(
-            f"🚀 [Phase 1/2] Running parallel Groq-Whisper + {provider}-Diarization"
-        )
+        # 3. Diarization & Gold Whisper Transcription
+        run_parallel = os.getenv("GROQ_PARALLEL_WITH_DIARIZATION_ENABLED", "false").lower() == "true"
+        
         try:
-            diarization_task = asyncio.create_task(
-                diarization_service.diarize_meeting(
+            if run_parallel:
+                logger.info(
+                    f"🚀 [Phase 1/2] Running PARALLEL Groq-Whisper + {provider}-Diarization"
+                )
+                diarization_task = asyncio.create_task(
+                    diarization_service.diarize_meeting(
+                        meeting_id=meeting_id,
+                        audio_data=wav_data,
+                        provider=provider,
+                        user_email=user_email,
+                    )
+                )
+                whisper_task = asyncio.create_task(
+                    diarization_service.transcribe_with_whisper(
+                        wav_data, user_email=user_email
+                    )
+                )
+
+                # Wait for both with a combined timeout
+                diarization_result, whisper_output = await asyncio.gather(
+                    diarization_task, whisper_task
+                )
+            else:
+                logger.info(
+                    f"🚀 [Phase 1/2] Running SEQUENTIAL {provider}-Diarization followed by Groq-Whisper"
+                )
+                diarization_result = await diarization_service.diarize_meeting(
                     meeting_id=meeting_id,
                     audio_data=wav_data,
                     provider=provider,
                     user_email=user_email,
                 )
-            )
-            whisper_task = asyncio.create_task(
-                diarization_service.transcribe_with_whisper(
+                
+                whisper_output = await diarization_service.transcribe_with_whisper(
                     wav_data, user_email=user_email
                 )
-            )
-
-            # Wait for both with a combined timeout
-            diarization_result, whisper_output = await asyncio.gather(
-                diarization_task, whisper_task
-            )
+                
         except Exception as e:
-            logger.error(f"Parallel processing failed: {e}")
+            logger.error(f"Processing failed during Diarization/Whisper phase: {e}")
             raise
 
         # 4. Result Verification
