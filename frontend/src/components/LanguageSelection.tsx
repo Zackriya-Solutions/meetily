@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { Globe } from 'lucide-react';
 import Analytics from '@/lib/analytics';
 import { toast } from 'sonner';
+import { useConfig } from '@/contexts/ConfigContext';
 
 export interface Language {
   code: string;
@@ -128,6 +128,7 @@ export function LanguageSelection({
   provider = 'localWhisper'
 }: LanguageSelectionProps) {
   const [saving, setSaving] = useState(false);
+  const { setSelectedLanguage } = useConfig();
 
   // Parakeet only supports auto-detection (doesn't support manual language selection)
   const isParakeet = provider === 'parakeet';
@@ -138,8 +139,8 @@ export function LanguageSelection({
   const handleLanguageChange = async (languageCode: string) => {
     setSaving(true);
     try {
-      // Save language preference to backend
-      await invoke('set_language_preference', { language: languageCode });
+      // Save language preference to localStorage and sync to backend
+      setSelectedLanguage(languageCode);
       onLanguageChange(languageCode);
       console.log('Language preference saved:', languageCode);
 

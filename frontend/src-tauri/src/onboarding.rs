@@ -192,12 +192,12 @@ pub async fn complete_onboarding<R: Runtime>(
     if let Err(e) = SettingsRepository::save_transcript_config(
         pool,
         "parakeet",
-        "parakeet-tdt-0.6b-v3-int8",
+        crate::config::DEFAULT_PARAKEET_MODEL,
     ).await {
         error!("Failed to save transcription model config: {}", e);
         return Err(format!("Failed to save transcription model config: {}", e));
     }
-    info!("Saved transcription model config: provider=parakeet, model=parakeet-tdt-0.6b-v3-int8");
+    info!("Saved transcription model config: provider=parakeet, model={}", crate::config::DEFAULT_PARAKEET_MODEL);
 
     // Step 2: Only NOW mark onboarding as complete (after DB operations succeed)
     let mut status = load_onboarding_status(&app)

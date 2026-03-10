@@ -5,6 +5,8 @@ import { TranscriptModelProps } from '@/components/TranscriptSettings';
 import { SelectedDevices } from '@/components/DeviceSelection';
 import { configService, ModelConfig } from '@/services/configService';
 import { invoke } from '@tauri-apps/api/core';
+import Analytics from '@/lib/analytics';
+import { BetaFeatures, BetaFeatureKey, loadBetaFeatures, saveBetaFeatures } from '@/types/betaFeatures';
 
 export interface OllamaModel {
   name: string;
@@ -60,6 +62,10 @@ interface ConfigContextType {
   // UI preferences
   showConfidenceIndicator: boolean;
   toggleConfidenceIndicator: (checked: boolean) => void;
+
+  // Beta features
+  betaFeatures: BetaFeatures;
+  toggleBetaFeature: (featureKey: BetaFeatureKey, enabled: boolean) => void;
 
   // Ollama models
   models: OllamaModel[];
@@ -131,7 +137,13 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
   });
 
   // Language preference state
-  const [selectedLanguage, setSelectedLanguage] = useState('auto-translate');
+  const [selectedLanguage, setSelectedLanguage] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('primaryLanguage');
+      return saved || 'auto';
+    }
+    return 'auto';
+  });
 
   // UI preferences state
   const [showConfidenceIndicator, setShowConfidenceIndicator] = useState<boolean>(() => {
@@ -149,6 +161,11 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
       return saved !== null ? saved === 'true' : false
     }
     return false;
+  });
+
+  // Beta features state (localStorage)
+  const [betaFeatures, setBetaFeatures] = useState<BetaFeatures>(() => {
+    return loadBetaFeatures();
   });
 
   // Preference settings state (lazy loaded)
@@ -193,6 +210,19 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     };
     loadTranscriptConfig();
   }, []);
+
+  // Sync language preference to Rust on mount (fixes startup desync bug)
+  useEffect(() => {
+    if (selectedLanguage) {
+      invoke('set_language_preference', { language: selectedLanguage })
+        .then(() => {
+          console.log('[ConfigContext] Synced language preference to Rust on startup:', selectedLanguage);
+        })
+        .catch(err => {
+          console.error('[ConfigContext] Failed to sync language preference to Rust on startup:', err);
+        });
+    }
+  }, []); 
 
   // Load model configuration on mount
   useEffect(() => {
@@ -331,24 +361,6 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     loadDevicePreferences();
   }, []);
 
-  // Load language preference on mount
-  useEffect(() => {
-    const loadLanguagePreference = async () => {
-      try {
-        const language = await configService.getLanguagePreference();
-        if (language) {
-          setSelectedLanguage(language);
-          console.log('Loaded language preference:', language);
-        }
-      } catch (error) {
-        console.log('No language preference found or failed to load, using default (auto-translate):', error);
-        // Default to 'auto-translate' (Auto Detect with English translation) if no preference is saved
-        setSelectedLanguage('auto-translate');
-      }
-    };
-    loadLanguagePreference();
-  }, []);
-
   // Calculate model options based on available models
   const modelOptions: Record<ModelConfig['provider'], string[]> = {
     ollama: models.map(model => model.name),
@@ -376,6 +388,22 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
       localStorage.setItem('isAutoSummary', checked.toString());
     }
   }, [])
+
+  // Toggle beta feature with localStorage persistence and analytics
+  const toggleBetaFeature = useCallback((featureKey: BetaFeatureKey, enabled: boolean) => {
+    setBetaFeatures(prev => {
+      const updated = { ...prev, [featureKey]: enabled };
+      saveBetaFeatures(updated);
+
+      // Track analytics with specific feature
+      Analytics.track('beta_feature_toggled', {
+        feature: featureKey,
+        enabled: enabled.toString(),
+      }).catch(err => console.error('Failed to track beta feature toggle:', err));
+
+      return updated;
+    });
+  }, []);
 
   // Update individual provider API key
   const updateProviderApiKey = useCallback((provider: string, apiKey: string | null) => {
@@ -442,6 +470,18 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  // Wrapper for setSelectedLanguage that persists to localStorage and syncs to Rust
+  const handleSetSelectedLanguage = useCallback((lang: string) => {
+    setSelectedLanguage(lang);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('primaryLanguage', lang);
+    }
+    // Sync with Rust in-memory state for live recording
+    invoke('set_language_preference', { language: lang }).catch(err =>
+      console.error('Failed to sync language preference to Rust:', err)
+    );
+  }, []);
+
   const value: ConfigContextType = useMemo(() => ({
     modelConfig,
     setModelConfig,
@@ -454,9 +494,11 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     selectedDevices,
     setSelectedDevices,
     selectedLanguage,
-    setSelectedLanguage,
+    setSelectedLanguage: handleSetSelectedLanguage,
     showConfidenceIndicator,
     toggleConfidenceIndicator,
+    betaFeatures,
+    toggleBetaFeature,
     models,
     modelOptions,
     error,
@@ -474,8 +516,11 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     transcriptModelConfig,
     selectedDevices,
     selectedLanguage,
+    handleSetSelectedLanguage,
     showConfidenceIndicator,
     toggleConfidenceIndicator,
+    betaFeatures,
+    toggleBetaFeature,
     models,
     modelOptions,
     error,

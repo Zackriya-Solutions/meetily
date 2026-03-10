@@ -41,10 +41,6 @@ export interface RecordingPreferences {
   preferred_system_device: string | null;
 }
 
-export interface LanguagePreference {
-  language: string;
-}
-
 /**
  * Configuration Service
  * Singleton service for managing app configuration
@@ -72,14 +68,6 @@ export class ConfigService {
    */
   async getRecordingPreferences(): Promise<RecordingPreferences> {
     return invoke<RecordingPreferences>('get_recording_preferences');
-  }
-
-  /**
-   * Get saved language preference
-   * @returns Promise with language code string
-   */
-  async getLanguagePreference(): Promise<string> {
-    return invoke<string>('get_language_preference');
   }
 
   /**

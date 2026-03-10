@@ -205,7 +205,7 @@ pub async fn initialize_fresh_database(app: AppHandle) -> Result<(), String> {
     if let Err(e) = crate::database::repositories::setting::SettingsRepository::save_transcript_config(
         pool,
         "parakeet",
-        "parakeet-tdt-0.6b-v3-int8",
+        crate::config::DEFAULT_PARAKEET_MODEL,
     ).await {
         error!("Failed to set default transcription model config: {}", e);
     }
