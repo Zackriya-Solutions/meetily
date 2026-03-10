@@ -3,7 +3,7 @@
 import pytest
 from datetime import datetime, timezone
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("cleanup_db")]
 
 
 # ── log_event ────────────────────────────────────────────────────────

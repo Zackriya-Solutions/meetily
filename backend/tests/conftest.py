@@ -23,8 +23,11 @@ os.environ["SENDGRID_API_KEY"] = ""  # Skip actual email sending in tests
 
 
 @pytest_asyncio.fixture
-async def client():
-    """Create an async test client for the FastAPI app."""
+async def client(cleanup_db):
+    """Create an async test client for the FastAPI app.
+
+    Depends on cleanup_db to ensure a clean MongoDB state for each test.
+    """
     from httpx import AsyncClient, ASGITransport
     from main import app
 
@@ -33,7 +36,7 @@ async def client():
         yield ac
 
 
-@pytest_asyncio.fixture(autouse=True)
+@pytest_asyncio.fixture
 async def cleanup_db():
     """Clean the test database before and after each test."""
     from mongodb import get_mongo_client
