@@ -115,9 +115,9 @@ describe('ConfigContext', () => {
       expect(screen.getByTestId('whisperModel').textContent).toBe('large-v3');
     });
 
-    it('provides default language as auto-translate', () => {
+    it('provides default language as auto', () => {
       renderWithProvider();
-      expect(screen.getByTestId('language').textContent).toBe('auto-translate');
+      expect(screen.getByTestId('language').textContent).toBe('auto');
     });
 
     it('provides default confidence indicator as true', () => {

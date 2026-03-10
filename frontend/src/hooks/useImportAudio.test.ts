@@ -2,109 +2,92 @@ import { renderHook, act, waitFor } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach, type Mock } from 'vitest';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { useRouter } from 'next/navigation';
 
-// Mock sonner
-vi.mock('sonner', () => ({
-  toast: {
-    success: vi.fn(),
-    error: vi.fn(),
+// Mock analytics
+vi.mock('@/lib/analytics', () => ({
+  default: {
+    track: vi.fn().mockResolvedValue(undefined),
+    trackError: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
-// Mock useSidebar
-const mockSetCurrentMeeting = vi.fn();
-const mockRefetchMeetings = vi.fn().mockResolvedValue(undefined);
-vi.mock('@/components/Sidebar/SidebarProvider', () => ({
-  useSidebar: () => ({
-    setCurrentMeeting: mockSetCurrentMeeting,
-    refetchMeetings: mockRefetchMeetings,
-  }),
-}));
-
 import { useImportAudio } from './useImportAudio';
-import { toast } from 'sonner';
 
 describe('useImportAudio', () => {
   const invokeMock = invoke as Mock;
   const listenMock = listen as Mock;
-  let mockPush: Mock;
-  let progressCallback: ((event: any) => void) | null = null;
 
   beforeEach(() => {
-    mockPush = vi.fn();
-    (useRouter as Mock).mockReturnValue({
-      push: mockPush,
-      back: vi.fn(),
-      replace: vi.fn(),
-      prefetch: vi.fn(),
-      refresh: vi.fn(),
-    });
-
     invokeMock.mockReset();
-    mockSetCurrentMeeting.mockClear();
-    mockRefetchMeetings.mockClear().mockResolvedValue(undefined);
-    progressCallback = null;
-
-    listenMock.mockImplementation((event: string, cb: (e: any) => void) => {
-      if (event === 'import-progress') {
-        progressCallback = cb;
-      }
-      return Promise.resolve(vi.fn());
-    });
+    listenMock.mockReset();
+    listenMock.mockResolvedValue(vi.fn()); // unlisten function
   });
 
   // ── Initial State ──────────────────────────────────────────────────
 
-  it('should initialize with isImporting false', () => {
+  it('should initialize with idle status', () => {
     const { result } = renderHook(() => useImportAudio());
-
-    expect(result.current.isImporting).toBe(false);
+    expect(result.current.status).toBe('idle');
   });
 
-  it('should initialize with empty progress', () => {
+  it('should initialize with null progress', () => {
     const { result } = renderHook(() => useImportAudio());
-
-    expect(result.current.progress).toEqual({ stage: '', percent: 0, message: '' });
+    expect(result.current.progress).toBeNull();
   });
 
-  it('should expose importAudio function', () => {
+  it('should initialize with null fileInfo', () => {
     const { result } = renderHook(() => useImportAudio());
-
-    expect(typeof result.current.importAudio).toBe('function');
+    expect(result.current.fileInfo).toBeNull();
   });
 
-  // ── Event Listener ─────────────────────────────────────────────────
+  it('should initialize with null error', () => {
+    const { result } = renderHook(() => useImportAudio());
+    expect(result.current.error).toBeNull();
+  });
 
-  it('should register import-progress listener on mount', async () => {
+  it('should initialize with isProcessing false', () => {
+    const { result } = renderHook(() => useImportAudio());
+    expect(result.current.isProcessing).toBe(false);
+  });
+
+  it('should initialize with isBusy false', () => {
+    const { result } = renderHook(() => useImportAudio());
+    expect(result.current.isBusy).toBe(false);
+  });
+
+  it('should expose selectFile function', () => {
+    const { result } = renderHook(() => useImportAudio());
+    expect(typeof result.current.selectFile).toBe('function');
+  });
+
+  it('should expose startImport function', () => {
+    const { result } = renderHook(() => useImportAudio());
+    expect(typeof result.current.startImport).toBe('function');
+  });
+
+  it('should expose cancelImport function', () => {
+    const { result } = renderHook(() => useImportAudio());
+    expect(typeof result.current.cancelImport).toBe('function');
+  });
+
+  it('should expose reset function', () => {
+    const { result } = renderHook(() => useImportAudio());
+    expect(typeof result.current.reset).toBe('function');
+  });
+
+  // ── Event Listeners ─────────────────────────────────────────────────
+
+  it('should register event listeners on mount', async () => {
     renderHook(() => useImportAudio());
 
     await waitFor(() => {
       expect(listenMock).toHaveBeenCalledWith('import-progress', expect.any(Function));
+      expect(listenMock).toHaveBeenCalledWith('import-complete', expect.any(Function));
+      expect(listenMock).toHaveBeenCalledWith('import-error', expect.any(Function));
     });
   });
 
-  it('should update progress when import-progress event fires', async () => {
-    const { result } = renderHook(() => useImportAudio());
-
-    await waitFor(() => {
-      expect(progressCallback).not.toBeNull();
-    });
-
-    act(() => {
-      progressCallback!({
-        payload: { stage: 'transcribing', percent: 50, message: 'Processing...' },
-      });
-    });
-
-    expect(result.current.progress).toEqual({
-      stage: 'transcribing',
-      percent: 50,
-      message: 'Processing...',
-    });
-  });
-
-  it('should clean up listener on unmount', async () => {
+  it('should clean up listeners on unmount', async () => {
     const unlistenFn = vi.fn();
     listenMock.mockResolvedValue(unlistenFn);
 
@@ -118,186 +101,150 @@ describe('useImportAudio', () => {
     expect(unlistenFn).toHaveBeenCalled();
   });
 
-  // ── Successful Import ──────────────────────────────────────────────
+  // ── selectFile ──────────────────────────────────────────────────────
 
-  it('should handle successful import', async () => {
-    invokeMock.mockResolvedValue({
-      status: 'success',
-      meeting_id: 'meeting-123',
-      meeting_name: 'Imported Call',
-      segments_count: 42,
-      duration_seconds: 3600,
-    });
+  it('should return file info on successful selection', async () => {
+    const fileInfo = {
+      path: '/test/audio.mp3',
+      filename: 'audio.mp3',
+      duration_seconds: 120,
+      size_bytes: 1024000,
+      format: 'mp3',
+    };
+    invokeMock.mockResolvedValue(fileInfo);
 
     const { result } = renderHook(() => useImportAudio());
 
+    let selected: any;
     await act(async () => {
-      await result.current.importAudio();
+      selected = await result.current.selectFile();
     });
 
-    expect(invokeMock).toHaveBeenCalledWith('import_audio_file', {});
-    expect(toast.success).toHaveBeenCalledWith('Audio imported successfully', {
-      description: '42 segments transcribed',
-    });
-    expect(mockRefetchMeetings).toHaveBeenCalled();
-    expect(mockSetCurrentMeeting).toHaveBeenCalledWith({
-      id: 'meeting-123',
-      title: 'Imported Call',
-    });
-    expect(mockPush).toHaveBeenCalledWith('/meeting-details?id=meeting-123');
-    expect(result.current.isImporting).toBe(false);
+    expect(invokeMock).toHaveBeenCalledWith('select_and_validate_audio_command');
+    expect(selected).toEqual(fileInfo);
+    expect(result.current.fileInfo).toEqual(fileInfo);
+    expect(result.current.status).toBe('idle');
   });
 
-  it('should use default title when meeting_name is not provided', async () => {
-    invokeMock.mockResolvedValue({
-      status: 'success',
-      meeting_id: 'meeting-456',
-      segments_count: 10,
-    });
+  it('should return null when user cancels file selection', async () => {
+    invokeMock.mockResolvedValue(null);
 
     const { result } = renderHook(() => useImportAudio());
 
+    let selected: any;
     await act(async () => {
-      await result.current.importAudio();
+      selected = await result.current.selectFile();
     });
 
-    expect(mockSetCurrentMeeting).toHaveBeenCalledWith({
-      id: 'meeting-456',
-      title: 'Imported Meeting',
-    });
+    expect(selected).toBeNull();
+    expect(result.current.status).toBe('idle');
   });
 
-  // ── Cancelled Import ───────────────────────────────────────────────
-
-  it('should handle cancelled import (user closed file picker)', async () => {
-    invokeMock.mockResolvedValue({ status: 'cancelled' });
+  it('should set error on selection failure', async () => {
+    invokeMock.mockRejectedValue(new Error('Permission denied'));
 
     const { result } = renderHook(() => useImportAudio());
 
     await act(async () => {
-      await result.current.importAudio();
+      await result.current.selectFile();
     });
 
-    expect(result.current.isImporting).toBe(false);
-    expect(result.current.progress).toEqual({ stage: '', percent: 0, message: '' });
-    expect(toast.success).not.toHaveBeenCalled();
-    expect(mockPush).not.toHaveBeenCalled();
+    expect(result.current.status).toBe('error');
+    expect(result.current.error).toBe('Permission denied');
   });
 
-  // ── Error Handling ─────────────────────────────────────────────────
+  // ── validateFile ────────────────────────────────────────────────────
 
-  it('should handle import error with Error object', async () => {
-    invokeMock.mockRejectedValue(new Error('Unsupported format'));
+  it('should validate a file by path', async () => {
+    const fileInfo = {
+      path: '/test/audio.wav',
+      filename: 'audio.wav',
+      duration_seconds: 60,
+      size_bytes: 512000,
+      format: 'wav',
+    };
+    invokeMock.mockResolvedValue(fileInfo);
 
     const { result } = renderHook(() => useImportAudio());
 
+    let validated: any;
     await act(async () => {
-      await result.current.importAudio();
+      validated = await result.current.validateFile('/test/audio.wav');
     });
 
-    expect(toast.error).toHaveBeenCalledWith('Import failed', {
-      description: 'Unsupported format',
-    });
-    expect(result.current.isImporting).toBe(false);
-    expect(result.current.progress).toEqual({
-      stage: 'error',
-      percent: 0,
-      message: 'Unsupported format',
-    });
+    expect(invokeMock).toHaveBeenCalledWith('validate_audio_file_command', { path: '/test/audio.wav' });
+    expect(validated).toEqual(fileInfo);
   });
 
-  it('should handle import error with string error', async () => {
-    invokeMock.mockRejectedValue('string error');
+  // ── startImport ─────────────────────────────────────────────────────
+
+  it('should call start_import_audio_command', async () => {
+    invokeMock.mockResolvedValue(undefined);
 
     const { result } = renderHook(() => useImportAudio());
 
     await act(async () => {
-      await result.current.importAudio();
+      await result.current.startImport('/test/audio.mp3', 'My Meeting', 'en', 'large-v3', 'localWhisper');
     });
 
-    expect(toast.error).toHaveBeenCalledWith('Import failed', {
-      description: 'string error',
+    expect(invokeMock).toHaveBeenCalledWith('start_import_audio_command', {
+      sourcePath: '/test/audio.mp3',
+      title: 'My Meeting',
+      language: 'en',
+      model: 'large-v3',
+      provider: 'localWhisper',
     });
+    expect(result.current.status).toBe('processing');
   });
 
-  // ── Guard Against Double Import ────────────────────────────────────
-
-  it('should not start a second import while one is in progress', async () => {
-    let resolveImport: (value: any) => void;
-    invokeMock.mockImplementation(
-      () => new Promise((resolve) => { resolveImport = resolve; })
-    );
+  it('should set error when startImport fails', async () => {
+    invokeMock.mockRejectedValue(new Error('Import failed'));
 
     const { result } = renderHook(() => useImportAudio());
 
-    // Start first import
-    let firstImport: Promise<void>;
-    act(() => {
-      firstImport = result.current.importAudio();
-    });
-
-    expect(result.current.isImporting).toBe(true);
-
-    // Try second import
     await act(async () => {
-      await result.current.importAudio();
+      await result.current.startImport('/test/audio.mp3', 'Meeting');
     });
 
-    // invoke should only have been called once
-    expect(invokeMock).toHaveBeenCalledTimes(1);
-
-    // Resolve the first import
-    await act(async () => {
-      resolveImport!({ status: 'cancelled' });
-      await firstImport;
-    });
+    expect(result.current.status).toBe('error');
+    expect(result.current.error).toBe('Import failed');
   });
 
-  // ── isImporting Transitions ────────────────────────────────────────
+  // ── cancelImport ────────────────────────────────────────────────────
 
-  it('should set isImporting to true while importing', async () => {
-    let resolveImport: (value: any) => void;
-    invokeMock.mockImplementation(
-      () => new Promise((resolve) => { resolveImport = resolve; })
-    );
+  it('should call cancel_import_command', async () => {
+    invokeMock.mockResolvedValue(undefined);
 
     const { result } = renderHook(() => useImportAudio());
-
-    let importPromise: Promise<void>;
-    act(() => {
-      importPromise = result.current.importAudio();
-    });
-
-    expect(result.current.isImporting).toBe(true);
 
     await act(async () => {
-      resolveImport!({ status: 'cancelled' });
-      await importPromise;
+      await result.current.cancelImport();
     });
 
-    expect(result.current.isImporting).toBe(false);
+    expect(invokeMock).toHaveBeenCalledWith('cancel_import_command');
+    expect(result.current.status).toBe('idle');
   });
 
-  it('should set initial progress when starting import', async () => {
-    let resolveImport: (value: any) => void;
-    invokeMock.mockImplementation(
-      () => new Promise((resolve) => { resolveImport = resolve; })
-    );
+  // ── reset ───────────────────────────────────────────────────────────
+
+  it('should reset all state', async () => {
+    invokeMock.mockRejectedValue(new Error('fail'));
 
     const { result } = renderHook(() => useImportAudio());
+
+    // Trigger an error state first
+    await act(async () => {
+      await result.current.selectFile();
+    });
+    expect(result.current.status).toBe('error');
 
     act(() => {
-      result.current.importAudio();
+      result.current.reset();
     });
 
-    expect(result.current.progress).toEqual({
-      stage: 'starting',
-      percent: 0,
-      message: 'Opening file picker...',
-    });
-
-    await act(async () => {
-      resolveImport!({ status: 'cancelled' });
-    });
+    expect(result.current.status).toBe('idle');
+    expect(result.current.fileInfo).toBeNull();
+    expect(result.current.progress).toBeNull();
+    expect(result.current.error).toBeNull();
   });
 });

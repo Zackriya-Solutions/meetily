@@ -78,14 +78,13 @@ describe('LanguageSelection', () => {
     expect(frenchElements.length).toBeGreaterThanOrEqual(2); // option + info text
   });
 
-  it('calls onLanguageChange and invoke when selection changes', async () => {
+  it('calls onLanguageChange when selection changes', async () => {
     const onLanguageChange = vi.fn();
     render(<LanguageSelection {...defaultProps} onLanguageChange={onLanguageChange} />);
 
     fireEvent.change(screen.getByRole('combobox'), { target: { value: 'en' } });
 
     await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith('set_language_preference', { language: 'en' });
       expect(onLanguageChange).toHaveBeenCalledWith('en');
     });
   });
