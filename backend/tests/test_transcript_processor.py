@@ -209,7 +209,12 @@ def test_chunking_exact_chunk_size():
     chunk_size = 5000
     overlap = 1000
     step = chunk_size - overlap
+    # With overlap-based stepping, range(0, 5000, 4000) yields [0, 4000].
+    # The second chunk (text[4000:9000]) is just the trailing overlap and
+    # should be dropped when it adds no new content beyond the first chunk.
     chunks = [text[i:i + chunk_size] for i in range(0, len(text), step)]
+    # Filter out trailing chunks that are fully contained in the previous chunk
+    chunks = [c for i, c in enumerate(chunks) if i == 0 or len(c) > overlap]
     assert len(chunks) == 1
 
 

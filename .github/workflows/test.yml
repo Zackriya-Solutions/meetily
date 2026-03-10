@@ -77,6 +77,14 @@ jobs:
         if: failure()
         working-directory: backend
         run: |
+          echo '### Backend Test Output (last 200 lines)' >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
           tail -200 test-output.txt >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload test output
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-test-output
+          path: backend/test-output.txt
