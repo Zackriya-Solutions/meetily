@@ -73,28 +73,6 @@ describe('ConfigService', () => {
     });
   });
 
-  describe('getLanguagePreference', () => {
-    it('should invoke get_language_preference and return language code', async () => {
-      vi.mocked(invoke).mockResolvedValueOnce('en');
-
-      const result = await service.getLanguagePreference();
-      expect(result).toBe('en');
-      expect(invoke).toHaveBeenCalledWith('get_language_preference');
-    });
-
-    it('should return non-English language', async () => {
-      vi.mocked(invoke).mockResolvedValueOnce('ja');
-
-      const result = await service.getLanguagePreference();
-      expect(result).toBe('ja');
-    });
-
-    it('should propagate invoke errors', async () => {
-      vi.mocked(invoke).mockRejectedValueOnce(new Error('no preference'));
-      await expect(service.getLanguagePreference()).rejects.toThrow('no preference');
-    });
-  });
-
   describe('getCustomOpenAIConfig', () => {
     it('should invoke api_get_custom_openai_config and return config', async () => {
       const config = {

@@ -5,11 +5,16 @@ import React from 'react';
 import { ConfigProvider, useConfig } from './ConfigContext';
 import { invoke } from '@tauri-apps/api/core';
 
-// Mock @tauri-apps/api/event (dynamic import in ConfigContext)
-vi.mock('@tauri-apps/api/event', () => ({
-  listen: vi.fn().mockResolvedValue(() => {}),
-  emit: vi.fn().mockResolvedValue(undefined),
-}));
+// Ensure window.__TAURI_INTERNALS__ exists for dynamic imports of @tauri-apps/api/event
+// ConfigContext uses `await import('@tauri-apps/api/event')` which bypasses vi.mock
+// when the actual module tries to access Tauri internals
+beforeEach(() => {
+  (globalThis as any).window = globalThis.window || {};
+  (window as any).__TAURI_INTERNALS__ = {
+    transformCallback: vi.fn().mockReturnValue(0),
+    invoke: vi.fn().mockResolvedValue(undefined),
+  };
+});
 
 // Mock configService
 vi.mock('@/services/configService', () => ({
@@ -29,7 +34,6 @@ vi.mock('@/services/configService', () => ({
       preferred_mic_device: null,
       preferred_system_device: null,
     }),
-    getLanguagePreference: vi.fn().mockResolvedValue('auto-translate'),
     getCustomOpenAIConfig: vi.fn().mockResolvedValue(null),
   },
   ConfigService: vi.fn(),
