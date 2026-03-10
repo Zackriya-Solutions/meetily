@@ -11,6 +11,8 @@ import {
   getAccessToken,
   initCloudApiUrl,
 } from '@/services/authService'
+import { toast } from 'sonner'
+import Analytics from '@/lib/analytics'
 
 interface AuthContextType {
   user: UserProfile | null
@@ -41,11 +43,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setUser(result.user)
           scheduleRefresh()
         } else {
-          setUser(null)
+          setUser(prev => {
+            if (prev) toast.info('Session expired. Please sign in again.')
+            return null
+          })
         }
       } catch {
         console.warn('[Auth] Token refresh failed')
-        setUser(null)
+        setUser(prev => {
+          if (prev) toast.info('Session expired. Please sign in again.')
+          return null
+        })
       }
     }, 12 * 60 * 1000) // 12 minutes
   }, [])
@@ -69,6 +77,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           if (profile) {
             setUser(profile)
             scheduleRefresh()
+            // Re-identify restored user in analytics
+            Analytics.identify(profile.user_id, {
+              email: profile.email,
+              account_level: profile.account_level || 'free',
+            }).catch(() => {})
           } else {
             // Token expired — try refresh
             const result = await refreshTokens()
@@ -102,6 +115,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const result = await apiLogin(email, password, deviceId)
       setUser(result.user)
       scheduleRefresh()
+      // Link auth user to analytics
+      Analytics.identify(result.user.user_id, {
+        email: result.user.email,
+        account_level: result.user.account_level || 'free',
+      }).catch(() => {})
     } catch (e: any) {
       const msg = e?.message || 'Login failed'
       setError(msg)
@@ -115,6 +133,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const result = await apiRegister(email, password, deviceId, displayName)
       setUser(result.user)
       scheduleRefresh()
+      // Link auth user to analytics
+      Analytics.identify(result.user.user_id, {
+        email: result.user.email,
+        account_level: result.user.account_level || 'free',
+      }).catch(() => {})
     } catch (e: any) {
       const msg = e?.message || 'Registration failed'
       setError(msg)

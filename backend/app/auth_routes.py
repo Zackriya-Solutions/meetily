@@ -500,6 +500,45 @@ async def list_user_devices(current_user: dict = Depends(get_current_user)):
     return _user_to_profile(user).devices
 
 
+@router.delete("/devices/{device_id}")
+async def unlink_device(
+    device_id: str,
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+):
+    """Remove a device from the authenticated user's account."""
+    col = get_users_collection()
+    user_id = current_user["sub"]
+
+    user = await col.find_one({"user_id": user_id})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    device_ids = [d["device_id"] for d in user.get("devices", [])]
+    if device_id not in device_ids:
+        raise HTTPException(status_code=404, detail="Device not found on this account")
+
+    # Prevent unlinking the last device
+    if len(device_ids) <= 1:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot remove your last device. At least one device must remain linked.",
+        )
+
+    await col.update_one(
+        {"user_id": user_id},
+        {
+            "$pull": {"devices": {"device_id": device_id}},
+            "$set": {"updated_at": datetime.now(timezone.utc)},
+        },
+    )
+
+    await log_event("device_unlinked", user_id=user_id, ip=_get_client_ip(request),
+                     metadata={"device_id": device_id})
+    logger.info(f"Device {device_id} unlinked from user {user_id}")
+    return {"message": "Device unlinked", "device_id": device_id}
+
+
 # ── Email verification ──────────────────────────────────────────────
 
 

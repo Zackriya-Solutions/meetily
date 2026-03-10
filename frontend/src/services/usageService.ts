@@ -88,15 +88,13 @@ export async function flushEvents(): Promise<void> {
     const events = await invoke<any[]>('usage_flush_events')
     if (!events || events.length === 0) return
 
-    // Get device ID from analytics store
-    let deviceId = 'unknown'
+    // Get device ID from cached value (set during init)
+    const deviceId = (window as any).__iqcapture_device_id || 'unknown'
+
+    // Get auth user_id if available (links usage events to authenticated user)
+    let userId: string | null = null
     try {
-      const stored = await invoke<string | null>('auth_get_user_id')
-      // Actually we need the device_id, not the auth user_id
-      // The device_id is the user_id in analytics.json
-      const analyticsPath = await invoke<string | null>('auth_get_access_token')
-      // Simpler: use the identify_user data
-      deviceId = (window as any).__iqcapture_device_id || 'unknown'
+      userId = await getAuthUserId()
     } catch { /* ignore */ }
 
     const baseUrl = await getBaseUrl()
@@ -106,7 +104,11 @@ export async function flushEvents(): Promise<void> {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify({ device_id: deviceId, events }),
+      body: JSON.stringify({
+        device_id: deviceId,
+        user_id: userId,
+        events,
+      }),
     })
 
     if (res.ok) {
@@ -150,12 +152,19 @@ export async function initUsageService(): Promise<void> {
   await trackSessionStarted()
   startPeriodicFlush()
 
-  // Store device_id globally for flush
+  // Store device_id globally for flush — use Tauri store (same as Analytics.getPersistentUserId)
   try {
-    // Read from analytics store (same place as PostHog user_id)
-    const stored = localStorage.getItem('iqcapture_user_id')
-    if (stored) (window as any).__iqcapture_device_id = stored
-  } catch { /* ignore */ }
+    const { Store } = await import('@tauri-apps/plugin-store')
+    const store = await Store.load('analytics.json')
+    const storedId = await store.get<string>('user_id')
+    if (storedId) (window as any).__iqcapture_device_id = storedId
+  } catch {
+    // Fallback to localStorage
+    try {
+      const stored = localStorage.getItem('iqcapture_user_id')
+      if (stored) (window as any).__iqcapture_device_id = stored
+    } catch { /* ignore */ }
+  }
 
   // Flush on app close
   window.addEventListener('beforeunload', () => {

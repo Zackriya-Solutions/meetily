@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
-import { ChevronDown, ChevronRight, File, Settings, ChevronLeftCircle, ChevronRightCircle, Calendar, StickyNote, Home, Trash2, Mic, Square, Plus, Search, Pencil, NotebookPen, SearchIcon, X, Upload } from 'lucide-react';
+import { ChevronDown, ChevronRight, File, Settings, ChevronLeftCircle, ChevronRightCircle, Calendar, StickyNote, Home, Trash2, Mic, Square, Plus, Search, Pencil, NotebookPen, SearchIcon, X, Upload, LogIn } from 'lucide-react';
 import { useRouter, usePathname } from 'next/navigation';
 import { useSidebar } from './SidebarProvider';
 import type { CurrentMeeting } from '@/components/Sidebar/SidebarProvider';
@@ -16,6 +16,8 @@ import { toast } from 'sonner';
 import { useRecordingState } from '@/contexts/RecordingStateContext';
 import { useImportDialog } from '@/contexts/ImportDialogContext';
 import { useConfig } from '@/contexts/ConfigContext';
+import { useAuth } from '@/contexts/AuthContext';
+import { AuthModal, UserProfileMenu } from '@/components/Auth';
 
 import {
   Dialog,
@@ -61,6 +63,8 @@ const Sidebar: React.FC = React.memo(() => {
   const { isRecording } = useRecordingState();
   const { openImportDialog } = useImportDialog();
   const { betaFeatures } = useConfig();
+  const { isAuthenticated } = useAuth();
+  const [showAuthModal, setShowAuthModal] = useState(false);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set(['meetings']));
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [showModelSettings, setShowModelSettings] = useState(false);
@@ -84,6 +88,12 @@ const Sidebar: React.FC = React.memo(() => {
     currentTitle: ''
   });
   const [editingTitle, setEditingTitle] = useState<string>('');
+  const [deviceId, setDeviceId] = useState<string>('');
+
+  // Get device ID for auth
+  useEffect(() => {
+    Analytics.getPersistentUserId().then(setDeviceId).catch(() => setDeviceId('unknown'));
+  }, []);
 
   // Prefetch heavy routes so Next.js compiles them in the background at startup
   // instead of on first click (avoids ~8s compilation lag on /meeting-details)
@@ -813,6 +823,22 @@ const Sidebar: React.FC = React.memo(() => {
               <span>Settings</span>
             </button>
             <Info isCollapsed={isCollapsed} />
+
+            {/* Auth: Sign In button or User Profile */}
+            <div className="w-full px-1 mt-1">
+              {isAuthenticated ? (
+                <UserProfileMenu />
+              ) : (
+                <button
+                  onClick={() => setShowAuthModal(true)}
+                  className="w-full flex items-center justify-center px-3 py-1.5 text-sm font-medium text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                >
+                  <LogIn className="w-4 h-4 mr-2" />
+                  <span>Sign In</span>
+                </button>
+              )}
+            </div>
+
             <div className="w-full flex items-center justify-center px-3 py-1 text-xs text-gray-400">
               v0.4.0
             </div>
@@ -878,6 +904,14 @@ const Sidebar: React.FC = React.memo(() => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Auth Modal */}
+      <AuthModal
+        isOpen={showAuthModal}
+        onClose={() => setShowAuthModal(false)}
+        onSuccess={() => setShowAuthModal(false)}
+        deviceId={deviceId}
+      />
     </div>
   );
 });
