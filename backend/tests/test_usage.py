@@ -1,5 +1,6 @@
 """Tests for usage event ingestion and deduplication."""
 
+from uuid import uuid4
 from helpers import _register_payload
 
 
@@ -18,11 +19,13 @@ async def test_ingest_events(client):
                 "event_type": "recording_minutes",
                 "value": 5.5,
                 "timestamp": "2025-01-01T00:00:00Z",
+                "client_event_id": str(uuid4()),
             },
             {
                 "event_type": "meeting_created",
                 "value": 1,
                 "timestamp": "2025-01-01T00:01:00Z",
+                "client_event_id": str(uuid4()),
             },
         ],
     }

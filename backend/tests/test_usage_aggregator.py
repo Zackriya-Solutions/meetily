@@ -2,6 +2,7 @@
 
 import pytest
 from datetime import datetime, timezone
+from uuid import uuid4
 
 pytestmark = pytest.mark.usefixtures("cleanup_db")
 
@@ -18,6 +19,7 @@ async def _insert_event(events_col, user_id, event_type, value, timestamp_str,
         "timestamp": timestamp_str,
         "received_at": datetime.now(timezone.utc),
         "aggregated": False,
+        "client_event_id": str(uuid4()),
     })
 
 
