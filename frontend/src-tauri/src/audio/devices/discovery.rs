@@ -27,7 +27,10 @@ pub async fn list_audio_devices() -> Result<Vec<AudioDevice>> {
         }
     };
 
-    // Add any additional devices from the default host
+    // On non-Linux platforms, supplement with any CPAL output devices not already listed.
+    // On Linux we rely exclusively on pactl enumeration in configure_linux_audio to avoid
+    // adding raw ALSA device names (pulse, default, hw:*) as spurious system audio options.
+    #[cfg(not(target_os = "linux"))]
     if let Ok(other_devices) = host.devices() {
         for device in other_devices {
             if let Ok(name) = device.name() {

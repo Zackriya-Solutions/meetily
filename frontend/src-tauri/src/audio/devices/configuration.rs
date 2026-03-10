@@ -154,16 +154,42 @@ pub async fn get_device_and_config(
 
                 #[cfg(target_os = "linux")]
                 {
-                    // For Linux, we use PulseAudio monitor sources for system audio
-                    if let Ok(pulse_host) = cpal::host_from_id(cpal::HostId::Alsa) {
-                        for device in pulse_host.input_devices()? {
+                    use log::{info, warn};
+
+                    // On Linux, system audio devices are PulseAudio/PipeWire monitor sources.
+                    // Monitor sources are accessible as INPUT devices via the "pulse" ALSA plugin
+                    // when PULSE_SOURCE is set to the monitor name.
+                    let is_pa_monitor = audio_device.name.ends_with(".monitor")
+                        || audio_device.name.contains("alsa_output");
+
+                    if is_pa_monitor {
+                        // Set PULSE_SOURCE so the "pulse" ALSA device reads from this monitor
+                        std::env::set_var("PULSE_SOURCE", &audio_device.name);
+                        info!("[Linux DeviceConfig] Set PULSE_SOURCE={}", audio_device.name);
+
+                        // Use the "pulse" ALSA device to capture from the monitor
+                        for device in host.input_devices()? {
                             if let Ok(name) = device.name() {
-                                if name == audio_device.name {
-                                    let default_config = device
+                                if name == "pulse" {
+                                    let config = device
                                         .default_input_config()
-                                        .map_err(|e| anyhow!("Failed to get default input config: {}", e))?;
-                                    return Ok((device, default_config));
+                                        .map_err(|e| anyhow!("Failed to get pulse input config: {}", e))?;
+                                    info!("[Linux DeviceConfig] Capturing monitor '{}' via 'pulse' device", audio_device.name);
+                                    return Ok((device, config));
                                 }
+                            }
+                        }
+                        warn!("[Linux DeviceConfig] 'pulse' ALSA device not found — install pulseaudio-alsa or pipewire-alsa");
+                    }
+
+                    // Fallback: try to find the monitor as a direct ALSA input device
+                    for device in host.input_devices()? {
+                        if let Ok(name) = device.name() {
+                            if name == audio_device.name {
+                                let config = device
+                                    .default_input_config()
+                                    .map_err(|e| anyhow!("Failed to get input config: {}", e))?;
+                                return Ok((device, config));
                             }
                         }
                     }

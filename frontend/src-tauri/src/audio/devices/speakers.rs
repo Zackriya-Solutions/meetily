@@ -113,3 +113,11 @@ pub fn find_builtin_output_device() -> Result<Option<AudioDevice>> {
     warn!("⚠️ No built-in speaker found (searched {} patterns)", builtin_patterns.len());
     Ok(None)
 }
+
+/// Get the default system audio capture device on Linux via PulseAudio/PipeWire monitor source.
+///
+/// Delegates to the linux platform module which queries pactl.
+#[cfg(target_os = "linux")]
+pub fn default_system_audio_device() -> Result<AudioDevice> {
+    super::platform::linux::default_system_audio_device()
+}
