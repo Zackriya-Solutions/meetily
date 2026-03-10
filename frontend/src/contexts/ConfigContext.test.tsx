@@ -5,6 +5,12 @@ import React from 'react';
 import { ConfigProvider, useConfig } from './ConfigContext';
 import { invoke } from '@tauri-apps/api/core';
 
+// Mock @tauri-apps/api/event (dynamic import in ConfigContext)
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: vi.fn().mockResolvedValue(() => {}),
+  emit: vi.fn().mockResolvedValue(undefined),
+}));
+
 // Mock configService
 vi.mock('@/services/configService', () => ({
   configService: {

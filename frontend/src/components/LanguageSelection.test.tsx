@@ -16,6 +16,12 @@ vi.mock('sonner', () => ({
   },
 }));
 
+vi.mock('@/contexts/ConfigContext', () => ({
+  useConfig: vi.fn().mockReturnValue({
+    setSelectedLanguage: vi.fn(),
+  }),
+}));
+
 describe('LanguageSelection', () => {
   const defaultProps = {
     selectedLanguage: 'auto',
