@@ -678,8 +678,12 @@ pub fn run() {
             audio::recording_commands::attempt_device_reconnect,
             // Playback device detection (Bluetooth warning)
             audio::recording_commands::get_active_audio_output,
-            // Audio import command
-            audio::import::import_audio_file,
+            // Audio import commands
+            audio::import::select_and_validate_audio_command,
+            audio::import::validate_audio_file_command,
+            audio::import::start_import_audio_command,
+            audio::import::cancel_import_command,
+            audio::import::is_import_in_progress_command,
             // Audio recovery commands (for transcript recovery feature)
             audio::incremental_saver::recover_audio_from_checkpoints,
             audio::incremental_saver::cleanup_checkpoints,
