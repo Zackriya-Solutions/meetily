@@ -122,6 +122,10 @@ Build from source following our detailed guides:
 - [Building on Linux](docs/building_in_linux.md)
 - [General Build Instructions](docs/BUILDING.md)
 
+**System audio capture** on Linux works via PulseAudio/PipeWire monitor sources.
+Requires `pulseaudio-alsa` or `pipewire-alsa` (installed by default on Ubuntu, Fedora, and most desktop distros).
+The app automatically captures from the monitor of your active output device (built-in, Bluetooth, HDMI, USB).
+
 **Quick start:**
 
 ```bash
