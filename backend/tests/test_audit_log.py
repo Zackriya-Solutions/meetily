@@ -59,6 +59,7 @@ async def test_log_event_stores_timestamp():
     from audit_log import log_event
     from mongodb import get_audit_log_collection
 
+    from datetime import timedelta
     before = datetime.now(timezone.utc)
     await log_event(event_type="register", user_id="user-ts")
     after = datetime.now(timezone.utc)
@@ -66,9 +67,10 @@ async def test_log_event_stores_timestamp():
     col = get_audit_log_collection()
     entry = await col.find_one({"user_id": "user-ts"})
     assert entry is not None
-    # MongoDB returns naive datetimes (UTC without tzinfo), so strip tz for comparison
-    ts = entry["timestamp"]
-    assert before.replace(tzinfo=None) <= ts.replace(tzinfo=None) <= after.replace(tzinfo=None)
+    # MongoDB truncates microseconds to milliseconds and returns naive datetimes,
+    # so strip tzinfo and allow 1ms tolerance for the rounding.
+    ts = entry["timestamp"].replace(tzinfo=None)
+    assert before.replace(tzinfo=None) - timedelta(milliseconds=1) <= ts <= after.replace(tzinfo=None)
 
 
 async def test_log_event_optional_fields():

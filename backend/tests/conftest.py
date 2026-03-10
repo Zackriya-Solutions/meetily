@@ -63,14 +63,15 @@ async def client(cleanup_db):
 async def cleanup_db():
     """Clean the MongoDB test database before and after each test.
 
-    Drops the entire database (not just documents) so that unique indexes
-    created by ensure_indexes() don't cause DuplicateKeyError in tests
-    that insert documents without all indexed fields.
+    Drops the entire database (not just documents) so that stale data
+    and unique indexes don't leak between tests, then recreates indexes
+    so that tests relying on them (e.g. deduplication) work correctly.
     """
-    from mongodb import get_mongo_client
+    from mongodb import get_mongo_client, ensure_indexes
 
     mongo_client = get_mongo_client()
     await mongo_client.drop_database("iqcapture_test")
+    await ensure_indexes()
     yield
     await mongo_client.drop_database("iqcapture_test")
 
