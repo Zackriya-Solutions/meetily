@@ -49,9 +49,17 @@ pnpm install
 echo "Building Next.js application..."
 pnpm run build
 
-# Set environment variables for the build
+# Set environment variables for Tauri updater signing
+SIGNING_KEY_PATH="$HOME/.tauri/meetily.key"
+if [ -f "$SIGNING_KEY_PATH" ]; then
+    echo "Found Tauri signing key at $SIGNING_KEY_PATH"
+    export TAURI_SIGNING_PRIVATE_KEY=$(cat "$SIGNING_KEY_PATH")
+    export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""
+else
+    echo "Warning: No signing key found at $SIGNING_KEY_PATH"
+    echo "The updater bundle will not be signed. Run 'pnpm tauri signer generate -w $SIGNING_KEY_PATH' to create one."
+fi
 
 echo "Building Tauri app..."
 pnpm run tauri build
-sleep
 
