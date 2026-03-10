@@ -34,10 +34,10 @@ if ! command -v gh &> /dev/null; then
     exit 1
 fi
 
-# Verify we're in a git repo with a remote
-REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null)
+# Derive repo from origin remote (not gh repo view, which follows fork parent)
+REPO=$(git remote get-url origin 2>/dev/null | sed 's/.*github.com[:/]\(.*\)\.git/\1/')
 if [ -z "$REPO" ]; then
-    echo "Error: Could not determine GitHub repo. Run 'gh auth login' first."
+    echo "Error: Could not determine GitHub repo from origin remote."
     exit 1
 fi
 echo "Target repo: $REPO"
@@ -60,8 +60,8 @@ echo "  DMG:     $DMG"
 echo "  Tarball: $TARBALL"
 echo "  Sig:     $SIG"
 
-# Check if tag already exists
-if git tag -l "$TAG" | grep -q .; then
+# Check if tag already exists locally or on origin
+if git tag -l "$TAG" | grep -q . || git ls-remote --tags origin "$TAG" 2>/dev/null | grep -q .; then
     echo "Error: Tag $TAG already exists. Bump the version in tauri.conf.json or pass a different version."
     exit 1
 fi
