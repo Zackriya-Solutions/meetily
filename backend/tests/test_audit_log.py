@@ -66,7 +66,9 @@ async def test_log_event_stores_timestamp():
     col = get_audit_log_collection()
     entry = await col.find_one({"user_id": "user-ts"})
     assert entry is not None
-    assert before <= entry["timestamp"] <= after
+    # MongoDB returns naive datetimes (UTC without tzinfo), so strip tz for comparison
+    ts = entry["timestamp"]
+    assert before.replace(tzinfo=None) <= ts.replace(tzinfo=None) <= after.replace(tzinfo=None)
 
 
 async def test_log_event_optional_fields():

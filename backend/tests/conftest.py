@@ -41,9 +41,18 @@ async def client(cleanup_db):
     """Create an async test client for the FastAPI app.
 
     Depends on cleanup_db to ensure a clean MongoDB state for each test.
+    Also cleans the SQLite database so tests don't leak state.
     """
     from httpx import AsyncClient, ASGITransport
-    from main import app
+    from main import app, db as sqlite_db
+    import aiosqlite
+
+    # Clean SQLite tables between tests
+    async with aiosqlite.connect(sqlite_db.db_path) as conn:
+        for table in ("meetings", "transcripts", "summary_processes",
+                       "transcript_chunks", "settings", "transcript_settings"):
+            await conn.execute(f"DELETE FROM {table}")
+        await conn.commit()
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
@@ -52,17 +61,18 @@ async def client(cleanup_db):
 
 @pytest_asyncio.fixture
 async def cleanup_db():
-    """Clean the test database before and after each test."""
+    """Clean the MongoDB test database before and after each test.
+
+    Drops the entire database (not just documents) so that unique indexes
+    created by ensure_indexes() don't cause DuplicateKeyError in tests
+    that insert documents without all indexed fields.
+    """
     from mongodb import get_mongo_client
 
-    db = get_mongo_client()["iqcapture_test"]
-    collection_names = await db.list_collection_names()
-    for name in collection_names:
-        await db[name].delete_many({})
+    mongo_client = get_mongo_client()
+    await mongo_client.drop_database("iqcapture_test")
     yield
-    collection_names = await db.list_collection_names()
-    for name in collection_names:
-        await db[name].delete_many({})
+    await mongo_client.drop_database("iqcapture_test")
 
 
 def _register_payload(email="test@example.com", password="TestPass1", device_id="device-001"):
