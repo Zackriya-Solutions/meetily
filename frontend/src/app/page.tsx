@@ -44,7 +44,6 @@ import {
 import { ChatInterface } from '@/components/MeetingDetails/ChatInterface';
 import { MicrophoneIcon } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
-import { ButtonGroup } from '@/components/ui/button-group';
 import { apiUrl } from '@/lib/config';
 import { authFetch, AuthError } from '@/lib/api';
 import { recoveryService, PendingMeetingData } from '@/lib/transcriptRecovery';
@@ -1318,8 +1317,13 @@ export default function Home() {
           console.log('Auto-starting recording from navigation/new-tab launch...');
           sessionStorage.removeItem('autoStartRecording'); // Clear the flag
           if (shouldAutoStartFromUrl) {
+            const urlMeetingTitle = urlParams.get('meetingTitle');
+            if (urlMeetingTitle) {
+              setMeetingTitle(urlMeetingTitle);
+            }
             urlParams.delete('autoStart');
             urlParams.delete('source');
+            urlParams.delete('meetingTitle');
             const nextQuery = urlParams.toString();
             window.history.replaceState(
               {},
@@ -1506,6 +1510,9 @@ export default function Home() {
       audio_start_time: adjustedAudioStart,
       audio_end_time: adjustedAudioEnd,
       duration: update.duration,
+      source: update.source || 'live',
+      speaker: update.speaker,
+      speaker_confidence: update.speaker_confidence,
       stability_score: update.stability_score,
       stability_class: update.stability_class || 'stable',
       segment_finalize_latency_seconds: update.segment_finalize_latency_seconds,
@@ -1864,7 +1871,11 @@ export default function Home() {
     };
 
     const fullTranscript = transcripts
-      .map(t => `${formatTime(t.audio_start_time)} ${t.text}`)
+      .map((t) => {
+        const speaker = (t.speaker || '').trim();
+        const speakerPrefix = speaker ? `${speaker}: ` : '';
+        return `${formatTime(t.audio_start_time)} ${speakerPrefix}${t.text}`;
+      })
       .join('\n');
     try {
       await navigator.clipboard.writeText(fullTranscript);
@@ -2223,37 +2234,7 @@ export default function Home() {
                     </div>
                   </div>
                 )}
-                <div className="flex justify-center  items-center space-x-2">
-                  <ButtonGroup>
-                    {transcripts?.length > 0 && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => {
-                          handleCopyTranscript();
-                        }}
-                        title="Copy Transcript"
-                      >
-                        <Copy />
-                        <span className='hidden md:inline'>
-                          Copy
-                        </span>
-                      </Button>
-                    )}
-                    {/* {!isRecording && transcripts?.length === 0 && ( */}
-
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setShowDeviceSettings(true)}
-                      title="Input/Output devices selection"
-                    >
-                      <MicrophoneIcon />
-                      <span className='hidden md:inline'>
-                        Devices
-                      </span>
-                    </Button>
-                  </ButtonGroup>
+                <div className="flex justify-center items-center space-x-2">
                   {/* {showSummary && !isRecording && (
                     <>
                       <button
@@ -2602,6 +2583,30 @@ export default function Home() {
               <div className="flex h-full w-full flex-col">
                 <div className="flex items-center justify-between border-b border-gray-200 px-3 py-2">
                   <h4 className="text-sm font-semibold text-gray-900">Live Transcript</h4>
+                  <div className="flex items-center gap-1.5">
+                    {transcripts?.length > 0 && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleCopyTranscript}
+                        title="Copy Transcript"
+                        className="h-8 px-2.5"
+                      >
+                        <Copy className="h-4 w-4" />
+                        <span className="hidden md:inline">Copy</span>
+                      </Button>
+                    )}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setShowDeviceSettings(true)}
+                      title="Input/Output devices selection"
+                      className="h-8 px-2.5"
+                    >
+                      <MicrophoneIcon className="h-4 w-4" />
+                      <span className="hidden md:inline">Devices</span>
+                    </Button>
+                  </div>
                 </div>
                 <div ref={transcriptContainerRef} className="min-h-0 flex-1 overflow-y-auto px-2 py-3">
                   <TranscriptView

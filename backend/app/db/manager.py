@@ -980,7 +980,9 @@ class DatabaseManager:
                 "user_email": row["user_email"],
                 "skill_markdown": row["skill_markdown"] or "",
                 "is_active": bool(row["is_active"]),
-                "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+                "updated_at": row["updated_at"].isoformat()
+                if row["updated_at"]
+                else None,
             }
 
     async def get_user_ai_host_skill(self, user_email: str) -> Optional[Dict]:
@@ -1000,7 +1002,9 @@ class DatabaseManager:
                 "user_email": row["user_email"],
                 "skill_markdown": row["skill_markdown"] or "",
                 "is_active": bool(row["is_active"]),
-                "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+                "updated_at": row["updated_at"].isoformat()
+                if row["updated_at"]
+                else None,
             }
 
     async def delete_user_ai_host_skill(self, user_email: str) -> None:
@@ -1132,7 +1136,7 @@ class DatabaseManager:
 
         query = f"""
             UPDATE user_ai_host_styles
-            SET {', '.join(fields)}
+            SET {", ".join(fields)}
             WHERE user_email = $1 AND id::text = $2
             RETURNING id, user_email, name, skill_markdown, is_active, created_at, updated_at
         """
@@ -1229,7 +1233,9 @@ class DatabaseManager:
                 "skill_markdown": row["skill_markdown"] or "",
                 "is_active": bool(row["is_active"]),
                 "updated_by": row["updated_by"],
-                "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+                "updated_at": row["updated_at"].isoformat()
+                if row["updated_at"]
+                else None,
             }
 
     async def get_meeting_ai_host_skill(self, meeting_id: str) -> Optional[Dict]:
@@ -1250,7 +1256,9 @@ class DatabaseManager:
                 "skill_markdown": row["skill_markdown"] or "",
                 "is_active": bool(row["is_active"]),
                 "updated_by": row["updated_by"],
-                "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+                "updated_at": row["updated_at"].isoformat()
+                if row["updated_at"]
+                else None,
             }
 
     async def delete_meeting_ai_host_skill(self, meeting_id: str) -> None:
@@ -1480,7 +1488,9 @@ class DatabaseManager:
                 }
 
             raw_scopes = row["scopes"] or []
-            scopes = json.loads(raw_scopes) if isinstance(raw_scopes, str) else raw_scopes
+            scopes = (
+                json.loads(raw_scopes) if isinstance(raw_scopes, str) else raw_scopes
+            )
             can_writeback = "https://www.googleapis.com/auth/calendar.events" in scopes
 
             return {
@@ -1574,7 +1584,9 @@ class DatabaseManager:
                 "share_transcript": row["share_transcript"],
             }
 
-    async def get_active_calendar_integrations(self, provider: str = "google") -> List[Dict]:
+    async def get_active_calendar_integrations(
+        self, provider: str = "google"
+    ) -> List[Dict]:
         async with self._get_connection() as conn:
             rows = await conn.fetch(
                 """
@@ -1731,9 +1743,7 @@ class DatabaseManager:
                         "agenda_description": row["agenda_description"],
                         "attendees": attendees,
                         "start_time": row["start_time"],
-                        "attendee_reminders_enabled": row[
-                            "attendee_reminders_enabled"
-                        ],
+                        "attendee_reminders_enabled": row["attendee_reminders_enabled"],
                     }
                 )
             return reminders
@@ -1756,7 +1766,9 @@ class DatabaseManager:
                 return None
 
             raw_scopes = row["scopes"] or []
-            scopes = json.loads(raw_scopes) if isinstance(raw_scopes, str) else raw_scopes
+            scopes = (
+                json.loads(raw_scopes) if isinstance(raw_scopes, str) else raw_scopes
+            )
             return {
                 "user_email": row["user_email"],
                 "provider": row["provider"],
@@ -1782,6 +1794,14 @@ class DatabaseManager:
             if not meeting:
                 return None
 
+            meeting_title = meeting["title"] or ""
+
+            # If the meeting has the default placeholder title, it means the user
+            # started an ad-hoc meeting without explicitly setting a context.
+            # Do not attempt to guess the calendar event based on title or time.
+            if meeting_title.strip() in ("Untitled Meeting", "New Meeting", ""):
+                return None
+
             # Primary match: similar title + close start time window.
             row = await conn.fetchrow(
                 """
@@ -1805,24 +1825,8 @@ class DatabaseManager:
                 meeting["created_at"],
             )
 
-            # Fallback: nearest event around meeting start (if title drifted/renamed).
-            if not row:
-                row = await conn.fetchrow(
-                    """
-                    SELECT event_id, meeting_title, meeting_link, agenda_description,
-                           attendee_emails, start_time, end_time
-                    FROM calendar_events
-                    WHERE user_email = $1
-                      AND provider = $2
-                      AND start_time BETWEEN ($3::timestamp - INTERVAL '3 hours') AND ($3::timestamp + INTERVAL '3 hours')
-                    ORDER BY ABS(EXTRACT(EPOCH FROM (start_time - $3))) ASC
-                    LIMIT 1
-                """,
-                    user_email,
-                    provider,
-                    meeting["created_at"],
-                )
-
+            # Fallback removed to prevent auto-associating ad hoc meetings
+            # with calendar events just based on time.
             if not row:
                 return None
 
@@ -1863,7 +1867,11 @@ class DatabaseManager:
                 return None
 
             attendees_raw = row["attendee_emails"] or []
-            attendees = json.loads(attendees_raw) if isinstance(attendees_raw, str) else attendees_raw
+            attendees = (
+                json.loads(attendees_raw)
+                if isinstance(attendees_raw, str)
+                else attendees_raw
+            )
 
             return {
                 "event_id": row["event_id"],
@@ -1900,16 +1908,22 @@ class DatabaseManager:
             upcoming_events = []
             for row in rows:
                 attendees_raw = row["attendee_emails"] or []
-                attendees = json.loads(attendees_raw) if isinstance(attendees_raw, str) else attendees_raw
-                upcoming_events.append({
-                    "event_id": row["event_id"],
-                    "meeting_title": row["meeting_title"],
-                    "meeting_link": row["meeting_link"],
-                    "agenda_description": row["agenda_description"],
-                    "attendees": attendees,
-                    "start_time": row["start_time"],
-                    "end_time": row["end_time"],
-                })
+                attendees = (
+                    json.loads(attendees_raw)
+                    if isinstance(attendees_raw, str)
+                    else attendees_raw
+                )
+                upcoming_events.append(
+                    {
+                        "event_id": row["event_id"],
+                        "meeting_title": row["meeting_title"],
+                        "meeting_link": row["meeting_link"],
+                        "agenda_description": row["agenda_description"],
+                        "attendees": attendees,
+                        "start_time": row["start_time"],
+                        "end_time": row["end_time"],
+                    }
+                )
 
             return upcoming_events
 
@@ -2080,7 +2094,9 @@ class DatabaseManager:
                 now,
             )
 
-    async def get_recording_chunk(self, session_id: str, chunk_index: int) -> Optional[Dict]:
+    async def get_recording_chunk(
+        self, session_id: str, chunk_index: int
+    ) -> Optional[Dict]:
         async with self._get_connection() as conn:
             row = await conn.fetchrow(
                 """
@@ -2108,12 +2124,16 @@ class DatabaseManager:
             """,
                 session_id,
             )
-            return dict(row) if row else {
-                "total": 0,
-                "uploaded": 0,
-                "pending": 0,
-                "failed": 0,
-            }
+            return (
+                dict(row)
+                if row
+                else {
+                    "total": 0,
+                    "uploaded": 0,
+                    "pending": 0,
+                    "failed": 0,
+                }
+            )
 
     async def update_recording_session_counters(
         self,
@@ -2323,13 +2343,17 @@ class DatabaseManager:
                 """,
                 meeting_id,
             )
-            return dict(row) if row else {
-                "total": 0,
-                "pending": 0,
-                "processing": 0,
-                "completed": 0,
-                "failed": 0,
-            }
+            return (
+                dict(row)
+                if row
+                else {
+                    "total": 0,
+                    "pending": 0,
+                    "processing": 0,
+                    "completed": 0,
+                    "failed": 0,
+                }
+            )
 
     async def search_transcripts(self, query: str):
         """Search through meeting transcripts for the given query"""
@@ -2539,12 +2563,22 @@ class DatabaseManager:
             results = []
             for row in rows:
                 item = dict(row)
-                item["shared_at"] = item["shared_at"].isoformat() if item["shared_at"] else None
-                item["last_viewed_at"] = item["last_viewed_at"].isoformat() if item.get("last_viewed_at") else None
-                item["notes_updated_at"] = item["notes_updated_at"].isoformat() if item.get("notes_updated_at") else None
-                item["has_update"] = (
-                    item["notes_updated_at"] is not None
-                    and (item["last_viewed_at"] is None or item["notes_updated_at"] > item["last_viewed_at"])
+                item["shared_at"] = (
+                    item["shared_at"].isoformat() if item["shared_at"] else None
+                )
+                item["last_viewed_at"] = (
+                    item["last_viewed_at"].isoformat()
+                    if item.get("last_viewed_at")
+                    else None
+                )
+                item["notes_updated_at"] = (
+                    item["notes_updated_at"].isoformat()
+                    if item.get("notes_updated_at")
+                    else None
+                )
+                item["has_update"] = item["notes_updated_at"] is not None and (
+                    item["last_viewed_at"] is None
+                    or item["notes_updated_at"] > item["last_viewed_at"]
                 )
                 results.append(item)
             return results
