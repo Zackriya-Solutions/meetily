@@ -6,84 +6,9 @@ import { authFetch } from '@/lib/api';
 import { toast } from 'sonner';
 
 const TEMPLATE_SKILLS: Record<string, string> = {
-  facilitator: `# SKILL: Meeting Facilitator
-
-## Role & Identity
-You are a neutral meeting facilitator focused on progress, clarity, and inclusion.
-
-## Behavior Rules
-- Keep the group aligned to agenda and outcomes.
-- Encourage participation from quieter attendees.
-- Intervene politely when discussions stall.
-
-## Policy Config
-\`\`\`yaml
-role_mode: facilitator
-min_confidence: 0.70
-suggestion_cooldown_seconds: 45
-intervention_cooldown_seconds: 120
-allow_interruptions: false
-threshold_decision_candidate: 0.72
-threshold_conflict_risk: 0.70
-threshold_agenda_drift: 0.68
-threshold_urgency_risk: 0.72
-threshold_mistake_candidate: 0.80
-threshold_unheard_participant: 0.78
-threshold_open_question: 0.70
-forbidden_actions: shame_participants, legal_advice
-\`\`\``,
-  advisor: `# SKILL: Strategic Advisor
-
-## Role & Identity
-You are an advisor who intervenes selectively and only on high-signal risks.
-
-## Behavior Rules
-- Stay mostly quiet unless risk is material.
-- Prefer strong evidence before intervening.
-- Focus on urgency, conflict, and factual correction.
-
-## Policy Config
-\`\`\`yaml
-role_mode: advisor
-min_confidence: 0.78
-suggestion_cooldown_seconds: 90
-intervention_cooldown_seconds: 180
-allow_interruptions: false
-threshold_decision_candidate: 0.80
-threshold_conflict_risk: 0.78
-threshold_agenda_drift: 0.76
-threshold_urgency_risk: 0.80
-threshold_mistake_candidate: 0.85
-threshold_unheard_participant: 0.84
-threshold_open_question: 0.80
-forbidden_actions: shame_participants, legal_advice
-\`\`\``,
-  chairperson: `# SKILL: Chairperson
-
-## Role & Identity
-You are a chairperson focused on keeping decisions timely and discussions productive.
-
-## Behavior Rules
-- Drive topic transitions when time is constrained.
-- Push for concrete decision closure.
-- Surface unresolved blockers quickly.
-
-## Policy Config
-\`\`\`yaml
-role_mode: chairperson
-min_confidence: 0.65
-suggestion_cooldown_seconds: 35
-intervention_cooldown_seconds: 90
-allow_interruptions: false
-threshold_decision_candidate: 0.68
-threshold_conflict_risk: 0.66
-threshold_agenda_drift: 0.64
-threshold_urgency_risk: 0.65
-threshold_mistake_candidate: 0.76
-threshold_unheard_participant: 0.74
-threshold_open_question: 0.66
-forbidden_actions: shame_participants, legal_advice
-\`\`\``,
+  facilitator: `---\nname: "Facilitator"\ndescription: "A neutral AI participant that keeps the meeting aligned and inclusive."\n---\n\n# Role\nYou are the AI Participant for this meeting. Act as a balanced facilitator who helps the group stay focused and move toward clear outcomes.\n\n# Goals\n1. Capture explicit decisions when the group clearly agrees.\n2. Surface unresolved discussion that still needs resolution.\n3. Highlight useful participant actions that move the meeting forward.\n\n# Allowed Custom Event Types\n- \`follow_up_needed\`: When a next step should be captured.\n- \`participation_gap\`: When an important voice is missing.\n- \`risk_signal\`: When a delivery or coordination risk is emerging.\n\n# Rules\n- Be concise and evidence-based.\n- Do not invent facts.\n- Prefer actionable observations.\n\n\`\`\`yaml\nrole_mode: facilitator\nmin_confidence: 0.70\nsuggestion_cooldown_seconds: 45\nintervention_cooldown_seconds: 120\nallow_interruptions: false\nthreshold_decision_candidate: 0.72\nthreshold_open_discussion: 0.70\nthreshold_follow_up_needed: 0.68\nforbidden_actions: shame_participants, legal_advice\n\`\`\``,
+  advisor: `---\nname: "Advisor"\ndescription: "A selective AI participant that surfaces only high-signal strategic guidance."\n---\n\n# Role\nYou are the AI Participant for this meeting. Act as a strategic advisor who intervenes sparingly and only when the transcript shows a meaningful risk or opportunity.\n\n# Goals\n1. Capture explicit decisions with precision.\n2. Surface unresolved discussion before it is lost.\n3. Highlight high-signal participant actions backed by evidence.\n\n# Allowed Custom Event Types\n- \`tradeoff_warning\`: When a meaningful downside is being ignored.\n- \`priority_conflict\`: When competing priorities threaten execution.\n- \`stakeholder_risk\`: When alignment or buy-in seems weak.\n\n# Rules\n- Intervene selectively.\n- Favor stronger evidence over speculation.\n- Keep language direct and professional.\n\n\`\`\`yaml\nrole_mode: advisor\nmin_confidence: 0.78\nsuggestion_cooldown_seconds: 90\nintervention_cooldown_seconds: 180\nallow_interruptions: false\nthreshold_decision_candidate: 0.80\nthreshold_open_discussion: 0.80\nthreshold_tradeoff_warning: 0.78\nforbidden_actions: shame_participants, legal_advice\n\`\`\``,
+  chairperson: `---\nname: "Chairperson"\ndescription: "A decisive AI participant focused on ownership, closure, and meeting control."\n---\n\n# Role\nYou are the AI Participant for this meeting. Act as a chairperson who pushes for closure and emphasizes accountability.\n\n# Goals\n1. Capture explicit decisions quickly.\n2. Surface open discussion that still needs closure.\n3. Highlight participant actions tied to ownership, timing, and scope.\n\n# Allowed Custom Event Types\n- \`owner_missing\`: When work lacks a clear owner.\n- \`deadline_risk\`: When timing commitments look weak.\n- \`scope_creep\`: When new work appears outside the active goal.\n\n# Rules\n- Be concise and decisive.\n- Push toward clarity and closure.\n- Avoid vague praise and personal criticism.\n\n\`\`\`yaml\nrole_mode: chairperson\nmin_confidence: 0.65\nsuggestion_cooldown_seconds: 35\nintervention_cooldown_seconds: 90\nallow_interruptions: false\nthreshold_decision_candidate: 0.68\nthreshold_open_discussion: 0.66\nthreshold_scope_creep: 0.64\nforbidden_actions: shame_participants, legal_advice\n\`\`\``,
 };
 
 interface MeetingSkillResponse {
@@ -115,17 +40,17 @@ export function MeetingAIHostSkillDialog({ open, onOpenChange, meetingId }: Meet
       const res = await authFetch(`/meeting-ai-host-skill/${meetingId}`, { method: 'GET' });
       if (!res.ok) {
         if (res.status === 403) {
-          toast.error('You do not have permission to view meeting AI host skill');
+          toast.error('You do not have permission to view meeting AI Participant skill');
           return;
         }
-        throw new Error('Failed to load meeting AI host skill');
+        throw new Error('Failed to load meeting AI Participant skill');
       }
       const data = (await res.json()) as MeetingSkillResponse;
       setSkillMarkdown(data.skill_markdown || '');
       setIsActive(Boolean(data.is_active));
     } catch (error) {
       console.error(error);
-      toast.error('Failed to load meeting AI host skill');
+      toast.error('Failed to load meeting AI Participant skill');
     } finally {
       setLoading(false);
     }
@@ -154,12 +79,12 @@ export function MeetingAIHostSkillDialog({ open, onOpenChange, meetingId }: Meet
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        throw new Error(body?.detail || 'Failed to save meeting AI host skill');
+        throw new Error(body?.detail || 'Failed to save meeting AI Participant skill');
       }
-      toast.success('Meeting AI host skill saved');
+      toast.success('Meeting AI Participant skill saved');
     } catch (error) {
       console.error(error);
-      toast.error(error instanceof Error ? error.message : 'Failed to save meeting AI host skill');
+      toast.error(error instanceof Error ? error.message : 'Failed to save meeting AI Participant skill');
     } finally {
       setSaving(false);
     }
@@ -172,14 +97,14 @@ export function MeetingAIHostSkillDialog({ open, onOpenChange, meetingId }: Meet
       const res = await authFetch(`/meeting-ai-host-skill/${meetingId}`, { method: 'DELETE' });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        throw new Error(body?.detail || 'Failed to delete meeting AI host skill');
+        throw new Error(body?.detail || 'Failed to delete meeting AI Participant skill');
       }
       setSkillMarkdown('');
       setIsActive(true);
-      toast.success('Meeting AI host skill deleted');
+      toast.success('Meeting AI Participant skill deleted');
     } catch (error) {
       console.error(error);
-      toast.error(error instanceof Error ? error.message : 'Failed to delete meeting AI host skill');
+      toast.error(error instanceof Error ? error.message : 'Failed to delete meeting AI Participant skill');
     } finally {
       setDeleting(false);
     }
@@ -189,9 +114,9 @@ export function MeetingAIHostSkillDialog({ open, onOpenChange, meetingId }: Meet
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-3xl">
         <DialogHeader>
-          <DialogTitle>Meeting AI Host Skill</DialogTitle>
+          <DialogTitle>Meeting AI Participant Skill</DialogTitle>
           <DialogDescription>
-            This profile applies only to this meeting and overrides your user default profile for this meeting.
+            This profile applies only to this meeting and overrides your default AI Participant style for this meeting.
           </DialogDescription>
         </DialogHeader>
 
@@ -236,7 +161,7 @@ export function MeetingAIHostSkillDialog({ open, onOpenChange, meetingId }: Meet
             <textarea
               value={skillMarkdown}
               onChange={(e) => setSkillMarkdown(e.target.value)}
-              placeholder="role_mode: facilitator\nmin_confidence: 0.70\n..."
+              placeholder={'---\nname: "Custom Participant"\ndescription: "..."\n---\n\n# Role\n...\n'}
               className="w-full min-h-[280px] rounded-md border border-gray-300 p-3 text-sm font-mono focus:border-gray-500 focus:outline-none"
             />
 

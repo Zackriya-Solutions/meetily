@@ -21,23 +21,17 @@ import Analytics from '@/lib/analytics';
 import { showRecordingNotification } from '@/lib/recordingNotification';
 import { Button } from '@/components/ui/button';
 import {
-  AlertTriangle,
   Bot,
   Calendar,
   CheckCircle2,
-  Clock3,
   Copy,
   ChevronLeftCircle,
   ChevronRightCircle,
   GlobeIcon,
   HelpCircle,
-  MessageSquareWarning,
   MessageCircle,
   Settings,
-  ShieldAlert,
   Sparkles,
-  Target,
-  Users,
   X,
   Zap,
 } from 'lucide-react';
@@ -109,7 +103,7 @@ interface AIGuardrailAlert {
 
 interface AIHostSuggestion {
   id: string;
-  event_type: 'decision_candidate' | 'conflict_risk' | 'agenda_drift' | 'urgency_risk' | 'mistake_candidate' | 'unheard_participant' | 'open_question';
+  event_type: string;
   title: string;
   content: string;
   confidence: number;
@@ -121,7 +115,7 @@ interface AIHostSuggestion {
 
 interface AIHostIntervention {
   id: string;
-  event_type: 'decision_candidate' | 'conflict_risk' | 'agenda_drift' | 'urgency_risk' | 'mistake_candidate' | 'unheard_participant' | 'open_question';
+  event_type: string;
   headline: string;
   body: string;
   priority: 'low' | 'medium' | 'high';
@@ -151,6 +145,8 @@ interface AIHostStylesPayload {
   styles: AIHostStyleItem[];
   default_style_id: string;
 }
+
+const CORE_EVENT_TYPES = new Set(['decision_candidate', 'open_discussion']);
 
 const extractRoleModeFromMarkdown = (markdown: string): string | null => {
   const match = markdown.match(/role_mode\s*:\s*([a-zA-Z_]+)/i);
@@ -774,20 +770,14 @@ export default function Home() {
     switch (eventType) {
       case 'decision_candidate':
         return 'Decision';
-      case 'conflict_risk':
-        return 'Conflict';
-      case 'agenda_drift':
-        return 'Agenda Drift';
-      case 'urgency_risk':
-        return 'Urgency';
-      case 'mistake_candidate':
-        return 'Constructive Fix';
-      case 'unheard_participant':
-        return 'Inclusion';
-      case 'open_question':
-        return 'Open Question';
+      case 'open_discussion':
+        return 'Open Discussion';
       default:
-        return 'Host';
+        return eventType
+          .split('_')
+          .filter(Boolean)
+          .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+          .join(' ');
     }
   };
 
@@ -795,20 +785,10 @@ export default function Home() {
     switch (eventType) {
       case 'decision_candidate':
         return <CheckCircle2 className="h-4 w-4 text-emerald-600" />;
-      case 'conflict_risk':
-        return <ShieldAlert className="h-4 w-4 text-red-600" />;
-      case 'agenda_drift':
-        return <Target className="h-4 w-4 text-blue-600" />;
-      case 'urgency_risk':
-        return <Clock3 className="h-4 w-4 text-orange-600" />;
-      case 'mistake_candidate':
-        return <AlertTriangle className="h-4 w-4 text-violet-600" />;
-      case 'unheard_participant':
-        return <Users className="h-4 w-4 text-emerald-600" />;
-      case 'open_question':
+      case 'open_discussion':
         return <HelpCircle className="h-4 w-4 text-sky-600" />;
       default:
-        return <MessageSquareWarning className="h-4 w-4 text-gray-600" />;
+        return <Sparkles className="h-4 w-4 text-indigo-600" />;
     }
   };
 
@@ -816,20 +796,10 @@ export default function Home() {
     switch (eventType) {
       case 'decision_candidate':
         return 'border-amber-300 text-amber-700 bg-amber-50';
-      case 'conflict_risk':
-        return 'border-red-300 text-red-700 bg-red-50';
-      case 'agenda_drift':
-        return 'border-blue-300 text-blue-700 bg-blue-50';
-      case 'urgency_risk':
-        return 'border-orange-300 text-orange-700 bg-orange-50';
-      case 'mistake_candidate':
-        return 'border-purple-300 text-purple-700 bg-purple-50';
-      case 'unheard_participant':
-        return 'border-emerald-300 text-emerald-700 bg-emerald-50';
-      case 'open_question':
+      case 'open_discussion':
         return 'border-sky-300 text-sky-700 bg-sky-50';
       default:
-        return 'border-gray-300 text-gray-700 bg-gray-50';
+        return 'border-indigo-300 text-indigo-700 bg-indigo-50';
     }
   };
 
@@ -1012,14 +982,13 @@ export default function Home() {
 
   const openDiscussionCount = useMemo(() => {
     const derived = hostSuggestionQueue.filter(
-      (item) => item.event_type === 'open_question' || item.event_type === 'conflict_risk'
+      (item) => item.event_type === 'open_discussion'
     ).length;
     return Math.max(unresolvedDiscussionItems.length, derived);
   }, [hostSuggestionQueue, unresolvedDiscussionItems.length]);
 
   const proposedActionCount = useMemo(() => {
-    const actionTypes = new Set(['urgency_risk', 'agenda_drift', 'mistake_candidate']);
-    return hostSuggestionQueue.filter((item) => actionTypes.has(item.event_type)).length;
+    return hostSuggestionQueue.filter((item) => !CORE_EVENT_TYPES.has(item.event_type)).length;
   }, [hostSuggestionQueue]);
 
   const pendingDecisions = useMemo(
@@ -1036,13 +1005,13 @@ export default function Home() {
 
   const discussionsForPanel = useMemo(() => {
     const fromSuggestions = hostSuggestionQueue
-      .filter((item) => item.event_type === 'open_question' || item.event_type === 'conflict_risk')
+      .filter((item) => item.event_type === 'open_discussion')
       .map((item) => item.content.trim())
       .filter((item) => item.length > 0);
     const merged = [...unresolvedDiscussionItems];
 
     // Include active host intervention if it's an open discussion
-    if (activeHostIntervention && (activeHostIntervention.event_type === 'open_question' || activeHostIntervention.event_type === 'conflict_risk')) {
+    if (activeHostIntervention && activeHostIntervention.event_type === 'open_discussion') {
       const bodyText = activeHostIntervention.body.trim();
       if (bodyText && !merged.includes(bodyText)) merged.push(bodyText);
     }
@@ -1054,12 +1023,11 @@ export default function Home() {
   }, [hostSuggestionQueue, unresolvedDiscussionItems, activeHostIntervention]);
 
   const isInsightIntervention = activeHostIntervention &&
-    activeHostIntervention.event_type !== 'open_question' &&
-    activeHostIntervention.event_type !== 'conflict_risk' ? activeHostIntervention : null;
+    !CORE_EVENT_TYPES.has(activeHostIntervention.event_type) ? activeHostIntervention : null;
 
-  const insightsForPanel = useMemo(
+  const participantActionsForPanel = useMemo(
     () => hostSuggestionQueue
-      .filter((item) => item.event_type !== 'open_question' && item.event_type !== 'conflict_risk' && item.event_type !== 'decision_candidate')
+      .filter((item) => !CORE_EVENT_TYPES.has(item.event_type))
       .slice(0, 8),
     [hostSuggestionQueue]
   );
@@ -1068,13 +1036,13 @@ export default function Home() {
     const backendSummary = (hostStateDelta as Record<string, unknown> | null)?.meeting_summary as string | undefined;
     if (backendSummary?.trim()) return backendSummary.trim();
     if (isInsightIntervention && typeof isInsightIntervention !== 'boolean' && isInsightIntervention.body?.trim()) return isInsightIntervention.body.trim();
-    if (insightsForPanel[0]?.content?.trim()) return insightsForPanel[0].content.trim();
+    if (participantActionsForPanel[0]?.content?.trim()) return participantActionsForPanel[0].content.trim();
     if (meetingGoalInput.trim()) return `Meeting focus: ${meetingGoalInput.trim()}.`;
     if (transcripts.length > 0) {
       return `Meeting is active with ${transcripts.length} transcript segments captured so far.`;
     }
     return 'Meeting intelligence will appear here as discussion progresses.';
-  }, [hostStateDelta, isInsightIntervention, insightsForPanel, meetingGoalInput, transcripts.length]);
+  }, [hostStateDelta, isInsightIntervention, participantActionsForPanel, meetingGoalInput, transcripts.length]);
 
   const parsedMeetingParticipants = useMemo(
     () =>
@@ -1130,7 +1098,7 @@ export default function Home() {
     setSelectedHostStyleId(nextStyleId);
     if (isRecording) {
       setTimeout(() => {
-        toast.success('AI Host mode updated for this meeting');
+        toast.success('AI Participant style updated for this meeting');
       }, 0);
     }
   }, [isRecording]);
@@ -2220,7 +2188,7 @@ export default function Home() {
                         value={selectedHostStyleId}
                         onChange={(e) => handleInlineHostModeChange(e.target.value)}
                         className="rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 focus:border-gray-400 focus:outline-none"
-                        title={`Current AI host mode: ${effectiveHostModeLabel}`}
+                        title={`Current AI Participant style: ${effectiveHostModeLabel}`}
                       >
                         <option value="__default__">
                           Default ({toTitleCase(defaultHostStyleId.replace(/^.*:/, '') || 'facilitator')})
@@ -2444,7 +2412,7 @@ export default function Home() {
                         <div className="flex items-center justify-between">
                           <h3 className="flex items-center gap-2 text-2xl font-semibold text-gray-900">
                             <Sparkles className="h-6 w-6 text-gray-700" />
-                            AI Insights
+                            Participant Actions
                           </h3>
                           {isInsightIntervention && (
                             <span className="text-[11px] text-gray-500">
@@ -2470,7 +2438,7 @@ export default function Home() {
                             </div>
                           )}
                           <AnimatePresence mode="popLayout">
-                            {insightsForPanel.map((item) => (
+                            {participantActionsForPanel.map((item) => (
                               <motion.div
                                 key={item.id}
                                 layout
@@ -2513,9 +2481,9 @@ export default function Home() {
                               </motion.div>
                             ))}
                           </AnimatePresence>
-                          {!isInsightIntervention && insightsForPanel.length === 0 && (
+                          {!isInsightIntervention && participantActionsForPanel.length === 0 && (
                             <p className="rounded-lg border border-gray-100 bg-white px-3 py-2 text-sm text-gray-500">
-                              AI Host is monitoring and will surface suggestions when needed.
+                              AI Participant is monitoring and will surface actions when needed.
                             </p>
                           )}
                           {activeGuardrailAlert && (
@@ -2689,7 +2657,7 @@ export default function Home() {
                     onHostStateDelta={handleHostStateDelta}
                     onHostActionAck={handleHostActionAck}
                     onHostSkillAck={(applied) => {
-                      if (applied) toast.success('AI host skill override applied');
+                      if (applied) toast.success('AI Participant skill override applied');
                     }}
                     onHostClientReady={handleHostClientReady}
                     hostSkillMarkdown={effectiveHostStyleMarkdown}
@@ -3331,7 +3299,7 @@ export default function Home() {
           <DialogHeader>
             <DialogTitle>Meeting Context</DialogTitle>
             <DialogDescription className="hidden">
-              Configure goal, agenda, participants, and style for AI host guidance.
+              Configure goal, agenda, participants, and style for AI Participant guidance.
             </DialogDescription>
           </DialogHeader>
           <div className="grid grid-cols-1 gap-3 px-1 py-2">
@@ -3388,13 +3356,13 @@ export default function Home() {
       >
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Select AI Host Style</DialogTitle>
+            <DialogTitle>Select AI Participant Style</DialogTitle>
             <DialogDescription>
               Choose a style for this meeting. Your default style will be pre-selected.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2">
-            <label className="text-xs font-medium text-gray-600">AI Host Style</label>
+            <label className="text-xs font-medium text-gray-600">AI Participant Style</label>
             <select
               value={pendingStartStyleId}
               onChange={(e) => setPendingStartStyleId(e.target.value)}

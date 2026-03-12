@@ -48,7 +48,7 @@ function SettingsContent() {
     // { id: 'summaryModels' as const, label: 'Summary', icon: <SparkleIcon className="w-4 h-4" /> },
     { id: 'personalKeys' as const, label: 'Personal Keys', icon: <Key className="w-4 h-4" /> },
     { id: 'calendar' as const, label: 'Calendar', icon: <Calendar className="w-4 h-4" /> },
-    { id: 'aiHost' as const, label: 'AI Host', icon: <Bot className="w-4 h-4" /> }
+    { id: 'aiHost' as const, label: 'AI Participant', icon: <Bot className="w-4 h-4" /> }
   ];
 
   // Load saved transcript configuration on mount

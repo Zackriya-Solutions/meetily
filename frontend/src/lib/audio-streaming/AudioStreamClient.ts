@@ -12,7 +12,7 @@
 export interface StreamingCallbacks {
   onHostSuggestion?: (suggestion: {
     id: string;
-    event_type: 'decision_candidate' | 'conflict_risk' | 'agenda_drift' | 'urgency_risk' | 'mistake_candidate' | 'unheard_participant' | 'open_question';
+    event_type: string;
     title: string;
     content: string;
     confidence: number;
@@ -23,7 +23,7 @@ export interface StreamingCallbacks {
   }) => void;
   onHostIntervention?: (intervention: {
     id: string;
-    event_type: 'decision_candidate' | 'conflict_risk' | 'agenda_drift' | 'urgency_risk' | 'mistake_candidate' | 'unheard_participant' | 'open_question';
+    event_type: string;
     headline: string;
     body: string;
     priority: 'low' | 'medium' | 'high';

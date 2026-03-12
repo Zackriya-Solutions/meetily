@@ -10,12 +10,14 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Deque, Dict, List, Optional, Tuple
 
+from anthropic import AsyncAnthropic
+from openai import AsyncOpenAI
+
 try:
     from ..schemas.ai_participant import (
         GuardrailAlert,
         GuardrailLLMOutput,
         GuardrailReason,
-        HostEventType,
         HostInterventionCard,
         HostPolicyConfig,
         HostRoleMode,
@@ -23,12 +25,15 @@ try:
         MeetingHostState,
     )
     from .gemini_client import generate_content_text_async
+    from .ai_participant_skills import (
+        load_system_skill_templates,
+        parse_skill_markdown,
+    )
 except (ImportError, ValueError):
     from schemas.ai_participant import (
         GuardrailAlert,
         GuardrailLLMOutput,
         GuardrailReason,
-        HostEventType,
         HostInterventionCard,
         HostPolicyConfig,
         HostRoleMode,
@@ -36,95 +41,19 @@ except (ImportError, ValueError):
         MeetingHostState,
     )
     from services.gemini_client import generate_content_text_async
+    from services.ai_participant_skills import (
+        load_system_skill_templates,
+        parse_skill_markdown,
+    )
 
 logger = logging.getLogger(__name__)
 
-
-SYSTEM_HOST_SKILLS: Dict[str, str] = {
-    "facilitator": """
-# SKILL: Meeting Facilitator
-
-## Role & Identity
-You are a neutral meeting facilitator focused on progress, clarity, and inclusion.
-
-## Behavior Rules
-- Keep the group aligned to agenda and outcomes.
-- Encourage participation from quieter attendees.
-- Intervene politely when discussions stall.
-
-## Policy Config
-```yaml
-role_mode: facilitator
-min_confidence: 0.70
-suggestion_cooldown_seconds: 45
-intervention_cooldown_seconds: 120
-allow_interruptions: false
-threshold_decision_candidate: 0.72
-threshold_conflict_risk: 0.70
-threshold_agenda_drift: 0.68
-threshold_urgency_risk: 0.72
-threshold_mistake_candidate: 0.80
-threshold_unheard_participant: 0.78
-threshold_open_question: 0.70
-forbidden_actions: shame_participants, legal_advice
-```
-""".strip(),
-    "advisor": """
-# SKILL: Strategic Advisor
-
-## Role & Identity
-You are an advisor who intervenes selectively and only on high-signal risks.
-
-## Behavior Rules
-- Stay mostly quiet unless risk is material.
-- Prefer strong evidence before intervening.
-- Focus on urgency, conflict, and factual correction.
-
-## Policy Config
-```yaml
-role_mode: advisor
-min_confidence: 0.78
-suggestion_cooldown_seconds: 90
-intervention_cooldown_seconds: 180
-allow_interruptions: false
-threshold_decision_candidate: 0.80
-threshold_conflict_risk: 0.78
-threshold_agenda_drift: 0.76
-threshold_urgency_risk: 0.80
-threshold_mistake_candidate: 0.85
-threshold_unheard_participant: 0.84
-threshold_open_question: 0.80
-forbidden_actions: shame_participants, legal_advice
-```
-""".strip(),
-    "chairperson": """
-# SKILL: Chairperson
-
-## Role & Identity
-You are a chairperson focused on keeping decisions timely and discussions productive.
-
-## Behavior Rules
-- Drive topic transitions when time is constrained.
-- Push for concrete decision closure.
-- Surface unresolved blockers quickly.
-
-## Policy Config
-```yaml
-role_mode: chairperson
-min_confidence: 0.65
-suggestion_cooldown_seconds: 35
-intervention_cooldown_seconds: 90
-allow_interruptions: false
-threshold_decision_candidate: 0.68
-threshold_conflict_risk: 0.66
-threshold_agenda_drift: 0.64
-threshold_urgency_risk: 0.65
-threshold_mistake_candidate: 0.76
-threshold_unheard_participant: 0.74
-threshold_open_question: 0.66
-forbidden_actions: shame_participants, legal_advice
-```
-""".strip(),
+SYSTEM_HOST_SKILLS: Dict[str, str] = load_system_skill_templates()
+CORE_EVENT_TYPES = {"decision_candidate", "open_discussion"}
+DEFAULT_PROVIDER_MODELS = {
+    "gemini": "gemini-2.5-flash",
+    "openai": "gpt-4o-mini",
+    "anthropic": "claude-3-5-sonnet-20241022",
 }
 
 
@@ -355,9 +284,17 @@ class AIParticipantEngine:
         self.meeting_context = meeting_context
 
         self.enabled = os.getenv("AI_PARTICIPANT_ENABLED", "true").lower() == "true"
-        self.model_name = os.getenv("AI_PARTICIPANT_MODEL", "gemini-3-pro-preview")
+        self.provider = (
+            os.getenv("AI_PARTICIPANT_PROVIDER", "gemini").strip().lower() or "gemini"
+        )
+        if self.provider == "claude":
+            self.provider = "anthropic"
+        self.model_name = os.getenv(
+            "AI_PARTICIPANT_MODEL",
+            DEFAULT_PROVIDER_MODELS.get(self.provider, DEFAULT_PROVIDER_MODELS["gemini"]),
+        )
         fallback_models = os.getenv(
-            "AI_PARTICIPANT_FALLBACK_MODELS", "gemini-3-pro-preview,gemini-3-flash-preview"
+            "AI_PARTICIPANT_FALLBACK_MODELS", ""
         )
         self.fallback_models = [
             m.strip() for m in fallback_models.split(",") if (m or "").strip()
@@ -386,18 +323,21 @@ class AIParticipantEngine:
 
         self._last_analysis_at = 0.0
         self._lock = asyncio.Lock()
-        self._gemini_api_key: Optional[str] = None
+        self._provider_api_key: Optional[str] = None
         self._missing_key_logged = False
         self._last_alert_summary = "None"
 
         self._host_event_last_published_at: Dict[str, float] = {}
         self._host_event_last_signature: Dict[str, str] = {}
         self._host_state = MeetingHostState(meeting_id=self.meeting_context.meeting_id)
+        default_skill_markdown = (
+            os.getenv("AI_HOST_DEFAULT_SKILL_MARKDOWN", "").strip()
+            or SYSTEM_HOST_SKILLS.get("facilitator", "")
+        )
+        self._active_skill_markdown = default_skill_markdown
+        self._active_skill_definition = parse_skill_markdown(default_skill_markdown)
         self._host_policy = self._load_policy_from_skill(
-            skill_text=(
-                os.getenv("AI_HOST_DEFAULT_SKILL_MARKDOWN", "").strip()
-                or SYSTEM_HOST_SKILLS["facilitator"]
-            ),
+            skill_text=default_skill_markdown,
             source="system",
         )
         self._host_policy_source = "system"
@@ -414,6 +354,7 @@ class AIParticipantEngine:
             "assessment_none": 0,
             "model_fallbacks": 0,
             "last_model_used": self.model_name,
+            "provider": self.provider,
             "last_assessment_intervention_required": None,
             "last_assessment_reason": None,
             "last_assessment_confidence": None,
@@ -632,10 +573,8 @@ class AIParticipantEngine:
         for event in events:
             if not isinstance(event, dict):
                 continue
-            event_type_raw = str(event.get("event_type") or "").strip().lower()
-            try:
-                event_type = HostEventType(event_type_raw)
-            except Exception:
+            event_type = self._normalize_host_event_type(event.get("event_type"))
+            if not event_type:
                 continue
 
             title = " ".join(str(event.get("title") or "").split()).strip()
@@ -661,13 +600,14 @@ class AIParticipantEngine:
             normalized_events.append(
                 {
                     "event_type": event_type,
-                    "title": title or event_type.value.replace("_", " ").title(),
+                    "title": title or event_type.replace("_", " ").title(),
                     "content": content,
                     "confidence": confidence,
                     "priority": priority,
                     "source_excerpt": source_excerpt[:240] if source_excerpt else None,
                 }
             )
+        self._refresh_host_state_from_events(normalized_events)
         return normalized_events
 
     async def _call_llm_json(self, prompt: str) -> Tuple[Optional[str], str]:
@@ -682,12 +622,7 @@ class AIParticipantEngine:
                 self._stats["llm_calls"] += 1
                 used_model = model
                 raw_text = await asyncio.wait_for(
-                    generate_content_text_async(
-                        api_key=await self._get_gemini_api_key(),
-                        model=model,
-                        contents=prompt,
-                        config={"temperature": 0.1},
-                    ),
+                    self._generate_llm_text(model=model, prompt=prompt),
                     timeout=self.llm_timeout_seconds,
                 )
                 if idx > 0:
@@ -705,21 +640,79 @@ class AIParticipantEngine:
 
         return None, used_model
 
-    async def _get_gemini_api_key(self) -> Optional[str]:
-        if self._gemini_api_key:
-            return self._gemini_api_key
+    async def _generate_llm_text(self, model: str, prompt: str) -> str:
+        api_key = await self._get_provider_api_key()
+        if not api_key:
+            raise ValueError(f"{self.provider} API key not found")
 
-        key = os.getenv("GEMINI_API_KEY", "").strip() or os.getenv("GOOGLE_API_KEY", "").strip()
-        if not key:
-            key = (await self.db.get_api_key("gemini", user_email=self.user_email)) or ""
-            key = key.strip()
+        if self.provider == "gemini":
+            return await generate_content_text_async(
+                api_key=api_key,
+                model=model,
+                contents=prompt,
+                config={"temperature": 0.1},
+            )
 
+        if self.provider == "openai":
+            client = AsyncOpenAI(api_key=api_key)
+            response = await client.chat.completions.create(
+                model=model,
+                temperature=0.1,
+                response_format={"type": "json_object"},
+                messages=[
+                    {"role": "system", "content": "Return strict JSON only."},
+                    {"role": "user", "content": prompt},
+                ],
+            )
+            return response.choices[0].message.content or ""
+
+        if self.provider == "anthropic":
+            client = AsyncAnthropic(api_key=api_key)
+            response = await client.messages.create(
+                model=model,
+                max_tokens=1200,
+                temperature=0.1,
+                system="Return strict JSON only.",
+                messages=[{"role": "user", "content": prompt}],
+            )
+            parts: List[str] = []
+            for block in getattr(response, "content", []) or []:
+                text = getattr(block, "text", None)
+                if text:
+                    parts.append(text)
+            return "".join(parts)
+
+        raise ValueError(f"Unsupported AI participant provider: {self.provider}")
+
+    async def _get_provider_api_key(self) -> Optional[str]:
+        if self._provider_api_key:
+            return self._provider_api_key
+
+        key = ""
+        if self.provider == "gemini":
+            key = os.getenv("GEMINI_API_KEY", "").strip() or os.getenv("GOOGLE_API_KEY", "").strip()
+            if not key:
+                key = (await self.db.get_api_key("gemini", user_email=self.user_email)) or ""
+        elif self.provider == "openai":
+            key = os.getenv("OPENAI_API_KEY", "").strip()
+            if not key:
+                key = (await self.db.get_api_key("openai", user_email=self.user_email)) or ""
+        elif self.provider == "anthropic":
+            key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+            if not key:
+                key = (await self.db.get_api_key("claude", user_email=self.user_email)) or ""
+
+        key = key.strip()
         if not key and not self._missing_key_logged:
-            logger.info("[AIParticipant] Gemini API key not found for %s", self.user_email)
+            logger.info(
+                "[AIParticipant] %s API key not found for %s",
+                self.provider,
+                self.user_email,
+            )
             self._missing_key_logged = True
 
-        self._gemini_api_key = key or None
-        return self._gemini_api_key
+        self._provider_api_key = key or None
+        return self._provider_api_key
 
     def _build_prompt(self, transcript_window: str) -> str:
         title = self.meeting_context.title or ""
@@ -768,12 +761,26 @@ Recent transcript window:
 
         policy = self._host_policy
         role = policy.role_mode.value
+        skill_definition = self._active_skill_definition or {}
+        skill_name = str(skill_definition.get("name") or role.title())
+        skill_description = str(skill_definition.get("description") or "").strip() or "None"
+        skill_role = str(skill_definition.get("role") or "").strip() or "None"
+        skill_goals = skill_definition.get("goals") or []
+        skill_rules = skill_definition.get("rules") or []
+        allowed_custom_types = skill_definition.get("allowed_custom_event_types") or []
 
         pinned_titles = [item.title for item in self._host_state.pinned_items]
         pinned_line = ", ".join(pinned_titles) if pinned_titles else "None"
+        goals_block = "\n".join(f"- {goal_item}" for goal_item in skill_goals) if skill_goals else "- None"
+        rules_block = "\n".join(f"- {rule_item}" for rule_item in skill_rules) if skill_rules else "- None"
+        custom_types_block = (
+            "\n".join(f"- {event_type}" for event_type in allowed_custom_types)
+            if allowed_custom_types
+            else "- None"
+        )
 
         return f"""
-You are an active AI meeting host. Generate event suggestions conservatively, based only on transcript and meeting context.
+You are an active AI Participant in this meeting. Generate event suggestions conservatively, based only on transcript and meeting context.
 
 Meeting Context:
 - Title: {title}
@@ -784,15 +791,24 @@ Meeting Context:
 - Role Mode: {role}
 - Current Summary: {self._host_state.meeting_summary or "None"}
 - Already Pinned Decisions/Topics: {pinned_line}
+- Skill Name: {skill_name}
+- Skill Description: {skill_description}
 
-Allowed event_type values:
+Skill Role:
+{skill_role}
+
+Skill Goals:
+{goals_block}
+
+Skill Rules:
+{rules_block}
+
+Reserved core event_type values:
 - decision_candidate
-- conflict_risk
-- agenda_drift
-- urgency_risk
-- mistake_candidate
-- unheard_participant
-- open_question
+- open_discussion
+
+Allowed custom event_type values from the active skill:
+{custom_types_block}
 
 Rules:
 - Return strict JSON object only with this shape:
@@ -801,6 +817,8 @@ Rules:
 - If no event is needed, return {{"events": []}}.
 - Do NOT suggest events for topics or decisions that are already in the "Already Pinned Decisions/Topics" list.
 - ONLY output a `decision_candidate` if an explicit choice, commitment, or action has been agreed upon by participants.
+- ONLY output an `open_discussion` when the transcript shows an unresolved question, active debate, disagreement, or conflict that still needs resolution.
+- Any non-core event must use one of the allowed custom event types from the active skill.
 - Do NOT classify informational statements, general discussion, tech news summaries, or observations as decisions.
 - Keep title <= 10 words and content <= 35 words.
 - Avoid personal criticism or blame.
@@ -812,7 +830,7 @@ Recent transcript window:
 
     def _build_host_suggestion(self, event: Dict[str, Any]) -> Optional[HostSuggestion]:
         event_type = event.get("event_type")
-        if not isinstance(event_type, HostEventType):
+        if not isinstance(event_type, str) or not event_type.strip():
             return None
 
         confidence = float(event.get("confidence") or 0.0)
@@ -831,7 +849,7 @@ Recent transcript window:
         return HostSuggestion(
             id=str(uuid.uuid4()),
             event_type=event_type,
-            title=title or event_type.value.replace("_", " ").title(),
+            title=title or event_type.replace("_", " ").title(),
             content=content,
             confidence=round(confidence, 2),
             timestamp=datetime.utcnow().isoformat(),
@@ -844,7 +862,7 @@ Recent transcript window:
         suggestion: HostSuggestion,
         now_ts: float,
     ) -> Optional[HostInterventionCard]:
-        event_key = suggestion.event_type.value
+        event_key = suggestion.event_type
         cooldown_seconds = int(self._host_policy.intervention_cooldown_seconds)
         last_ts = float(self._host_event_last_published_at.get(event_key) or 0.0)
         if (now_ts - last_ts) < cooldown_seconds:
@@ -874,23 +892,63 @@ Recent transcript window:
         role = self._host_policy.role_mode
         confidence = float(suggestion.confidence)
         event_type = suggestion.event_type
+        priority = str((suggestion.metadata or {}).get("priority") or "medium").lower()
 
         if role == HostRoleMode.ADVISOR:
-            return event_type in {
-                HostEventType.CONFLICT_RISK,
-                HostEventType.URGENCY_RISK,
-                HostEventType.MISTAKE_CANDIDATE,
-            }
+            return event_type in CORE_EVENT_TYPES or priority == "high"
 
         if role == HostRoleMode.FACILITATOR:
             return confidence >= max(0.72, self._host_policy.min_confidence)
 
-        return confidence >= max(0.65, self._host_policy.min_confidence - 0.03)
+        return event_type in CORE_EVENT_TYPES or confidence >= max(
+            0.65, self._host_policy.min_confidence - 0.03
+        )
 
     @staticmethod
     def _suggestion_signature(suggestion: HostSuggestion) -> str:
         text = " ".join((suggestion.content or "").strip().lower().split())
-        return f"{suggestion.event_type.value}:{text}"
+        return f"{suggestion.event_type}:{text}"
+
+    def _normalize_host_event_type(self, event_type_value: Any) -> Optional[str]:
+        raw = str(event_type_value or "").strip().lower()
+        if not raw:
+            return None
+
+        aliases = {
+            "open_question": "open_discussion",
+            "discussion_open": "open_discussion",
+            "decision": "decision_candidate",
+        }
+        normalized = aliases.get(raw, raw)
+        normalized = normalized.replace("-", "_").replace(" ", "_")
+        normalized = re.sub(r"[^a-z0-9_]", "", normalized)
+        normalized = re.sub(r"_+", "_", normalized).strip("_")
+        if not normalized:
+            return None
+
+        allowed_custom = set(
+            self._active_skill_definition.get("allowed_custom_event_types") or []
+        )
+        if normalized in CORE_EVENT_TYPES or normalized in allowed_custom:
+            return normalized
+        return None
+
+    def _refresh_host_state_from_events(self, events: List[Dict[str, Any]]) -> None:
+        current_topic = ""
+        unresolved_items: List[str] = []
+        for event in events:
+            content = " ".join(str(event.get("content") or "").split()).strip()
+            if not content:
+                continue
+            if not current_topic:
+                current_topic = " ".join(str(event.get("title") or "").split()).strip()
+            if event.get("event_type") == "open_discussion" and content not in unresolved_items:
+                unresolved_items.append(content)
+
+        if current_topic:
+            self._host_state.current_topic = current_topic
+        if unresolved_items:
+            self._host_state.unresolved_items = unresolved_items[:8]
 
     def _load_policy_from_skill(self, skill_text: str, source: str) -> HostPolicyConfig:
         policy = HostPolicyConfig(source=source)
@@ -933,14 +991,16 @@ Recent transcript window:
                 if v and v.strip()
             ]
 
-        for event_type in HostEventType:
-            key = f"threshold_{event_type.value}"
-            if key in parsed:
-                try:
-                    val = float(parsed[key])
-                    policy.event_threshold_overrides[event_type] = max(0.0, min(1.0, val))
-                except Exception:
-                    continue
+        for key, raw_value in parsed.items():
+            if not str(key).startswith("threshold_"):
+                continue
+            event_type = str(key).replace("threshold_", "", 1).strip().lower()
+            event_type = self._normalize_host_event_type(event_type) or event_type
+            try:
+                val = float(raw_value)
+                policy.event_threshold_overrides[event_type] = max(0.0, min(1.0, val))
+            except Exception:
+                continue
 
         return policy
 
@@ -961,14 +1021,14 @@ Recent transcript window:
         # Interaction style hints
         if "always ask clarifying questions" in lower:
             inferred.setdefault("min_confidence", "0.72")
-            inferred.setdefault("threshold_open_question", "0.66")
+            inferred.setdefault("threshold_open_discussion", "0.66")
 
         if any(token in lower for token in ["default to simplicity", "simplicity over clever", "simple over clever"]):
             inferred["forbidden_actions"] = "overengineered_solutions, shame_participants, legal_advice"
 
         if any(token in lower for token in ["direct and confident", "drive decisions", "time-box", "timebox"]):
             inferred.setdefault("intervention_cooldown_seconds", "90")
-            inferred.setdefault("threshold_urgency_risk", "0.65")
+            inferred.setdefault("threshold_decision_candidate", "0.65")
 
         return inferred
 
@@ -1018,6 +1078,8 @@ Recent transcript window:
         skill_text = (skill_markdown or "").strip()
         if not skill_text:
             return
+        self._active_skill_markdown = skill_text
+        self._active_skill_definition = parse_skill_markdown(skill_text)
         self._host_policy = self._load_policy_from_skill(skill_text, source=source)
         self._host_policy_source = source
         self._stats["host_policy_source"] = source
@@ -1027,6 +1089,8 @@ Recent transcript window:
         skill_text = SYSTEM_HOST_SKILLS.get(template_key)
         if not skill_text:
             return
+        self._active_skill_markdown = skill_text
+        self._active_skill_definition = parse_skill_markdown(skill_text)
         self._host_policy = self._load_policy_from_skill(skill_text, source=source)
         self._host_policy_source = source
         self._stats["host_policy_source"] = source
@@ -1191,7 +1255,9 @@ Recent transcript window:
             self.buffer.get_duration_seconds(), 3
         )
         payload["evaluator"] = self.evaluator.get_metrics_snapshot()
+        payload["provider"] = self.provider
         payload["model"] = self.model_name
+        payload["active_skill"] = self._active_skill_definition
         payload["host_policy"] = self._host_policy.model_dump()
         payload["host_state"] = self.get_host_state_snapshot()
         suggested = int(payload.get("host_suggestions_emitted") or 0)

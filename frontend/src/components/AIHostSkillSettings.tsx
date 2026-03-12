@@ -43,7 +43,7 @@ export function AIHostSkillSettings() {
     setLoading(true);
     try {
       const res = await authFetch('/api/user/ai-host-styles', { method: 'GET' });
-      if (!res.ok) throw new Error('Failed to load AI host styles');
+      if (!res.ok) throw new Error('Failed to load AI Participant styles');
       const data = (await res.json()) as StylesResponse;
       setStyles(data.styles || []);
       setDefaultStyleId(data.default_style_id || 'system:facilitator');
@@ -54,7 +54,7 @@ export function AIHostSkillSettings() {
       setIsCreating(false);
     } catch (error) {
       console.error(error);
-      toast.error('Failed to load AI host styles');
+      toast.error('Failed to load AI Participant styles');
     } finally {
       setLoading(false);
     }
@@ -78,8 +78,8 @@ export function AIHostSkillSettings() {
 
   const startCreate = () => {
     setIsCreating(true);
-    setDraftName('My Custom Host Style');
-    setDraftMarkdown(`# SKILL: My Custom Style\n\n## Role & Identity\nYou are a meeting host tuned for my team.\n\n## Behavior Rules\n- Ask clarifying questions\n- Keep discussion on track\n\n## Policy Config\n\`\`\`yaml\nrole_mode: facilitator\nmin_confidence: 0.70\nsuggestion_cooldown_seconds: 45\nintervention_cooldown_seconds: 120\nallow_interruptions: false\nthreshold_decision_candidate: 0.72\nthreshold_conflict_risk: 0.70\nthreshold_agenda_drift: 0.68\nthreshold_urgency_risk: 0.72\nthreshold_mistake_candidate: 0.80\nthreshold_unheard_participant: 0.78\nthreshold_open_question: 0.70\nforbidden_actions: shame_participants, legal_advice\n\`\`\``);
+    setDraftName('My Custom Participant Style');
+    setDraftMarkdown(`---\nname: "My Custom Participant"\ndescription: "A focused AI participant tuned for my team."\n---\n\n# Role\nYou are the AI Participant for this meeting. Keep the team focused and surface concrete actions.\n\n# Goals\n1. Capture explicit decisions only when the group clearly agrees.\n2. Surface unresolved discussion that still needs closure.\n3. Flag the team-specific signals that matter most.\n\n# Allowed Custom Event Types\n- \`blocker_detected\`: When someone cannot proceed without help.\n- \`scope_creep\`: When new work appears outside the active goal.\n- \`owner_missing\`: When work is discussed without a clear owner.\n\n# Rules\n- Be concise and evidence-based.\n- Do not invent facts.\n- Prefer actionable observations over commentary.\n\n\`\`\`yaml\nrole_mode: facilitator\nmin_confidence: 0.70\nsuggestion_cooldown_seconds: 45\nintervention_cooldown_seconds: 120\nallow_interruptions: false\nthreshold_decision_candidate: 0.72\nthreshold_open_discussion: 0.70\nthreshold_blocker_detected: 0.70\nforbidden_actions: shame_participants, legal_advice\n\`\`\``);
     setDraftActive(true);
   };
 
@@ -104,7 +104,7 @@ export function AIHostSkillSettings() {
           const body = await res.json().catch(() => ({}));
           throw new Error(body?.detail || 'Failed to create style');
         }
-        toast.success('Custom AI host style created');
+        toast.success('Custom AI Participant style created');
       } else if (selectedStyle && selectedStyle.source === 'user') {
         const res = await authFetch(`/api/user/ai-host-styles/${selectedStyle.id}`, {
           method: 'PUT',
@@ -118,7 +118,7 @@ export function AIHostSkillSettings() {
           const body = await res.json().catch(() => ({}));
           throw new Error(body?.detail || 'Failed to update style');
         }
-        toast.success('Custom AI host style updated');
+        toast.success('Custom AI Participant style updated');
       }
       await loadStyles();
     } catch (error) {
@@ -145,7 +145,7 @@ export function AIHostSkillSettings() {
         const body = await res.json().catch(() => ({}));
         throw new Error(body?.detail || 'Failed to set default style');
       }
-      toast.success('Default AI host style updated');
+      toast.success('Default AI Participant style updated');
       await loadStyles();
     } catch (error) {
       console.error(error);
@@ -166,7 +166,7 @@ export function AIHostSkillSettings() {
         const body = await res.json().catch(() => ({}));
         throw new Error(body?.detail || 'Failed to delete style');
       }
-      toast.success('Custom AI host style deleted');
+      toast.success('Custom AI Participant style deleted');
       await loadStyles();
     } catch (error) {
       console.error(error);
@@ -179,14 +179,14 @@ export function AIHostSkillSettings() {
   const readOnly = !isCreating && Boolean(selectedStyle?.read_only);
 
   if (loading) {
-    return <div className="text-sm text-gray-600">Loading AI Host styles...</div>;
+    return <div className="text-sm text-gray-600">Loading AI Participant styles...</div>;
   }
 
   return (
     <div className="space-y-6">
       <div className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm space-y-4">
         <div>
-          <h3 className="text-lg font-semibold text-gray-900">AI Host Style Library</h3>
+          <h3 className="text-lg font-semibold text-gray-900">AI Participant Style Library</h3>
           <p className="text-sm text-gray-600 mt-1">
             System styles are read-only. Create custom styles for your team and set one as default for quick start.
           </p>

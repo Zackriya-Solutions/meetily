@@ -1265,13 +1265,8 @@ async def websocket_streaming_audio(
 
         event_type = str(payload.get("event_type") or "").strip().lower()
         reason_map = {
-            "agenda_drift": "agenda_deviation",
             "decision_candidate": "no_decision",
-            "open_question": "unresolved_question",
-            "conflict_risk": "missing_context_or_repeat",
-            "urgency_risk": "missing_context_or_repeat",
-            "mistake_candidate": "missing_context_or_repeat",
-            "unheard_participant": "missing_context_or_repeat",
+            "open_discussion": "unresolved_question",
         }
         legacy_reason = reason_map.get(event_type)
         if legacy_reason:

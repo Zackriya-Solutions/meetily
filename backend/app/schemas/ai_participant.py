@@ -25,16 +25,6 @@ class GuardrailAlert(BaseModel):
     timestamp: str
 
 
-class HostEventType(str, Enum):
-    DECISION_CANDIDATE = "decision_candidate"
-    CONFLICT_RISK = "conflict_risk"
-    AGENDA_DRIFT = "agenda_drift"
-    URGENCY_RISK = "urgency_risk"
-    MISTAKE_CANDIDATE = "mistake_candidate"
-    UNHEARD_PARTICIPANT = "unheard_participant"
-    OPEN_QUESTION = "open_question"
-
-
 class HostRoleMode(str, Enum):
     FACILITATOR = "facilitator"
     ADVISOR = "advisor"
@@ -43,7 +33,7 @@ class HostRoleMode(str, Enum):
 
 class HostSuggestion(BaseModel):
     id: str
-    event_type: HostEventType
+    event_type: str
     title: str
     content: str
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
@@ -55,7 +45,7 @@ class HostSuggestion(BaseModel):
 
 class HostInterventionCard(BaseModel):
     id: str
-    event_type: HostEventType
+    event_type: str
     headline: str
     body: str
     priority: str = "medium"
@@ -89,7 +79,7 @@ class HostPolicyConfig(BaseModel):
     max_intervention_history: int = 30
     max_pinned_items: int = 100
     allow_interruptions: bool = False
-    event_threshold_overrides: Dict[HostEventType, float] = Field(default_factory=dict)
+    event_threshold_overrides: Dict[str, float] = Field(default_factory=dict)
     forbidden_actions: List[str] = Field(default_factory=list)
     escalation_rules: Dict[str, str] = Field(default_factory=dict)
     source: str = "system"

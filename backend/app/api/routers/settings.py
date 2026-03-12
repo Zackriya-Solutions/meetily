@@ -20,6 +20,7 @@ try:
     )
     from ...db import DatabaseManager
     from ...services.ai_participant import SYSTEM_HOST_SKILLS
+    from ...services.ai_participant_skills import parse_skill_markdown
 except (ImportError, ValueError):
     from api.deps import get_current_user
     from schemas.user import User
@@ -38,6 +39,7 @@ except (ImportError, ValueError):
     )
     from db import DatabaseManager
     from services.ai_participant import SYSTEM_HOST_SKILLS
+    from services.ai_participant_skills import parse_skill_markdown
 
 # Initialize services
 db = DatabaseManager()
@@ -293,10 +295,11 @@ def _system_style_items(default_style_id: str) -> List[AIHostStyleItem]:
     items: List[AIHostStyleItem] = []
     for key, markdown in SYSTEM_HOST_SKILLS.items():
         style_id = f"system:{key}"
+        parsed = parse_skill_markdown(markdown)
         items.append(
             AIHostStyleItem(
                 id=style_id,
-                name=key.title(),
+                name=str(parsed.get("name") or key.title()),
                 source="system",
                 read_only=True,
                 is_default=(style_id == default_style_id),

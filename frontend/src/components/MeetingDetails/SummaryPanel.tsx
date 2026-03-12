@@ -136,7 +136,7 @@ export function SummaryPanel({
           <button
             onClick={() => setIsHostSkillDialogOpen(true)}
             className="p-2 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-            title="Meeting AI Host Skill"
+            title="Meeting AI Participant Skill"
           >
             <Bot className="w-5 h-5" />
           </button>
