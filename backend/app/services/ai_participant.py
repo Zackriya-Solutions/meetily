@@ -15,6 +15,12 @@ try:
         GuardrailAlert,
         GuardrailLLMOutput,
         GuardrailReason,
+        HostEventType,
+        HostInterventionCard,
+        HostPolicyConfig,
+        HostRoleMode,
+        HostSuggestion,
+        MeetingHostState,
     )
     from .gemini_client import generate_content_text_async
 except (ImportError, ValueError):
@@ -22,10 +28,104 @@ except (ImportError, ValueError):
         GuardrailAlert,
         GuardrailLLMOutput,
         GuardrailReason,
+        HostEventType,
+        HostInterventionCard,
+        HostPolicyConfig,
+        HostRoleMode,
+        HostSuggestion,
+        MeetingHostState,
     )
     from services.gemini_client import generate_content_text_async
 
 logger = logging.getLogger(__name__)
+
+
+SYSTEM_HOST_SKILLS: Dict[str, str] = {
+    "facilitator": """
+# SKILL: Meeting Facilitator
+
+## Role & Identity
+You are a neutral meeting facilitator focused on progress, clarity, and inclusion.
+
+## Behavior Rules
+- Keep the group aligned to agenda and outcomes.
+- Encourage participation from quieter attendees.
+- Intervene politely when discussions stall.
+
+## Policy Config
+```yaml
+role_mode: facilitator
+min_confidence: 0.70
+suggestion_cooldown_seconds: 45
+intervention_cooldown_seconds: 120
+allow_interruptions: false
+threshold_decision_candidate: 0.72
+threshold_conflict_risk: 0.70
+threshold_agenda_drift: 0.68
+threshold_urgency_risk: 0.72
+threshold_mistake_candidate: 0.80
+threshold_unheard_participant: 0.78
+threshold_open_question: 0.70
+forbidden_actions: shame_participants, legal_advice
+```
+""".strip(),
+    "advisor": """
+# SKILL: Strategic Advisor
+
+## Role & Identity
+You are an advisor who intervenes selectively and only on high-signal risks.
+
+## Behavior Rules
+- Stay mostly quiet unless risk is material.
+- Prefer strong evidence before intervening.
+- Focus on urgency, conflict, and factual correction.
+
+## Policy Config
+```yaml
+role_mode: advisor
+min_confidence: 0.78
+suggestion_cooldown_seconds: 90
+intervention_cooldown_seconds: 180
+allow_interruptions: false
+threshold_decision_candidate: 0.80
+threshold_conflict_risk: 0.78
+threshold_agenda_drift: 0.76
+threshold_urgency_risk: 0.80
+threshold_mistake_candidate: 0.85
+threshold_unheard_participant: 0.84
+threshold_open_question: 0.80
+forbidden_actions: shame_participants, legal_advice
+```
+""".strip(),
+    "chairperson": """
+# SKILL: Chairperson
+
+## Role & Identity
+You are a chairperson focused on keeping decisions timely and discussions productive.
+
+## Behavior Rules
+- Drive topic transitions when time is constrained.
+- Push for concrete decision closure.
+- Surface unresolved blockers quickly.
+
+## Policy Config
+```yaml
+role_mode: chairperson
+min_confidence: 0.65
+suggestion_cooldown_seconds: 35
+intervention_cooldown_seconds: 90
+allow_interruptions: false
+threshold_decision_candidate: 0.68
+threshold_conflict_risk: 0.66
+threshold_agenda_drift: 0.64
+threshold_urgency_risk: 0.65
+threshold_mistake_candidate: 0.76
+threshold_unheard_participant: 0.74
+threshold_open_question: 0.66
+forbidden_actions: shame_participants, legal_advice
+```
+""".strip(),
+}
 
 
 @dataclass
@@ -35,7 +135,7 @@ class MeetingContext:
     goal: str = ""
     description: str = ""
     agenda_text: str = ""
-    participant_names: List[str] = None
+    participant_names: Optional[List[str]] = None
 
 
 class RollingTranscriptBuffer:
@@ -64,7 +164,6 @@ class RollingTranscriptBuffer:
         while self._items and self._char_count > self.max_chars:
             _, old_text = self._items.popleft()
             self._char_count -= len(old_text)
-            logger.debug("[AIParticipant][Buffer] Pruned old text due to char limit. Current count: %s", self._char_count)
 
     def is_empty(self) -> bool:
         return not self._items
@@ -215,9 +314,7 @@ class GuardrailEvaluator:
         self._last_publish_at = now_ts
         self._metrics["published"] += 1
         by_reason = self._metrics.setdefault("published_by_reason", {})
-        by_reason[assessment.reason.value] = (
-            int(by_reason.get(assessment.reason.value) or 0) + 1
-        )
+        by_reason[assessment.reason.value] = int(by_reason.get(assessment.reason.value) or 0) + 1
 
         return GuardrailAlert(
             id=str(uuid.uuid4()),
@@ -241,9 +338,8 @@ class GuardrailEvaluator:
         return " ".join(words[:30]).rstrip(" ,.;") + "."
 
     def get_metrics_snapshot(self) -> Dict[str, Any]:
-        by_reason = dict(self._metrics.get("published_by_reason") or {})
         payload = dict(self._metrics)
-        payload["published_by_reason"] = by_reason
+        payload["published_by_reason"] = dict(self._metrics.get("published_by_reason") or {})
         return payload
 
 
@@ -264,7 +360,7 @@ class AIParticipantEngine:
             "AI_PARTICIPANT_FALLBACK_MODELS", "gemini-3-pro-preview,gemini-3-flash-preview"
         )
         self.fallback_models = [
-            m.strip() for m in fallback_models.split(",") if (m or ""   ).strip()
+            m.strip() for m in fallback_models.split(",") if (m or "").strip()
         ]
         self.llm_timeout_seconds = float(
             os.getenv("AI_PARTICIPANT_LLM_TIMEOUT_SECONDS", "12")
@@ -288,20 +384,24 @@ class AIParticipantEngine:
         )
         self.evaluator = GuardrailEvaluator()
 
-        logger.info(
-            "[AIParticipant] Engine initialized meeting_id=%s user=%s window=%ss max_chars=%s interval=%ss",
-            self.meeting_context.meeting_id,
-            self.user_email,
-            window_seconds,
-            max_chars,
-            self.analysis_interval_seconds,
-        )
-
         self._last_analysis_at = 0.0
         self._lock = asyncio.Lock()
         self._gemini_api_key: Optional[str] = None
         self._missing_key_logged = False
         self._last_alert_summary = "None"
+
+        self._host_event_last_published_at: Dict[str, float] = {}
+        self._host_event_last_signature: Dict[str, str] = {}
+        self._host_state = MeetingHostState(meeting_id=self.meeting_context.meeting_id)
+        self._host_policy = self._load_policy_from_skill(
+            skill_text=(
+                os.getenv("AI_HOST_DEFAULT_SKILL_MARKDOWN", "").strip()
+                or SYSTEM_HOST_SKILLS["facilitator"]
+            ),
+            source="system",
+        )
+        self._host_policy_source = "system"
+
         self._stats: Dict[str, Any] = {
             "analysis_attempts": 0,
             "analysis_skipped_small_window": 0,
@@ -318,6 +418,12 @@ class AIParticipantEngine:
             "last_assessment_reason": None,
             "last_assessment_confidence": None,
             "last_analysis_at": None,
+            "host_suggestions_emitted": 0,
+            "host_interventions_emitted": 0,
+            "host_suggestions_pinned": 0,
+            "host_suggestions_dismissed": 0,
+            "host_suggestions_suppressed": 0,
+            "host_policy_source": self._host_policy_source,
         }
 
     async def ingest_transcript(
@@ -325,6 +431,7 @@ class AIParticipantEngine:
         text: str,
         transcript_time_seconds: Optional[float] = None,
     ) -> Optional[GuardrailAlert]:
+        """Backward-compatible guardrail path."""
         if not self.enabled:
             return None
 
@@ -341,63 +448,26 @@ class AIParticipantEngine:
             and self.buffer.get_char_count() < self.min_chars_before_analysis
         ):
             self._stats["analysis_skipped_small_window"] += 1
-            if self.verbose_logs:
-                logger.info(
-                    "[AIParticipant][Cycle] skipped_small_window meeting=%s chars=%s min_chars=%s",
-                    self.meeting_context.meeting_id,
-                    self.buffer.get_char_count(),
-                    self.min_chars_before_analysis,
-                )
             return None
 
         if now_ts - self._last_analysis_at < self.analysis_interval_seconds:
             self._stats["analysis_skipped_interval"] += 1
-            if self.verbose_logs:
-                logger.info(
-                    "[AIParticipant][Cycle] skipped_interval meeting=%s since_last=%.1fs interval=%ss chars=%s",
-                    self.meeting_context.meeting_id,
-                    now_ts - self._last_analysis_at,
-                    self.analysis_interval_seconds,
-                    self.buffer.get_char_count(),
-                )
             return None
 
         async with self._lock:
             now_ts = time.time()
             if now_ts - self._last_analysis_at < self.analysis_interval_seconds:
                 self._stats["analysis_skipped_interval"] += 1
-                if self.verbose_logs:
-                    logger.info(
-                        "[AIParticipant][Cycle] skipped_interval_locked meeting=%s since_last=%.1fs interval=%ss",
-                        self.meeting_context.meeting_id,
-                        now_ts - self._last_analysis_at,
-                        self.analysis_interval_seconds,
-                    )
                 return None
+
             self._last_analysis_at = now_ts
             self._stats["analysis_attempts"] += 1
             self._stats["last_analysis_at"] = datetime.utcnow().isoformat()
-            if self.verbose_logs:
-                logger.info(
-                    "[AIParticipant][Cycle] analysis_start meeting=%s attempt=%s chars=%s duration=%.1fs model=%s",
-                    self.meeting_context.meeting_id,
-                    self._stats["analysis_attempts"],
-                    self.buffer.get_char_count(),
-                    self.buffer.get_duration_seconds(),
-                    self.model_name,
-                )
-
             assessment = await self._reason_with_llm()
             if not assessment:
                 self._stats["assessment_none"] += 1
-                if self.verbose_logs:
-                    logger.info(
-                        "[AIParticipant][Cycle] assessment_none meeting=%s llm_failures=%s parse_failures=%s",
-                        self.meeting_context.meeting_id,
-                        self._stats.get("llm_failures", 0),
-                        self._stats.get("parse_failures", 0),
-                    )
                 return None
+
             self._stats["last_assessment_intervention_required"] = bool(
                 assessment.intervention_required
             )
@@ -407,17 +477,6 @@ class AIParticipantEngine:
             self._stats["last_assessment_confidence"] = float(
                 assessment.confidence or 0.0
             )
-            if self.verbose_logs:
-                logger.info(
-                    "[AIParticipant] Assessed meeting=%s intervention=%s reason=%s confidence=%.2f window_chars=%s window_duration=%.1fs model=%s",
-                    self.meeting_context.meeting_id,
-                    bool(assessment.intervention_required),
-                    assessment.reason.value if assessment.reason else None,
-                    float(assessment.confidence or 0.0),
-                    self.buffer.get_char_count(),
-                    self.buffer.get_duration_seconds(),
-                    self._stats.get("last_model_used") or self.model_name,
-                )
 
             alert = self.evaluator.evaluate(
                 assessment=assessment,
@@ -427,6 +486,89 @@ class AIParticipantEngine:
             if alert:
                 self._last_alert_summary = f"{alert.reason.value}: {alert.insight}"
             return alert
+
+    async def ingest_transcript_host(
+        self,
+        text: str,
+        transcript_time_seconds: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Active host path: suggestions + interventions + state delta."""
+        payload: Dict[str, Any] = {
+            "suggestions": [],
+            "interventions": [],
+            "state_delta": {},
+            "policy_source": self._host_policy_source,
+        }
+        if not self.enabled:
+            return payload
+
+        now_ts = time.time()
+        ts = (
+            float(transcript_time_seconds)
+            if transcript_time_seconds is not None
+            else now_ts
+        )
+        self.buffer.add(ts, text)
+
+        if (
+            self.min_chars_before_analysis > 0
+            and self.buffer.get_char_count() < self.min_chars_before_analysis
+        ):
+            self._stats["analysis_skipped_small_window"] += 1
+            return payload
+
+        if now_ts - self._last_analysis_at < self.analysis_interval_seconds:
+            self._stats["analysis_skipped_interval"] += 1
+            return payload
+
+        async with self._lock:
+            now_ts = time.time()
+            if now_ts - self._last_analysis_at < self.analysis_interval_seconds:
+                self._stats["analysis_skipped_interval"] += 1
+                return payload
+
+            self._last_analysis_at = now_ts
+            self._stats["analysis_attempts"] += 1
+            self._stats["last_analysis_at"] = datetime.utcnow().isoformat()
+
+            events = await self._reason_host_events()
+            if not events:
+                self._stats["assessment_none"] += 1
+                payload["state_delta"] = self.get_host_state_snapshot()
+                return payload
+
+            for event in events:
+                suggestion = self._build_host_suggestion(event)
+                if not suggestion:
+                    self._stats["host_suggestions_suppressed"] += 1
+                    continue
+
+                self._host_state.suggested_items.insert(0, suggestion)
+                self._host_state.suggested_items = self._host_state.suggested_items[
+                    : self._host_policy.max_suggestions_buffer
+                ]
+                self._host_state.counters["suggested"] = (
+                    int(self._host_state.counters.get("suggested") or 0) + 1
+                )
+                self._host_state.updated_at = datetime.utcnow().isoformat()
+                self._stats["host_suggestions_emitted"] += 1
+                payload["suggestions"].append(suggestion.model_dump())
+
+                card = self._build_intervention_from_suggestion(suggestion, now_ts)
+                if card is not None:
+                    self._host_state.intervention_history.insert(0, card)
+                    self._host_state.intervention_history = self._host_state.intervention_history[
+                        : self._host_policy.max_intervention_history
+                    ]
+                    self._host_state.counters["intervened"] = (
+                        int(self._host_state.counters.get("intervened") or 0) + 1
+                    )
+                    self._host_state.updated_at = datetime.utcnow().isoformat()
+                    self._stats["host_interventions_emitted"] += 1
+                    payload["interventions"].append(card.model_dump())
+
+            payload["state_delta"] = self.get_host_state_snapshot()
+            return payload
 
     async def _reason_with_llm(self) -> Optional[GuardrailLLMOutput]:
         api_key = await self._get_gemini_api_key()
@@ -438,14 +580,102 @@ class AIParticipantEngine:
             return None
 
         prompt = self._build_prompt(transcript_window)
+        raw_text, used_model = await self._call_llm_json(prompt)
+        if raw_text is None:
+            return None
 
+        try:
+            self._stats["last_model_used"] = used_model
+            parsed = self._extract_json(raw_text)
+            if not parsed:
+                self._stats["parse_failures"] += 1
+                return None
+            normalized = self._normalize_model_payload(parsed)
+            if not normalized:
+                self._stats["normalize_silent_fallbacks"] += 1
+                return None
+            return GuardrailLLMOutput.model_validate(normalized)
+        except Exception:
+            self._stats["llm_failures"] += 1
+            return None
+
+    async def _reason_host_events(self) -> List[Dict[str, Any]]:
+        api_key = await self._get_gemini_api_key()
+        if not api_key:
+            return []
+
+        transcript_window = self.buffer.get_text()
+        if not transcript_window:
+            return []
+
+        prompt = self._build_host_prompt(transcript_window)
+        raw_text, used_model = await self._call_llm_json(prompt)
+        if raw_text is None:
+            return []
+
+        self._stats["last_model_used"] = used_model
+        parsed = self._extract_json(raw_text)
+        if not parsed:
+            self._stats["parse_failures"] += 1
+            return []
+
+        # Update the rolling meeting summary from the model directly into host state
+        summary_text = str(parsed.get("meeting_summary") or "").strip()
+        if summary_text and summary_text.lower() not in ("null", "none"):
+            self._host_state.meeting_summary = summary_text
+
+        events = parsed.get("events") if isinstance(parsed, dict) else None
+        if not isinstance(events, list):
+            return []
+
+        normalized_events: List[Dict[str, Any]] = []
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+            event_type_raw = str(event.get("event_type") or "").strip().lower()
+            try:
+                event_type = HostEventType(event_type_raw)
+            except Exception:
+                continue
+
+            title = " ".join(str(event.get("title") or "").split()).strip()
+            content = " ".join(str(event.get("content") or "").split()).strip()
+            if not content:
+                continue
+
+            confidence = event.get("confidence", 0.0)
+            try:
+                confidence = float(confidence)
+            except Exception:
+                confidence = 0.0
+            confidence = max(0.0, min(1.0, confidence))
+
+            priority = str(event.get("priority") or "medium").strip().lower()
+            if priority not in {"low", "medium", "high"}:
+                priority = "medium"
+
+            source_excerpt = " ".join(
+                str(event.get("source_excerpt") or "").split()
+            ).strip()
+
+            normalized_events.append(
+                {
+                    "event_type": event_type,
+                    "title": title or event_type.value.replace("_", " ").title(),
+                    "content": content,
+                    "confidence": confidence,
+                    "priority": priority,
+                    "source_excerpt": source_excerpt[:240] if source_excerpt else None,
+                }
+            )
+        return normalized_events
+
+    async def _call_llm_json(self, prompt: str) -> Tuple[Optional[str], str]:
         model_candidates: List[str] = []
         for model in [self.model_name, *self.fallback_models]:
             if model and model not in model_candidates:
                 model_candidates.append(model)
 
-        last_exc: Optional[Exception] = None
-        raw_text = ""
         used_model = self.model_name
         for idx, model in enumerate(model_candidates):
             try:
@@ -453,7 +683,7 @@ class AIParticipantEngine:
                 used_model = model
                 raw_text = await asyncio.wait_for(
                     generate_content_text_async(
-                        api_key=api_key,
+                        api_key=await self._get_gemini_api_key(),
                         model=model,
                         contents=prompt,
                         config={"temperature": 0.1},
@@ -462,86 +692,30 @@ class AIParticipantEngine:
                 )
                 if idx > 0:
                     self._stats["model_fallbacks"] += 1
-                    logger.info(
-                        "[AIParticipant] Fallback model selected: %s (primary: %s)",
-                        model,
-                        self.model_name,
-                    )
-                break
+                return raw_text, used_model
             except (asyncio.TimeoutError, TimeoutError):
                 self._stats["llm_failures"] += 1
                 self._stats["llm_timeouts"] += 1
-                logger.warning(
-                    "[AIParticipant] Reasoning timeout on model %s after %.2fs",
-                    model,
-                    self.llm_timeout_seconds,
-                )
                 if idx == len(model_candidates) - 1:
-                    return None
-                continue
-            except Exception as exc:
+                    return None, used_model
+            except Exception:
                 self._stats["llm_failures"] += 1
-                message = str(exc)
-                logger.warning("[AIParticipant] Reasoning failed on model %s: %s", model, message)
-                
-                not_found = "NOT_FOUND" in message or "not found" in message.lower()
-                if idx < len(model_candidates) - 1:
-                    logger.info("[AIParticipant] Trying fallback model due to error...")
-                    continue
-                return None
+                if idx == len(model_candidates) - 1:
+                    return None, used_model
 
-        try:
-            self._stats["last_model_used"] = used_model
-            parsed = self._extract_json(raw_text)
-            if not parsed:
-                self._stats["parse_failures"] += 1
-                logger.warning(
-                    "[AIParticipant] JSON parsing failed. Raw response: %s",
-                    raw_text[:200],
-                )
-                return None
-            normalized = self._normalize_model_payload(parsed)
-            if not normalized:
-                self._stats["normalize_silent_fallbacks"] += 1
-                logger.warning(
-                    "[AIParticipant] Response normalization failed: %s", parsed
-                )
-                return None
-            if (
-                isinstance(parsed, dict)
-                and bool(parsed.get("intervention_required", False))
-                and not bool(normalized.get("intervention_required", False))
-            ):
-                self._stats["normalize_silent_fallbacks"] += 1
-            return GuardrailLLMOutput.model_validate(normalized)
-        except asyncio.TimeoutError:
-            self._stats["llm_failures"] += 1
-            self._stats["llm_timeouts"] += 1
-            logger.warning(
-                "[AIParticipant] Reasoning timeout after %.2fs",
-                self.llm_timeout_seconds,
-            )
-            return None
-        except Exception as exc:
-            self._stats["llm_failures"] += 1
-            logger.warning("[AIParticipant] Reasoning failed: %s", exc)
-            return None
+        return None, used_model
 
     async def _get_gemini_api_key(self) -> Optional[str]:
         if self._gemini_api_key:
             return self._gemini_api_key
 
-        # Prioritize Environment Variables over Database
         key = os.getenv("GEMINI_API_KEY", "").strip() or os.getenv("GOOGLE_API_KEY", "").strip()
-
         if not key:
             key = (await self.db.get_api_key("gemini", user_email=self.user_email)) or ""
             key = key.strip()
 
         if not key and not self._missing_key_logged:
-            logger.info(
-                "[AIParticipant] Gemini API key not found for %s", self.user_email
-            )
+            logger.info("[AIParticipant] Gemini API key not found for %s", self.user_email)
             self._missing_key_logged = True
 
         self._gemini_api_key = key or None
@@ -553,9 +727,7 @@ class AIParticipantEngine:
         description = self.meeting_context.description or ""
         agenda_text = self.meeting_context.agenda_text or ""
         participant_names = self.meeting_context.participant_names or []
-        participant_line = (
-            ", ".join(participant_names[:25]) if participant_names else "None"
-        )
+        participant_line = ", ".join(participant_names[:25]) if participant_names else "None"
 
         return f"""
 You are a silent meeting observer. Stay silent unless a guardrail condition is detected.
@@ -580,14 +752,361 @@ Rules:
   {{"intervention_required": true, "reason": "...", "insight": "...", "confidence": 0.0}}
 - Insight must be one actionable sentence and no more than 30 words.
 - Reason must be one of: agenda_deviation, no_decision, unresolved_question, missing_context_or_repeat.
-- If transcript is repetitive/noisy/filler or clearly unrelated to the meeting goal/agenda, prefer reason=agenda_deviation.
-- Do not stay silent just because transcript quality is poor; poor or irrelevant discussion is still a guardrail signal.
-- Use only provided meeting context and transcript text.
 - Return JSON only. No markdown.
 
 Recent transcript window:
 {transcript_window}
 """.strip()
+
+    def _build_host_prompt(self, transcript_window: str) -> str:
+        title = self.meeting_context.title or ""
+        goal = self.meeting_context.goal or ""
+        description = self.meeting_context.description or ""
+        agenda_text = self.meeting_context.agenda_text or ""
+        participant_names = self.meeting_context.participant_names or []
+        participant_line = ", ".join(participant_names[:25]) if participant_names else "None"
+
+        policy = self._host_policy
+        role = policy.role_mode.value
+
+        pinned_titles = [item.title for item in self._host_state.pinned_items]
+        pinned_line = ", ".join(pinned_titles) if pinned_titles else "None"
+
+        return f"""
+You are an active AI meeting host. Generate event suggestions conservatively, based only on transcript and meeting context.
+
+Meeting Context:
+- Title: {title}
+- Goal: {goal}
+- Description: {description}
+- Agenda: {agenda_text}
+- Participants: {participant_line}
+- Role Mode: {role}
+- Current Summary: {self._host_state.meeting_summary or "None"}
+- Already Pinned Decisions/Topics: {pinned_line}
+
+Allowed event_type values:
+- decision_candidate
+- conflict_risk
+- agenda_drift
+- urgency_risk
+- mistake_candidate
+- unheard_participant
+- open_question
+
+Rules:
+- Return strict JSON object only with this shape:
+  {{"meeting_summary": "...", "events": [{{"event_type": "...", "title": "...", "content": "...", "confidence": 0.0, "priority": "low|medium|high", "source_excerpt": "..."}}]}}
+- `meeting_summary` should be a rolling 2-3 sentence paragraph summarizing the entire meeting up to this point. Include key details from the past 20-30 minutes if applicable.
+- If no event is needed, return {{"events": []}}.
+- Do NOT suggest events for topics or decisions that are already in the "Already Pinned Decisions/Topics" list.
+- ONLY output a `decision_candidate` if an explicit choice, commitment, or action has been agreed upon by participants.
+- Do NOT classify informational statements, general discussion, tech news summaries, or observations as decisions.
+- Keep title <= 10 words and content <= 35 words.
+- Avoid personal criticism or blame.
+- Do not hallucinate facts outside provided transcript/context.
+
+Recent transcript window:
+{transcript_window}
+""".strip()
+
+    def _build_host_suggestion(self, event: Dict[str, Any]) -> Optional[HostSuggestion]:
+        event_type = event.get("event_type")
+        if not isinstance(event_type, HostEventType):
+            return None
+
+        confidence = float(event.get("confidence") or 0.0)
+        threshold = float(
+            self._host_policy.event_threshold_overrides.get(event_type)
+            or self._host_policy.min_confidence
+        )
+        if confidence < threshold:
+            return None
+
+        title = " ".join(str(event.get("title") or "").split()).strip()
+        content = " ".join(str(event.get("content") or "").split()).strip()
+        if not content:
+            return None
+
+        return HostSuggestion(
+            id=str(uuid.uuid4()),
+            event_type=event_type,
+            title=title or event_type.value.replace("_", " ").title(),
+            content=content,
+            confidence=round(confidence, 2),
+            timestamp=datetime.utcnow().isoformat(),
+            source_excerpt=event.get("source_excerpt"),
+            metadata={"priority": event.get("priority", "medium")},
+        )
+
+    def _build_intervention_from_suggestion(
+        self,
+        suggestion: HostSuggestion,
+        now_ts: float,
+    ) -> Optional[HostInterventionCard]:
+        event_key = suggestion.event_type.value
+        cooldown_seconds = int(self._host_policy.intervention_cooldown_seconds)
+        last_ts = float(self._host_event_last_published_at.get(event_key) or 0.0)
+        if (now_ts - last_ts) < cooldown_seconds:
+            return None
+
+        signature = self._suggestion_signature(suggestion)
+        if self._host_event_last_signature.get(event_key) == signature:
+            return None
+
+        if not self._should_intervene(suggestion):
+            return None
+
+        self._host_event_last_published_at[event_key] = now_ts
+        self._host_event_last_signature[event_key] = signature
+        return HostInterventionCard(
+            id=str(uuid.uuid4()),
+            event_type=suggestion.event_type,
+            headline=suggestion.title,
+            body=suggestion.content,
+            priority=str(suggestion.metadata.get("priority") or "medium"),
+            confidence=suggestion.confidence,
+            timestamp=datetime.utcnow().isoformat(),
+            linked_suggestion_id=suggestion.id,
+        )
+
+    def _should_intervene(self, suggestion: HostSuggestion) -> bool:
+        role = self._host_policy.role_mode
+        confidence = float(suggestion.confidence)
+        event_type = suggestion.event_type
+
+        if role == HostRoleMode.ADVISOR:
+            return event_type in {
+                HostEventType.CONFLICT_RISK,
+                HostEventType.URGENCY_RISK,
+                HostEventType.MISTAKE_CANDIDATE,
+            }
+
+        if role == HostRoleMode.FACILITATOR:
+            return confidence >= max(0.72, self._host_policy.min_confidence)
+
+        return confidence >= max(0.65, self._host_policy.min_confidence - 0.03)
+
+    @staticmethod
+    def _suggestion_signature(suggestion: HostSuggestion) -> str:
+        text = " ".join((suggestion.content or "").strip().lower().split())
+        return f"{suggestion.event_type.value}:{text}"
+
+    def _load_policy_from_skill(self, skill_text: str, source: str) -> HostPolicyConfig:
+        policy = HostPolicyConfig(source=source)
+        if not skill_text:
+            return policy
+
+        parsed = self._parse_simple_skill_text(skill_text)
+        inferred = self._infer_policy_from_markdown(skill_text)
+        for key, value in inferred.items():
+            parsed.setdefault(key, value)
+
+        role_raw = str(parsed.get("role_mode") or "").strip().lower()
+        if role_raw in {"facilitator", "advisor", "chairperson"}:
+            policy.role_mode = HostRoleMode(role_raw)
+
+        for key in (
+            "min_confidence",
+            "suggestion_cooldown_seconds",
+            "intervention_cooldown_seconds",
+            "max_suggestions_buffer",
+            "max_intervention_history",
+            "max_pinned_items",
+        ):
+            if key in parsed:
+                self._apply_policy_numeric(policy, key, parsed[key])
+
+        if "allow_interruptions" in parsed:
+            policy.allow_interruptions = str(parsed["allow_interruptions"]).strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
+
+        forbidden = parsed.get("forbidden_actions")
+        if forbidden:
+            policy.forbidden_actions = [
+                v.strip()
+                for v in str(forbidden).split(",")
+                if v and v.strip()
+            ]
+
+        for event_type in HostEventType:
+            key = f"threshold_{event_type.value}"
+            if key in parsed:
+                try:
+                    val = float(parsed[key])
+                    policy.event_threshold_overrides[event_type] = max(0.0, min(1.0, val))
+                except Exception:
+                    continue
+
+        return policy
+
+    @staticmethod
+    def _infer_policy_from_markdown(skill_text: str) -> Dict[str, Any]:
+        inferred: Dict[str, Any] = {}
+        text = str(skill_text or "")
+        lower = text.lower()
+
+        # Role inference from human-readable role/identity sections
+        if any(token in lower for token in ["chairperson", "team lead", "tech lead", "engineering lead"]):
+            inferred["role_mode"] = "chairperson"
+        elif any(token in lower for token in ["advisor", "consultant", "observer"]):
+            inferred["role_mode"] = "advisor"
+        elif any(token in lower for token in ["facilitator", "moderator", "host"]):
+            inferred["role_mode"] = "facilitator"
+
+        # Interaction style hints
+        if "always ask clarifying questions" in lower:
+            inferred.setdefault("min_confidence", "0.72")
+            inferred.setdefault("threshold_open_question", "0.66")
+
+        if any(token in lower for token in ["default to simplicity", "simplicity over clever", "simple over clever"]):
+            inferred["forbidden_actions"] = "overengineered_solutions, shame_participants, legal_advice"
+
+        if any(token in lower for token in ["direct and confident", "drive decisions", "time-box", "timebox"]):
+            inferred.setdefault("intervention_cooldown_seconds", "90")
+            inferred.setdefault("threshold_urgency_risk", "0.65")
+
+        return inferred
+
+    @staticmethod
+    def _parse_simple_skill_text(skill_text: str) -> Dict[str, str]:
+        parsed: Dict[str, str] = {}
+        text = str(skill_text or "")
+
+        # Prefer fenced code blocks (yaml/yml/toml/ini/txt) if present.
+        # This allows users to paste markdown docs with an embedded config block.
+        fence_blocks = re.findall(
+            r"```(?:yaml|yml|toml|ini|txt)?\s*(.*?)\s*```", text, flags=re.DOTALL
+        )
+        candidate = fence_blocks[0] if fence_blocks else text
+
+        for line in candidate.splitlines():
+            item = line.strip()
+            if not item:
+                continue
+            if item.startswith("#"):
+                continue
+            if item.startswith("- "):
+                item = item[2:].strip()
+            if item.startswith("* "):
+                item = item[2:].strip()
+            if ":" not in item:
+                continue
+            key, value = item.split(":", 1)
+            key = key.strip().strip("`").lower()
+            value = value.strip().strip("`")
+            if not key:
+                continue
+            parsed[key] = value
+        return parsed
+
+    @staticmethod
+    def _apply_policy_numeric(policy: HostPolicyConfig, key: str, value: Any) -> None:
+        try:
+            if key in {"min_confidence"}:
+                setattr(policy, key, max(0.0, min(1.0, float(value))))
+            else:
+                setattr(policy, key, max(1, int(float(value))))
+        except Exception:
+            return
+
+    def apply_host_skill_override(self, skill_markdown: str, source: str = "meeting") -> None:
+        skill_text = (skill_markdown or "").strip()
+        if not skill_text:
+            return
+        self._host_policy = self._load_policy_from_skill(skill_text, source=source)
+        self._host_policy_source = source
+        self._stats["host_policy_source"] = source
+
+    def set_host_template(self, template_name: str, source: str = "system") -> None:
+        template_key = str(template_name or "").strip().lower()
+        skill_text = SYSTEM_HOST_SKILLS.get(template_key)
+        if not skill_text:
+            return
+        self._host_policy = self._load_policy_from_skill(skill_text, source=source)
+        self._host_policy_source = source
+        self._stats["host_policy_source"] = source
+
+    def pin_suggestion(self, suggestion_id: str, actor: Optional[str] = None) -> Optional[HostSuggestion]:
+        suggestion_id = str(suggestion_id or "").strip()
+        if not suggestion_id:
+            return None
+
+        match = None
+        remaining: List[HostSuggestion] = []
+        for item in self._host_state.suggested_items:
+            if item.id == suggestion_id and match is None:
+                match = item
+            else:
+                remaining.append(item)
+
+        if not match:
+            for item in self._host_state.pinned_items:
+                if item.id == suggestion_id:
+                    return item
+            return None
+
+        match.status = "pinned"
+        meta = dict(match.metadata or {})
+        if actor:
+            meta["pinned_by"] = actor
+        meta["pinned_at"] = datetime.utcnow().isoformat()
+        match.metadata = meta
+
+        self._host_state.suggested_items = remaining
+        self._host_state.pinned_items.insert(0, match)
+        self._host_state.pinned_items = self._host_state.pinned_items[: self._host_policy.max_pinned_items]
+        self._host_state.counters["pinned"] = int(self._host_state.counters.get("pinned") or 0) + 1
+        self._host_state.updated_at = datetime.utcnow().isoformat()
+        self._stats["host_suggestions_pinned"] += 1
+        return match
+
+    def dismiss_suggestion(self, suggestion_id: str, actor: Optional[str] = None) -> bool:
+        suggestion_id = str(suggestion_id or "").strip()
+        if not suggestion_id:
+            return False
+
+        remaining: List[HostSuggestion] = []
+        removed = False
+        for item in self._host_state.suggested_items:
+            if item.id == suggestion_id and not removed:
+                removed = True
+                continue
+            remaining.append(item)
+
+        if not removed:
+            return False
+
+        self._host_state.suggested_items = remaining
+        if suggestion_id not in self._host_state.dismissed_item_ids:
+            self._host_state.dismissed_item_ids.insert(0, suggestion_id)
+            self._host_state.dismissed_item_ids = self._host_state.dismissed_item_ids[:200]
+        self._host_state.counters["dismissed"] = int(self._host_state.counters.get("dismissed") or 0) + 1
+        self._host_state.updated_at = datetime.utcnow().isoformat()
+        self._stats["host_suggestions_dismissed"] += 1
+
+        if actor:
+            self._host_state.last_response_outcomes.insert(0, f"dismissed_by:{actor}")
+            self._host_state.last_response_outcomes = self._host_state.last_response_outcomes[:50]
+        return True
+
+    def record_feedback(self, suggestion_id: str, feedback: str, actor: Optional[str] = None) -> None:
+        entry = f"feedback:{suggestion_id}:{feedback}"
+        if actor:
+            entry += f":{actor}"
+        self._host_state.last_response_outcomes.insert(0, entry[:300])
+        self._host_state.last_response_outcomes = self._host_state.last_response_outcomes[:50]
+        self._host_state.updated_at = datetime.utcnow().isoformat()
+
+    def get_host_state_snapshot(self) -> Dict[str, Any]:
+        state = self._host_state.model_dump()
+        state["policy_source"] = self._host_policy_source
+        state["policy_role_mode"] = self._host_policy.role_mode.value
+        return state
 
     @staticmethod
     def _normalize_reason(reason_value: str) -> Optional[str]:
@@ -640,14 +1159,12 @@ Recent transcript window:
         if not text:
             return None
 
-        # Direct JSON path
         try:
             obj = json.loads(text)
             return obj if isinstance(obj, dict) else None
         except Exception:
             pass
 
-        # Code fence path
         fence_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
         if fence_match:
             try:
@@ -656,7 +1173,6 @@ Recent transcript window:
             except Exception:
                 return None
 
-        # First object heuristic
         start = text.find("{")
         end = text.rfind("}")
         if start >= 0 and end > start:
@@ -676,6 +1192,18 @@ Recent transcript window:
         )
         payload["evaluator"] = self.evaluator.get_metrics_snapshot()
         payload["model"] = self.model_name
+        payload["host_policy"] = self._host_policy.model_dump()
+        payload["host_state"] = self.get_host_state_snapshot()
+        suggested = int(payload.get("host_suggestions_emitted") or 0)
+        pinned = int(payload.get("host_suggestions_pinned") or 0)
+        dismissed = int(payload.get("host_suggestions_dismissed") or 0)
+        payload["host_quality"] = {
+            "pin_rate": round((pinned / suggested), 4) if suggested > 0 else 0.0,
+            "dismiss_rate": round((dismissed / suggested), 4) if suggested > 0 else 0.0,
+            "suggested": suggested,
+            "pinned": pinned,
+            "dismissed": dismissed,
+        }
         return payload
 
     def apply_manual_context(

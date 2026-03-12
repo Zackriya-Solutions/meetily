@@ -33,14 +33,15 @@ class StreamingTranscriptionManager:
     """
 
     def __init__(
-        self, groq_api_key: str, meeting_context: Optional[Dict[str, Any]] = None
+        self, transcription_client, meeting_context: Optional[Dict[str, Any]] = None
     ):
         """
         Args:
-            groq_api_key: Groq API key for Whisper Large v3
+            transcription_client: Any transcription client implementing transcribe_audio_async().
+                                  Supports GroqTranscriptionClient or ElevenLabsTranscriptionClient.
             meeting_context: Dictionary with meeting details (title, agenda, participants)
         """
-        self.groq = GroqTranscriptionClient(groq_api_key)
+        self.transcription_client = transcription_client
         self.meeting_context = meeting_context or {}
         # No ThreadPoolExecutor needed — GroqTranscriptionClient is now fully async.
 
@@ -622,7 +623,7 @@ class StreamingTranscriptionManager:
 
                 # Transcribe with AsyncGroq — no thread pool needed.
                 prompt = self._construct_prompt()
-                result = await self.groq.transcribe_audio_async(
+                result = await self.transcription_client.transcribe_audio_async(
                     window_bytes,
                     "auto",  # Auto-detect language
                     prompt,
@@ -1192,7 +1193,7 @@ class StreamingTranscriptionManager:
             logger.info(f"Flushing {len(remaining_bytes)} bytes of remaining audio")
 
             # Transcribe final chunk using async client
-            result = await self.groq.transcribe_audio_async(
+            result = await self.transcription_client.transcribe_audio_async(
                 remaining_bytes,
                 "auto",
                 self.last_final_text[-100:] if self.last_final_text else None,

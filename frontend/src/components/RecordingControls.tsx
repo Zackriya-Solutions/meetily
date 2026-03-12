@@ -39,6 +39,32 @@ interface RecordingControlsProps {
     timestamp: string;
     updated_at?: string;
   }) => void;
+  onHostSuggestion?: (suggestion: {
+    id: string;
+    event_type: 'decision_candidate' | 'conflict_risk' | 'agenda_drift' | 'urgency_risk' | 'mistake_candidate' | 'unheard_participant' | 'open_question';
+    title: string;
+    content: string;
+    confidence: number;
+    timestamp: string;
+    status?: string;
+    source_excerpt?: string;
+    metadata?: Record<string, unknown>;
+  }) => void;
+  onHostIntervention?: (intervention: {
+    id: string;
+    event_type: 'decision_candidate' | 'conflict_risk' | 'agenda_drift' | 'urgency_risk' | 'mistake_candidate' | 'unheard_participant' | 'open_question';
+    headline: string;
+    body: string;
+    priority: 'low' | 'medium' | 'high';
+    confidence: number;
+    timestamp: string;
+    linked_suggestion_id?: string;
+  }) => void;
+  onHostStateDelta?: (state: Record<string, unknown>) => void;
+  onHostActionAck?: (payload: { action: string; applied: boolean; suggestion?: unknown; suggestion_id?: string }) => void;
+  onHostSkillAck?: (applied: boolean) => void;
+  onHostClientReady?: (client: AudioStreamClient | null) => void;
+  hostSkillMarkdown?: string;
   manualContext?: {
     goal: string;
     agenda_text: string;
@@ -46,6 +72,7 @@ interface RecordingControlsProps {
   };
   contextApplySignal?: number;
   onContextApplied?: (applied: boolean) => void;
+  onBeforeStart?: () => boolean | Promise<boolean>;
 }
 
 export const RecordingControls: React.FC<RecordingControlsProps> = ({
@@ -63,9 +90,17 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
   onPauseChange,
   startSignal,
   onGuardrailAlert,
+  onHostSuggestion,
+  onHostIntervention,
+  onHostStateDelta,
+  onHostActionAck,
+  onHostSkillAck,
+  onHostClientReady,
+  hostSkillMarkdown,
   manualContext,
   contextApplySignal,
-  onContextApplied
+  onContextApplied,
+  onBeforeStart
 }) => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
@@ -94,6 +129,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
         console.log('🧹 [RecordingControls] Unmounting - cleaning up audio client');
         void audioClientRef.current.stop();
         audioClientRef.current = null;
+        onHostClientReady?.(null);
       }
     };
   }, []);
@@ -141,6 +177,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
       // Create new streaming audio client (uses Groq Whisper)
       const client = new AudioStreamClient(wsUrl);
       audioClientRef.current = client;
+      onHostClientReady?.(client);
       const stableSessionId =
         initialSessionId ||
         (typeof crypto !== 'undefined' && 'randomUUID' in crypto
@@ -165,6 +202,9 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
           if (manualContext) {
             client.updateMeetingContext(manualContext);
           }
+          if ((hostSkillMarkdown || '').trim()) {
+            client.applyHostSkillOverride(hostSkillMarkdown || '');
+          }
         },
         onContextAck: (applied) => {
           onContextApplied?.(applied);
@@ -175,6 +215,21 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
         },
         onGuardrailAlert: (alert) => {
           onGuardrailAlert?.(alert);
+        },
+        onHostSuggestion: (suggestion) => {
+          onHostSuggestion?.(suggestion);
+        },
+        onHostIntervention: (intervention) => {
+          onHostIntervention?.(intervention);
+        },
+        onHostStateDelta: (state) => {
+          onHostStateDelta?.(state);
+        },
+        onHostActionAck: (payload) => {
+          onHostActionAck?.(payload);
+        },
+        onHostSkillAck: (applied) => {
+          onHostSkillAck?.(applied);
         },
 
         onFinal: (text, confidence, reason, timing, metadata) => {
@@ -256,7 +311,25 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
     } finally {
       setIsStarting(false);
     }
-  }, [onRecordingStart, onTranscriptionError, onTranscriptReceived, isStarting, initialSessionId, onSessionIdReceived, session?.idToken, onGuardrailAlert, manualContext, onContextApplied]);
+  }, [
+    onRecordingStart,
+    onTranscriptionError,
+    onTranscriptReceived,
+    isStarting,
+    initialSessionId,
+    onSessionIdReceived,
+    session?.idToken,
+    onGuardrailAlert,
+    onHostSuggestion,
+    onHostIntervention,
+    onHostStateDelta,
+    onHostActionAck,
+    onHostSkillAck,
+    onHostClientReady,
+    hostSkillMarkdown,
+    manualContext,
+    onContextApplied
+  ]);
 
   useEffect(() => {
     if (!isRecording) return;
@@ -292,6 +365,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
       // Stop the streaming audio client
       await audioClientRef.current?.stop();
       audioClientRef.current = null;
+      onHostClientReady?.(null);
       console.log('✅ Streaming stopped');
 
       setIsProcessing(false);
@@ -305,7 +379,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
       setIsStopping(false);
     }
 
-  }, [isRecording, isStarting, isStopping, onStopInitiated, onRecordingStop]);
+  }, [isRecording, isStarting, isStopping, onStopInitiated, onRecordingStop, onHostClientReady]);
 
   const handlePauseResume = useCallback(async () => {
     if (!audioClientRef.current) return;
@@ -356,6 +430,14 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
     }
   };
 
+  const handleUserStartRequest = useCallback(async () => {
+    if (onBeforeStart) {
+      const shouldStart = await onBeforeStart();
+      if (!shouldStart) return;
+    }
+    handleStartRecording();
+  }, [onBeforeStart, handleStartRecording]);
+
   return (
     <TooltipProvider>
       <GroqApiKeyDialog 
@@ -378,7 +460,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
                     <button
                       onClick={() => {
                         Analytics.trackButtonClick('start_recording', 'recording_controls');
-                        handleStartRecording();
+                        void handleUserStartRequest();
                       }}
                       disabled={isStarting || isProcessing || isRecordingDisabled}
                       className={`w-12 h-12 flex items-center justify-center ${isStarting || isProcessing ? 'bg-gray-400' : 'bg-red-500 hover:bg-red-600'

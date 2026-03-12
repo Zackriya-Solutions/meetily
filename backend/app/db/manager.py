@@ -3,7 +3,7 @@ import json
 import os
 import asyncio
 from datetime import datetime
-from typing import Optional, Dict, List
+from typing import Any, Optional, Dict, List
 import logging
 from contextlib import asynccontextmanager
 
@@ -955,6 +955,311 @@ class DatabaseManager:
                 provider,
             )
 
+    async def upsert_user_ai_host_skill(
+        self, user_email: str, skill_markdown: str, is_active: bool = True
+    ) -> Dict:
+        now = datetime.utcnow()
+        clean_skill = str(skill_markdown or "").strip()
+        async with self._get_connection() as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO user_ai_host_skills (user_email, skill_markdown, is_active, created_at, updated_at)
+                VALUES ($1, $2, $3, $4, $4)
+                ON CONFLICT (user_email) DO UPDATE SET
+                    skill_markdown = EXCLUDED.skill_markdown,
+                    is_active = EXCLUDED.is_active,
+                    updated_at = EXCLUDED.updated_at
+                RETURNING user_email, skill_markdown, is_active, updated_at
+            """,
+                user_email,
+                clean_skill,
+                bool(is_active),
+                now,
+            )
+            return {
+                "user_email": row["user_email"],
+                "skill_markdown": row["skill_markdown"] or "",
+                "is_active": bool(row["is_active"]),
+                "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+            }
+
+    async def get_user_ai_host_skill(self, user_email: str) -> Optional[Dict]:
+        async with self._get_connection() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT user_email, skill_markdown, is_active, updated_at
+                FROM user_ai_host_skills
+                WHERE user_email = $1
+                LIMIT 1
+            """,
+                user_email,
+            )
+            if not row:
+                return None
+            return {
+                "user_email": row["user_email"],
+                "skill_markdown": row["skill_markdown"] or "",
+                "is_active": bool(row["is_active"]),
+                "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+            }
+
+    async def delete_user_ai_host_skill(self, user_email: str) -> None:
+        async with self._get_connection() as conn:
+            await conn.execute(
+                "DELETE FROM user_ai_host_skills WHERE user_email = $1",
+                user_email,
+            )
+
+    async def list_user_ai_host_styles(self, user_email: str) -> List[Dict]:
+        async with self._get_connection() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id, user_email, name, skill_markdown, is_active, created_at, updated_at
+                FROM user_ai_host_styles
+                WHERE user_email = $1
+                ORDER BY updated_at DESC, created_at DESC
+            """,
+                user_email,
+            )
+            return [
+                {
+                    "id": str(row["id"]),
+                    "user_email": row["user_email"],
+                    "name": row["name"],
+                    "skill_markdown": row["skill_markdown"] or "",
+                    "is_active": bool(row["is_active"]),
+                    "created_at": row["created_at"].isoformat()
+                    if row["created_at"]
+                    else None,
+                    "updated_at": row["updated_at"].isoformat()
+                    if row["updated_at"]
+                    else None,
+                }
+                for row in rows
+            ]
+
+    async def get_user_ai_host_style_by_id(
+        self, user_email: str, style_id: str
+    ) -> Optional[Dict]:
+        async with self._get_connection() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT id, user_email, name, skill_markdown, is_active, created_at, updated_at
+                FROM user_ai_host_styles
+                WHERE user_email = $1 AND id::text = $2
+                LIMIT 1
+            """,
+                user_email,
+                style_id,
+            )
+            if not row:
+                return None
+            return {
+                "id": str(row["id"]),
+                "user_email": row["user_email"],
+                "name": row["name"],
+                "skill_markdown": row["skill_markdown"] or "",
+                "is_active": bool(row["is_active"]),
+                "created_at": row["created_at"].isoformat()
+                if row["created_at"]
+                else None,
+                "updated_at": row["updated_at"].isoformat()
+                if row["updated_at"]
+                else None,
+            }
+
+    async def create_user_ai_host_style(
+        self, user_email: str, name: str, skill_markdown: str, is_active: bool = True
+    ) -> Dict:
+        now = datetime.utcnow()
+        async with self._get_connection() as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO user_ai_host_styles (user_email, name, skill_markdown, is_active, created_at, updated_at)
+                VALUES ($1, $2, $3, $4, $5, $5)
+                RETURNING id, user_email, name, skill_markdown, is_active, created_at, updated_at
+            """,
+                user_email,
+                str(name or "").strip()[:255],
+                str(skill_markdown or "").strip(),
+                bool(is_active),
+                now,
+            )
+            return {
+                "id": str(row["id"]),
+                "user_email": row["user_email"],
+                "name": row["name"],
+                "skill_markdown": row["skill_markdown"] or "",
+                "is_active": bool(row["is_active"]),
+                "created_at": row["created_at"].isoformat()
+                if row["created_at"]
+                else None,
+                "updated_at": row["updated_at"].isoformat()
+                if row["updated_at"]
+                else None,
+            }
+
+    async def update_user_ai_host_style(
+        self,
+        user_email: str,
+        style_id: str,
+        name: Optional[str] = None,
+        skill_markdown: Optional[str] = None,
+        is_active: Optional[bool] = None,
+    ) -> Optional[Dict]:
+        fields: List[str] = []
+        params: List[Any] = [user_email, style_id]
+        idx = 3
+
+        if name is not None:
+            fields.append(f"name = ${idx}")
+            params.append(str(name).strip()[:255])
+            idx += 1
+        if skill_markdown is not None:
+            fields.append(f"skill_markdown = ${idx}")
+            params.append(str(skill_markdown).strip())
+            idx += 1
+        if is_active is not None:
+            fields.append(f"is_active = ${idx}")
+            params.append(bool(is_active))
+            idx += 1
+
+        fields.append(f"updated_at = ${idx}")
+        params.append(datetime.utcnow())
+
+        if len(fields) == 1:
+            return await self.get_user_ai_host_style_by_id(user_email, style_id)
+
+        query = f"""
+            UPDATE user_ai_host_styles
+            SET {', '.join(fields)}
+            WHERE user_email = $1 AND id::text = $2
+            RETURNING id, user_email, name, skill_markdown, is_active, created_at, updated_at
+        """
+        async with self._get_connection() as conn:
+            row = await conn.fetchrow(query, *params)
+            if not row:
+                return None
+            return {
+                "id": str(row["id"]),
+                "user_email": row["user_email"],
+                "name": row["name"],
+                "skill_markdown": row["skill_markdown"] or "",
+                "is_active": bool(row["is_active"]),
+                "created_at": row["created_at"].isoformat()
+                if row["created_at"]
+                else None,
+                "updated_at": row["updated_at"].isoformat()
+                if row["updated_at"]
+                else None,
+            }
+
+    async def delete_user_ai_host_style(self, user_email: str, style_id: str) -> bool:
+        async with self._get_connection() as conn:
+            result = await conn.execute(
+                "DELETE FROM user_ai_host_styles WHERE user_email = $1 AND id::text = $2",
+                user_email,
+                style_id,
+            )
+            return result != "DELETE 0"
+
+    async def get_user_ai_host_default_style_id(self, user_email: str) -> Optional[str]:
+        async with self._get_connection() as conn:
+            return await conn.fetchval(
+                """
+                SELECT default_style_id
+                FROM user_ai_host_style_defaults
+                WHERE user_email = $1
+                LIMIT 1
+            """,
+                user_email,
+            )
+
+    async def set_user_ai_host_default_style_id(
+        self, user_email: str, default_style_id: str
+    ) -> str:
+        now = datetime.utcnow()
+        async with self._get_connection() as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO user_ai_host_style_defaults (user_email, default_style_id, updated_at)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (user_email) DO UPDATE SET
+                    default_style_id = EXCLUDED.default_style_id,
+                    updated_at = EXCLUDED.updated_at
+                RETURNING default_style_id
+            """,
+                user_email,
+                str(default_style_id or "").strip(),
+                now,
+            )
+            return str(row["default_style_id"])
+
+    async def upsert_meeting_ai_host_skill(
+        self,
+        meeting_id: str,
+        skill_markdown: str,
+        is_active: bool = True,
+        updated_by: Optional[str] = None,
+    ) -> Dict:
+        now = datetime.utcnow()
+        clean_skill = str(skill_markdown or "").strip()
+        async with self._get_connection() as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO meeting_ai_host_skills (
+                    meeting_id, skill_markdown, is_active, updated_by, created_at, updated_at
+                )
+                VALUES ($1, $2, $3, $4, $5, $5)
+                ON CONFLICT (meeting_id) DO UPDATE SET
+                    skill_markdown = EXCLUDED.skill_markdown,
+                    is_active = EXCLUDED.is_active,
+                    updated_by = EXCLUDED.updated_by,
+                    updated_at = EXCLUDED.updated_at
+                RETURNING meeting_id, skill_markdown, is_active, updated_by, updated_at
+            """,
+                meeting_id,
+                clean_skill,
+                bool(is_active),
+                updated_by,
+                now,
+            )
+            return {
+                "meeting_id": row["meeting_id"],
+                "skill_markdown": row["skill_markdown"] or "",
+                "is_active": bool(row["is_active"]),
+                "updated_by": row["updated_by"],
+                "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+            }
+
+    async def get_meeting_ai_host_skill(self, meeting_id: str) -> Optional[Dict]:
+        async with self._get_connection() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT meeting_id, skill_markdown, is_active, updated_by, updated_at
+                FROM meeting_ai_host_skills
+                WHERE meeting_id = $1
+                LIMIT 1
+            """,
+                meeting_id,
+            )
+            if not row:
+                return None
+            return {
+                "meeting_id": row["meeting_id"],
+                "skill_markdown": row["skill_markdown"] or "",
+                "is_active": bool(row["is_active"]),
+                "updated_by": row["updated_by"],
+                "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+            }
+
+    async def delete_meeting_ai_host_skill(self, meeting_id: str) -> None:
+        async with self._get_connection() as conn:
+            await conn.execute(
+                "DELETE FROM meeting_ai_host_skills WHERE meeting_id = $1",
+                meeting_id,
+            )
+
     async def get_transcript_config(self):
         """Get the current transcript configuration"""
         async with self._get_connection() as conn:
@@ -1522,7 +1827,12 @@ class DatabaseManager:
                 return None
 
             attendees_raw = row["attendee_emails"] or []
-            attendees = json.loads(attendees_raw) if isinstance(attendees_raw, str) else attendees_raw
+            attendees = (
+                json.loads(attendees_raw)
+                if isinstance(attendees_raw, str)
+                else attendees_raw
+            )
+
             return {
                 "event_id": row["event_id"],
                 "meeting_title": row["meeting_title"],
@@ -1533,6 +1843,75 @@ class DatabaseManager:
                 "end_time": row["end_time"],
                 "meeting_created_at": meeting["created_at"],
             }
+
+    async def get_calendar_event_by_id(
+        self, event_id: str, user_email: str, provider: str = "google"
+    ) -> Optional[Dict]:
+        async with self._get_connection() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT event_id, meeting_title, meeting_link, agenda_description,
+                       attendee_emails, start_time, end_time
+                FROM calendar_events
+                WHERE event_id = $1 AND user_email = $2 AND provider = $3
+            """,
+                event_id,
+                user_email,
+                provider,
+            )
+            if not row:
+                return None
+
+            attendees_raw = row["attendee_emails"] or []
+            attendees = json.loads(attendees_raw) if isinstance(attendees_raw, str) else attendees_raw
+
+            return {
+                "event_id": row["event_id"],
+                "meeting_title": row["meeting_title"],
+                "meeting_link": row["meeting_link"],
+                "agenda_description": row["agenda_description"],
+                "attendees": attendees,
+                "start_time": row["start_time"],
+                "end_time": row["end_time"],
+                "meeting_created_at": None,
+            }
+
+    async def get_upcoming_calendar_events(
+        self, user_email: str, provider: str = "google", hours: int = 12
+    ) -> List[Dict]:
+        """Fetch all calendar events for a user within a time window from now."""
+        async with self._get_connection() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT event_id, meeting_title, meeting_link, agenda_description,
+                       attendee_emails, start_time, end_time
+                FROM calendar_events
+                WHERE user_email = $1
+                  AND provider = $2
+                  AND start_time BETWEEN (NOW() - make_interval(hours := $3)) AND (NOW() + make_interval(hours := $3))
+                ORDER BY ABS(EXTRACT(EPOCH FROM (start_time - NOW()))) ASC
+                MAX 100
+            """,
+                user_email,
+                provider,
+                hours,
+            )
+
+            upcoming_events = []
+            for row in rows:
+                attendees_raw = row["attendee_emails"] or []
+                attendees = json.loads(attendees_raw) if isinstance(attendees_raw, str) else attendees_raw
+                upcoming_events.append({
+                    "event_id": row["event_id"],
+                    "meeting_title": row["meeting_title"],
+                    "meeting_link": row["meeting_link"],
+                    "agenda_description": row["agenda_description"],
+                    "attendees": attendees,
+                    "start_time": row["start_time"],
+                    "end_time": row["end_time"],
+                })
+
+            return upcoming_events
 
     async def mark_calendar_reminder_sent(
         self,

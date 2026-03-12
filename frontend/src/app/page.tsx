@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useContext, useCallback, useMemo, useRef } from 'react';
-import { motion } from 'framer-motion';
+import { AnimatePresence, LayoutGroup, motion } from 'framer-motion';
 import { Transcript, TranscriptUpdate, Summary, SummaryResponse } from '@/types';
 import { EditableTitle } from '@/components/EditableTitle';
 import { TranscriptView } from '@/components/TranscriptView';
@@ -20,7 +20,27 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import Analytics from '@/lib/analytics';
 import { showRecordingNotification } from '@/lib/recordingNotification';
 import { Button } from '@/components/ui/button';
-import { Copy, GlobeIcon, Settings, Bot, Zap, X } from 'lucide-react';
+import {
+  AlertTriangle,
+  Bot,
+  Calendar,
+  CheckCircle2,
+  Clock3,
+  Copy,
+  ChevronLeftCircle,
+  ChevronRightCircle,
+  GlobeIcon,
+  HelpCircle,
+  MessageSquareWarning,
+  MessageCircle,
+  Settings,
+  ShieldAlert,
+  Sparkles,
+  Target,
+  Users,
+  X,
+  Zap,
+} from 'lucide-react';
 import { ChatInterface } from '@/components/MeetingDetails/ChatInterface';
 import { MicrophoneIcon } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
@@ -29,6 +49,9 @@ import { apiUrl } from '@/lib/config';
 import { authFetch, AuthError } from '@/lib/api';
 import { recoveryService, PendingMeetingData } from '@/lib/transcriptRecovery';
 import { SetupRequirements } from '@/components/SetupRequirements';
+import { CalendarMeetingPicker, CalendarEvent } from '@/components/CalendarMeetingPicker';
+import { AudioStreamClient } from '@/lib/audio-streaming/AudioStreamClient';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 
 
 
@@ -85,11 +108,63 @@ interface AIGuardrailAlert {
   updated_at?: string;
 }
 
+interface AIHostSuggestion {
+  id: string;
+  event_type: 'decision_candidate' | 'conflict_risk' | 'agenda_drift' | 'urgency_risk' | 'mistake_candidate' | 'unheard_participant' | 'open_question';
+  title: string;
+  content: string;
+  confidence: number;
+  timestamp: string;
+  status?: string;
+  source_excerpt?: string;
+  metadata?: Record<string, unknown>;
+}
+
+interface AIHostIntervention {
+  id: string;
+  event_type: 'decision_candidate' | 'conflict_risk' | 'agenda_drift' | 'urgency_risk' | 'mistake_candidate' | 'unheard_participant' | 'open_question';
+  headline: string;
+  body: string;
+  priority: 'low' | 'medium' | 'high';
+  confidence: number;
+  timestamp: string;
+  linked_suggestion_id?: string;
+}
+
 interface ManualMeetingContext {
+  calendar_event_id?: string;
   goal: string;
   agenda_text: string;
   participants: string[];
 }
+
+interface AIHostStyleItem {
+  id: string;
+  name: string;
+  source: 'system' | 'user';
+  read_only: boolean;
+  is_default: boolean;
+  is_active: boolean;
+  skill_markdown: string;
+}
+
+interface AIHostStylesPayload {
+  styles: AIHostStyleItem[];
+  default_style_id: string;
+}
+
+const extractRoleModeFromMarkdown = (markdown: string): string | null => {
+  const match = markdown.match(/role_mode\s*:\s*([a-zA-Z_]+)/i);
+  if (!match?.[1]) return null;
+  return match[1].replace(/_/g, ' ').trim();
+};
+
+const toTitleCase = (value: string): string =>
+  value
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(' ');
 
 export default function Home() {
 
@@ -166,11 +241,27 @@ export default function Home() {
   const [activeGuardrailAlert, setActiveGuardrailAlert] = useState<AIGuardrailAlert | null>(null);
   const [guardrailAlertHistory, setGuardrailAlertHistory] = useState<AIGuardrailAlert[]>([]);
   const [showGuardrailHistory, setShowGuardrailHistory] = useState(false);
+  const [activeHostIntervention, setActiveHostIntervention] = useState<AIHostIntervention | null>(null);
+  const [hostSuggestionQueue, setHostSuggestionQueue] = useState<AIHostSuggestion[]>([]);
+  const [hostStateDelta, setHostStateDelta] = useState<Record<string, unknown> | null>(null);
+  const [pinnedHostSuggestions, setPinnedHostSuggestions] = useState<AIHostSuggestion[]>([]);
+  const [isTranscriptPanelCollapsed, setIsTranscriptPanelCollapsed] = useState(false);
+  const hostClientRef = useRef<AudioStreamClient | null>(null);
   const [meetingGoalInput, setMeetingGoalInput] = useState('');
   const [meetingAgendaInput, setMeetingAgendaInput] = useState('');
   const [meetingParticipantsInput, setMeetingParticipantsInput] = useState('');
   const [contextAppliedStatus, setContextAppliedStatus] = useState<'idle' | 'applying' | 'applied' | 'failed'>('idle');
   const [contextApplySignal, setContextApplySignal] = useState(0);
+  const [hostStyles, setHostStyles] = useState<AIHostStyleItem[]>([]);
+  const [defaultHostStyleId, setDefaultHostStyleId] = useState<string>('system:facilitator');
+  const [selectedHostStyleId, setSelectedHostStyleId] = useState<string>('__default__');
+  const [askHostStyleBeforeStart, setAskHostStyleBeforeStart] = useState<boolean>(false);
+  const [showHostStyleStartDialog, setShowHostStyleStartDialog] = useState<boolean>(false);
+  const [pendingStartStyleId, setPendingStartStyleId] = useState<string>('__default__');
+  const [showGuardrailContextDialog, setShowGuardrailContextDialog] = useState(false);
+  const [showCalendarPicker, setShowCalendarPicker] = useState(false);
+  const [selectedCalendarEvent, setSelectedCalendarEvent] = useState<CalendarEvent | null>(null);
+  const pendingStartResolverRef = useRef<((allow: boolean) => void) | null>(null);
   const lastGuardrailSignatureRef = useRef<string>('');
   const lastGuardrailAtRef = useRef<number>(0);
 
@@ -218,6 +309,57 @@ export default function Home() {
       }
     };
     checkRecoveries();
+  }, []);
+
+  useEffect(() => {
+    const loadHostStyles = async () => {
+      try {
+        const res = await authFetch('/api/user/ai-host-styles', {
+          method: 'GET',
+          preventLogout: true,
+        });
+        if (!res.ok) return;
+        const data = (await res.json()) as AIHostStylesPayload;
+        setHostStyles(data.styles || []);
+        setDefaultHostStyleId(data.default_style_id || 'system:facilitator');
+      } catch {
+        // Keep UI quiet if endpoint not available.
+      }
+    };
+    void loadHostStyles();
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const loadPreference = () => {
+      setAskHostStyleBeforeStart(localStorage.getItem('ai_host_ask_before_meeting') === 'true');
+    };
+    loadPreference();
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === 'ai_host_ask_before_meeting') {
+        loadPreference();
+      }
+    };
+    window.addEventListener('storage', onStorage);
+    return () => {
+      window.removeEventListener('storage', onStorage);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (window.innerWidth < 1024) {
+      setIsTranscriptPanelCollapsed(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (pendingStartResolverRef.current) {
+        pendingStartResolverRef.current(false);
+        pendingStartResolverRef.current = null;
+      }
+    };
   }, []);
 
   const handleRecoverTranscripts = async (data: PendingMeetingData) => {
@@ -629,6 +771,69 @@ export default function Home() {
     }
   };
 
+  const getHostEventLabel = (eventType: AIHostSuggestion['event_type']) => {
+    switch (eventType) {
+      case 'decision_candidate':
+        return 'Decision';
+      case 'conflict_risk':
+        return 'Conflict';
+      case 'agenda_drift':
+        return 'Agenda Drift';
+      case 'urgency_risk':
+        return 'Urgency';
+      case 'mistake_candidate':
+        return 'Constructive Fix';
+      case 'unheard_participant':
+        return 'Inclusion';
+      case 'open_question':
+        return 'Open Question';
+      default:
+        return 'Host';
+    }
+  };
+
+  const getHostEventIcon = (eventType: AIHostSuggestion['event_type']) => {
+    switch (eventType) {
+      case 'decision_candidate':
+        return <CheckCircle2 className="h-4 w-4 text-emerald-600" />;
+      case 'conflict_risk':
+        return <ShieldAlert className="h-4 w-4 text-red-600" />;
+      case 'agenda_drift':
+        return <Target className="h-4 w-4 text-blue-600" />;
+      case 'urgency_risk':
+        return <Clock3 className="h-4 w-4 text-orange-600" />;
+      case 'mistake_candidate':
+        return <AlertTriangle className="h-4 w-4 text-violet-600" />;
+      case 'unheard_participant':
+        return <Users className="h-4 w-4 text-emerald-600" />;
+      case 'open_question':
+        return <HelpCircle className="h-4 w-4 text-sky-600" />;
+      default:
+        return <MessageSquareWarning className="h-4 w-4 text-gray-600" />;
+    }
+  };
+
+  const getHostEventBadgeClasses = (eventType: AIHostSuggestion['event_type']) => {
+    switch (eventType) {
+      case 'decision_candidate':
+        return 'border-amber-300 text-amber-700 bg-amber-50';
+      case 'conflict_risk':
+        return 'border-red-300 text-red-700 bg-red-50';
+      case 'agenda_drift':
+        return 'border-blue-300 text-blue-700 bg-blue-50';
+      case 'urgency_risk':
+        return 'border-orange-300 text-orange-700 bg-orange-50';
+      case 'mistake_candidate':
+        return 'border-purple-300 text-purple-700 bg-purple-50';
+      case 'unheard_participant':
+        return 'border-emerald-300 text-emerald-700 bg-emerald-50';
+      case 'open_question':
+        return 'border-sky-300 text-sky-700 bg-sky-50';
+      default:
+        return 'border-gray-300 text-gray-700 bg-gray-50';
+    }
+  };
+
   const getGuardrailBadgeClasses = (reason: AIGuardrailAlert['reason']) => {
     switch (reason) {
       case 'agenda_deviation':
@@ -673,6 +878,205 @@ export default function Home() {
     });
   }, []);
 
+  const handleHostSuggestion = useCallback((suggestion: AIHostSuggestion) => {
+    setHostSuggestionQueue((prev) => {
+      const deduped = prev.filter((item) => item.id !== suggestion.id);
+      return [suggestion, ...deduped].slice(0, 8);
+    });
+  }, []);
+
+  const handleHostIntervention = useCallback((intervention: AIHostIntervention) => {
+    setActiveHostIntervention(intervention);
+    if (intervention.linked_suggestion_id) {
+      setHostSuggestionQueue((prev) =>
+        prev.filter((item) => item.id !== intervention.linked_suggestion_id)
+      );
+    }
+  }, []);
+
+  const handleHostStateDelta = useCallback((state: Record<string, unknown>) => {
+    setHostStateDelta(state);
+  }, []);
+
+  const handleHostActionAck = useCallback((payload: { action: string; applied: boolean }) => {
+    if (!payload?.applied) return;
+    if (payload.action === 'pin' || payload.action === 'dismiss') {
+      toast.success(`Host suggestion ${payload.action}ned`);
+    }
+  }, []);
+
+  const pinHostSuggestion = useCallback((suggestionId: string) => {
+    setHostSuggestionQueue((prev) => {
+      let matched: AIHostSuggestion | null = null;
+      const next = prev.filter((item) => {
+        if (item.id === suggestionId) {
+          matched = item;
+          return false;
+        }
+        return true;
+      });
+      if (matched) {
+        setPinnedHostSuggestions((existing) => {
+          const deduped = existing.filter((item) => item.id !== matched!.id);
+          return [{ ...matched!, status: 'pinned' }, ...deduped].slice(0, 12);
+        });
+      }
+      return next;
+    });
+    hostClientRef.current?.pinHostSuggestion(suggestionId);
+  }, []);
+
+  const dismissHostSuggestion = useCallback((suggestionId: string) => {
+    setHostSuggestionQueue((prev) => prev.filter((item) => item.id !== suggestionId));
+    hostClientRef.current?.dismissHostSuggestion(suggestionId);
+  }, []);
+
+  const handleHostClientReady = useCallback((client: AudioStreamClient | null) => {
+    hostClientRef.current = client;
+  }, []);
+
+  const activeHostStyles = useMemo(
+    () => hostStyles.filter((style) => style.is_active),
+    [hostStyles]
+  );
+
+  const effectiveHostStyleId = useMemo(
+    () => (selectedHostStyleId === '__default__' ? defaultHostStyleId : selectedHostStyleId),
+    [selectedHostStyleId, defaultHostStyleId]
+  );
+
+  const effectiveHostStyle = useMemo(
+    () => hostStyles.find((style) => style.id === effectiveHostStyleId) || null,
+    [hostStyles, effectiveHostStyleId]
+  );
+
+  const effectiveHostStyleMarkdown = useMemo(
+    () => effectiveHostStyle?.skill_markdown || '',
+    [effectiveHostStyle]
+  );
+
+  const effectiveHostModeLabel = useMemo(() => {
+    const roleFromMarkdown = extractRoleModeFromMarkdown(effectiveHostStyleMarkdown);
+    if (roleFromMarkdown) return toTitleCase(roleFromMarkdown);
+    if (effectiveHostStyle?.id?.startsWith('system:')) {
+      return toTitleCase(effectiveHostStyle.id.split(':')[1] || 'facilitator');
+    }
+    if (effectiveHostStyle?.name) return effectiveHostStyle.name;
+    return 'Facilitator';
+  }, [effectiveHostStyle, effectiveHostStyleMarkdown]);
+
+  const hostStatePinnedItems = useMemo(() => {
+    const raw = (hostStateDelta as Record<string, unknown> | null)?.pinned_items;
+    if (!Array.isArray(raw)) return [] as AIHostSuggestion[];
+    return raw.filter((item): item is AIHostSuggestion => {
+      if (!item || typeof item !== 'object') return false;
+      const suggestion = item as Partial<AIHostSuggestion>;
+      return (
+        typeof suggestion.id === 'string' &&
+        typeof suggestion.title === 'string' &&
+        typeof suggestion.content === 'string'
+      );
+    });
+  }, [hostStateDelta]);
+
+  useEffect(() => {
+    if (!hostStatePinnedItems.length) return;
+    setPinnedHostSuggestions((prev) => {
+      const merged = new Map<string, AIHostSuggestion>();
+      prev.forEach((item) => merged.set(item.id, item));
+      hostStatePinnedItems.forEach((item) => merged.set(item.id, { ...item, status: 'pinned' }));
+      return Array.from(merged.values()).slice(0, 12);
+    });
+  }, [hostStatePinnedItems]);
+
+  const unresolvedDiscussionItems = useMemo(() => {
+    const raw = (hostStateDelta as Record<string, unknown> | null)?.unresolved_items;
+    if (!Array.isArray(raw)) return [] as string[];
+    return raw
+      .map((item) => String(item || '').trim())
+      .filter((item) => item.length > 0)
+      .slice(0, 8);
+  }, [hostStateDelta]);
+
+  const hostCurrentTopic = useMemo(() => {
+    const topicRaw = (hostStateDelta as Record<string, unknown> | null)?.current_topic;
+    if (typeof topicRaw === 'string' && topicRaw.trim()) return topicRaw.trim();
+    if (activeHostIntervention?.headline) return activeHostIntervention.headline;
+    if (meetingGoalInput.trim()) return meetingGoalInput.trim();
+    return 'General discussion';
+  }, [hostStateDelta, activeHostIntervention, meetingGoalInput]);
+
+  const decisionStatusLabel = useMemo(
+    () => ((pinnedHostSuggestions.length > 0 || hostStatePinnedItems.length > 0) ? 'Decision Made' : 'In Progress'),
+    [pinnedHostSuggestions.length, hostStatePinnedItems.length]
+  );
+
+  const openDiscussionCount = useMemo(() => {
+    const derived = hostSuggestionQueue.filter(
+      (item) => item.event_type === 'open_question' || item.event_type === 'conflict_risk'
+    ).length;
+    return Math.max(unresolvedDiscussionItems.length, derived);
+  }, [hostSuggestionQueue, unresolvedDiscussionItems.length]);
+
+  const proposedActionCount = useMemo(() => {
+    const actionTypes = new Set(['urgency_risk', 'agenda_drift', 'mistake_candidate']);
+    return hostSuggestionQueue.filter((item) => actionTypes.has(item.event_type)).length;
+  }, [hostSuggestionQueue]);
+
+  const pendingDecisions = useMemo(
+    () => hostSuggestionQueue.filter((item) => item.event_type === 'decision_candidate'),
+    [hostSuggestionQueue]
+  );
+
+  const decisionsForPanel = useMemo(() => {
+    const merged = new Map<string, AIHostSuggestion>();
+    hostStatePinnedItems.forEach((item) => merged.set(item.id, { ...item, status: 'pinned' }));
+    pinnedHostSuggestions.forEach((item) => merged.set(item.id, { ...item, status: 'pinned' }));
+    return Array.from(merged.values()).slice(0, 8);
+  }, [hostStatePinnedItems, pinnedHostSuggestions]);
+
+  const discussionsForPanel = useMemo(() => {
+    const fromSuggestions = hostSuggestionQueue
+      .filter((item) => item.event_type === 'open_question' || item.event_type === 'conflict_risk')
+      .map((item) => item.content.trim())
+      .filter((item) => item.length > 0);
+    const merged = [...unresolvedDiscussionItems];
+
+    // Include active host intervention if it's an open discussion
+    if (activeHostIntervention && (activeHostIntervention.event_type === 'open_question' || activeHostIntervention.event_type === 'conflict_risk')) {
+      const bodyText = activeHostIntervention.body.trim();
+      if (bodyText && !merged.includes(bodyText)) merged.push(bodyText);
+    }
+
+    fromSuggestions.forEach((item) => {
+      if (!merged.includes(item)) merged.push(item);
+    });
+    return merged.slice(0, 8);
+  }, [hostSuggestionQueue, unresolvedDiscussionItems, activeHostIntervention]);
+
+  const isInsightIntervention = activeHostIntervention &&
+    activeHostIntervention.event_type !== 'open_question' &&
+    activeHostIntervention.event_type !== 'conflict_risk' ? activeHostIntervention : null;
+
+  const insightsForPanel = useMemo(
+    () => hostSuggestionQueue
+      .filter((item) => item.event_type !== 'open_question' && item.event_type !== 'conflict_risk' && item.event_type !== 'decision_candidate')
+      .slice(0, 8),
+    [hostSuggestionQueue]
+  );
+
+  const liveMeetingSummary = useMemo(() => {
+    const backendSummary = (hostStateDelta as Record<string, unknown> | null)?.meeting_summary as string | undefined;
+    if (backendSummary?.trim()) return backendSummary.trim();
+    if (isInsightIntervention && typeof isInsightIntervention !== 'boolean' && isInsightIntervention.body?.trim()) return isInsightIntervention.body.trim();
+    if (insightsForPanel[0]?.content?.trim()) return insightsForPanel[0].content.trim();
+    if (meetingGoalInput.trim()) return `Meeting focus: ${meetingGoalInput.trim()}.`;
+    if (transcripts.length > 0) {
+      return `Meeting is active with ${transcripts.length} transcript segments captured so far.`;
+    }
+    return 'Meeting intelligence will appear here as discussion progresses.';
+  }, [hostStateDelta, isInsightIntervention, insightsForPanel, meetingGoalInput, transcripts.length]);
+
   const parsedMeetingParticipants = useMemo(
     () =>
       meetingParticipantsInput
@@ -685,18 +1089,20 @@ export default function Home() {
 
   const manualMeetingContext: ManualMeetingContext = useMemo(
     () => ({
+      calendar_event_id: selectedCalendarEvent?.event_id,
       goal: meetingGoalInput.trim(),
       agenda_text: meetingAgendaInput.trim(),
       participants: parsedMeetingParticipants,
     }),
-    [meetingGoalInput, meetingAgendaInput, parsedMeetingParticipants]
+    [meetingGoalInput, meetingAgendaInput, parsedMeetingParticipants, selectedCalendarEvent]
   );
 
   useEffect(() => {
     setContextAppliedStatus('idle');
-  }, [meetingGoalInput, meetingAgendaInput, meetingParticipantsInput]);
+  }, [meetingGoalInput, meetingAgendaInput, meetingParticipantsInput, selectedCalendarEvent]);
 
   const hasManualContextValues = Boolean(
+    manualMeetingContext.calendar_event_id ||
     manualMeetingContext.goal ||
     manualMeetingContext.agenda_text ||
     (manualMeetingContext.participants && manualMeetingContext.participants.length > 0)
@@ -714,6 +1120,57 @@ export default function Home() {
     setContextAppliedStatus('applying');
     setContextApplySignal((v) => v + 1);
   }, [hasManualContextValues, isRecording]);
+
+  useEffect(() => {
+    if (!isRecording) return;
+    if (!effectiveHostStyleMarkdown.trim()) return;
+    hostClientRef.current?.applyHostSkillOverride(effectiveHostStyleMarkdown);
+  }, [isRecording, effectiveHostStyleMarkdown]);
+
+  const handleInlineHostModeChange = useCallback((nextStyleId: string) => {
+    setSelectedHostStyleId(nextStyleId);
+    if (isRecording) {
+      setTimeout(() => {
+        toast.success('AI Host mode updated for this meeting');
+      }, 0);
+    }
+  }, [isRecording]);
+
+  const handleBeforeStartRecording = useCallback((): boolean | Promise<boolean> => {
+    if (!askHostStyleBeforeStart) {
+      if (selectedHostStyleId !== '__default__') {
+        setSelectedHostStyleId('__default__');
+      }
+      return true;
+    }
+    if (isRecording) return true;
+    if (showHostStyleStartDialog) return false;
+
+    const initialStyle = selectedHostStyleId === '__default__' ? '__default__' : selectedHostStyleId;
+    setPendingStartStyleId(initialStyle);
+    setShowHostStyleStartDialog(true);
+
+    return new Promise<boolean>((resolve) => {
+      pendingStartResolverRef.current = resolve;
+    });
+  }, [askHostStyleBeforeStart, isRecording, selectedHostStyleId, showHostStyleStartDialog]);
+
+  const cancelStartStyleDialog = useCallback(() => {
+    setShowHostStyleStartDialog(false);
+    if (pendingStartResolverRef.current) {
+      pendingStartResolverRef.current(false);
+      pendingStartResolverRef.current = null;
+    }
+  }, []);
+
+  const confirmStartStyleDialog = useCallback(() => {
+    setSelectedHostStyleId(pendingStartStyleId);
+    setShowHostStyleStartDialog(false);
+    if (pendingStartResolverRef.current) {
+      pendingStartResolverRef.current(true);
+      pendingStartResolverRef.current = null;
+    }
+  }, [pendingStartStyleId]);
 
   // Sync transcript history and meeting name from backend on reload
   // This fixes the issue where reloading during active recording causes state desync
@@ -797,6 +1254,10 @@ export default function Home() {
       setActiveGuardrailAlert(null);
       setGuardrailAlertHistory([]);
       setShowGuardrailHistory(false);
+      setActiveHostIntervention(null);
+      setHostSuggestionQueue([]);
+      setHostStateDelta(null);
+      setPinnedHostSuggestions([]);
       lastGuardrailSignatureRef.current = '';
       lastGuardrailAtRef.current = 0;
       setIsRecording(true);
@@ -915,8 +1376,8 @@ export default function Home() {
           })),
           folder_path: null,
           template_id: defaultTemplate,
-          meeting_id: currentSessionId || pendingRecoveryId || undefined,
-          session_id: currentSessionId,
+          meeting_id: currentSessionIdRef.current || pendingRecoveryIdRef.current || undefined,
+          session_id: currentSessionIdRef.current,
         }),
         preventLogout: true
       });
@@ -940,9 +1401,11 @@ export default function Home() {
       setOriginalTranscript(fullTranscript);
 
       // Cleanup pending recovery if exists
-      if (pendingRecoveryId) {
-        await recoveryService.deletePendingTranscript(pendingRecoveryId);
+      const recoveryToDelete = pendingRecoveryIdRef.current || pendingRecoveryId;
+      if (recoveryToDelete) {
+        await recoveryService.deletePendingTranscript(recoveryToDelete);
         setPendingRecoveryId(null);
+        pendingRecoveryIdRef.current = null;
       }
 
       // Update UI
@@ -970,7 +1433,7 @@ export default function Home() {
       if (error instanceof AuthError) {
         // Save to recovery
         const freshTranscripts = transcriptsRef.current;
-        const recoveryId = currentSessionId || pendingRecoveryId || `recovery-${Date.now()}`;
+        const recoveryId = currentSessionIdRef.current || pendingRecoveryIdRef.current || `recovery-${Date.now()}`;
         const defaultTemplate = localStorage.getItem('selectedTemplate') || 'standard_meeting';
 
         await recoveryService.savePendingTranscript({
@@ -978,10 +1441,12 @@ export default function Home() {
           title: meetingTitle || 'Untitled Meeting',
           transcripts: freshTranscripts,
           timestamp: Date.now(),
-          templateId: defaultTemplate
+          templateId: defaultTemplate,
+          sessionId: currentSessionIdRef.current
         });
 
         setPendingRecoveryId(recoveryId);
+        pendingRecoveryIdRef.current = recoveryId;
         setShowReauthModal(true);
         toast.error('Session Expired', {
           description: 'Your session expired while saving. Please log in again to save your meeting.',
@@ -1648,9 +2113,11 @@ export default function Home() {
 
   const handleDiscardRecovery = async () => {
     if (confirm('Are you sure you want to discard this recovered meeting? This cannot be undone.')) {
-      if (pendingRecoveryId) {
-        await recoveryService.deletePendingTranscript(pendingRecoveryId);
+      const recoveryToDelete = pendingRecoveryIdRef.current || pendingRecoveryId;
+      if (recoveryToDelete) {
+        await recoveryService.deletePendingTranscript(recoveryToDelete);
         setPendingRecoveryId(null);
+        pendingRecoveryIdRef.current = null;
       }
       setTranscripts([]);
       setMeetingTitle('+ New Call');
@@ -1700,12 +2167,62 @@ export default function Home() {
       )}
       <div className="flex flex-1 overflow-hidden">
         {/* Left side - Transcript */}
-        <div ref={transcriptContainerRef} className="w-full border-r border-gray-200 bg-white flex flex-col overflow-y-auto">
+        <div className="flex-1 border-r border-gray-200 bg-white flex flex-col overflow-y-auto">
           {/* Title area - Sticky header */}
           <div className="sticky top-0 z-10 bg-white p-4 border-gray-200">
             <div className="flex flex-col space-y-3">
               <SetupRequirements />
               <div className="flex  flex-col space-y-2">
+                {(isMeetingActive || isRecording || transcripts.length > 0) && (
+                  <div className="w-full flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <h1 className="text-xl font-semibold text-gray-900 truncate max-w-[420px]" title={meetingTitle}>
+                        {meetingTitle}
+                      </h1>
+                      {isRecording && (
+                        <span className="inline-flex items-center rounded-full border border-red-200 bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700">
+                          Live
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setShowGuardrailContextDialog(true)}
+                        className="inline-flex items-center gap-1.5 rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100 transition-colors shadow-sm"
+                        title="Meeting context"
+                      >
+                        <Settings className="h-3.5 w-3.5" />
+                        Meeting Context
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setShowCalendarPicker(true)}
+                        className="inline-flex items-center gap-1.5 rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-100 transition-colors shadow-sm"
+                        title="Pick Calendar Meeting"
+                      >
+                        <Calendar className="h-3.5 w-3.5" />
+                        Calendar Event
+                      </button>
+                      <span className="text-xs font-medium text-gray-500">Mode</span>
+                      <select
+                        value={selectedHostStyleId}
+                        onChange={(e) => handleInlineHostModeChange(e.target.value)}
+                        className="rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 focus:border-gray-400 focus:outline-none"
+                        title={`Current AI host mode: ${effectiveHostModeLabel}`}
+                      >
+                        <option value="__default__">
+                          Default ({toTitleCase(defaultHostStyleId.replace(/^.*:/, '') || 'facilitator')})
+                        </option>
+                        {activeHostStyles.map((style) => (
+                          <option key={style.id} value={style.id}>
+                            {style.name} ({style.source})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                )}
                 <div className="flex justify-center  items-center space-x-2">
                   <ButtonGroup>
                     {transcripts?.length > 0 && (
@@ -1843,140 +2360,201 @@ export default function Home() {
 
           {/* Permission Warning (only for Tauri mode) */}
 
-          <div className="flex justify-center mb-4">
-            <div className="w-2/3 max-w-[750px] rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-              <div className="flex items-center justify-between mb-2">
-                <p className="text-sm font-semibold text-gray-900">Meeting Context for AI Guardrails</p>
-                <span className="text-xs text-gray-500">Best set before recording starts</span>
-              </div>
-              <div className="grid grid-cols-1 gap-2">
-                <input
-                  type="text"
-                  value={meetingGoalInput}
-                  onChange={(e) => setMeetingGoalInput(e.target.value)}
-                  placeholder="Meeting goal (example: decide launch date and owners)"
-                  className="w-full rounded-md border border-gray-200 px-3 py-2 text-sm focus:border-gray-400 focus:outline-none"
-                />
-                <textarea
-                  value={meetingAgendaInput}
-                  onChange={(e) => setMeetingAgendaInput(e.target.value)}
-                  placeholder="Agenda (optional)"
-                  className="w-full min-h-[72px] rounded-md border border-gray-200 px-3 py-2 text-sm focus:border-gray-400 focus:outline-none"
-                />
-                <input
-                  type="text"
-                  value={meetingParticipantsInput}
-                  onChange={(e) => setMeetingParticipantsInput(e.target.value)}
-                  placeholder="Participants (comma separated, optional)"
-                  className="w-full rounded-md border border-gray-200 px-3 py-2 text-sm focus:border-gray-400 focus:outline-none"
-                />
-              </div>
-              <div className="mt-2 flex items-center justify-between">
-                <p className="text-xs text-gray-500">
-                  You can still update this during recording; changes are applied live.
-                </p>
-                <div className="flex items-center gap-3">
-                  <button
-                    type="button"
-                    onClick={applyManualContext}
-                    disabled={!hasManualContextValues || contextAppliedStatus === 'applying'}
-                    className={`rounded-md px-3 py-1.5 text-xs font-medium ${!hasManualContextValues || contextAppliedStatus === 'applying'
-                        ? 'bg-gray-100 text-gray-400'
-                        : 'bg-gray-900 text-white hover:bg-gray-800'
-                      }`}
-                  >
-                    {contextAppliedStatus === 'applying' ? 'Applying...' : 'Apply Context'}
-                  </button>
-                  {isRecording && (
-                    <span className={`text-xs font-medium ${contextAppliedStatus === 'applied'
-                        ? 'text-emerald-700'
-                        : contextAppliedStatus === 'failed'
-                          ? 'text-red-700'
-                          : contextAppliedStatus === 'applying'
-                            ? 'text-blue-700'
-                            : 'text-gray-500'
-                      }`}>
-                      {contextAppliedStatus === 'applied'
-                        ? 'Context applied'
-                        : contextAppliedStatus === 'failed'
-                          ? 'Context apply failed'
-                          : contextAppliedStatus === 'applying'
-                            ? 'Applying context...'
-                            : 'Context pending'}
-                    </span>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
+          <div className="pb-28">
+            <div className="mx-auto w-full max-w-[1200px] px-4 lg:px-6 space-y-4">
+              {isRecording && (
+                <>
+                  <LayoutGroup id="host-intelligence-board">
+                    <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+                      <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+                        <h3 className="flex items-center gap-2 text-2xl font-semibold text-gray-900">
+                          <CheckCircle2 className="h-6 w-6 text-emerald-600" />
+                          Decisions
+                        </h3>
+                        <div className="mt-3 space-y-2">
+                          <AnimatePresence mode="popLayout">
+                            {/* Pending Decisions mapped here */}
+                            {pendingDecisions.map((item) => (
+                              <motion.div
+                                key={`pending-${item.id}`}
+                                layout
+                                layoutId={item.id}
+                                initial={{ opacity: 0, y: 6 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                exit={{ opacity: 0, y: -6 }}
+                                className="relative overflow-hidden rounded-lg border-2 border-emerald-100 bg-emerald-50/50 px-3 py-3 shadow-sm transition-all hover:border-emerald-200"
+                              >
+                                <div className="absolute bottom-0 left-0 top-0 w-1 bg-emerald-400"></div>
+                                <div className="flex items-start gap-2">
+                                  <div className="mt-0.5">{getHostEventIcon(item.event_type)}</div>
+                                  <div className="flex-1">
+                                    <div className="flex items-center justify-between gap-2">
+                                      <p className="text-sm font-medium text-emerald-900">{item.title}</p>
+                                      <span className="text-[11px] text-emerald-700">
+                                        {Math.round(item.confidence * 100)}%
+                                      </span>
+                                    </div>
+                                    <p className="mt-1 text-xs text-emerald-800">{item.content}</p>
+                                    <div className="mt-2 flex items-center gap-2">
+                                      <button
+                                        type="button"
+                                        onClick={() => pinHostSuggestion(item.id)}
+                                        className="rounded-md border border-emerald-300 bg-emerald-100 px-3 py-1.5 text-[11px] font-semibold text-emerald-800 shadow-sm transition-colors hover:bg-emerald-200"
+                                      >
+                                        Yes, Pin to meeting
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => dismissHostSuggestion(item.id)}
+                                        className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-[11px] font-medium text-gray-700 shadow-sm transition-colors hover:bg-gray-50"
+                                      >
+                                        Dismiss
+                                      </button>
+                                    </div>
+                                  </div>
+                                </div>
+                              </motion.div>
+                            ))}
+                          </AnimatePresence>
+                          <AnimatePresence mode="popLayout">
+                            {decisionsForPanel.map((item) => (
+                              <motion.div
+                                key={item.id}
+                                layout
+                                layoutId={item.id}
+                                initial={{ opacity: 0, y: 6 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                exit={{ opacity: 0, y: -6 }}
+                                className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2"
+                              >
+                                <p className="text-sm font-medium text-emerald-900">{item.title}</p>
+                                <p className="mt-1 text-xs text-emerald-800">{item.content}</p>
+                              </motion.div>
+                            ))}
+                          </AnimatePresence>
+                          {decisionsForPanel.length === 0 && pendingDecisions.length === 0 && (
+                            <p className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-sm text-gray-500">
+                              No confirmed decisions yet.
+                            </p>
+                          )}
+                        </div>
+                      </section>
 
-          {/* Transcript content */}
-          <div className="pb-20">
-            <div className="flex justify-center">
-              <div className="w-2/3 max-w-[750px]">
-                <TranscriptView
-                  transcripts={transcripts}
-                  isRecording={isRecording}
-                  isPaused={isPaused}
-                  activeDuration={recordingElapsedSeconds}
-                  isProcessing={isProcessingStop}
-                  isStopping={isStopping}
-                  enableStreaming={isRecording}
-                />
-              </div>
-            </div>
-          </div>
+                      <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+                        <h3 className="flex items-center gap-2 text-2xl font-semibold text-gray-900">
+                          <MessageCircle className="h-6 w-6 text-blue-600" />
+                          Open Discussions
+                        </h3>
+                        <div className="mt-3 space-y-2">
+                          {discussionsForPanel.map((item, index) => (
+                            <div key={`${item}-${index}`} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900">
+                              {item}
+                            </div>
+                          ))}
+                          {discussionsForPanel.length === 0 && (
+                            <p className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-sm text-gray-500">
+                              No unresolved discussions right now.
+                            </p>
+                          )}
+                        </div>
+                      </section>
 
-          {(isRecording || activeGuardrailAlert) && (
-            <div className="fixed top-28 right-6 z-30 w-[320px] max-w-[calc(100vw-2rem)]">
-              <div className="rounded-xl border border-gray-200 bg-white/95 shadow-lg backdrop-blur-sm p-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <p className="text-sm font-semibold text-gray-900">AI Guardrails</p>
-                  {activeGuardrailAlert && (
-                    <span className="text-[11px] text-gray-500">
-                      Updated at {formatGuardrailTime(activeGuardrailAlert.updated_at || activeGuardrailAlert.timestamp)}
-                    </span>
-                  )}
-                </div>
-
-                {!activeGuardrailAlert ? (
-                  <p className="text-sm text-gray-600">Monitoring meeting guardrails</p>
-                ) : (
-                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${getGuardrailBadgeClasses(activeGuardrailAlert.reason)}`}>
-                        {getGuardrailReasonLabel(activeGuardrailAlert.reason)}
-                      </span>
-                      <span className="text-[11px] text-amber-700">
-                        {Math.round(activeGuardrailAlert.confidence * 100)}%
-                      </span>
+                      <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+                        <div className="flex items-center justify-between">
+                          <h3 className="flex items-center gap-2 text-2xl font-semibold text-gray-900">
+                            <Sparkles className="h-6 w-6 text-gray-700" />
+                            AI Insights
+                          </h3>
+                          {isInsightIntervention && (
+                            <span className="text-[11px] text-gray-500">
+                              Updated {formatGuardrailTime(isInsightIntervention.timestamp)}
+                            </span>
+                          )}
+                        </div>
+                        <div className="mt-3 space-y-2">
+                          {isInsightIntervention && (
+                            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+                              <div className="mb-1 flex items-center justify-between">
+                                <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${getHostEventBadgeClasses(isInsightIntervention.event_type)}`}>
+                                  {getHostEventLabel(isInsightIntervention.event_type)}
+                                </span>
+                                <span className="text-[11px] text-gray-600">
+                                  {Math.round(isInsightIntervention.confidence * 100)}%
+                                </span>
+                              </div>
+                              <p className="text-xs font-semibold uppercase tracking-wide text-gray-600">
+                                {isInsightIntervention.headline}
+                              </p>
+                              <p className="mt-1 text-sm text-gray-800">{isInsightIntervention.body}</p>
+                            </div>
+                          )}
+                          <AnimatePresence mode="popLayout">
+                            {insightsForPanel.map((item) => (
+                              <motion.div
+                                key={item.id}
+                                layout
+                                layoutId={item.id}
+                                initial={{ opacity: 0, y: 6 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                exit={{ opacity: 0, y: -6 }}
+                                className="relative overflow-hidden rounded-lg border-2 border-indigo-100 bg-indigo-50/30 px-3 py-3 shadow-sm transition-all hover:border-indigo-200"
+                              >
+                                {/* Subtle highlight bar on the left */}
+                                <div className="absolute bottom-0 left-0 top-0 w-1 bg-indigo-400"></div>
+                                <div className="flex items-start gap-2">
+                                  <div className="mt-0.5">{getHostEventIcon(item.event_type)}</div>
+                                  <div className="flex-1">
+                                    <div className="flex items-center justify-between gap-2">
+                                      <p className="text-sm font-medium text-gray-900">{item.title}</p>
+                                      <span className="text-[11px] text-gray-500">
+                                        {Math.round(item.confidence * 100)}%
+                                      </span>
+                                    </div>
+                                    <p className="mt-1 text-xs text-gray-700">{item.content}</p>
+                                    <div className="mt-2 flex items-center gap-2">
+                                      <button
+                                        type="button"
+                                        onClick={() => pinHostSuggestion(item.id)}
+                                        className="rounded-md border border-indigo-300 bg-indigo-100 px-3 py-1.5 text-[11px] font-semibold text-indigo-800 shadow-sm transition-colors hover:bg-indigo-200"
+                                      >
+                                        Yes, Pin to meeting
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => dismissHostSuggestion(item.id)}
+                                        className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-[11px] font-medium text-gray-700 shadow-sm transition-colors hover:bg-gray-50"
+                                      >
+                                        Dismiss
+                                      </button>
+                                    </div>
+                                  </div>
+                                </div>
+                              </motion.div>
+                            ))}
+                          </AnimatePresence>
+                          {!isInsightIntervention && insightsForPanel.length === 0 && (
+                            <p className="rounded-lg border border-gray-100 bg-white px-3 py-2 text-sm text-gray-500">
+                              AI Host is monitoring and will surface suggestions when needed.
+                            </p>
+                          )}
+                          {activeGuardrailAlert && (
+                            <p className="rounded-md border border-gray-200 bg-gray-50 px-2.5 py-2 text-[11px] text-gray-600">
+                              Legacy guardrail: {getGuardrailReasonLabel(activeGuardrailAlert.reason)} - {activeGuardrailAlert.insight}
+                            </p>
+                          )}
+                        </div>
+                      </section>
                     </div>
-                    <p className="text-sm text-gray-800">{activeGuardrailAlert.insight}</p>
-                  </div>
-                )}
+                  </LayoutGroup>
 
-                {guardrailAlertHistory.length > 1 && (
-                  <div className="border-t border-gray-100 pt-2 space-y-1">
-                    <button
-                      type="button"
-                      onClick={() => setShowGuardrailHistory((prev) => !prev)}
-                      className="text-xs font-medium text-gray-500 hover:text-gray-700"
-                    >
-                      {showGuardrailHistory ? 'Hide alert history' : 'Show alert history'}
-                    </button>
-                    {showGuardrailHistory && guardrailAlertHistory.slice(1, 4).map((item) => (
-                      <div key={item.id} className="text-xs text-gray-600 flex items-start justify-between gap-2">
-                        <span className="line-clamp-2">{item.insight}</span>
-                        <span className="whitespace-nowrap text-[10px] text-gray-400">
-                          {formatGuardrailTime(item.updated_at || item.timestamp)}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
+                  <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+                    <h3 className="text-2xl font-semibold text-gray-900">Meeting Summary</h3>
+                    <p className="mt-3 text-base leading-7 text-gray-700">{liveMeetingSummary}</p>
+                  </section>
+                </>
+              )}
             </div>
-          )}
+          </div>
 
           {/* Custom prompt input at bottom of transcript section */}
           {/* {!isRecording && transcripts.length > 0 && !isMeetingActive && (
@@ -1990,20 +2568,70 @@ export default function Home() {
               />
             </div>
           )} */}
+        </div>
 
-          {/* Recording controls - only show when not in recovery mode OR when recording is active */}
-          {(!isProcessingStop && !isSavingTranscript && (!pendingRecoveryId || isRecording)) && (
-            <div className="fixed bottom-12 left-0 right-0 z-10">
-              <div
-                className="flex justify-center pl-8 transition-[margin] duration-300"
-                style={{
-                  marginLeft: sidebarCollapsed ? '4rem' : '16rem'
-                }}
-              >
-                <div className="w-2/3 max-w-[750px] flex flex-col items-center gap-2">
-                  {/* {isRecording && streamingHealth && ( */}
-                  {/* <div className="w-full bg-white/95 border border-gray-200 rounded-lg px-3 py-2 shadow-sm text-xs text-gray-700"> */}
-                  {/* <div className="flex flex-wrap items-center gap-3">
+        {(isRecording || transcripts.length > 0) && (
+          <aside
+            className={`relative flex border-l border-gray-200 bg-white transition-all duration-300 ${isTranscriptPanelCollapsed ? 'w-8' : 'w-[280px] sm:w-[330px] xl:w-[380px]'
+              }`}
+          >
+            <button
+              type="button"
+              onClick={() => setIsTranscriptPanelCollapsed((prev) => !prev)}
+              className="absolute -left-6 top-20 z-20 rounded-full border bg-white p-1 shadow-lg hover:bg-gray-100"
+              style={{ transform: 'translateX(-50%)' }}
+              aria-label={isTranscriptPanelCollapsed ? 'Expand transcript panel' : 'Collapse transcript panel'}
+            >
+              {isTranscriptPanelCollapsed ? (
+                <ChevronLeftCircle className="h-6 w-6" />
+              ) : (
+                <ChevronRightCircle className="h-6 w-6" />
+              )}
+            </button>
+
+            {isTranscriptPanelCollapsed ? (
+              <div className="flex h-full w-full items-center justify-center">
+                <span
+                  className="text-xs font-medium tracking-wide text-gray-500"
+                  style={{ writingMode: 'vertical-rl', textOrientation: 'mixed' }}
+                >
+                  Transcript
+                </span>
+              </div>
+            ) : (
+              <div className="flex h-full w-full flex-col">
+                <div className="flex items-center justify-between border-b border-gray-200 px-3 py-2">
+                  <h4 className="text-sm font-semibold text-gray-900">Live Transcript</h4>
+                </div>
+                <div ref={transcriptContainerRef} className="min-h-0 flex-1 overflow-y-auto px-2 py-3">
+                  <TranscriptView
+                    transcripts={transcripts}
+                    isRecording={isRecording}
+                    isPaused={isPaused}
+                    activeDuration={recordingElapsedSeconds}
+                    isProcessing={isProcessingStop}
+                    isStopping={isStopping}
+                    enableStreaming={isRecording}
+                  />
+                </div>
+              </div>
+            )}
+          </aside>
+        )}
+
+        {/* Recording controls - only show when not in recovery mode OR when recording is active */}
+        {(!isProcessingStop && !isSavingTranscript && (!pendingRecoveryId || isRecording)) && (
+          <div className="fixed bottom-12 left-0 right-0 z-10">
+            <div
+              className="flex justify-center pl-8 transition-[margin] duration-300"
+              style={{
+                marginLeft: sidebarCollapsed ? '4rem' : '16rem'
+              }}
+            >
+              <div className="w-2/3 max-w-[750px] flex flex-col items-center gap-2">
+                {/* {isRecording && streamingHealth && ( */}
+                {/* <div className="w-full bg-white/95 border border-gray-200 rounded-lg px-3 py-2 shadow-sm text-xs text-gray-700"> */}
+                {/* <div className="flex flex-wrap items-center gap-3">
                         <span>conn: <strong>{streamingHealth.active_connections ?? 0}</strong></span>
                         <span>queue: <strong>{streamingHealth.runtime?.queue_depth ?? 0}</strong></span>
                         <span>dropped: <strong>{streamingHealth.runtime?.dropped_audio_chunks ?? 0}</strong></span>
@@ -2018,7 +2646,7 @@ export default function Home() {
                           <span className="text-red-700 font-semibold">backpressure-hard-limit</span>
                         )}
                       </div> */}
-                  {/* {!!streamingHealth.runtime?.alert_history?.length && (
+                {/* {!!streamingHealth.runtime?.alert_history?.length && (
                         <div className="mt-2 border-t border-gray-200 pt-2 space-y-1">
                           <div className="flex flex-wrap gap-2">
                             {Object.entries(streamingHealth.runtime?.alert_counts || {}).map(([key, count]) => (
@@ -2043,95 +2671,105 @@ export default function Home() {
                         </div>
                       )}
                     </div> */}
-                  {/* )} */}
-                  <div className="bg-white rounded-full shadow-lg flex items-center">
-                    <RecordingControls
-                      isRecording={isRecording}
-                      onRecordingStop={(success) => handleRecordingStop(success)}
-                      onRecordingStart={handleRecordingStart}
-                      onTranscriptReceived={handleTranscriptUpdate}
-                      onGuardrailAlert={handleGuardrailAlert}
-                      manualContext={manualMeetingContext}
-                      contextApplySignal={contextApplySignal}
-                      onContextApplied={(applied) =>
-                        setContextAppliedStatus(applied ? 'applied' : 'failed')
-                      }
-                      onStopInitiated={() => setIsStopping(true)}
-                      barHeights={barHeights}
-                      onTranscriptionError={(message) => {
-                        setErrorMessage(message);
-                        setShowErrorAlert(true);
-                      }}
-                      isRecordingDisabled={isRecordingDisabled}
-                      isParentProcessing={isProcessingStop}
-                      selectedDevices={selectedDevices}
-                      meetingName={meetingTitle}
-                      onSessionIdReceived={(sessionId) => {
-                        setCurrentSessionId(sessionId);
-                        // Upgrade temporary recovery ids once backend confirms live session id.
-                        setPendingRecoveryId((prev) => {
-                          if (!prev) return prev;
-                          if (prev === sessionId) return prev;
-                          return prev.startsWith('recovery-') ? sessionId : prev;
-                        });
-                      }}
-                      initialSessionId={currentSessionId}
-                      onPauseChange={setIsPaused}
-                      startSignal={resumeStartSignal}
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Recovery Mode Actions - hide if currently recording */}
-          {pendingRecoveryId && !isSavingTranscript && !isRecording && (
-            <div className="fixed bottom-12 left-0 right-0 z-10">
-              <div
-                className="flex justify-center pl-8 transition-[margin] duration-300"
-                style={{
-                  marginLeft: sidebarCollapsed ? '4rem' : '16rem'
-                }}
-              >
-                <div className="bg-amber-50 border border-amber-200 rounded-full shadow-lg px-6 py-3 flex items-center gap-4">
-                  <div className="flex flex-col">
-                    <span className="text-sm font-semibold text-amber-800">Recovery Mode</span>
-                    <span className="text-xs text-amber-600 max-w-[200px] truncate" title={meetingTitle}>
-                      {meetingTitle}
-                    </span>
-                  </div>
-                  <div className="h-8 w-px bg-amber-200 mx-2"></div>
-                  <Button
-                    onClick={() => {
-                      // Reveal controls and trigger actual websocket/audio start.
-                      setPendingRecoveryId(null);
-                      setResumeStartSignal((v) => v + 1);
+                {/* )} */}
+                <div className="bg-white rounded-full shadow-lg flex items-center">
+                  <RecordingControls
+                    isRecording={isRecording}
+                    onRecordingStop={(success) => handleRecordingStop(success)}
+                    onRecordingStart={handleRecordingStart}
+                    onTranscriptReceived={handleTranscriptUpdate}
+                    onGuardrailAlert={handleGuardrailAlert}
+                    onHostSuggestion={handleHostSuggestion}
+                    onHostIntervention={handleHostIntervention}
+                    onHostStateDelta={handleHostStateDelta}
+                    onHostActionAck={handleHostActionAck}
+                    onHostSkillAck={(applied) => {
+                      if (applied) toast.success('AI host skill override applied');
                     }}
-                    className="bg-blue-600 hover:bg-blue-700 text-white rounded-full px-6"
-                  >
-                    Resume Meeting
-                  </Button>
-                  <Button
-                    onClick={() => handleWebAudioRecordingStop()}
-                    className="bg-green-600 hover:bg-green-700 text-white rounded-full px-6"
-                  >
-                    Save & Finish
-                  </Button>
-                  <Button
-                    variant="outline"
-                    onClick={handleDiscardRecovery}
-                    className="border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700 rounded-full px-4"
-                  >
-                    Discard
-                  </Button>
+                    onHostClientReady={handleHostClientReady}
+                    hostSkillMarkdown={effectiveHostStyleMarkdown}
+                    manualContext={manualMeetingContext}
+                    contextApplySignal={contextApplySignal}
+                    onContextApplied={(applied) =>
+                      setContextAppliedStatus(applied ? 'applied' : 'failed')
+                    }
+                    onStopInitiated={() => setIsStopping(true)}
+                    barHeights={barHeights}
+                    onTranscriptionError={(message) => {
+                      setErrorMessage(message);
+                      setShowErrorAlert(true);
+                    }}
+                    isRecordingDisabled={isRecordingDisabled}
+                    isParentProcessing={isProcessingStop}
+                    selectedDevices={selectedDevices}
+                    meetingName={meetingTitle}
+                    onSessionIdReceived={(sessionId) => {
+                      setCurrentSessionId(sessionId);
+                      // Upgrade temporary recovery ids once backend confirms live session id.
+                      setPendingRecoveryId((prev) => {
+                        if (!prev) return prev;
+                        if (prev === sessionId) return prev;
+                        return prev.startsWith('recovery-') ? sessionId : prev;
+                      });
+                    }}
+                    initialSessionId={currentSessionId}
+                    onPauseChange={setIsPaused}
+                    startSignal={resumeStartSignal}
+                    onBeforeStart={handleBeforeStartRecording}
+                  />
                 </div>
               </div>
             </div>
-          )}
+          </div>
+        )}
 
-          {/* Processing status overlay */}
-          {/* {summaryStatus === 'processing' && !isRecording && (
+        {/* Recovery Mode Actions - hide if currently recording */}
+        {pendingRecoveryId && !isSavingTranscript && !isRecording && (
+          <div className="fixed bottom-12 left-0 right-0 z-10">
+            <div
+              className="flex justify-center pl-8 transition-[margin] duration-300"
+              style={{
+                marginLeft: sidebarCollapsed ? '4rem' : '16rem'
+              }}
+            >
+              <div className="bg-amber-50 border border-amber-200 rounded-full shadow-lg px-6 py-3 flex items-center gap-4">
+                <div className="flex flex-col">
+                  <span className="text-sm font-semibold text-amber-800">Recovery Mode</span>
+                  <span className="text-xs text-amber-600 max-w-[200px] truncate" title={meetingTitle}>
+                    {meetingTitle}
+                  </span>
+                </div>
+                <div className="h-8 w-px bg-amber-200 mx-2"></div>
+                <Button
+                  onClick={() => {
+                    // Reveal controls and trigger actual websocket/audio start.
+                    setPendingRecoveryId(null);
+                    setResumeStartSignal((v) => v + 1);
+                  }}
+                  className="bg-blue-600 hover:bg-blue-700 text-white rounded-full px-6"
+                >
+                  Resume Meeting
+                </Button>
+                <Button
+                  onClick={() => handleWebAudioRecordingStop()}
+                  className="bg-green-600 hover:bg-green-700 text-white rounded-full px-6"
+                >
+                  Save & Finish
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={handleDiscardRecovery}
+                  className="border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700 rounded-full px-4"
+                >
+                  Discard
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Processing status overlay */}
+        {/* {summaryStatus === 'processing' && !isRecording && (
             <div className="fixed bottom-4 left-0 right-0 z-10">
               <div
                 className="flex justify-center pl-8 transition-[margin] duration-300"
@@ -2148,375 +2786,374 @@ export default function Home() {
               </div>
             </div>
           )} */}
-          {isSavingTranscript && (
-            <div className="fixed bottom-4 left-0 right-0 z-10">
-              <div
-                className="flex justify-center pl-8 transition-[margin] duration-300"
-                style={{
-                  marginLeft: sidebarCollapsed ? '4rem' : '16rem'
-                }}
-              >
-                <div className="w-2/3 max-w-[750px] flex justify-center">
-                  <div className="bg-white rounded-lg shadow-lg px-4 py-2 flex items-center space-x-2">
-                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-900"></div>
-                    <span className="text-sm text-gray-700">Saving transcript...</span>
-                  </div>
+        {isSavingTranscript && (
+          <div className="fixed bottom-4 left-0 right-0 z-10">
+            <div
+              className="flex justify-center pl-8 transition-[margin] duration-300"
+              style={{
+                marginLeft: sidebarCollapsed ? '4rem' : '16rem'
+              }}
+            >
+              <div className="w-2/3 max-w-[750px] flex justify-center">
+                <div className="bg-white rounded-lg shadow-lg px-4 py-2 flex items-center space-x-2">
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-900"></div>
+                  <span className="text-sm text-gray-700">Saving transcript...</span>
                 </div>
               </div>
             </div>
-          )}
+          </div>
+        )}
 
-          {/* Preferences Modal (Settings) */}
-          {showModelSettings && (
-            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-              <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col">
-                {/* Header */}
-                <div className="flex justify-between items-center p-6 border-b">
-                  <h3 className="text-xl font-semibold text-gray-900">Preferences</h3>
-                  <button
-                    onClick={() => setShowModelSettings(false)}
-                    className="text-gray-500 hover:text-gray-700"
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                  </button>
-                </div>
-
-                {/* Content - Scrollable */}
-                <div className="flex-1 overflow-y-auto p-6 space-y-8">
-                  {/* General Preferences Section */}
-                  <PreferenceSettings />
-
-                  {/* Divider */}
-                  <div className="border-t pt-8">
-                    <h4 className="text-lg font-semibold text-gray-900 mb-4">AI Model Configuration</h4>
-                    <div className="space-y-4">
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">
-                          Summarization Model
-                        </label>
-                        <div className="flex space-x-2">
-                          <select
-                            className="px-3 py-2 text-sm bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
-                            value={modelConfig.provider}
-                            onChange={(e) => {
-                              const provider = e.target.value as ModelConfig['provider'];
-                              setModelConfig({
-                                ...modelConfig,
-                                provider,
-                                model: (modelOptions[provider] || modelOptions.ollama)[0]
-                              });
-                            }}
-                          >
-                            <option value="claude">Claude</option>
-                            <option value="groq">Groq</option>
-                            <option value="ollama">Ollama</option>
-                            <option value="openrouter">OpenRouter</option>
-                          </select>
-
-                          <select
-                            className="flex-1 px-3 py-2 text-sm bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
-                            value={modelConfig.model}
-                            onChange={(e) => setModelConfig(prev => ({ ...prev, model: e.target.value }))}
-                          >
-                            {(modelOptions[modelConfig.provider] || []).map((model: string) => (
-                              <option key={model} value={model}>
-                                {model}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      </div>
-                      {modelConfig.provider === 'ollama' && (
-                        <div>
-                          <h4 className="text-lg font-bold mb-4">Available Ollama Models</h4>
-                          {error && (
-                            <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
-                              {error}
-                            </div>
-                          )}
-                          <div className="grid gap-4 max-h-[400px] overflow-y-auto pr-2">
-                            {models.map((model) => (
-                              <div
-                                key={model.id}
-                                className={`bg-white p-4 rounded-lg shadow cursor-pointer transition-colors ${modelConfig.model === model.name ? 'ring-2 ring-blue-500 bg-blue-50' : 'hover:bg-gray-50'
-                                  }`}
-                                onClick={() => setModelConfig(prev => ({ ...prev, model: model.name }))}
-                              >
-                                <h3 className="font-bold">{model.name}</h3>
-                                <p className="text-gray-600">Size: {model.size}</p>
-                                <p className="text-gray-600">Modified: {model.modified}</p>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Footer */}
-                <div className="border-t p-6 flex justify-end">
-                  <button
-                    onClick={() => setShowModelSettings(false)}
-                    className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-                  >
-                    Done
-                  </button>
-                </div>
+        {/* Preferences Modal (Settings) */}
+        {showModelSettings && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+              {/* Header */}
+              <div className="flex justify-between items-center p-6 border-b">
+                <h3 className="text-xl font-semibold text-gray-900">Preferences</h3>
+                <button
+                  onClick={() => setShowModelSettings(false)}
+                  className="text-gray-500 hover:text-gray-700"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
               </div>
-            </div>
-          )}
 
-          {/* Device Settings Modal */}
-          {showDeviceSettings && (
-            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-              <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
-                <div className="flex justify-between items-center mb-4">
-                  <h3 className="text-lg font-semibold text-gray-900">Audio Device Settings</h3>
-                  <button
-                    onClick={() => setShowDeviceSettings(false)}
-                    className="text-gray-500 hover:text-gray-700"
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                  </button>
-                </div>
+              {/* Content - Scrollable */}
+              <div className="flex-1 overflow-y-auto p-6 space-y-8">
+                {/* General Preferences Section */}
+                <PreferenceSettings />
 
-                <DeviceSelection
-                  selectedDevices={selectedDevices}
-                  onDeviceChange={setSelectedDevices}
-                  disabled={isRecording}
-                />
-
-                <div className="mt-6 flex justify-end">
-                  <button
-                    onClick={() => {
-                      const micDevice = selectedDevices.micDevice || 'Default';
-                      const systemDevice = selectedDevices.systemDevice || 'Default';
-                      toast.success("Devices selected", {
-                        description: `Microphone: ${micDevice}, System Audio: ${systemDevice}`
-                      });
-                      setShowDeviceSettings(false);
-                    }}
-                    className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-                  >
-                    Done
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Language Settings Modal */}
-          {showLanguageSettings && (
-            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-              <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
-                <div className="flex justify-between items-center mb-4">
-                  <h3 className="text-lg font-semibold text-gray-900">Language Settings</h3>
-                  <button
-                    onClick={() => setShowLanguageSettings(false)}
-                    className="text-gray-500 hover:text-gray-700"
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                  </button>
-                </div>
-
-                <LanguageSelection
-                  selectedLanguage={selectedLanguage}
-                  onLanguageChange={setSelectedLanguage}
-                  disabled={isRecording}
-                  provider={transcriptModelConfig.provider}
-                />
-
-                <div className="mt-6 flex justify-end">
-                  <button
-                    onClick={() => setShowLanguageSettings(false)}
-                    className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-                  >
-                    Done
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Model Selection Modal - shown when model loading fails */}
-          {showModelSelector && (
-            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-              <div className="bg-white rounded-lg max-w-4xl w-full mx-4 shadow-xl max-h-[90vh] flex flex-col">
-                {/* Fixed Header */}
-                <div className="flex justify-between items-center p-6 pb-4 border-b border-gray-200">
-                  <h3 className="text-lg font-semibold text-gray-900">
-                    {modelSelectorMessage ? 'Speech Recognition Setup Required' : 'Transcription Model Settings'}
-                  </h3>
-                  <button
-                    onClick={() => {
-                      setShowModelSelector(false);
-                      setModelSelectorMessage(''); // Clear the message when closing
-                    }}
-                    className="text-gray-500 hover:text-gray-700"
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                  </button>
-                </div>
-
-                {/* Scrollable Content */}
-                <div className="flex-1 overflow-y-auto p-6 pt-4">
-                  {/* Only show warning if there's an error message (triggered by transcription error) */}
-                  {modelSelectorMessage && (
-                    <div className="mb-6 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
-                      <div className="flex items-start space-x-3">
-                        <span className="text-yellow-600 text-xl">⚠️</span>
-                        <div>
-                          <h4 className="font-medium text-yellow-800 mb-1">Model Required</h4>
-                          <p className="text-sm text-yellow-700">
-                            {modelSelectorMessage}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  <TranscriptSettings
-                    transcriptModelConfig={transcriptModelConfig}
-                    setTranscriptModelConfig={setTranscriptModelConfig}
-                    onModelSelect={() => {
-                      setShowModelSelector(false);
-                      setModelSelectorMessage('');
-                    }}
-                  />
-                </div>
-
-                {/* Fixed Footer */}
-                <div className="p-6 pt-4 border-t border-gray-200 flex items-center justify-between">
-                  {/* Left side: Confidence Indicator Toggle */}
-                  <div className="flex items-center gap-3">
-                    <label className="relative inline-flex items-center cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={showConfidenceIndicator}
-                        onChange={(e) => handleConfidenceToggle(e.target.checked)}
-                        className="sr-only peer"
-                      />
-                      <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
-                    </label>
+                {/* Divider */}
+                <div className="border-t pt-8">
+                  <h4 className="text-lg font-semibold text-gray-900 mb-4">AI Model Configuration</h4>
+                  <div className="space-y-4">
                     <div>
-                      <p className="text-sm font-medium text-gray-700">Show Confidence Indicators</p>
-                      <p className="text-xs text-gray-500">Display colored dots showing transcription confidence quality</p>
-                    </div>
-                  </div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Summarization Model
+                      </label>
+                      <div className="flex space-x-2">
+                        <select
+                          className="px-3 py-2 text-sm bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                          value={modelConfig.provider}
+                          onChange={(e) => {
+                            const provider = e.target.value as ModelConfig['provider'];
+                            setModelConfig({
+                              ...modelConfig,
+                              provider,
+                              model: (modelOptions[provider] || modelOptions.ollama)[0]
+                            });
+                          }}
+                        >
+                          <option value="claude">Claude</option>
+                          <option value="groq">Groq</option>
+                          <option value="ollama">Ollama</option>
+                          <option value="openrouter">OpenRouter</option>
+                        </select>
 
-                  {/* Right side: Done Button */}
-                  <button
-                    onClick={() => {
-                      setShowModelSelector(false);
-                      setModelSelectorMessage(''); // Clear the message when closing
-                    }}
-                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500"
-                  >
-                    {modelSelectorMessage ? 'Cancel' : 'Done'}
-                  </button>
+                        <select
+                          className="flex-1 px-3 py-2 text-sm bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                          value={modelConfig.model}
+                          onChange={(e) => setModelConfig(prev => ({ ...prev, model: e.target.value }))}
+                        >
+                          {(modelOptions[modelConfig.provider] || []).map((model: string) => (
+                            <option key={model} value={model}>
+                              {model}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                    {modelConfig.provider === 'ollama' && (
+                      <div>
+                        <h4 className="text-lg font-bold mb-4">Available Ollama Models</h4>
+                        {error && (
+                          <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
+                            {error}
+                          </div>
+                        )}
+                        <div className="grid gap-4 max-h-[400px] overflow-y-auto pr-2">
+                          {models.map((model) => (
+                            <div
+                              key={model.id}
+                              className={`bg-white p-4 rounded-lg shadow cursor-pointer transition-colors ${modelConfig.model === model.name ? 'ring-2 ring-blue-500 bg-blue-50' : 'hover:bg-gray-50'
+                                }`}
+                              onClick={() => setModelConfig(prev => ({ ...prev, model: model.name }))}
+                            >
+                              <h3 className="font-bold">{model.name}</h3>
+                              <p className="text-gray-600">Size: {model.size}</p>
+                              <p className="text-gray-600">Modified: {model.modified}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
-            </div>
-          )}
-        </div>
 
-        {/* Right side - AI Summary */}
-        {/* <div className="flex-1 overflow-y-auto bg-white"> */}
-        {/*   <div className="p-4 border-b border-gray-200"> */}
-        {/*     <div className="flex items-center"> */}
-        {/*       <EditableTitle */}
-        {/*         title={meetingTitle} */}
-        {/*         isEditing={isEditingTitle} */}
-        {/*         onStartEditing={() => setIsEditingTitle(true)} */}
-        {/*         onFinishEditing={() => setIsEditingTitle(false)} */}
-        {/*         onChange={handleTitleChange} */}
-        {/*       /> */}
-        {/*     </div> */}
-        {/*   </div> */}
-        {/*   {/* {isSummaryLoading ? ( */}
-        {/*     <div className="flex items-center justify-center h-full"> */}
-        {/*       <div className="text-center"> */}
-        {/*         <div className="inline-block animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500 mb-4"></div> */}
-        {/*         <p className="text-gray-600">Generating AI Summary...</p> */}
-        {/*       </div> */}
-        {/*     </div> */}
-        {/*   ) : showSummary && ( */}
-        {/*     <div className="max-w-4xl mx-auto p-6"> */}
-        {/*       {summaryResponse && ( */}
-        {/*         <div className="fixed bottom-0 left-0 right-0 bg-white shadow-lg p-4 max-h-1/3 overflow-y-auto"> */}
-        {/*           <h3 className="text-lg font-semibold mb-2">Meeting Summary</h3> */}
-        {/*           <div className="grid grid-cols-2 gap-4"> */}
-        {/*             <div className="bg-white p-4 rounded-lg shadow-sm"> */}
-        {/*               <h4 className="font-medium mb-1">Key Points</h4> */}
-        {/*               <ul className="list-disc pl-4"> */}
-        {/*                 {summaryResponse.summary.key_points.blocks.map((block, i) => ( */}
-        {/*                   <li key={i} className="text-sm">{block.content}</li> */}
-        {/*                 ))} */}
-        {/*               </ul> */}
-        {/*             </div> */}
-        {/*             <div className="bg-white p-4 rounded-lg shadow-sm mt-4"> */}
-        {/*               <h4 className="font-medium mb-1">Action Items</h4> */}
-        {/*               <ul className="list-disc pl-4"> */}
-        {/*                 {summaryResponse.summary.action_items.blocks.map((block, i) => ( */}
-        {/*                   <li key={i} className="text-sm">{block.content}</li> */}
-        {/*                 ))} */}
-        {/*               </ul> */}
-        {/*             </div> */}
-        {/*             <div className="bg-white p-4 rounded-lg shadow-sm mt-4"> */}
-        {/*               <h4 className="font-medium mb-1">Decisions</h4> */}
-        {/*               <ul className="list-disc pl-4"> */}
-        {/*                 {summaryResponse.summary.decisions.blocks.map((block, i) => ( */}
-        {/*                   <li key={i} className="text-sm">{block.content}</li> */}
-        {/*                 ))} */}
-        {/*               </ul> */}
-        {/*             </div> */}
-        {/*             <div className="bg-white p-4 rounded-lg shadow-sm mt-4"> */}
-        {/*               <h4 className="font-medium mb-1">Main Topics</h4> */}
-        {/*               <ul className="list-disc pl-4"> */}
-        {/*                 {summaryResponse.summary.main_topics.blocks.map((block, i) => ( */}
-        {/*                   <li key={i} className="text-sm">{block.content}</li> */}
-        {/*                 ))} */}
-        {/*               </ul> */}
-        {/*             </div> */}
-        {/*           </div> */}
-        {/*           {summaryResponse.raw_summary ? ( */}
-        {/*             <div className="mt-4"> */}
-        {/*               <h4 className="font-medium mb-1">Full Summary</h4> */}
-        {/*               <p className="text-sm whitespace-pre-wrap">{summaryResponse.raw_summary}</p> */}
-        {/*             </div> */}
-        {/*           ) : null} */}
-        {/*         </div> */}
-        {/*       )} */}
-        {/*       <div className="flex-1 overflow-y-auto p-4"> */}
-        {/*         <AISummary  */}
-        {/*           summary={aiSummary}  */}
-        {/*           status={summaryStatus}  */}
-        {/*           error={summaryError} */}
-        {/*           onSummaryChange={(newSummary) => setAiSummary(newSummary)} */}
-        {/*           onRegenerateSummary={handleRegenerateSummary} */}
-        {/*         /> */}
-        {/*       </div> */}
-        {/*       {summaryStatus !== 'idle' && ( */}
-        {/*         <div className={`mt-4 p-4 rounded-lg ${ */}
-        {/*           summaryStatus === 'error' ? 'bg-red-100 text-red-700' : */}
-        {/*           summaryStatus === 'completed' ? 'bg-green-100 text-green-700' : */}
-        {/*           'bg-blue-100 text-blue-700' */}
-        {/*         }`}> */}
-        {/*           <p className="text-sm font-medium">{getSummaryStatusMessage(summaryStatus)}</p> */}
-        {/*         </div> */}
-        {/*       )} */}
-        {/*     </div> */}
-        {/*   )} */}        {/* </div> */}
+              {/* Footer */}
+              <div className="border-t p-6 flex justify-end">
+                <button
+                  onClick={() => setShowModelSettings(false)}
+                  className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                >
+                  Done
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Device Settings Modal */}
+        {showDeviceSettings && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-semibold text-gray-900">Audio Device Settings</h3>
+                <button
+                  onClick={() => setShowDeviceSettings(false)}
+                  className="text-gray-500 hover:text-gray-700"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              <DeviceSelection
+                selectedDevices={selectedDevices}
+                onDeviceChange={setSelectedDevices}
+                disabled={isRecording}
+              />
+
+              <div className="mt-6 flex justify-end">
+                <button
+                  onClick={() => {
+                    const micDevice = selectedDevices.micDevice || 'Default';
+                    const systemDevice = selectedDevices.systemDevice || 'Default';
+                    toast.success("Devices selected", {
+                      description: `Microphone: ${micDevice}, System Audio: ${systemDevice}`
+                    });
+                    setShowDeviceSettings(false);
+                  }}
+                  className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                >
+                  Done
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Language Settings Modal */}
+        {showLanguageSettings && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-semibold text-gray-900">Language Settings</h3>
+                <button
+                  onClick={() => setShowLanguageSettings(false)}
+                  className="text-gray-500 hover:text-gray-700"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              <LanguageSelection
+                selectedLanguage={selectedLanguage}
+                onLanguageChange={setSelectedLanguage}
+                disabled={isRecording}
+                provider={transcriptModelConfig.provider}
+              />
+
+              <div className="mt-6 flex justify-end">
+                <button
+                  onClick={() => setShowLanguageSettings(false)}
+                  className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                >
+                  Done
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Model Selection Modal - shown when model loading fails */}
+        {showModelSelector && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div className="bg-white rounded-lg max-w-4xl w-full mx-4 shadow-xl max-h-[90vh] flex flex-col">
+              {/* Fixed Header */}
+              <div className="flex justify-between items-center p-6 pb-4 border-b border-gray-200">
+                <h3 className="text-lg font-semibold text-gray-900">
+                  {modelSelectorMessage ? 'Speech Recognition Setup Required' : 'Transcription Model Settings'}
+                </h3>
+                <button
+                  onClick={() => {
+                    setShowModelSelector(false);
+                    setModelSelectorMessage(''); // Clear the message when closing
+                  }}
+                  className="text-gray-500 hover:text-gray-700"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              {/* Scrollable Content */}
+              <div className="flex-1 overflow-y-auto p-6 pt-4">
+                {/* Only show warning if there's an error message (triggered by transcription error) */}
+                {modelSelectorMessage && (
+                  <div className="mb-6 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+                    <div className="flex items-start space-x-3">
+                      <span className="text-yellow-600 text-xl">⚠️</span>
+                      <div>
+                        <h4 className="font-medium text-yellow-800 mb-1">Model Required</h4>
+                        <p className="text-sm text-yellow-700">
+                          {modelSelectorMessage}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <TranscriptSettings
+                  transcriptModelConfig={transcriptModelConfig}
+                  setTranscriptModelConfig={setTranscriptModelConfig}
+                  onModelSelect={() => {
+                    setShowModelSelector(false);
+                    setModelSelectorMessage('');
+                  }}
+                />
+              </div>
+
+              {/* Fixed Footer */}
+              <div className="p-6 pt-4 border-t border-gray-200 flex items-center justify-between">
+                {/* Left side: Confidence Indicator Toggle */}
+                <div className="flex items-center gap-3">
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={showConfidenceIndicator}
+                      onChange={(e) => handleConfidenceToggle(e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                  </label>
+                  <div>
+                    <p className="text-sm font-medium text-gray-700">Show Confidence Indicators</p>
+                    <p className="text-xs text-gray-500">Display colored dots showing transcription confidence quality</p>
+                  </div>
+                </div>
+
+                {/* Right side: Done Button */}
+                <button
+                  onClick={() => {
+                    setShowModelSelector(false);
+                    setModelSelectorMessage(''); // Clear the message when closing
+                  }}
+                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500"
+                >
+                  {modelSelectorMessage ? 'Cancel' : 'Done'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
+
+      {/* Right side - AI Summary */}
+      {/* <div className="flex-1 overflow-y-auto bg-white"> */}
+      {/*   <div className="p-4 border-b border-gray-200"> */}
+      {/*     <div className="flex items-center"> */}
+      {/*       <EditableTitle */}
+      {/*         title={meetingTitle} */}
+      {/*         isEditing={isEditingTitle} */}
+      {/*         onStartEditing={() => setIsEditingTitle(true)} */}
+      {/*         onFinishEditing={() => setIsEditingTitle(false)} */}
+      {/*         onChange={handleTitleChange} */}
+      {/*       /> */}
+      {/*     </div> */}
+      {/*   </div> */}
+      {/*   {/* {isSummaryLoading ? ( */}
+      {/*     <div className="flex items-center justify-center h-full"> */}
+      {/*       <div className="text-center"> */}
+      {/*         <div className="inline-block animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500 mb-4"></div> */}
+      {/*         <p className="text-gray-600">Generating AI Summary...</p> */}
+      {/*       </div> */}
+      {/*     </div> */}
+      {/*   ) : showSummary && ( */}
+      {/*     <div className="max-w-4xl mx-auto p-6"> */}
+      {/*       {summaryResponse && ( */}
+      {/*         <div className="fixed bottom-0 left-0 right-0 bg-white shadow-lg p-4 max-h-1/3 overflow-y-auto"> */}
+      {/*           <h3 className="text-lg font-semibold mb-2">Meeting Summary</h3> */}
+      {/*           <div className="grid grid-cols-2 gap-4"> */}
+      {/*             <div className="bg-white p-4 rounded-lg shadow-sm"> */}
+      {/*               <h4 className="font-medium mb-1">Key Points</h4> */}
+      {/*               <ul className="list-disc pl-4"> */}
+      {/*                 {summaryResponse.summary.key_points.blocks.map((block, i) => ( */}
+      {/*                   <li key={i} className="text-sm">{block.content}</li> */}
+      {/*                 ))} */}
+      {/*               </ul> */}
+      {/*             </div> */}
+      {/*             <div className="bg-white p-4 rounded-lg shadow-sm mt-4"> */}
+      {/*               <h4 className="font-medium mb-1">Action Items</h4> */}
+      {/*               <ul className="list-disc pl-4"> */}
+      {/*                 {summaryResponse.summary.action_items.blocks.map((block, i) => ( */}
+      {/*                   <li key={i} className="text-sm">{block.content}</li> */}
+      {/*                 ))} */}
+      {/*               </ul> */}
+      {/*             </div> */}
+      {/*             <div className="bg-white p-4 rounded-lg shadow-sm mt-4"> */}
+      {/*               <h4 className="font-medium mb-1">Decisions</h4> */}
+      {/*               <ul className="list-disc pl-4"> */}
+      {/*                 {summaryResponse.summary.decisions.blocks.map((block, i) => ( */}
+      {/*                   <li key={i} className="text-sm">{block.content}</li> */}
+      {/*                 ))} */}
+      {/*               </ul> */}
+      {/*             </div> */}
+      {/*             <div className="bg-white p-4 rounded-lg shadow-sm mt-4"> */}
+      {/*               <h4 className="font-medium mb-1">Main Topics</h4> */}
+      {/*               <ul className="list-disc pl-4"> */}
+      {/*                 {summaryResponse.summary.main_topics.blocks.map((block, i) => ( */}
+      {/*                   <li key={i} className="text-sm">{block.content}</li> */}
+      {/*                 ))} */}
+      {/*               </ul> */}
+      {/*             </div> */}
+      {/*           </div> */}
+      {/*           {summaryResponse.raw_summary ? ( */}
+      {/*             <div className="mt-4"> */}
+      {/*               <h4 className="font-medium mb-1">Full Summary</h4> */}
+      {/*               <p className="text-sm whitespace-pre-wrap">{summaryResponse.raw_summary}</p> */}
+      {/*             </div> */}
+      {/*           ) : null} */}
+      {/*         </div> */}
+      {/*       )} */}
+      {/*       <div className="flex-1 overflow-y-auto p-4"> */}
+      {/*         <AISummary  */}
+      {/*           summary={aiSummary}  */}
+      {/*           status={summaryStatus}  */}
+      {/*           error={summaryError} */}
+      {/*           onSummaryChange={(newSummary) => setAiSummary(newSummary)} */}
+      {/*           onRegenerateSummary={handleRegenerateSummary} */}
+      {/*         /> */}
+      {/*       </div> */}
+      {/*       {summaryStatus !== 'idle' && ( */}
+      {/*         <div className={`mt-4 p-4 rounded-lg ${ */}
+      {/*           summaryStatus === 'error' ? 'bg-red-100 text-red-700' : */}
+      {/*           summaryStatus === 'completed' ? 'bg-green-100 text-green-700' : */}
+      {/*           'bg-blue-100 text-blue-700' */}
+      {/*         }`}> */}
+      {/*           <p className="text-sm font-medium">{getSummaryStatusMessage(summaryStatus)}</p> */}
+      {/*         </div> */}
+      {/*       )} */}
+      {/*     </div> */}
+      {/*   )} */}        {/* </div> */}
 
       {/* Chat Interface - Only show when recording or meeting is active */}
       {(isRecording || isMeetingActive) && (
@@ -2684,10 +3321,114 @@ export default function Home() {
         </>
       )}
 
-      {/* Re-auth Modal */}
-      {showReauthModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
+      <Dialog open={showGuardrailContextDialog} onOpenChange={setShowGuardrailContextDialog}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Meeting Context</DialogTitle>
+            <DialogDescription className="hidden">
+              Configure goal, agenda, participants, and style for AI host guidance.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid grid-cols-1 gap-3 px-1 py-2">
+            <div>
+              <label className="text-xs font-medium text-gray-500 mb-1 block">Meeting Goal</label>
+              <input
+                type="text"
+                value={meetingGoalInput}
+                onChange={(e) => setMeetingGoalInput(e.target.value)}
+                placeholder="What's the meeting goal?"
+                className="w-full rounded-md border border-gray-200 px-3 py-2 text-sm focus:border-gray-400 focus:outline-none"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-gray-500 mb-1 block">Agenda</label>
+              <textarea
+                value={meetingAgendaInput}
+                onChange={(e) => setMeetingAgendaInput(e.target.value)}
+                placeholder="Key topics to cover..."
+                className="w-full min-h-[100px] rounded-md border border-gray-200 px-3 py-2 text-sm focus:border-gray-400 focus:outline-none"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-gray-500 mb-1 block">Participants (Optional)</label>
+              <input
+                type="text"
+                value={meetingParticipantsInput}
+                onChange={(e) => setMeetingParticipantsInput(e.target.value)}
+                placeholder="Comma separated names"
+                className="w-full rounded-md border border-gray-200 px-3 py-2 text-sm focus:border-gray-400 focus:outline-none"
+              />
+            </div>
+          </div>
+          <DialogFooter className="mt-2">
+            <Button
+              onClick={() => {
+                applyManualContext();
+                setShowGuardrailContextDialog(false);
+              }}
+              disabled={!hasManualContextValues || contextAppliedStatus === 'applying'}
+              className="w-full"
+            >
+              {contextAppliedStatus === 'applying' ? 'Applying...' : 'Apply Context'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={showHostStyleStartDialog}
+        onOpenChange={(open) => {
+          if (!open) cancelStartStyleDialog();
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Select AI Host Style</DialogTitle>
+            <DialogDescription>
+              Choose a style for this meeting. Your default style will be pre-selected.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <label className="text-xs font-medium text-gray-600">AI Host Style</label>
+            <select
+              value={pendingStartStyleId}
+              onChange={(e) => setPendingStartStyleId(e.target.value)}
+              className="w-full rounded-md border border-gray-200 px-3 py-2 text-sm focus:border-gray-400 focus:outline-none"
+            >
+              <option value="__default__">
+                Use default style ({defaultHostStyleId || 'system:facilitator'})
+              </option>
+              {activeHostStyles.map((style) => (
+                <option key={style.id} value={style.id}>
+                  {style.name} ({style.source}){style.is_default ? ' ★' : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={cancelStartStyleDialog}>
+              Cancel
+            </Button>
+            <Button onClick={confirmStartStyleDialog}>
+              Start Meeting
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <CalendarMeetingPicker
+        open={showCalendarPicker}
+        onOpenChange={setShowCalendarPicker}
+        onSelectMeeting={(event: CalendarEvent) => {
+          setSelectedCalendarEvent(event);
+          setMeetingTitle(event.meeting_title);
+          setShowCalendarPicker(false);
+        }}
+      />
+
+      <Dialog open={showReauthModal} onOpenChange={setShowReauthModal}>
+        <DialogContent className="sm:max-w-md border-none p-0 bg-transparent shadow-none">
+          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 shadow-xl border border-gray-200">
             <h3 className="text-lg font-semibold text-gray-900 mb-2">Session Expired</h3>
             <p className="text-gray-600 mb-6">
               Your session has expired, but your meeting transcript is safe locally.
@@ -2696,7 +3437,7 @@ export default function Home() {
             <div className="flex justify-end gap-3">
               <button
                 onClick={() => window.open('/login', '_blank')}
-                className="px-4 py-2 text-sm font-medium text-blue-600 hover:bg-blue-50 rounded-md"
+                className="px-4 py-2 text-sm font-medium text-blue-600 hover:bg-blue-50 rounded-md transition-colors"
               >
                 Log In (New Tab)
               </button>
@@ -2705,15 +3446,14 @@ export default function Home() {
                   setShowReauthModal(false);
                   await handleWebAudioRecordingStop();
                 }}
-                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700"
+                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 transition-colors shadow-sm"
               >
                 Retry Save
               </button>
             </div>
           </div>
-        </div>
-      )}
-
-    </motion.div>
+        </DialogContent>
+      </Dialog>
+    </motion.div >
   );
 }

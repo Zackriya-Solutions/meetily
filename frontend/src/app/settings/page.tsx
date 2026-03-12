@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, Suspense } from 'react';
-import { ArrowLeft, Settings2, Mic, Database as DatabaseIcon, SparkleIcon, Key, Calendar } from 'lucide-react';
+import { ArrowLeft, Settings2, Mic, Database as DatabaseIcon, SparkleIcon, Key, Calendar, Bot } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 // import { TranscriptSettings, TranscriptModelProps } from '@/components/TranscriptSettings';
 // import { RecordingSettings } from '@/components/RecordingSettings';
@@ -9,9 +9,10 @@ import { useRouter, useSearchParams } from 'next/navigation';
 // import { SummaryModelSettings } from '@/components/SummaryModelSettings';
 import { PersonalKeysSettings } from '@/components/PersonalKeysSettings';
 import { CalendarIntegrationSettings } from '@/components/CalendarIntegrationSettings';
+import { AIHostSkillSettings } from '@/components/AIHostSkillSettings';
 import { authFetch } from '@/lib/api';
 
-type SettingsTab = 'general' | 'recording' | 'Transcriptionmodels' | 'summaryModels' | 'personalKeys' | 'calendar';
+type SettingsTab = 'general' | 'recording' | 'Transcriptionmodels' | 'summaryModels' | 'personalKeys' | 'calendar' | 'aiHost';
 
 // Make a dummy type since we commented out the actual import
 type TranscriptModelProps = {
@@ -31,9 +32,9 @@ function SettingsContent() {
   });
 
   useEffect(() => {
-    const tabParam = searchParams.get('tab');
-    if (tabParam) {
-      const validTabs: SettingsTab[] = [/* 'general', 'recording', 'Transcriptionmodels', 'summaryModels', */ 'personalKeys', 'calendar'];
+      const tabParam = searchParams.get('tab');
+      if (tabParam) {
+      const validTabs: SettingsTab[] = [/* 'general', 'recording', 'Transcriptionmodels', 'summaryModels', */ 'personalKeys', 'calendar', 'aiHost'];
       if (validTabs.includes(tabParam as SettingsTab)) {
         setActiveTab(tabParam as SettingsTab);
       }
@@ -46,7 +47,8 @@ function SettingsContent() {
     // { id: 'Transcriptionmodels' as const, label: 'Transcription', icon: <DatabaseIcon className="w-4 h-4" /> },
     // { id: 'summaryModels' as const, label: 'Summary', icon: <SparkleIcon className="w-4 h-4" /> },
     { id: 'personalKeys' as const, label: 'Personal Keys', icon: <Key className="w-4 h-4" /> },
-    { id: 'calendar' as const, label: 'Calendar', icon: <Calendar className="w-4 h-4" /> }
+    { id: 'calendar' as const, label: 'Calendar', icon: <Calendar className="w-4 h-4" /> },
+    { id: 'aiHost' as const, label: 'AI Host', icon: <Bot className="w-4 h-4" /> }
   ];
 
   // Load saved transcript configuration on mount
@@ -124,6 +126,7 @@ function SettingsContent() {
               {/* {activeTab === 'summaryModels' && <SummaryModelSettings />} */}
               {activeTab === 'personalKeys' && <PersonalKeysSettings />}
               {activeTab === 'calendar' && <CalendarIntegrationSettings />}
+              {activeTab === 'aiHost' && <AIHostSkillSettings />}
             </div>
           </div>
         </div>

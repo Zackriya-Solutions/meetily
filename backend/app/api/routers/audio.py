@@ -33,6 +33,8 @@ try:
     from ...core.security import verify_google_token
     from ...services.ai_participant import AIParticipantEngine, MeetingContext
     from ...services.audio.manager import StreamingTranscriptionManager
+    from ...services.audio.groq_client import GroqTranscriptionClient
+    from ...services.audio.elevenlabs_client import ElevenLabsTranscriptionClient
     from ...services.audio.recorder import get_or_create_recorder, stop_recorder
     from ...services.audio.post_recording import get_post_recording_service
     from ...services.audio.pipeline_state import get_audio_pipeline_state_service
@@ -46,6 +48,8 @@ except (ImportError, ValueError):
     from core.security import verify_google_token
     from services.ai_participant import AIParticipantEngine, MeetingContext
     from services.audio.manager import StreamingTranscriptionManager
+    from services.audio.groq_client import GroqTranscriptionClient
+    from services.audio.elevenlabs_client import ElevenLabsTranscriptionClient
     from services.audio.recorder import get_or_create_recorder, stop_recorder
     from services.audio.post_recording import get_post_recording_service
     from services.audio.pipeline_state import get_audio_pipeline_state_service
@@ -355,7 +359,11 @@ def _cancel_pending_cleanup(session_id: str):
         task.cancel()
 
 
-async def _build_ai_meeting_context(meeting_id: str, user_email: str) -> MeetingContext:
+async def _build_ai_meeting_context(
+    meeting_id: str,
+    user_email: str,
+    calendar_event_id: Optional[str] = None,
+) -> MeetingContext:
     context = MeetingContext(meeting_id=meeting_id)
     if not meeting_id:
         return context
@@ -374,10 +382,21 @@ async def _build_ai_meeting_context(meeting_id: str, user_email: str) -> Meeting
         )
 
     try:
-        event_context = await db.get_calendar_event_context_for_meeting(
-            meeting_id=meeting_id,
-            user_email=user_email,
-        )
+        event_context = None
+        if calendar_event_id:
+            # Explicit event selection takes precedence
+            event_context = await db.get_calendar_event_by_id(
+                event_id=calendar_event_id,
+                user_email=user_email,
+            )
+        
+        if not event_context:
+            # Fallback to implicit meeting matching
+            event_context = await db.get_calendar_event_context_for_meeting(
+                meeting_id=meeting_id,
+                user_email=user_email,
+            )
+
         if event_context:
             agenda_text = (event_context.get("agenda_description") or "").strip()
             if agenda_text:
@@ -415,11 +434,88 @@ async def _build_ai_meeting_context(meeting_id: str, user_email: str) -> Meeting
     return context
 
 
+async def _apply_host_skill_precedence(
+    engine: AIParticipantEngine, user_email: str, meeting_id: str
+) -> str:
+    """
+    Apply persisted host skill in precedence order:
+    meeting -> user -> system.
+    Returns source marker: meeting | user | system.
+    """
+    if meeting_id:
+        try:
+            meeting_profile = await db.get_meeting_ai_host_skill(meeting_id)
+            if (
+                meeting_profile
+                and bool(meeting_profile.get("is_active", True))
+                and str(meeting_profile.get("skill_markdown") or "").strip()
+            ):
+                engine.apply_host_skill_override(
+                    skill_markdown=str(meeting_profile.get("skill_markdown") or ""),
+                    source="meeting",
+                )
+                return "meeting"
+        except Exception as exc:
+            logger.debug(
+                "[AIHost] Failed loading meeting skill profile for %s: %s",
+                meeting_id,
+                exc,
+            )
+
+    try:
+        default_style_id = await db.get_user_ai_host_default_style_id(user_email)
+        if default_style_id:
+            if str(default_style_id).startswith("system:"):
+                template_name = str(default_style_id).split("system:", 1)[1].strip()
+                engine.set_host_template(template_name=template_name, source="user")
+                return "user"
+            if str(default_style_id).startswith("user:"):
+                style_row_id = str(default_style_id).split("user:", 1)[1].strip()
+                row = await db.get_user_ai_host_style_by_id(user_email, style_row_id)
+                if (
+                    row
+                    and bool(row.get("is_active", True))
+                    and str(row.get("skill_markdown") or "").strip()
+                ):
+                    engine.apply_host_skill_override(
+                        skill_markdown=str(row.get("skill_markdown") or ""),
+                        source="user",
+                    )
+                    return "user"
+    except Exception as exc:
+        logger.debug(
+            "[AIHost] Failed loading default user style profile for %s: %s",
+            user_email,
+            exc,
+        )
+
+    try:
+        profile = await db.get_user_ai_host_skill(user_email)
+        if (
+            profile
+            and bool(profile.get("is_active", True))
+            and str(profile.get("skill_markdown") or "").strip()
+        ):
+            engine.apply_host_skill_override(
+                skill_markdown=str(profile.get("skill_markdown") or ""),
+                source="user",
+            )
+            return "user"
+    except Exception as exc:
+        logger.debug(
+            "[AIHost] Failed loading user skill profile for %s: %s", user_email, exc
+        )
+    return "system"
+
+
 def _normalize_manual_context(payload: Dict[str, Any]) -> Dict[str, Any]:
     context_payload = payload.get("manual_context")
     if not isinstance(context_payload, dict):
         return {}
 
+    calendar_event_id = " ".join(
+        str(context_payload.get("calendar_event_id") or "").split()
+    ).strip()
     goal = " ".join(str(context_payload.get("goal") or "").split()).strip()
     agenda_text = " ".join(
         str(context_payload.get("agenda_text") or "").split()
@@ -434,10 +530,11 @@ def _normalize_manual_context(payload: Dict[str, Any]) -> Dict[str, Any]:
                 participants.append(value)
 
     return {
+        "calendar_event_id": calendar_event_id,
         "goal": goal[:300],
         "agenda_text": agenda_text[:2000],
         "participants": participants[:30],
-        "has_values": bool(goal or agenda_text or participants),
+        "has_values": bool(calendar_event_id or goal or agenda_text or participants),
     }
 
 
@@ -719,6 +816,7 @@ async def websocket_streaming_audio(
         )
         await websocket.close(code=1008)
         return
+    can_manage_ai_host = True
     if meeting_id:
         try:
             existing_meeting = await db.get_meeting(active_meeting_id)
@@ -734,6 +832,9 @@ async def websocket_streaming_audio(
                 )
                 await websocket.close(code=1008)
                 return
+            can_manage_ai_host = (not existing_meeting) or await rbac.can(
+                current_user, "edit", active_meeting_id
+            )
         except Exception as authz_err:
             logger.error(f"[Streaming] Meeting authorization failed: {authz_err}")
             await websocket.send_json(
@@ -775,29 +876,70 @@ async def websocket_streaming_audio(
             )
 
         if not is_resume:
-            groq_api_key = (
-                (await db.get_api_key("groq", user_email=user_email))
-                if user_email
-                else ""
-            ) or os.getenv("GROQ_API_KEY", "")
-            groq_api_key = groq_api_key.strip()
-            if not groq_api_key:
-                logger.warning(
-                    f"[Streaming] No Groq API key resolved for user: {user_email}"
+            # ── Transcription provider selection ─────────────────────────
+            transcription_provider = os.getenv(
+                "TRANSCRIPTION_PROVIDER", "groq"
+            ).lower().strip()
+
+            transcription_client = None
+
+            if transcription_provider == "elevenlabs":
+                elevenlabs_api_key = os.getenv("ELEVENLABS_API_KEY", "").strip()
+                if not elevenlabs_api_key:
+                    logger.warning(
+                        f"[Streaming] No ElevenLabs API key found in env for user: {user_email}"
+                    )
+                    await websocket.send_json(
+                        {
+                            "type": "error",
+                            "code": "ELEVENLABS_KEY_REQUIRED",
+                            "message": "ElevenLabs API key required. Set ELEVENLABS_API_KEY in environment.",
+                        }
+                    )
+                    try:
+                        await stop_recorder(recorder_key)
+                    except Exception:
+                        pass
+                    await websocket.close()
+                    return
+
+                elevenlabs_mode = os.getenv(
+                    "ELEVENLABS_MODE", "batch"
+                ).lower().strip()
+                transcription_client = ElevenLabsTranscriptionClient(
+                    api_key=elevenlabs_api_key, mode=elevenlabs_mode
                 )
-                await websocket.send_json(
-                    {
-                        "type": "error",
-                        "code": "GROQ_KEY_REQUIRED",
-                        "message": "Groq API key required. Add it in Settings → Personal Keys (or admin model settings).",
-                    }
+                logger.info(
+                    f"[Streaming] Using ElevenLabs Scribe v2 (mode={elevenlabs_mode})"
                 )
-                try:
-                    await stop_recorder(recorder_key)
-                except Exception:
-                    pass
-                await websocket.close()
-                return
+            else:
+                # Default: Groq Whisper
+                groq_api_key = (
+                    (await db.get_api_key("groq", user_email=user_email))
+                    if user_email
+                    else ""
+                ) or os.getenv("GROQ_API_KEY", "")
+                groq_api_key = groq_api_key.strip()
+                if not groq_api_key:
+                    logger.warning(
+                        f"[Streaming] No Groq API key resolved for user: {user_email}"
+                    )
+                    await websocket.send_json(
+                        {
+                            "type": "error",
+                            "code": "GROQ_KEY_REQUIRED",
+                            "message": "Groq API key required. Add it in Settings → Personal Keys (or admin model settings).",
+                        }
+                    )
+                    try:
+                        await stop_recorder(recorder_key)
+                    except Exception:
+                        pass
+                    await websocket.close()
+                    return
+
+                transcription_client = GroqTranscriptionClient(groq_api_key)
+                logger.info("[Streaming] Using Groq Whisper")
 
             # Fetch meeting context for dynamic prompting
             meeting_context = {}
@@ -806,6 +948,7 @@ async def websocket_streaming_audio(
                     ai_context = await _build_ai_meeting_context(
                         meeting_id=active_meeting_id,
                         user_email=user_email,
+                        # We will read calendar_event_id from payload down below, but initially we don't have it since it comes in a websocket message after this setup. Wait! Actually we should read it from the URL or query params, but it runs on WS connection. We will process context updates dynamically instead.
                     )
                     meeting_context = {
                         "title": ai_context.title,
@@ -816,9 +959,14 @@ async def websocket_streaming_audio(
                         user_email=user_email,
                         meeting_context=ai_context,
                     )
+                    policy_source = await _apply_host_skill_precedence(
+                        ai_engine,
+                        user_email=user_email,
+                        meeting_id=active_meeting_id,
+                    )
                     session_ai_participants[session_id] = ai_engine
                     logger.info(
-                        "[AIParticipant] Engine initialized session=%s meeting=%s enabled=%s model=%s interval=%ss min_window_chars=%s verbose_logs=%s decision_logs=%s goal=%s agenda_chars=%s participants=%s",
+                        "[AIParticipant] Engine initialized session=%s meeting=%s enabled=%s model=%s interval=%ss min_window_chars=%s verbose_logs=%s decision_logs=%s goal=%s agenda_chars=%s participants=%s host_policy_source=%s",
                         session_id,
                         active_meeting_id,
                         ai_engine.enabled,
@@ -830,15 +978,18 @@ async def websocket_streaming_audio(
                         bool(ai_context.goal),
                         len(ai_context.agenda_text or ""),
                         len(ai_context.participant_names or []),
+                        policy_source,
                     )
                 except Exception as e:
                     logger.warning(f"[Streaming] Failed to fetch meeting context: {e}")
 
             manager = StreamingTranscriptionManager(
-                groq_api_key, meeting_context=meeting_context
+                transcription_client, meeting_context=meeting_context
             )
             streaming_managers[session_id] = manager
-            logger.info(f"[Streaming] ✅ Session {session_id} started (HYBRID mode)")
+            logger.info(
+                f"[Streaming] ✅ Session {session_id} started (provider={transcription_provider})"
+            )
 
     if ai_engine is None and active_meeting_id:
         try:
@@ -851,9 +1002,14 @@ async def websocket_streaming_audio(
                 user_email=user_email,
                 meeting_context=ai_context,
             )
+            policy_source = await _apply_host_skill_precedence(
+                ai_engine,
+                user_email=user_email,
+                meeting_id=active_meeting_id,
+            )
             session_ai_participants[session_id] = ai_engine
             logger.info(
-                "[AIParticipant] Engine initialized session=%s meeting=%s enabled=%s model=%s interval=%ss min_window_chars=%s verbose_logs=%s decision_logs=%s goal=%s agenda_chars=%s participants=%s",
+                "[AIParticipant] Engine initialized session=%s meeting=%s enabled=%s model=%s interval=%ss min_window_chars=%s verbose_logs=%s decision_logs=%s goal=%s agenda_chars=%s participants=%s host_policy_source=%s",
                 session_id,
                 active_meeting_id,
                 ai_engine.enabled,
@@ -865,6 +1021,7 @@ async def websocket_streaming_audio(
                 bool(ai_context.goal),
                 len(ai_context.agenda_text or ""),
                 len(ai_context.participant_names or []),
+                policy_source,
             )
         except Exception as ai_ctx_err:
             logger.debug(
@@ -993,7 +1150,7 @@ async def websocket_streaming_audio(
         # Do not persist live transcript segments on streaming path.
         # Transcript persistence is handled by explicit save-transcript flow.
         if ai_engine:
-            asyncio.create_task(_process_ai_guardrail(data, event_ts))
+            asyncio.create_task(_process_ai_host(data, event_ts))
 
     last_final_transcript_at = time.time()
     last_inactivity_alert_at = 0.0
@@ -1046,7 +1203,100 @@ async def websocket_streaming_audio(
             session_id, metadata_patch
         )
 
-    async def _process_ai_guardrail(data: Dict[str, Any], event_ts: str) -> None:
+    async def _publish_ai_host_suggestion_payload(
+        suggestion: Dict[str, Any], ai_stats: Optional[Dict[str, Any]] = None
+    ) -> None:
+        payload = dict(suggestion or {})
+        payload["type"] = "ai_host_suggestion"
+        await websocket.send_json(payload)
+
+        runtime_stats["ai_host_suggestions_count"] = (
+            int(runtime_stats.get("ai_host_suggestions_count") or 0) + 1
+        )
+        runtime_stats["last_ai_host_suggestion"] = payload
+        runtime_stats["last_update_at"] = datetime.utcnow().isoformat()
+
+        metadata_patch = {
+            "ai_host_last_suggestion": payload,
+            "ai_host_last_suggestion_at": payload.get("timestamp"),
+            "ai_host_suggestions_count": runtime_stats["ai_host_suggestions_count"],
+        }
+        if ai_stats is not None:
+            metadata_patch["ai_host"] = ai_stats
+        await state_service.db.merge_recording_session_metadata(
+            session_id, metadata_patch
+        )
+
+    async def _publish_ai_host_intervention_payload(
+        intervention: Dict[str, Any],
+        event_ts: str,
+        ai_stats: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        payload = dict(intervention or {})
+        payload["type"] = "ai_host_intervention"
+        await websocket.send_json(payload)
+
+        runtime_stats["ai_host_interventions_count"] = (
+            int(runtime_stats.get("ai_host_interventions_count") or 0) + 1
+        )
+        runtime_stats["last_ai_host_intervention"] = payload
+        runtime_stats["last_update_at"] = datetime.utcnow().isoformat()
+
+        metadata_patch = {
+            "ai_host_last_intervention": payload,
+            "ai_host_last_intervention_at": payload.get("timestamp"),
+            "ai_host_interventions_count": runtime_stats[
+                "ai_host_interventions_count"
+            ],
+        }
+        if ai_stats is not None:
+            metadata_patch["ai_host"] = ai_stats
+        await state_service.db.merge_recording_session_metadata(
+            session_id, metadata_patch
+        )
+
+        event_type = str(payload.get("event_type") or "").strip().lower()
+        reason_map = {
+            "agenda_drift": "agenda_deviation",
+            "decision_candidate": "no_decision",
+            "open_question": "unresolved_question",
+            "conflict_risk": "missing_context_or_repeat",
+            "urgency_risk": "missing_context_or_repeat",
+            "mistake_candidate": "missing_context_or_repeat",
+            "unheard_participant": "missing_context_or_repeat",
+        }
+        legacy_reason = reason_map.get(event_type)
+        if legacy_reason:
+            await _publish_ai_guardrail_alert_payload(
+                alert_id=str(payload.get("id") or str(uuid.uuid4())),
+                reason=legacy_reason,
+                insight=str(payload.get("body") or payload.get("headline") or ""),
+                confidence=float(payload.get("confidence") or 0.0),
+                event_ts=event_ts,
+                updated_at=str(payload.get("timestamp") or datetime.utcnow().isoformat()),
+                ai_stats=ai_stats,
+            )
+
+    async def _publish_ai_host_state_delta_payload(
+        state_delta: Dict[str, Any], ai_stats: Optional[Dict[str, Any]] = None
+    ) -> None:
+        payload = {
+            "type": "ai_host_state_delta",
+            "state": state_delta or {},
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+        await websocket.send_json(payload)
+
+        runtime_stats["ai_host_state"] = state_delta or {}
+        runtime_stats["last_update_at"] = datetime.utcnow().isoformat()
+        metadata_patch = {"ai_host_state": state_delta or {}}
+        if ai_stats is not None:
+            metadata_patch["ai_host"] = ai_stats
+        await state_service.db.merge_recording_session_metadata(
+            session_id, metadata_patch
+        )
+
+    async def _process_ai_host(data: Dict[str, Any], event_ts: str) -> None:
         nonlocal last_final_transcript_at
         try:
             transcript_text = (data.get("text") or "").strip()
@@ -1058,37 +1308,47 @@ async def websocket_streaming_audio(
             if len(transcript_text) >= AI_PARTICIPANT_INACTIVITY_RESET_MIN_CHARS:
                 last_final_transcript_at = time.time()
             transcript_time = data.get("audio_end_time")
-            alert = await ai_engine.ingest_transcript(
+            host_payload = await ai_engine.ingest_transcript_host(
                 text=transcript_text,
                 transcript_time_seconds=transcript_time,
             )
             ai_stats = ai_engine.get_stats_snapshot()
+            runtime_stats["ai_host"] = ai_stats
             runtime_stats["ai_guardrail"] = ai_stats
             runtime_stats["last_update_at"] = datetime.utcnow().isoformat()
 
-            if not alert:
+            suggestions = host_payload.get("suggestions") or []
+            interventions = host_payload.get("interventions") or []
+            state_delta = host_payload.get("state_delta") or {}
+
+            for suggestion in suggestions:
+                await _publish_ai_host_suggestion_payload(
+                    suggestion=suggestion, ai_stats=ai_stats
+                )
+            for intervention in interventions:
+                await _publish_ai_host_intervention_payload(
+                    intervention=intervention,
+                    event_ts=event_ts,
+                    ai_stats=ai_stats,
+                )
+            if state_delta:
+                await _publish_ai_host_state_delta_payload(
+                    state_delta=state_delta,
+                    ai_stats=ai_stats,
+                )
+
+            if not suggestions and not interventions:
                 logger.debug(
-                    "[AIParticipant] No alert session=%s attempts=%s last_model=%s window_chars=%s window_duration=%.1fs",
+                    "[AIHost] No host output session=%s attempts=%s last_model=%s window_chars=%s window_duration=%.1fs",
                     session_id,
                     ai_stats.get("analysis_attempts"),
                     ai_stats.get("last_model_used") or ai_stats.get("model"),
                     ai_stats.get("window_char_count"),
                     float(ai_stats.get("window_duration_seconds") or 0.0),
                 )
-                return
-
-            await _publish_ai_guardrail_alert_payload(
-                alert_id=alert.id,
-                reason=alert.reason.value,
-                insight=alert.insight,
-                confidence=alert.confidence,
-                event_ts=event_ts,
-                updated_at=alert.timestamp,
-                ai_stats=ai_stats,
-            )
         except Exception as ai_err:
             logger.error(
-                "[AIParticipant] Guardrail processing failed: %s", ai_err, exc_info=True
+                "[AIHost] Host processing failed: %s", ai_err, exc_info=True
             )
 
     async def on_error(message: str, code: Optional[str] = None):
@@ -1337,12 +1597,152 @@ async def websocket_streaming_audio(
                         await websocket.send_json({"type": "stop_ack"})
                         explicit_stop = True
                         break
+                    if data.get("type") == "host_skill_override":
+                        skill_markdown = str(data.get("skill_markdown") or "").strip()
+                        applied = False
+                        if ai_engine and can_manage_ai_host and skill_markdown:
+                            ai_engine.apply_host_skill_override(
+                                skill_markdown=skill_markdown,
+                                source="meeting",
+                            )
+                            runtime_stats["ai_host_policy_source"] = "meeting"
+                            runtime_stats["last_update_at"] = datetime.utcnow().isoformat()
+                            applied = True
+                            try:
+                                await state_service.db.merge_recording_session_metadata(
+                                    session_id,
+                                    {
+                                        "ai_host_skill_override": skill_markdown[:8000],
+                                        "ai_host_policy_source": "meeting",
+                                    },
+                                )
+                            except Exception:
+                                pass
+                        await websocket.send_json(
+                            {
+                                "type": "host_skill_ack",
+                                "applied": applied,
+                                "timestamp": datetime.utcnow().isoformat(),
+                            }
+                        )
+                        continue
+                    if data.get("type") == "ai_host_pin":
+                        suggestion_id = str(data.get("suggestion_id") or "").strip()
+                        pinned = None
+                        if ai_engine and can_manage_ai_host and suggestion_id:
+                            pinned = ai_engine.pin_suggestion(
+                                suggestion_id=suggestion_id,
+                                actor=user_email,
+                            )
+                            ai_stats = ai_engine.get_stats_snapshot()
+                            runtime_stats["ai_host"] = ai_stats
+                            runtime_stats["last_update_at"] = datetime.utcnow().isoformat()
+                            try:
+                                await state_service.db.merge_recording_session_metadata(
+                                    session_id,
+                                    {
+                                        "ai_host": ai_stats,
+                                        "ai_host_pinned_items": (
+                                            ai_stats.get("host_state", {}).get("pinned_items")
+                                            or []
+                                        ),
+                                    },
+                                )
+                            except Exception:
+                                pass
+                        await websocket.send_json(
+                            {
+                                "type": "ai_host_action_ack",
+                                "action": "pin",
+                                "applied": bool(pinned),
+                                "suggestion": pinned.model_dump() if pinned else None,
+                                "timestamp": datetime.utcnow().isoformat(),
+                            }
+                        )
+                        continue
+                    if data.get("type") == "ai_host_dismiss":
+                        suggestion_id = str(data.get("suggestion_id") or "").strip()
+                        dismissed = False
+                        if ai_engine and can_manage_ai_host and suggestion_id:
+                            dismissed = ai_engine.dismiss_suggestion(
+                                suggestion_id=suggestion_id,
+                                actor=user_email,
+                            )
+                            ai_stats = ai_engine.get_stats_snapshot()
+                            runtime_stats["ai_host"] = ai_stats
+                            runtime_stats["last_update_at"] = datetime.utcnow().isoformat()
+                            try:
+                                await state_service.db.merge_recording_session_metadata(
+                                    session_id,
+                                    {"ai_host": ai_stats},
+                                )
+                            except Exception:
+                                pass
+                        await websocket.send_json(
+                            {
+                                "type": "ai_host_action_ack",
+                                "action": "dismiss",
+                                "applied": bool(dismissed),
+                                "suggestion_id": suggestion_id,
+                                "timestamp": datetime.utcnow().isoformat(),
+                            }
+                        )
+                        continue
+                    if data.get("type") == "ai_host_feedback":
+                        suggestion_id = str(data.get("suggestion_id") or "").strip()
+                        feedback = str(data.get("feedback") or "").strip()[:200]
+                        recorded = False
+                        if ai_engine and can_manage_ai_host and suggestion_id and feedback:
+                            ai_engine.record_feedback(
+                                suggestion_id=suggestion_id,
+                                feedback=feedback,
+                                actor=user_email,
+                            )
+                            ai_stats = ai_engine.get_stats_snapshot()
+                            runtime_stats["ai_host"] = ai_stats
+                            runtime_stats["last_update_at"] = datetime.utcnow().isoformat()
+                            recorded = True
+                            try:
+                                await state_service.db.merge_recording_session_metadata(
+                                    session_id,
+                                    {"ai_host": ai_stats},
+                                )
+                            except Exception:
+                                pass
+                        await websocket.send_json(
+                            {
+                                "type": "ai_host_action_ack",
+                                "action": "feedback",
+                                "applied": bool(recorded),
+                                "suggestion_id": suggestion_id,
+                                "timestamp": datetime.utcnow().isoformat(),
+                            }
+                        )
+                        continue
                     if data.get("type") == "context_update":
                         manual_context = _normalize_manual_context(data)
                         if ai_engine and manual_context.get("has_values"):
+                            calendar_event_id = manual_context.get("calendar_event_id")
                             goal = manual_context.get("goal") or None
                             agenda_text = manual_context.get("agenda_text") or None
                             participants = manual_context.get("participants") or None
+                            
+                            if calendar_event_id:
+                                try:
+                                    fresh_context = await _build_ai_meeting_context(
+                                        meeting_id=active_meeting_id,
+                                        user_email=user_email,
+                                        calendar_event_id=calendar_event_id
+                                    )
+                                    if not goal:
+                                        goal = fresh_context.goal
+                                    if not agenda_text:
+                                        agenda_text = fresh_context.agenda_text
+                                    if not participants and fresh_context.participant_names:
+                                        participants = fresh_context.participant_names
+                                except Exception as e:
+                                    logger.error(f"[Streaming] Failed to fetch calendar context override: {e}")
+
                             ai_engine.apply_manual_context(
                                 goal=goal,
                                 agenda_text=agenda_text,
@@ -1354,9 +1754,10 @@ async def websocket_streaming_audio(
                                 datetime.utcnow().isoformat()
                             )
                             logger.info(
-                                "[AIParticipant] Manual context applied session=%s meeting=%s goal=%s agenda_chars=%s participants=%s",
+                                "[AIParticipant] Manual context applied session=%s meeting=%s calendar=%s goal=%s agenda_chars=%s participants=%s",
                                 session_id,
                                 active_meeting_id,
+                                bool(calendar_event_id),
                                 bool(goal),
                                 len(agenda_text or ""),
                                 len(participants or []),

@@ -10,8 +10,9 @@ import { SummaryUpdaterButtonGroup } from './SummaryUpdaterButtonGroup';
 import Analytics from '@/lib/analytics';
 import { RefObject, useState } from 'react';
 import { RefineNotesSidebar } from './RefineNotesSidebar';
+import { MeetingAIHostSkillDialog } from './MeetingAIHostSkillDialog';
 
-import { Trash2, X } from 'lucide-react'; // Add Trash2 and X icon
+import { Bot, Trash2, X } from 'lucide-react'; // Add Trash2 and X icon
 
 interface SummaryPanelProps {
   meeting: {
@@ -96,6 +97,7 @@ export function SummaryPanel({
   const [isRefineSidebarOpen, setIsRefineSidebarOpen] = useState(false);
   const [currentNotesContent, setCurrentNotesContent] = useState('');
   const [isDiarizedPromptDismissed, setIsDiarizedPromptDismissed] = useState(false);
+  const [isHostSkillDialogOpen, setIsHostSkillDialogOpen] = useState(false);
 
   const handleOpenRefine = async () => {
     if (summaryRef.current) {
@@ -130,14 +132,24 @@ export function SummaryPanel({
           />
         </div>
 
-        {/* Delete Button */}
-        <button
-          onClick={onDeleteMeeting}
-          className="p-2 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-          title="Delete meeting"
-        >
-          <Trash2 className="w-5 h-5" />
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setIsHostSkillDialogOpen(true)}
+            className="p-2 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+            title="Meeting AI Host Skill"
+          >
+            <Bot className="w-5 h-5" />
+          </button>
+
+          {/* Delete Button */}
+          <button
+            onClick={onDeleteMeeting}
+            className="p-2 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+            title="Delete meeting"
+          >
+            <Trash2 className="w-5 h-5" />
+          </button>
+        </div>
       </div>
 
       {/* Button groups - only show when summary exists */}
@@ -343,6 +355,12 @@ export function SummaryPanel({
           onApplyRefinement={handleApplyRefinement}
         />
       )}
+
+      <MeetingAIHostSkillDialog
+        open={isHostSkillDialogOpen}
+        onOpenChange={setIsHostSkillDialogOpen}
+        meetingId={meeting.id}
+      />
     </div>
   );
 }

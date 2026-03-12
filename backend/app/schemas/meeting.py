@@ -70,3 +70,16 @@ class ShareNotesRequest(BaseModel):
     recipient_emails: Optional[List[str]] = None  # None = all accepted attendees
     share_summary: bool = True
     share_transcript: bool = False
+
+
+class MeetingAIHostSkillRequest(BaseModel):
+    meeting_id: str
+    skill_markdown: str
+    is_active: bool = True
+
+
+class MeetingAIHostSkillResponse(BaseModel):
+    meeting_id: str
+    skill_markdown: str
+    is_active: bool = True
+    source: str = "meeting"

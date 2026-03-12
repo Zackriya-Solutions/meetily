@@ -33,10 +33,20 @@ except (ImportError, ValueError):
 
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/calendar")
+router = APIRouter()
 db = DatabaseManager()
 oauth_service = GoogleCalendarOAuthService(db=db)
 reminder_email_service = CalendarReminderEmailService()
+
+
+@router.get("/upcoming-meetings")
+async def get_upcoming_meetings(current_user: User = Depends(get_current_user)):
+    try:
+        events = await db.get_upcoming_calendar_events(current_user.email, provider="google")
+        return {"status": "success", "events": events}
+    except Exception as e:
+        logger.error(f"Failed to fetch upcoming meetings: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch upcoming meetings")
 
 
 @router.get("/status")
@@ -97,7 +107,6 @@ async def disconnect_calendar(
 @router.post("/reminders/send")
 async def send_calendar_reminder_email(
     request: CalendarReminderEmailRequest,
-        SyncOAuthRequest,
     current_user: User = Depends(get_current_user),
 ):
     settings = await db.get_calendar_automation_settings(current_user.email)

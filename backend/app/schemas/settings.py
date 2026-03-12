@@ -24,6 +24,50 @@ class UserApiKeySaveRequest(BaseModel):
     api_key: str
 
 
+class UserAIHostSkillRequest(BaseModel):
+    skill_markdown: str
+    is_active: bool = True
+
+
+class UserAIHostSkillResponse(BaseModel):
+    user_email: str
+    skill_markdown: str
+    is_active: bool = True
+    source: str = "user"
+
+
+class AIHostStyleItem(BaseModel):
+    id: str
+    name: str
+    source: str  # system | user
+    read_only: bool = False
+    is_default: bool = False
+    is_active: bool = True
+    skill_markdown: str
+
+
+class AIHostStylesListResponse(BaseModel):
+    styles: List[AIHostStyleItem]
+    default_style_id: str
+
+
+class UserAIHostStyleCreateRequest(BaseModel):
+    name: str
+    skill_markdown: str
+    is_active: bool = True
+    set_default: bool = False
+
+
+class UserAIHostStyleUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    skill_markdown: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+class UserAIHostStyleDefaultRequest(BaseModel):
+    style_id: str
+
+
 class CalendarConnectRequest(BaseModel):
     request_write_scope: bool = False
 

@@ -12,6 +12,7 @@ from pydantic_ai.models.gemini import GeminiModel
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.providers.groq import GroqProvider
 from pydantic_ai.providers.anthropic import AnthropicProvider
+from pydantic_ai.providers.google_gla import GoogleGLAProvider
 
 # from ollama import AsyncClient
 
@@ -155,7 +156,7 @@ class TranscriptService:
                     )
 
                 # Try simple client initialization to check for immediate key errors
-                llm = GeminiModel(model_name, api_key=api_key)
+                llm = GeminiModel(model_name, provider=GoogleGLAProvider(api_key=api_key))
                 logger.info(f"Using Gemini model: {model_name}")
             else:
                 logger.error(f"Unsupported model provider requested: {model}")
@@ -262,7 +263,7 @@ class TranscriptService:
                             # Use Gemini for structured output
                             response_text = await generate_content_text_async(
                                 api_key=api_key,
-                                model=llm,
+                                model=model_name,
                                 contents=prompt,
                                 config={"response_mime_type": "application/json"},
                             )

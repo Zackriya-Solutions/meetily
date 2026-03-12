@@ -10,6 +10,30 @@
  */
 
 export interface StreamingCallbacks {
+  onHostSuggestion?: (suggestion: {
+    id: string;
+    event_type: 'decision_candidate' | 'conflict_risk' | 'agenda_drift' | 'urgency_risk' | 'mistake_candidate' | 'unheard_participant' | 'open_question';
+    title: string;
+    content: string;
+    confidence: number;
+    timestamp: string;
+    status?: string;
+    source_excerpt?: string;
+    metadata?: Record<string, unknown>;
+  }) => void;
+  onHostIntervention?: (intervention: {
+    id: string;
+    event_type: 'decision_candidate' | 'conflict_risk' | 'agenda_drift' | 'urgency_risk' | 'mistake_candidate' | 'unheard_participant' | 'open_question';
+    headline: string;
+    body: string;
+    priority: 'low' | 'medium' | 'high';
+    confidence: number;
+    timestamp: string;
+    linked_suggestion_id?: string;
+  }) => void;
+  onHostStateDelta?: (state: Record<string, unknown>) => void;
+  onHostActionAck?: (payload: { action: string; applied: boolean; suggestion?: unknown; suggestion_id?: string }) => void;
+  onHostSkillAck?: (applied: boolean) => void;
   onContextAck?: (applied: boolean) => void;
   onGuardrailAlert?: (alert: {
     id: string;
@@ -253,6 +277,45 @@ export class AudioStreamClient {
             this.sessionId = data.session_id; // Store for reconnection
             this.callbacks.onConnected?.(data.session_id);
           }
+          else if (data.type === 'ai_host_suggestion') {
+            this.callbacks.onHostSuggestion?.({
+              id: data.id,
+              event_type: data.event_type,
+              title: data.title,
+              content: data.content,
+              confidence: data.confidence,
+              timestamp: data.timestamp,
+              status: data.status,
+              source_excerpt: data.source_excerpt,
+              metadata: data.metadata,
+            });
+          }
+          else if (data.type === 'ai_host_intervention') {
+            this.callbacks.onHostIntervention?.({
+              id: data.id,
+              event_type: data.event_type,
+              headline: data.headline,
+              body: data.body,
+              priority: data.priority,
+              confidence: data.confidence,
+              timestamp: data.timestamp,
+              linked_suggestion_id: data.linked_suggestion_id,
+            });
+          }
+          else if (data.type === 'ai_host_state_delta') {
+            this.callbacks.onHostStateDelta?.(data.state || {});
+          }
+          else if (data.type === 'ai_host_action_ack') {
+            this.callbacks.onHostActionAck?.({
+              action: data.action,
+              applied: Boolean(data.applied),
+              suggestion: data.suggestion,
+              suggestion_id: data.suggestion_id,
+            });
+          }
+          else if (data.type === 'host_skill_ack') {
+            this.callbacks.onHostSkillAck?.(Boolean(data.applied));
+          }
           else if (data.type === 'ai_guardrail_alert') {
             this.callbacks.onGuardrailAlert?.({
               id: data.id,
@@ -454,22 +517,25 @@ export class AudioStreamClient {
   }
 
   updateMeetingContext(context: {
+    calendar_event_id?: string;
     goal?: string;
     agenda_text?: string;
     participants?: string[];
   }): void {
     if (!this.websocket || this.websocket.readyState !== WebSocket.OPEN) return;
+    const calendar_event_id = context.calendar_event_id;
     const goal = (context.goal || '').trim();
     const agenda = (context.agenda_text || '').trim();
     const participants = Array.isArray(context.participants)
       ? context.participants.map((item) => (item || '').trim()).filter(Boolean)
       : [];
-    if (!goal && !agenda && participants.length === 0) return;
+    if (!calendar_event_id && !goal && !agenda && participants.length === 0) return;
     try {
       this.websocket.send(
         JSON.stringify({
           type: 'context_update',
           manual_context: {
+            calendar_event_id,
             goal,
             agenda_text: agenda,
             participants,
@@ -478,6 +544,72 @@ export class AudioStreamClient {
       );
     } catch (error) {
       console.warn('[AudioStream] Failed to send context update:', error);
+    }
+  }
+
+  pinHostSuggestion(suggestionId: string): void {
+    if (!this.websocket || this.websocket.readyState !== WebSocket.OPEN) return;
+    const cleanId = (suggestionId || '').trim();
+    if (!cleanId) return;
+    try {
+      this.websocket.send(
+        JSON.stringify({
+          type: 'ai_host_pin',
+          suggestion_id: cleanId,
+        })
+      );
+    } catch (error) {
+      console.warn('[AudioStream] Failed to send host pin:', error);
+    }
+  }
+
+  dismissHostSuggestion(suggestionId: string): void {
+    if (!this.websocket || this.websocket.readyState !== WebSocket.OPEN) return;
+    const cleanId = (suggestionId || '').trim();
+    if (!cleanId) return;
+    try {
+      this.websocket.send(
+        JSON.stringify({
+          type: 'ai_host_dismiss',
+          suggestion_id: cleanId,
+        })
+      );
+    } catch (error) {
+      console.warn('[AudioStream] Failed to send host dismiss:', error);
+    }
+  }
+
+  sendHostFeedback(suggestionId: string, feedback: string): void {
+    if (!this.websocket || this.websocket.readyState !== WebSocket.OPEN) return;
+    const cleanId = (suggestionId || '').trim();
+    const cleanFeedback = (feedback || '').trim();
+    if (!cleanId || !cleanFeedback) return;
+    try {
+      this.websocket.send(
+        JSON.stringify({
+          type: 'ai_host_feedback',
+          suggestion_id: cleanId,
+          feedback: cleanFeedback,
+        })
+      );
+    } catch (error) {
+      console.warn('[AudioStream] Failed to send host feedback:', error);
+    }
+  }
+
+  applyHostSkillOverride(skillMarkdown: string): void {
+    if (!this.websocket || this.websocket.readyState !== WebSocket.OPEN) return;
+    const cleanSkill = (skillMarkdown || '').trim();
+    if (!cleanSkill) return;
+    try {
+      this.websocket.send(
+        JSON.stringify({
+          type: 'host_skill_override',
+          skill_markdown: cleanSkill,
+        })
+      );
+    } catch (error) {
+      console.warn('[AudioStream] Failed to send host skill override:', error);
     }
   }
 }

@@ -14,6 +14,8 @@ try:
         MeetingDetailsResponse,
         MeetingTitleUpdate,
         DeleteMeetingRequest,
+        MeetingAIHostSkillRequest,
+        MeetingAIHostSkillResponse,
     )
     from ...db import DatabaseManager
     from ...core.rbac import RBAC
@@ -26,6 +28,8 @@ except (ImportError, ValueError):
         MeetingDetailsResponse,
         MeetingTitleUpdate,
         DeleteMeetingRequest,
+        MeetingAIHostSkillRequest,
+        MeetingAIHostSkillResponse,
     )
     from db import DatabaseManager
     from core.rbac import RBAC
@@ -144,3 +148,72 @@ async def list_meetings(current_user: User = Depends(get_current_user)):
     except Exception as e:
         logger.error(f"Error listing meetings: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get(
+    "/meeting-ai-host-skill/{meeting_id}", response_model=MeetingAIHostSkillResponse
+)
+async def get_meeting_ai_host_skill(
+    meeting_id: str, current_user: User = Depends(get_current_user)
+):
+    if not await rbac.can(current_user, "view", meeting_id):
+        raise HTTPException(status_code=403, detail="Access denied")
+    try:
+        skill = await db.get_meeting_ai_host_skill(meeting_id)
+        if not skill:
+            return MeetingAIHostSkillResponse(
+                meeting_id=meeting_id,
+                skill_markdown="",
+                is_active=True,
+                source="meeting",
+            )
+        return MeetingAIHostSkillResponse(
+            meeting_id=skill["meeting_id"],
+            skill_markdown=skill.get("skill_markdown") or "",
+            is_active=bool(skill.get("is_active", True)),
+            source="meeting",
+        )
+    except Exception as e:
+        logger.error(f"Error getting meeting ai host skill: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch meeting AI host skill")
+
+
+@router.post("/meeting-ai-host-skill", response_model=MeetingAIHostSkillResponse)
+async def save_meeting_ai_host_skill(
+    request: MeetingAIHostSkillRequest, current_user: User = Depends(get_current_user)
+):
+    if not await rbac.can(current_user, "edit", request.meeting_id):
+        raise HTTPException(status_code=403, detail="Permission denied")
+    skill_text = (request.skill_markdown or "").strip()
+    if len(skill_text) > 20000:
+        raise HTTPException(status_code=400, detail="Skill markdown exceeds max length (20000)")
+    try:
+        saved = await db.upsert_meeting_ai_host_skill(
+            meeting_id=request.meeting_id,
+            skill_markdown=skill_text,
+            is_active=bool(request.is_active),
+            updated_by=current_user.email,
+        )
+        return MeetingAIHostSkillResponse(
+            meeting_id=saved["meeting_id"],
+            skill_markdown=saved.get("skill_markdown") or "",
+            is_active=bool(saved.get("is_active", True)),
+            source="meeting",
+        )
+    except Exception as e:
+        logger.error(f"Error saving meeting ai host skill: {e}")
+        raise HTTPException(status_code=500, detail="Failed to save meeting AI host skill")
+
+
+@router.delete("/meeting-ai-host-skill/{meeting_id}")
+async def delete_meeting_ai_host_skill(
+    meeting_id: str, current_user: User = Depends(get_current_user)
+):
+    if not await rbac.can(current_user, "edit", meeting_id):
+        raise HTTPException(status_code=403, detail="Permission denied")
+    try:
+        await db.delete_meeting_ai_host_skill(meeting_id)
+        return {"status": "success", "message": "Meeting AI host skill deleted"}
+    except Exception as e:
+        logger.error(f"Error deleting meeting ai host skill: {e}")
+        raise HTTPException(status_code=500, detail="Failed to delete meeting AI host skill")

@@ -4,7 +4,7 @@ This file tracks high-impact bugs that are confirmed but intentionally deferred.
 
 ## BUG-RESUME-001: Resume/Recovery may save only second-half audio
 
-- Status: Deferred
+- Status: Halt
 - Priority: High
 - Reported: 2026-02-20
 - Area: Recording / Recovery / Save pipeline
@@ -47,7 +47,7 @@ This file tracks high-impact bugs that are confirmed but intentionally deferred.
 3. Add strict single-meeting session lock and finalize idempotency guard.
 4. Add backend diagnostics endpoint to inspect chunk inventory vs merged output.
 
-## BUG-NOTES-CTX-001: Notes generation not using calendar context deeply enough
+## BUG-NOTES-CTX-001: Notes generation not using calendar context deeply enough 
 
 - Status: Fixed
 - Priority: High
@@ -84,7 +84,7 @@ This file tracks high-impact bugs that are confirmed but intentionally deferred.
 4. Add evaluation set comparing notes quality with/without calendar context.
 5. Add feature flags and fallback behavior when calendar data is missing/low quality.
 
-## BUG-TEST-AUTO-001: Audio + AI regression coverage is too manual
+## BUG-TEST-AUTO-001: Audio + AI regression coverage is too manual 
 
 - Status: Fixed
 - Priority: High
@@ -123,7 +123,7 @@ This file tracks high-impact bugs that are confirmed but intentionally deferred.
 
 ## BUG-DIARIZATION-COST-001: Groq parallel baseline can exhaust free-tier ASPH limits
 
-- Status: Fixed
+- Status: Halt
 - Priority: High
 - Reported: 2026-02-23
 - Area: Diarization / Transcription / Cost Control
@@ -158,7 +158,7 @@ This file tracks high-impact bugs that are confirmed but intentionally deferred.
 
 ## BUG-CALENDAR-WEBHOOK-001: Calendar sync and reminder eligibility should be webhook-driven and attendee-aware
 
-- Status: Deferred
+- Status: Halt
 - Priority: High
 - Reported: 2026-02-24
 - Area: Calendar Integration / Reminder Scheduling / Reliability
@@ -338,9 +338,9 @@ Real meeting rule refinement:
 3. Implement a more robust context window management strategy to handle larger amounts of historical data.
 4. Add evaluation cases to verify "Ask AI" performance with multi-meeting context.
 
-## TASK-SETTINGS-CLEANUP-001: Remove unnecessary tabs from Settings
+## TASK-SETTINGS-CLEANUP-001: Remove unnecessary tabs from Settings 
 
-- Status: Deferred
+- Status: Fixed
 - Priority: Medium
 - Reported: 2026-03-01
 - Area: Frontend / UX / Settings
