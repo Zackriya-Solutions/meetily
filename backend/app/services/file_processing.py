@@ -12,10 +12,12 @@ import aiofiles
 try:
     from ..db import DatabaseManager
     from .audio.groq_client import GroqTranscriptionClient
+    from .audio.elevenlabs_client import ElevenLabsTranscriptionClient
     from .audio.diarization import get_diarization_service
 except (ImportError, ValueError):
     from db import DatabaseManager
     from services.audio.groq_client import GroqTranscriptionClient
+    from services.audio.elevenlabs_client import ElevenLabsTranscriptionClient
     from services.audio.diarization import get_diarization_service
 
 logger = logging.getLogger(__name__)
@@ -37,6 +39,7 @@ class FileProcessor:
     def __init__(self, db_manager: DatabaseManager):
         self.db = db_manager
         self.groq_client = GroqTranscriptionClient()
+        self.elevenlabs_client: Optional[ElevenLabsTranscriptionClient] = None
         self.diarization_service = get_diarization_service()
 
         # Ensure directories exist
@@ -101,9 +104,23 @@ class FileProcessor:
             async with aiofiles.open(pcm_path, "rb") as f:
                 pcm_data = await f.read()
 
-            transcription_result = await self.groq_client.transcribe_full_audio(
-                pcm_data
+            transcription_provider = (
+                os.getenv("TRANSCRIPTION_PROVIDER", "groq").lower().strip()
             )
+            model_name = "whisper-large-v3"
+            model_family = "groq-whisper"
+            if transcription_provider == "elevenlabs":
+                if self.elevenlabs_client is None:
+                    self.elevenlabs_client = ElevenLabsTranscriptionClient(mode="batch")
+                transcription_result = await self.elevenlabs_client.transcribe_full_audio(
+                    pcm_data
+                )
+                model_name = "scribe_v2"
+                model_family = "elevenlabs-scribe"
+            else:
+                transcription_result = await self.groq_client.transcribe_full_audio(
+                    pcm_data
+                )
 
             if "error" in transcription_result:
                 logger.error(
@@ -130,7 +147,7 @@ class FileProcessor:
                         "audio_start_time": seg["start"],
                         "audio_end_time": seg["end"],
                         "duration": seg["end"] - seg["start"],
-                        "speaker": "Speaker 0",
+                        "speaker": str(seg.get("speaker") or "Speaker 0"),
                         "speaker_confidence": 1.0,
                         "source": "upload",
                         "alignment_state": "confident",
@@ -156,8 +173,8 @@ class FileProcessor:
                 await self.db.save_transcript(
                     meeting_id=meeting_id,
                     transcript_text=full_text,
-                    model="groq-whisper",
-                    model_name="whisper-large-v3",
+                    model=model_family,
+                    model_name=model_name,
                     chunk_size=0,
                     overlap=0,
                 )

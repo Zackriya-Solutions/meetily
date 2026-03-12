@@ -1143,6 +1143,14 @@ async def websocket_streaming_audio(
             if data.get("original_text"):
                 response["original_text"] = data["original_text"]
                 response["translated"] = data.get("translated", False)
+            if data.get("words"):
+                response["words"] = data.get("words")
+            if data.get("speaker_turns"):
+                response["speaker_turns"] = data.get("speaker_turns")
+            if data.get("diarized") is not None:
+                response["diarized"] = data.get("diarized")
+            if data.get("language"):
+                response["language"] = data.get("language")
             await websocket.send_json(response)
         except Exception as ws_e:
             logger.error(f"Failed to send final transcript over websocket: {ws_e}")

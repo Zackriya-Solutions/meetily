@@ -375,6 +375,14 @@ class StreamingTranscriptionManager:
                     final_data["original_text"] = metadata["original_text"]
                 if metadata.get("translated") is not None:
                     final_data["translated"] = metadata["translated"]
+                if metadata.get("words"):
+                    final_data["words"] = metadata.get("words")
+                if metadata.get("speaker_turns"):
+                    final_data["speaker_turns"] = metadata.get("speaker_turns")
+                if metadata.get("diarized") is not None:
+                    final_data["diarized"] = metadata.get("diarized")
+                if metadata.get("language"):
+                    final_data["language"] = metadata.get("language")
             await on_final(final_data)
 
         self.total_stable_segments += 1
