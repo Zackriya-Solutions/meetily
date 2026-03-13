@@ -13,6 +13,9 @@ use super::capture::{AudioCaptureBackend, get_current_backend};
 #[cfg(target_os = "macos")]
 use super::capture::CoreAudioCapture;
 
+#[cfg(target_os = "macos")]
+use super::capture::VoiceProcessingCapture;
+
 /// Stream backend implementation
 pub enum StreamBackend {
     /// CPAL-based stream (ScreenCaptureKit or default)
@@ -21,6 +24,11 @@ pub enum StreamBackend {
     #[cfg(target_os = "macos")]
     CoreAudio {
         task: Option<tokio::task::JoinHandle<()>>,
+    },
+    /// AVAudioEngine with Voice Processing (AEC) for microphone (macOS only)
+    #[cfg(target_os = "macos")]
+    VoiceProcessing {
+        capture: VoiceProcessingCapture,
     },
 }
 
@@ -61,25 +69,28 @@ impl AudioStream {
         info!("🎵 Stream: Creating audio stream for device: {} with backend: {:?}, device_type: {:?}",
               device.name, backend_type, device_type);
 
+        // macOS microphone: Use AVAudioEngine with Voice Processing (AEC)
+        // This prevents system audio played through speakers from being
+        // picked up by the mic and misattributed as local speech
+        #[cfg(target_os = "macos")]
+        if device_type == DeviceType::Microphone {
+            info!("🎤 Stream: Using Voice Processing (AEC) for microphone: {}", device.name);
+            match Self::create_voice_processing_stream(device.clone(), state.clone(), recording_sender.clone()).await {
+                Ok(stream) => return Ok(stream),
+                Err(e) => {
+                    warn!("⚠️ Voice Processing failed, falling back to CPAL: {}", e);
+                    // Fall through to CPAL below
+                }
+            }
+        }
+
         // For system audio devices, use the selected backend
-        // For microphone devices, always use CPAL
         #[cfg(target_os = "macos")]
         let use_core_audio = device_type == DeviceType::System
             && backend_type == AudioCaptureBackend::CoreAudio;
 
         #[cfg(not(target_os = "macos"))]
         let use_core_audio = false;
-
-        #[cfg(target_os = "macos")]
-        info!("🎵 Stream: use_core_audio = {}, device_type == System: {}, backend == CoreAudio: {}",
-              use_core_audio,
-              device_type == DeviceType::System,
-              backend_type == AudioCaptureBackend::CoreAudio);
-
-        #[cfg(not(target_os = "macos"))]
-        info!("🎵 Stream: use_core_audio = {}, device_type == System: {}",
-              use_core_audio,
-              device_type == DeviceType::System);
 
         #[cfg(target_os = "macos")]
         if use_core_audio {
@@ -100,6 +111,35 @@ impl AudioStream {
 
         info!("🎵 Stream: Using CPAL backend ({}) for device: {}", backend_name, device.name);
         Self::create_cpal_stream(device, state, device_type, recording_sender).await
+    }
+
+    /// Create an AVAudioEngine stream with Voice Processing (AEC) for microphone (macOS only)
+    #[cfg(target_os = "macos")]
+    async fn create_voice_processing_stream(
+        device: Arc<AudioDevice>,
+        state: Arc<RecordingState>,
+        recording_sender: Option<mpsc::UnboundedSender<super::recording_state::AudioChunk>>,
+    ) -> Result<Self> {
+        // Create AudioCapture with 48kHz mono — matches the tap format
+        // requested in VoiceProcessingCapture::start()
+        let capture = AudioCapture::new(
+            device.clone(),
+            state,
+            48000, // VP tap outputs at 48kHz
+            1,     // VP tap outputs mono
+            DeviceType::Microphone,
+            recording_sender,
+        );
+
+        // Start Voice Processing capture (creates AVAudioEngine internally)
+        let vp_capture = VoiceProcessingCapture::start(capture)?;
+
+        Ok(Self {
+            device,
+            backend: StreamBackend::VoiceProcessing {
+                capture: vp_capture,
+            },
+        })
     }
 
     /// Create a CPAL-based stream (ScreenCaptureKit on macOS)
@@ -343,6 +383,11 @@ impl AudioStream {
                     info!("Core Audio task aborted");
                 }
             }
+            #[cfg(target_os = "macos")]
+            StreamBackend::VoiceProcessing { capture } => {
+                capture.stop();
+                info!("Voice Processing stream stopped");
+            }
         }
 
         // Explicitly drop self.device Arc reference
@@ -384,7 +429,7 @@ impl AudioStreamManager {
 
         // Start microphone stream
         if let Some(mic_device) = microphone_device {
-            info!("🎤 Creating microphone stream: {} (always uses CPAL)", mic_device.name);
+            info!("🎤 Creating microphone stream: {}", mic_device.name);
             match AudioStream::create(mic_device.clone(), self.state.clone(), DeviceType::Microphone, recording_sender.clone()).await {
                 Ok(stream) => {
                     self.state.set_microphone_device(mic_device);

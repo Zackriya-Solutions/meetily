@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import uvicorn
-from typing import Optional, List
+from typing import Optional, List, Literal
 import logging
 from dotenv import load_dotenv
 from db import DatabaseManager
@@ -62,6 +62,7 @@ class Transcript(BaseModel):
     audio_start_time: Optional[float] = None
     audio_end_time: Optional[float] = None
     duration: Optional[float] = None
+    speaker: Optional[Literal["me", "others"]] = None
 
 class MeetingResponse(BaseModel):
     id: str
@@ -535,10 +536,10 @@ async def save_transcript(request: SaveTranscriptRequest):
                 summary="",
                 action_items="",
                 key_points="",
-                # NEW: Recording-relative timestamps for audio-transcript synchronization
                 audio_start_time=transcript.audio_start_time,
                 audio_end_time=transcript.audio_end_time,
-                duration=transcript.duration
+                duration=transcript.duration,
+                speaker=transcript.speaker
             )
 
         logger.info("Transcripts saved successfully")

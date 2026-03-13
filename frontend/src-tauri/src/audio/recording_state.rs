@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::sync::mpsc;
 use anyhow::Result;
+use serde::{Serialize, Deserialize};
 
 use super::devices::AudioDevice;
 use super::buffer_pool::AudioBufferPool;
@@ -12,6 +13,27 @@ use super::buffer_pool::AudioBufferPool;
 pub enum DeviceType {
     Microphone,
     System,
+}
+
+/// Speaker attribution for transcript segments
+/// Derived from DeviceType at the transcription boundary:
+/// - Microphone → Me (the local user)
+/// - System → Others (remote participants)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Speaker {
+    Me,
+    Others,
+}
+
+impl Speaker {
+    /// Derive speaker from device type
+    pub fn from_device_type(device_type: &DeviceType) -> Self {
+        match device_type {
+            DeviceType::Microphone => Speaker::Me,
+            DeviceType::System => Speaker::Others,
+        }
+    }
 }
 
 /// Audio chunk with metadata for processing

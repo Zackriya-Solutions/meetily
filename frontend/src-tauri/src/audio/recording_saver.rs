@@ -7,7 +7,7 @@ use tokio::sync::mpsc;
 use serde::{Serialize, Deserialize};
 use std::path::PathBuf;
 
-use super::recording_state::AudioChunk;
+use super::recording_state::{AudioChunk, Speaker};
 use super::audio_processing::create_meeting_folder;
 use super::incremental_saver::IncrementalAudioSaver;
 
@@ -22,6 +22,8 @@ pub struct TranscriptSegment {
     pub display_time: String,   // Formatted time for display like "[02:15]"
     pub confidence: f32,
     pub sequence_id: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker: Option<Speaker>, // "me" (mic) or "others" (system audio)
 }
 
 /// Meeting metadata structure
@@ -129,6 +131,7 @@ impl RecordingSaver {
             display_time: "[00:00]".to_string(),
             confidence: 1.0,
             sequence_id: 0,
+            speaker: None, // Legacy method, no speaker info
         };
         self.add_transcript_segment(segment);
     }

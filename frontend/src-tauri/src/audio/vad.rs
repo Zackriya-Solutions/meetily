@@ -13,6 +13,43 @@ pub struct SpeechSegment {
     pub confidence: f32,
 }
 
+/// Configuration for the continuous VAD processor
+/// Allows different thresholds for mic vs system audio
+pub struct PipelineVadConfig {
+    pub positive_speech_threshold: f32,
+    pub negative_speech_threshold: f32,
+    pub redemption_time_ms: u32,
+    pub min_speech_time_ms: u32,
+    pub pre_speech_pad_ms: u32,
+    pub post_speech_pad_ms: u32,
+}
+
+impl PipelineVadConfig {
+    /// Default config tuned for microphone audio
+    pub fn mic_default() -> Self {
+        Self {
+            positive_speech_threshold: 0.50,
+            negative_speech_threshold: 0.35,
+            redemption_time_ms: if cfg!(target_os = "macos") { 400 } else { 400 },
+            min_speech_time_ms: 250,
+            pre_speech_pad_ms: 300,
+            post_speech_pad_ms: 400,
+        }
+    }
+
+    /// Config tuned for system audio (higher threshold to reject codec artifacts/notifications)
+    pub fn system_default() -> Self {
+        Self {
+            positive_speech_threshold: 0.60,
+            negative_speech_threshold: 0.40,
+            redemption_time_ms: if cfg!(target_os = "macos") { 400 } else { 400 },
+            min_speech_time_ms: 400,
+            pre_speech_pad_ms: 200,
+            post_speech_pad_ms: 300,
+        }
+    }
+}
+
 /// Processes audio in 30ms chunks but returns complete speech segments
 pub struct ContinuousVadProcessor {
     session: VadSession,
@@ -29,34 +66,30 @@ pub struct ContinuousVadProcessor {
 }
 
 impl ContinuousVadProcessor {
+    /// Create a new VAD processor with default mic config (backward-compatible)
     pub fn new(input_sample_rate: u32, redemption_time_ms: u32) -> Result<Self> {
+        let mut config = PipelineVadConfig::mic_default();
+        config.redemption_time_ms = redemption_time_ms;
+        Self::with_config(input_sample_rate, &config)
+    }
+
+    /// Create a new VAD processor with the given pipeline config
+    pub fn with_config(input_sample_rate: u32, pipeline_config: &PipelineVadConfig) -> Result<Self> {
         // Silero VAD MUST use 16kHz - this is hardcoded requirement
         const VAD_SAMPLE_RATE: u32 = 16000;
 
-        // Use STRICT settings to prevent silence from reaching Whisper
         let mut config = VadConfig::default();
         config.sample_rate = VAD_SAMPLE_RATE as usize;
+        config.positive_speech_threshold = pipeline_config.positive_speech_threshold;
+        config.negative_speech_threshold = pipeline_config.negative_speech_threshold;
+        config.redemption_time = Duration::from_millis(pipeline_config.redemption_time_ms as u64);
+        config.pre_speech_pad = Duration::from_millis(pipeline_config.pre_speech_pad_ms as u64);
+        config.post_speech_pad = Duration::from_millis(pipeline_config.post_speech_pad_ms as u64);
+        config.min_speech_time = Duration::from_millis(pipeline_config.min_speech_time_ms as u64);
 
-        // CONTINUOUS SPEECH FIX: Tuned for capturing complete 5+ second utterances
-        // Previous: 0.55/0.40 with 400ms redemption was fragmenting speech into 40ms segments
-        // New: More lenient thresholds + longer redemption for continuous speech
-        config.positive_speech_threshold = 0.50;  // Silero default - good for continuous speech
-        config.negative_speech_threshold = 0.35;  // Silero default - allows natural pauses
-
-        // CRITICAL FIX: Removed redemption_time capping to support long continuous speech
-        // Previous: capped at 400ms, causing VAD to fragment 5-second speech into 40ms segments
-        // New: Use full redemption_time from pipeline (2000ms) to bridge natural pauses
-        config.redemption_time = Duration::from_millis(redemption_time_ms as u64);
-        config.pre_speech_pad = Duration::from_millis(300);   // Pre-speech padding for context
-        config.post_speech_pad = Duration::from_millis(400);  // Increased: more context at end
-
-        // CRITICAL FIX: Increased min_speech_time to prevent tiny 40ms fragments
-        // Previous: 100ms allowed too-short segments that Whisper rejects
-        // New: 250ms ensures segments are substantial enough for Whisper (>100ms requirement)
-        config.min_speech_time = Duration::from_millis(250);  // Prevent tiny fragments
-
-        debug!("Creating VAD session with: sample_rate={}Hz, redemption={}ms, min_speech={}ms, input_rate={}Hz",
-               VAD_SAMPLE_RATE, redemption_time_ms, 250, input_sample_rate);
+        debug!("Creating VAD session with: sample_rate={}Hz, positive_thresh={}, negative_thresh={}, redemption={}ms, min_speech={}ms, input_rate={}Hz",
+               VAD_SAMPLE_RATE, pipeline_config.positive_speech_threshold, pipeline_config.negative_speech_threshold,
+               pipeline_config.redemption_time_ms, pipeline_config.min_speech_time_ms, input_sample_rate);
 
         let session = VadSession::new(config)
             .map_err(|e| anyhow!("Failed to create VAD session: {:?}", e))?;

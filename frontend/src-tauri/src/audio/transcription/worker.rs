@@ -5,6 +5,7 @@
 use super::engine::TranscriptionEngine;
 use super::provider::TranscriptionError;
 use crate::audio::AudioChunk;
+use crate::audio::recording_state::Speaker;
 use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -27,12 +28,12 @@ pub fn reset_speech_detected_flag() {
 pub struct TranscriptUpdate {
     pub text: String,
     pub timestamp: String, // Wall-clock time for reference (e.g., "14:30:05")
-    pub source: String,
+    pub speaker: Option<Speaker>, // "me" (mic) or "others" (system audio)
     pub sequence_id: u64,
     pub chunk_start_time: f64, // Legacy field, kept for compatibility
     pub is_partial: bool,
     pub confidence: f32,
-    // NEW: Recording-relative timestamps for playback sync
+    // Recording-relative timestamps for playback sync
     pub audio_start_time: f64, // Seconds from recording start (e.g., 125.3)
     pub audio_end_time: f64,   // Seconds from recording start (e.g., 128.6)
     pub duration: f64,          // Segment duration in seconds (e.g., 3.3)
@@ -142,6 +143,8 @@ pub fn start_transcription_task<R: Runtime>(
 
                             let chunk_timestamp = chunk.timestamp;
                             let chunk_duration = chunk.data.len() as f64 / chunk.sample_rate as f64;
+                            // Derive speaker from device_type before chunk is consumed
+                            let speaker = Some(Speaker::from_device_type(&chunk.device_type));
 
                             // Transcribe with provider-agnostic approach
                             match transcribe_chunk_with_provider(
@@ -208,12 +211,11 @@ pub fn start_transcription_task<R: Runtime>(
                                         let update = TranscriptUpdate {
                                             text: transcript,
                                             timestamp: format_current_timestamp(), // Wall-clock for reference
-                                            source: "Audio".to_string(),
+                                            speaker: speaker.clone(),
                                             sequence_id,
                                             chunk_start_time: chunk_timestamp, // Legacy compatibility
                                             is_partial,
                                             confidence: confidence_opt.unwrap_or(0.85), // Default for providers without confidence
-                                            // NEW: Recording-relative timestamps for sync
                                             audio_start_time,
                                             audio_end_time,
                                             duration: chunk_duration,
