@@ -303,6 +303,7 @@ The application will be built with Metal GPU acceleration automatically.
 - **Rust:** Install from [rust-lang.org](https://www.rust-lang.org/tools/install).
 - **Visual Studio Build Tools:** Install the "Desktop development with C++" workload from the Visual Studio Installer.
 - **CMake:** Download and install from [cmake.org](https://cmake.org/download/).
+- **CUDA Toolkit:** Required for NVIDIA GPU builds. Install from [developer.nvidia.com/cuda-downloads](https://developer.nvidia.com/cuda-downloads).
 
 ### 2. Build and Run
 
@@ -315,5 +316,33 @@ pnpm tauri:build
 ```
 
 By default, the application will be built with CPU-only processing. To enable GPU acceleration, see the [GPU Acceleration Guide](GPU_ACCELERATION.md).
+
+### 3. Windows CUDA builds
+
+To build with CUDA explicitly:
+
+```powershell
+pnpm run tauri:build:cuda
+```
+
+Meetily now detects the CUDA compute capability on Windows via `nvidia-smi` and forwards it to CMake automatically. If detection fails or you need to override it manually, set `WHISPER_CUDA_ARCHITECTURES` before building.
+
+```powershell
+$env:WHISPER_CUDA_ARCHITECTURES = "86"
+pnpm run tauri:build:cuda
+```
+
+Examples:
+
+- RTX 20 / GTX 16 / T4 class GPUs: `75`
+- RTX 30-series: `86`
+- RTX 40-series: `89`
+- RTX 50-series: `120`
+
+If you hit CUDA compiler errors on Windows, verify:
+
+- `nvidia-smi` works
+- `nvcc --version` works
+- the CUDA Toolkit and Visual Studio C++ toolchain are installed in the same shell session used for the build
 
 </details>

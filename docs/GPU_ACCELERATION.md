@@ -27,20 +27,19 @@ If no GPU is detected, the application will fall back to CPU-only processing.
 
 ## Manual Configuration
 
-If you want to manually configure the GPU acceleration backend, you can do so by enabling the corresponding feature flag in the `frontend/src-tauri/Cargo.toml` file.
+You can enable a specific backend by building with the matching Tauri feature:
 
-For example, to enable CUDA, you would modify the `[features]` section as follows:
-
-```toml
-[features]
-default = ["cuda"]
-
-# ... other features
-
-cuda = ["whisper-rs/cuda"]
+```powershell
+pnpm run tauri:build:cuda
+pnpm run tauri:build:vulkan
 ```
 
-Then, you would build the application using the standard `pnpm tauri:build` command.
+On Windows CUDA builds, Meetily will try to detect the GPU compute capability automatically via `nvidia-smi` and pass it to CMake. If you need to override that manually, set `WHISPER_CUDA_ARCHITECTURES` before building:
+
+```powershell
+$env:WHISPER_CUDA_ARCHITECTURES = "89"
+pnpm run tauri:build:cuda
+```
 
 ## Platform-Specific Instructions
 

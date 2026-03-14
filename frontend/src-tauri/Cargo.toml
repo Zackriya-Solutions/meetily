@@ -179,7 +179,7 @@ whisper-rs = { version = "0.13.2", features = ["raw-api", "metal", "coreml"] }
 #   --features vulkan   (AMD/Intel GPUs)
 #   --features openblas (OpenBLAS optimization, requires BLAS_INCLUDE_DIRS)
 [target.'cfg(target_os = "windows")'.dependencies]
-whisper-rs = { version = "0.13.2", features = ["raw-api", "vulkan"] }
+whisper-rs = { version = "0.13.2", features = ["raw-api"] }
 futures-channel = "0.3.31"
 
 # Linux-specific dependencies
@@ -201,7 +201,3 @@ memory-stats = "1.0"
 strsim = "0.10.0"
 futures = "0.3.31"
 tracing-subscriber = "0.3.16"
-
-[patch.crates-io]
-cpal = { git = "https://github.com/RustAudio/cpal", rev = "51c3b43" }
-esaxx-rs = { git = "https://github.com/thewh1teagle/esaxx-rs.git", branch = "feat/dynamic-msvc-link" }
