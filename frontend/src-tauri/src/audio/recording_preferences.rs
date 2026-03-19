@@ -11,6 +11,27 @@ use log::error;
 #[cfg(target_os = "macos")]
 use crate::audio::capture::AudioCaptureBackend;
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub enum RecordingMode {
+    Mono,
+    Stereo,
+}
+
+impl Default for RecordingMode {
+    fn default() -> Self {
+        RecordingMode::Mono
+    }
+}
+
+impl RecordingMode {
+    pub fn channels(&self) -> u16 {
+        match self {
+            RecordingMode::Mono => 1,
+            RecordingMode::Stereo => 2,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RecordingPreferences {
     pub save_folder: PathBuf,
@@ -23,6 +44,8 @@ pub struct RecordingPreferences {
     #[cfg(target_os = "macos")]
     #[serde(default)]
     pub system_audio_backend: Option<String>,
+    #[serde(default)]
+    pub recording_mode: RecordingMode,
 }
 
 impl Default for RecordingPreferences {
@@ -35,6 +58,7 @@ impl Default for RecordingPreferences {
             preferred_system_device: None,
             #[cfg(target_os = "macos")]
             system_audio_backend: Some("coreaudio".to_string()),
+            recording_mode: RecordingMode::Mono,
         }
     }
 }
