@@ -610,6 +610,7 @@ impl AudioCapture {
         let audio_chunk = AudioChunk {
             data: mono_data,  // Raw audio (resampled if needed), no gain yet
             sample_rate: if self.needs_resampling { 48000 } else { self.sample_rate },
+            channels: 1,
             timestamp,
             chunk_id,
             device_type: self.device_type.clone(),
@@ -844,6 +845,7 @@ impl AudioPipeline {
                                             let transcription_chunk = AudioChunk {
                                                 data: segment.samples,
                                                 sample_rate: 16000,
+                                                channels: 1,
                                                 timestamp: segment.start_timestamp_ms / 1000.0,
                                                 chunk_id: self.chunk_id_counter,
                                                 device_type: DeviceType::Microphone,  // Mixed audio
@@ -870,6 +872,7 @@ impl AudioPipeline {
                                 let recording_chunk = AudioChunk {
                                     data: mixed_with_gain.clone(),
                                     sample_rate: self.sample_rate,
+                                    channels: 1,
                                     timestamp: chunk.timestamp,
                                     chunk_id: self.chunk_id_counter,
                                     device_type: DeviceType::Microphone,  // Mixed audio
@@ -914,6 +917,7 @@ impl AudioPipeline {
                         let transcription_chunk = AudioChunk {
                             data: segment.samples,
                             sample_rate: 16000,
+                            channels: 1,
                             timestamp: segment.start_timestamp_ms / 1000.0,
                             chunk_id: self.chunk_id_counter,
                             device_type: DeviceType::Microphone,
@@ -1036,6 +1040,7 @@ impl AudioPipelineManager {
             let flush_chunk = AudioChunk {
                 data: vec![], // Empty data signals flush
                 sample_rate: 16000,
+                channels: 1,
                 timestamp: 0.0,
                 chunk_id: u64::MAX, // Special ID to indicate flush
                 device_type: super::recording_state::DeviceType::Microphone,
@@ -1056,6 +1061,7 @@ impl AudioPipelineManager {
                     let additional_flush = AudioChunk {
                         data: vec![],
                         sample_rate: 16000,
+                        channels: 1,
                         timestamp: 0.0,
                         chunk_id: u64::MAX - (i as u64),
                         device_type: super::recording_state::DeviceType::Microphone,
