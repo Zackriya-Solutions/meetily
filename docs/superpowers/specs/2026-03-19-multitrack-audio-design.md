@@ -10,7 +10,7 @@ All audio sources (microphone + system) are mixed into a single mono track befor
 
 ## Solution
 
-Save audio as **stereo** (mic = left, system = right) by default, with a user toggle to revert to mono (mixed) for compatibility. The STT pipeline is unaffected — it always receives mono mixed audio at 16kHz.
+Add a **stereo recording mode** (mic = left, system = right) as an opt-in advanced option. **Default remains mono** (current behavior) for maximum compatibility and least-surprise UX. The STT pipeline is unaffected — it always receives mono mixed audio at 16kHz.
 
 ## Architecture
 
@@ -24,18 +24,18 @@ extract_window() -> (mic_window, sys_window)
     +---> Recording path (CHANGED):
           |
           if stereo: interleave(mic, sys) -> encode(channels=2)
-          if mono:   mix_window()         -> encode(channels=1)
+          if mono:   mix_window()         -> encode(channels=1)  [default]
 ```
 
 ### What changes
 
 | File | Change |
 |------|--------|
-| `audio/pipeline.rs` (STEP 4) | Send interleaved stereo or mono mix based on recording mode |
+| `audio/pipeline.rs` (STEP 4) | Send interleaved stereo or mono mix based on recording mode; pre-allocated interleave buffer |
 | `audio/recording_state.rs` | Add `channels: u16` field to `AudioChunk` |
-| `audio/incremental_saver.rs` | Accept `channels: u16` in constructor, adjust checkpoint math |
+| `audio/incremental_saver.rs` | Accept `channels: u16` in constructor, adjust checkpoint math (frames not samples) |
 | `audio/recording_saver.rs` | Read recording mode from preferences, propagate channels to saver |
-| `audio/recording_preferences.rs` | New field `recording_mode: "stereo" \| "mono"` (default: `"stereo"`) |
+| `audio/recording_preferences.rs` | New field `recording_mode: "stereo" \| "mono"` (default: `"mono"`) |
 | `audio/recording_manager.rs` | Read preference, pass `RecordingMode` through to pipeline and saver |
 | Frontend Settings page | Toggle in Recordings section |
 | `metadata.json` schema | Add `channels` and `recording_mode` fields |
@@ -55,12 +55,12 @@ New field in `recording_preferences.rs`:
 
 ```rust
 pub enum RecordingMode {
-    Stereo, // mic=L, system=R (default)
-    Mono,   // mixed, current behavior
+    Mono,   // mixed, current behavior (DEFAULT)
+    Stereo, // mic=L, system=R
 }
 ```
 
-Persisted in the app's preferences file. Default: `Stereo`.
+Persisted in the app's preferences file. Default: `Mono`.
 
 ### 2. AudioChunk Channel Awareness
 
@@ -95,40 +95,45 @@ RecordingManager.start_recording()
 
 ```rust
 let (recording_data, channels) = match self.recording_mode {
-    RecordingMode::Stereo => (interleave_stereo(&mic_window, &sys_window), 2),
-    RecordingMode::Mono => (mixed_with_gain.clone(), 1),
-};
-let recording_chunk = AudioChunk {
-    data: recording_data,
-    channels,
-    ...
+    RecordingMode::Stereo => {
+        self.interleave_buffer.clear();
+        interleave_stereo_into(&mic_window, &sys_window, &mut self.interleave_buffer);
+        (self.interleave_buffer.as_slice(), 2u16)
+    },
+    RecordingMode::Mono => (mixed_with_gain.as_slice(), 1u16),
 };
 ```
 
-**`interleave_stereo` function:**
+**`interleave_stereo_into` function (pre-allocated buffer):**
 
-Takes two mono buffers and produces `[L0, R0, L1, R1, ...]`. Buffers are guaranteed equal length by `extract_window()` which zero-pads incomplete buffers. An assertion guards this invariant:
+Takes two mono buffers and writes `[L0, R0, L1, R1, ...]` into a reusable buffer. Buffers are guaranteed equal length by `extract_window()` which zero-pads incomplete buffers:
 
 ```rust
-fn interleave_stereo(left: &[f32], right: &[f32]) -> Vec<f32> {
-    assert_eq!(left.len(), right.len(), "Stereo interleave requires equal-length buffers");
-    let mut interleaved = Vec::with_capacity(left.len() * 2);
+fn interleave_stereo_into(left: &[f32], right: &[f32], out: &mut Vec<f32>) {
+    debug_assert_eq!(left.len(), right.len(), "Stereo interleave requires equal-length buffers");
+    out.reserve(left.len() * 2);
     for (&l, &r) in left.iter().zip(right.iter()) {
-        interleaved.push(l);
-        interleaved.push(r);
+        out.push(l);
+        out.push(r);
     }
-    interleaved
 }
 ```
+
+**Performance notes:**
+- Uses `debug_assert_eq!` (zero cost in release builds) instead of `assert_eq!`
+- Buffer `self.interleave_buffer: Vec<f32>` is pre-allocated in `AudioPipeline::new()` and reused each window to avoid per-window allocation (~1.7 allocs/sec eliminated)
 
 ### 4. Incremental Saver
 
 Constructor receives `channels: u16`. Key changes:
 
-- **Store `channels` field** for use in encoding
-- **Checkpoint interval adjustment**: measured in **frames** (not samples). For stereo, a frame = 2 samples. The interval becomes `sample_rate * 30` frames = `sample_rate * 30 * channels` samples. The sample count from `chunk.data.len()` must be divided by `channels` to get frame count for threshold comparison.
+- **Store `channels` field** for use in encoding and math
+- **Checkpoint interval adjustment**: measured in **frames** (not samples). For stereo, a frame = 2 samples. All duration/threshold calculations use `data.len() / channels as usize`:
+  - Checkpoint threshold: `sample_rate * 30` frames → compare against `total_samples / channels`
+  - Duration calculation: `audio_data.len() / channels / sample_rate` (not `audio_data.len() / sample_rate`)
 - **Pass `channels` to `encode_single_audio()`** (already accepts the parameter)
 - **FFmpeg concat merge** (`merge_checkpoints`): no change needed — concat demuxer works with stereo MP4 files
+- **AAC bitrate**: consider 256kbps for stereo mode (vs current bitrate for mono) to maintain per-channel quality
 
 ### 5. Audio Recovery
 
@@ -156,15 +161,20 @@ Old metadata.json files without these fields deserialize correctly as mono.
 ### 7. Frontend Settings Toggle
 
 A toggle in the Recordings section of Settings:
-- Label: "Separate audio tracks (stereo)"
-- Description: "Record microphone and system audio on separate channels (left/right)"
-- Default: ON (stereo)
+- Label: "Separate audio tracks (advanced)"
+- Description: "Record microphone and system audio on separate stereo channels (left/right). Useful for speaker diarization and post-processing."
+- Default: OFF (mono)
 
 Calls a Tauri command to update the preference. Setting change takes effect on next recording.
 
 ### 8. Playback
 
-Stereo recordings play as-is — mic in left ear, system in right ear. This is expected for analysis purposes. Users who want a mixed playback experience can use external tools (Audacity) or switch to mono mode. In-app playback is not modified in this iteration.
+Stereo recordings play as-is — mic in left ear, system in right ear. This is expected for analysis/diarization purposes. Users who want a mixed playback experience should use mono mode (default) or external tools like Audacity.
+
+**Future iterations (not in scope):**
+- Downmix to mono for in-app playback
+- "Export as mono" button per meeting
+- Visual badge (Stereo/Mono) in meetings list
 
 ## Edge Cases
 
@@ -176,16 +186,18 @@ Stereo recordings play as-is — mic in left ear, system in right ear. This is e
 | User changes setting mid-recording | Takes effect on next recording (not current) |
 | Old mono recordings | Metadata defaults to `channels: 1`; playback/import unaffected |
 | Old metadata.json without channels field | `#[serde(default)]` deserializes as `channels: 1, recording_mode: "mono"` |
+| Retranscribe a stereo file from disk | STT path always receives live mono stream; retranscribe uses FFmpeg which handles stereo input |
 
 ## File Size
 
-Stereo at 48kHz doubles raw audio data vs mono. After AAC encoding, the increase is roughly 1.5-2x. At typical meeting lengths (1-2 hours), this adds ~50-100 MB — acceptable for local storage.
+Stereo at 48kHz doubles raw audio data vs mono. After AAC encoding at 256kbps, the increase is roughly 1.5-2x. At typical meeting lengths (1-2 hours), this adds ~50-100 MB — acceptable for local storage.
 
 ## Testing
 
-### Unit tests
-- `interleave_stereo()` — correct interleaving, assertion on mismatched lengths
-- `IncrementalAudioSaver` with `channels: 2` — checkpoint triggers at correct intervals
+### Unit tests (required before merge)
+- `interleave_stereo_into()` — correct interleaving, debug_assert on mismatched lengths
+- `IncrementalAudioSaver` with `channels: 2` — checkpoint triggers at correct frame intervals (30s, not 15s)
+- Duration calculation with `channels: 2` — reports correct seconds
 - Metadata deserialization — old format (no channels) defaults correctly
 
 ### Integration tests (manual)
@@ -194,3 +206,14 @@ Stereo at 48kHz doubles raw audio data vs mono. After AAC encoding, the increase
 - Toggle mono → verify mixed output matches current behavior
 - Verify STT output is identical in both modes
 - Verify metadata.json reflects correct channel count and recording mode
+
+## Design Decisions Log
+
+| Decision | Rationale |
+|----------|-----------|
+| Default mono, stereo opt-in | Least surprise for casual users; stereo L/R playback is confusing without context |
+| Pre-allocated interleave buffer | Eliminates ~1.7 heap allocations/sec in hot path |
+| `debug_assert_eq!` over `assert_eq!` | Zero cost in release; `extract_window()` guarantees equal lengths |
+| Stereo interleaved over 2 separate files | Temporal alignment guaranteed by construction; simpler recovery; single file management |
+| Frames-based checkpoint math | Prevents stereo checkpoints at half the intended duration |
+| AAC 256kbps for stereo | Maintains per-channel quality (128kbps effective per channel) |
