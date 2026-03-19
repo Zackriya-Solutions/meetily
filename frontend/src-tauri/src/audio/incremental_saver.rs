@@ -18,11 +18,14 @@ struct AudioData {
 /// to minimize memory usage and enable crash recovery
 pub struct IncrementalAudioSaver {
     checkpoint_buffer: Vec<AudioData>,
-    checkpoint_interval_samples: usize,  // 30s at 48kHz = 1,440,000 samples
+    /// Checkpoint threshold in raw samples (inclusive of channels).
+    /// For stereo: sample_rate * 30 * 2. For mono: sample_rate * 30.
+    checkpoint_interval_samples: usize,
     checkpoint_count: u32,
     checkpoints_dir: PathBuf,
     meeting_folder: PathBuf,
     sample_rate: u32,
+    channels: u16,
 }
 
 impl IncrementalAudioSaver {
@@ -31,7 +34,8 @@ impl IncrementalAudioSaver {
     /// # Arguments
     /// * `meeting_folder` - Path to the meeting folder (contains .checkpoints/)
     /// * `sample_rate` - Sample rate of audio (typically 48000)
-    pub fn new(meeting_folder: PathBuf, sample_rate: u32) -> Result<Self> {
+    /// * `channels` - Number of audio channels (1=mono, 2=stereo interleaved)
+    pub fn new(meeting_folder: PathBuf, sample_rate: u32, channels: u16) -> Result<Self> {
         let checkpoints_dir = meeting_folder.join(".checkpoints");
 
         // Verify checkpoints directory exists
@@ -41,11 +45,12 @@ impl IncrementalAudioSaver {
 
         Ok(Self {
             checkpoint_buffer: Vec::new(),
-            checkpoint_interval_samples: sample_rate as usize * 30, // 30 seconds
+            checkpoint_interval_samples: sample_rate as usize * 30 * channels as usize,
             checkpoint_count: 0,
             checkpoints_dir,
             meeting_folder,
             sample_rate,
+            channels,
         })
     }
 
@@ -96,11 +101,11 @@ impl IncrementalAudioSaver {
         encode_single_audio(
             bytemuck::cast_slice(&audio_data),
             self.sample_rate,
-            1,  // mono
+            self.channels,
             &checkpoint_path
         )?;
 
-        let duration_seconds = audio_data.len() as f32 / self.sample_rate as f32;
+        let duration_seconds = audio_data.len() as f32 / (self.sample_rate as f32 * self.channels as f32);
         self.checkpoint_count += 1;
 
         info!("Saved checkpoint {}: {:.2}s of audio ({} samples)",
@@ -429,7 +434,8 @@ mod tests {
 
         let mut saver = IncrementalAudioSaver::new(
             meeting_folder.clone(),
-            48000
+            48000,
+            1,
         ).unwrap();
 
         // Add 60 seconds worth of audio (should create 2 checkpoints)
@@ -465,12 +471,78 @@ mod tests {
 
         let mut saver = IncrementalAudioSaver::new(
             meeting_folder.clone(),
-            48000
+            48000,
+            1,
         ).unwrap();
 
         // Try to finalize without adding any chunks
         let result = saver.finalize().await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("No audio checkpoints"));
+    }
+
+    #[tokio::test]
+    async fn test_stereo_checkpoint_interval() {
+        let temp_dir = tempdir().unwrap();
+        let meeting_folder = temp_dir.path().join("Stereo_Test");
+        std::fs::create_dir_all(&meeting_folder).unwrap();
+        std::fs::create_dir_all(meeting_folder.join(".checkpoints")).unwrap();
+
+        let mut saver = IncrementalAudioSaver::new(
+            meeting_folder.clone(),
+            48000,
+            2,
+        ).unwrap();
+
+        // Add 15 seconds of stereo audio (30s of mono-equivalent samples)
+        // 15s * 48000 Hz * 2 channels = 1,440,000 samples
+        // This should NOT trigger a checkpoint (15s real audio, not 30s)
+        for i in 0..30 {
+            let chunk = AudioChunk {
+                data: vec![0.5f32; 48000],  // 0.5s of stereo data (24000 frames)
+                sample_rate: 48000,
+                channels: 2,
+                timestamp: i as f64 * 0.5,
+                chunk_id: i as u64,
+                device_type: DeviceType::Microphone,
+            };
+            saver.add_chunk(chunk).unwrap();
+        }
+
+        // Should be 0 checkpoints -- 15s of stereo, not 30s
+        assert_eq!(saver.get_checkpoint_count(), 0,
+            "Stereo checkpoint should use frame count (15s), not sample count (30s)");
+    }
+
+    #[tokio::test]
+    async fn test_stereo_duration_triggers_checkpoint() {
+        let temp_dir = tempdir().unwrap();
+        let meeting_folder = temp_dir.path().join("Stereo_Duration_Test");
+        std::fs::create_dir_all(&meeting_folder).unwrap();
+        std::fs::create_dir_all(meeting_folder.join(".checkpoints")).unwrap();
+
+        let mut saver = IncrementalAudioSaver::new(
+            meeting_folder.clone(),
+            48000,
+            2,
+        ).unwrap();
+
+        // Add exactly 30 seconds of stereo audio to trigger one checkpoint
+        // 30s * 48000 Hz * 2 channels = 2,880,000 samples
+        for i in 0..60 {
+            let chunk = AudioChunk {
+                data: vec![0.5f32; 48000],  // 0.5s stereo
+                sample_rate: 48000,
+                channels: 2,
+                timestamp: i as f64 * 0.5,
+                chunk_id: i as u64,
+                device_type: DeviceType::Microphone,
+            };
+            saver.add_chunk(chunk).unwrap();
+        }
+
+        // Should be exactly 1 checkpoint (30s of stereo audio)
+        assert_eq!(saver.get_checkpoint_count(), 1,
+            "30s of stereo audio should produce exactly 1 checkpoint");
     }
 }
