@@ -33,6 +33,7 @@ pub fn encode_single_audio(
 
     debug!("Using FFmpeg at: {:?}", ffmpeg_path);
 
+    let bitrate = if channels >= 2 { "256k" } else { "192k" };
     let mut command = Command::new(ffmpeg_path);
     command
         .args([
@@ -47,7 +48,7 @@ pub fn encode_single_audio(
             "-c:a",
             "aac",
             "-b:a",
-            "192k", // Increased from 64k for better audio quality (especially for speech)
+            bitrate,
             "-profile:a",
             "aac_low", // Use AAC-LC profile for better compatibility
             "-movflags",
