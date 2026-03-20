@@ -558,7 +558,11 @@ export function useSummaryGeneration({
     };
 
     const fullTranscript = allTranscripts
-      .map(t => `${formatTime(t.audio_start_time, t.timestamp)} ${t.text}`)
+      .map(t => {
+        const time = formatTime(t.audio_start_time, t.timestamp);
+        const source = t.source ? `[${t.source === 'mic' ? 'Mic' : 'System'}] ` : '';
+        return `${time} ${source}${t.text}`;
+      })
       .join('\n');
 
     await processSummary({ transcriptText: fullTranscript, customPrompt });
