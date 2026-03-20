@@ -16,6 +16,8 @@ export interface Transcript {
   audio_start_time?: number; // Seconds from recording start (e.g., 125.3)
   audio_end_time?: number;   // Seconds from recording start (e.g., 128.6)
   duration?: number;          // Segment duration in seconds (e.g., 3.3)
+  // Audio source: "mic", "system", or undefined (mono/mixed)
+  source?: string;
 }
 
 export interface TranscriptUpdate {
