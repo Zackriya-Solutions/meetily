@@ -1112,3 +1112,52 @@ impl Default for AudioPipelineManager {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_interleave_stereo_basic() {
+        let left = vec![1.0, 2.0, 3.0];
+        let right = vec![4.0, 5.0, 6.0];
+        let mut out = Vec::new();
+        interleave_stereo_into(&left, &right, &mut out);
+        assert_eq!(out, vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
+    }
+
+    #[test]
+    fn test_interleave_stereo_empty() {
+        let left: Vec<f32> = vec![];
+        let right: Vec<f32> = vec![];
+        let mut out = Vec::new();
+        interleave_stereo_into(&left, &right, &mut out);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn test_interleave_stereo_reuse_buffer() {
+        let mut out = Vec::with_capacity(100);
+        let left = vec![1.0, 2.0];
+        let right = vec![3.0, 4.0];
+
+        interleave_stereo_into(&left, &right, &mut out);
+        assert_eq!(out, vec![1.0, 3.0, 2.0, 4.0]);
+
+        out.clear();
+        let left2 = vec![5.0];
+        let right2 = vec![6.0];
+        interleave_stereo_into(&left2, &right2, &mut out);
+        assert_eq!(out, vec![5.0, 6.0]);
+    }
+
+    #[test]
+    #[should_panic(expected = "equal-length")]
+    #[cfg(debug_assertions)]
+    fn test_interleave_stereo_mismatched_panics_in_debug() {
+        let left = vec![1.0, 2.0];
+        let right = vec![3.0];
+        let mut out = Vec::new();
+        interleave_stereo_into(&left, &right, &mut out);
+    }
+}
