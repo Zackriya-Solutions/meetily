@@ -68,7 +68,7 @@ pub(crate) fn write_transcripts_json(folder: &Path, segments: &[TranscriptSegmen
         "last_updated": chrono::Utc::now().to_rfc3339(),
         "total_segments": segments.len(),
         "segments": segments.iter().enumerate().map(|(i, s)| {
-            serde_json::json!({
+            let mut seg = serde_json::json!({
                 "id": s.id,
                 "text": s.text,
                 "timestamp": s.timestamp,
@@ -76,7 +76,11 @@ pub(crate) fn write_transcripts_json(folder: &Path, segments: &[TranscriptSegmen
                 "audio_end_time": s.audio_end_time,
                 "duration": s.duration,
                 "sequence_id": i
-            })
+            });
+            if let Some(ref source) = s.source {
+                seg["source"] = serde_json::json!(source);
+            }
+            seg
         }).collect::<Vec<_>>()
     });
 
