@@ -62,6 +62,7 @@ pub struct RecordingSaver {
     transcript_segments: Arc<Mutex<Vec<TranscriptSegment>>>,
     chunk_receiver: Option<mpsc::UnboundedReceiver<AudioChunk>>,
     is_saving: Arc<Mutex<bool>>,
+    channels: u16,
 }
 
 impl RecordingSaver {
@@ -74,6 +75,7 @@ impl RecordingSaver {
             transcript_segments: Arc::new(Mutex::new(Vec::new())),
             chunk_receiver: None,
             is_saving: Arc::new(Mutex::new(false)),
+            channels: 1,
         }
     }
 
@@ -144,7 +146,9 @@ impl RecordingSaver {
     ///
     /// # Arguments
     /// * `auto_save` - If true, creates checkpoints and enables saving. If false, audio chunks are discarded.
-    pub fn start_accumulation(&mut self, auto_save: bool) -> mpsc::UnboundedSender<AudioChunk> {
+    /// * `channels` - Number of audio channels (1=mono, 2=stereo interleaved)
+    pub fn start_accumulation(&mut self, auto_save: bool, channels: u16) -> mpsc::UnboundedSender<AudioChunk> {
+        self.channels = channels;
         if auto_save {
             info!("Initializing incremental audio saver for recording (auto-save ENABLED)");
         } else {
@@ -243,7 +247,7 @@ impl RecordingSaver {
 
         // Only initialize incremental saver if checkpoints are needed (auto_save is true)
         if create_checkpoints {
-            let incremental_saver = IncrementalAudioSaver::new(meeting_folder.clone(), 48000, 1)?;
+            let incremental_saver = IncrementalAudioSaver::new(meeting_folder.clone(), 48000, self.channels)?;
             self.incremental_saver = Some(Arc::new(AsyncMutex::new(incremental_saver)));
             info!("✅ Incremental audio saver initialized for meeting: {}", meeting_name);
         } else {
@@ -265,8 +269,8 @@ impl RecordingSaver {
             audio_file: if create_checkpoints { "audio.mp4".to_string() } else { "".to_string() },
             transcript_file: "transcripts.json".to_string(),
             sample_rate: 48000,
-            channels: 1,
-            recording_mode: "mono".to_string(),
+            channels: self.channels,
+            recording_mode: if self.channels >= 2 { "stereo".to_string() } else { "mono".to_string() },
             status: "recording".to_string(),
         };
 

@@ -66,8 +66,10 @@ impl RecordingManager {
         microphone_device: Option<Arc<AudioDevice>>,
         system_device: Option<Arc<AudioDevice>>,
         auto_save: bool,
+        recording_mode: RecordingMode,
     ) -> Result<mpsc::UnboundedReceiver<AudioChunk>> {
-        info!("Starting recording manager (auto_save: {})", auto_save);
+        let channels = recording_mode.channels();
+        info!("Starting recording manager (auto_save: {}, recording_mode: {:?}, channels: {})", auto_save, recording_mode, channels);
 
         // Set up transcription channel
         let (transcription_sender, transcription_receiver) = mpsc::unbounded_channel::<AudioChunk>();
@@ -75,7 +77,7 @@ impl RecordingManager {
         // CRITICAL FIX: Create recording sender for pre-mixed audio from pipeline
         // Pipeline will mix mic + system audio professionally and send to this channel
         // Pass auto_save to control whether audio checkpoints are created
-        let recording_sender = self.recording_saver.start_accumulation(auto_save);
+        let recording_sender = self.recording_saver.start_accumulation(auto_save, channels);
 
         // Start recording state first
         self.state.start_recording()?;
@@ -117,7 +119,7 @@ impl RecordingManager {
             mic_kind,
             sys_name,
             sys_kind,
-            RecordingMode::Mono, // Temporary default, wired to preferences in Task 6
+            recording_mode.clone(),
         )?;
 
         // Give the pipeline a moment to fully initialize before starting streams
@@ -188,7 +190,7 @@ impl RecordingManager {
             }
 
             // Start recording with selected devices and auto_save setting
-            self.start_recording(microphone_device, system_device, auto_save).await
+            self.start_recording(microphone_device, system_device, auto_save, RecordingMode::Mono).await
         }
 
         #[cfg(not(target_os = "macos"))]
@@ -223,7 +225,7 @@ impl RecordingManager {
                 return Err(anyhow::anyhow!("No microphone device available"));
             }
 
-            self.start_recording(microphone_device, system_device, auto_save).await
+            self.start_recording(microphone_device, system_device, auto_save, RecordingMode::Mono).await
         }
     }
 
