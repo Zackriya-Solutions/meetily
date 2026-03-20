@@ -12,6 +12,18 @@ use super::devices::AudioDevice;
 use super::recording_state::{AudioChunk, AudioError, RecordingState, DeviceType};
 use super::audio_processing::{audio_to_mono, LoudnessNormalizer, NoiseSuppressionProcessor, HighPassFilter};
 use super::vad::{ContinuousVadProcessor};
+use super::recording_preferences::RecordingMode;
+
+/// Interleave two mono buffers into stereo [L0, R0, L1, R1, ...]
+/// Writes into a pre-allocated buffer to avoid per-window allocation.
+fn interleave_stereo_into(left: &[f32], right: &[f32], out: &mut Vec<f32>) {
+    debug_assert_eq!(left.len(), right.len(), "Stereo interleave requires equal-length buffers");
+    out.reserve(left.len() * 2);
+    for (&l, &r) in left.iter().zip(right.iter()) {
+        out.push(l);
+        out.push(r);
+    }
+}
 
 /// Ring buffer for synchronized audio mixing
 /// Accumulates samples from mic and system streams until we have aligned windows
@@ -608,6 +620,7 @@ impl AudioCapture {
         let audio_chunk = AudioChunk {
             data: mono_data,  // Raw audio (resampled if needed), no gain yet
             sample_rate: if self.needs_resampling { 48000 } else { self.sample_rate },
+            channels: 1,
             timestamp,
             chunk_id,
             device_type: self.device_type.clone(),
@@ -692,6 +705,9 @@ pub struct AudioPipeline {
     mixer: ProfessionalAudioMixer,
     // Recording sender for pre-mixed audio
     recording_sender_for_mixed: Option<mpsc::UnboundedSender<AudioChunk>>,
+    // Multitrack recording support
+    recording_mode: RecordingMode,
+    interleave_buffer: Vec<f32>,
 }
 
 impl AudioPipeline {
@@ -705,6 +721,7 @@ impl AudioPipeline {
         mic_device_kind: super::device_detection::InputDeviceKind,
         system_device_name: String,
         system_device_kind: super::device_detection::InputDeviceKind,
+        recording_mode: RecordingMode,
     ) -> Self {
         // Log device characteristics for adaptive buffering
         info!("🎛️ AudioPipeline initializing with device characteristics:");
@@ -758,6 +775,8 @@ impl AudioPipeline {
             ring_buffer,
             mixer,
             recording_sender_for_mixed: None,  // Will be set by manager
+            recording_mode,
+            interleave_buffer: Vec::with_capacity(48000),
         }
     }
 
@@ -842,6 +861,7 @@ impl AudioPipeline {
                                             let transcription_chunk = AudioChunk {
                                                 data: segment.samples,
                                                 sample_rate: 16000,
+                                                channels: 1,
                                                 timestamp: segment.start_timestamp_ms / 1000.0,
                                                 chunk_id: self.chunk_id_counter,
                                                 device_type: DeviceType::Microphone,  // Mixed audio
@@ -863,14 +883,23 @@ impl AudioPipeline {
                                 }
                             }
 
-                            // STEP 4: Send mixed audio for recording (WAV file)
+                            // STEP 4: Send audio for recording
                             if let Some(ref sender) = self.recording_sender_for_mixed {
+                                let (recording_data, rec_channels) = match self.recording_mode {
+                                    RecordingMode::Stereo => {
+                                        self.interleave_buffer.clear();
+                                        interleave_stereo_into(&mic_window, &sys_window, &mut self.interleave_buffer);
+                                        (self.interleave_buffer.clone(), 2u16)
+                                    },
+                                    RecordingMode::Mono => (mixed_with_gain.clone(), 1u16),
+                                };
                                 let recording_chunk = AudioChunk {
-                                    data: mixed_with_gain.clone(),
+                                    data: recording_data,
                                     sample_rate: self.sample_rate,
+                                    channels: rec_channels,
                                     timestamp: chunk.timestamp,
                                     chunk_id: self.chunk_id_counter,
-                                    device_type: DeviceType::Microphone,  // Mixed audio
+                                    device_type: DeviceType::Microphone,
                                 };
                                 let _ = sender.send(recording_chunk);
                             }
@@ -912,6 +941,7 @@ impl AudioPipeline {
                         let transcription_chunk = AudioChunk {
                             data: segment.samples,
                             sample_rate: 16000,
+                            channels: 1,
                             timestamp: segment.start_timestamp_ms / 1000.0,
                             chunk_id: self.chunk_id_counter,
                             device_type: DeviceType::Microphone,
@@ -964,6 +994,7 @@ impl AudioPipelineManager {
         mic_device_kind: super::device_detection::InputDeviceKind,
         system_device_name: String,
         system_device_kind: super::device_detection::InputDeviceKind,
+        recording_mode: RecordingMode,
     ) -> Result<()> {
         // Log device information for adaptive buffering
         info!("🎙️ Starting pipeline with device info:");
@@ -987,6 +1018,7 @@ impl AudioPipelineManager {
             mic_device_kind,
             system_device_name,
             system_device_kind,
+            recording_mode,
         );
 
         // CRITICAL FIX: Connect recording sender to receive pre-mixed audio
@@ -1034,6 +1066,7 @@ impl AudioPipelineManager {
             let flush_chunk = AudioChunk {
                 data: vec![], // Empty data signals flush
                 sample_rate: 16000,
+                channels: 1,
                 timestamp: 0.0,
                 chunk_id: u64::MAX, // Special ID to indicate flush
                 device_type: super::recording_state::DeviceType::Microphone,
@@ -1054,6 +1087,7 @@ impl AudioPipelineManager {
                     let additional_flush = AudioChunk {
                         data: vec![],
                         sample_rate: 16000,
+                        channels: 1,
                         timestamp: 0.0,
                         chunk_id: u64::MAX - (i as u64),
                         device_type: super::recording_state::DeviceType::Microphone,
@@ -1074,5 +1108,54 @@ impl AudioPipelineManager {
 impl Default for AudioPipelineManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_interleave_stereo_basic() {
+        let left = vec![1.0, 2.0, 3.0];
+        let right = vec![4.0, 5.0, 6.0];
+        let mut out = Vec::new();
+        interleave_stereo_into(&left, &right, &mut out);
+        assert_eq!(out, vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
+    }
+
+    #[test]
+    fn test_interleave_stereo_empty() {
+        let left: Vec<f32> = vec![];
+        let right: Vec<f32> = vec![];
+        let mut out = Vec::new();
+        interleave_stereo_into(&left, &right, &mut out);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn test_interleave_stereo_reuse_buffer() {
+        let mut out = Vec::with_capacity(100);
+        let left = vec![1.0, 2.0];
+        let right = vec![3.0, 4.0];
+
+        interleave_stereo_into(&left, &right, &mut out);
+        assert_eq!(out, vec![1.0, 3.0, 2.0, 4.0]);
+
+        out.clear();
+        let left2 = vec![5.0];
+        let right2 = vec![6.0];
+        interleave_stereo_into(&left2, &right2, &mut out);
+        assert_eq!(out, vec![5.0, 6.0]);
+    }
+
+    #[test]
+    #[should_panic(expected = "equal-length")]
+    #[cfg(debug_assertions)]
+    fn test_interleave_stereo_mismatched_panics_in_debug() {
+        let left = vec![1.0, 2.0];
+        let right = vec![3.0];
+        let mut out = Vec::new();
+        interleave_stereo_into(&left, &right, &mut out);
     }
 }

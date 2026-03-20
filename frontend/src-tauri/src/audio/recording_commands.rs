@@ -110,17 +110,17 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
     // Create new recording manager
     let mut manager = RecordingManager::new();
 
-    // Load recording preferences to get auto_save AND device preferences
-    let (auto_save, preferred_mic_name, preferred_system_name) =
+    // Load recording preferences to get auto_save, device preferences, AND recording mode
+    let (auto_save, preferred_mic_name, preferred_system_name, recording_mode) =
         match super::recording_preferences::load_recording_preferences(&app).await {
             Ok(prefs) => {
-                info!("📋 Loaded recording preferences: auto_save={}, preferred_mic={:?}, preferred_system={:?}",
-                      prefs.auto_save, prefs.preferred_mic_device, prefs.preferred_system_device);
-                (prefs.auto_save, prefs.preferred_mic_device, prefs.preferred_system_device)
+                info!("📋 Loaded recording preferences: auto_save={}, recording_mode={:?}, preferred_mic={:?}, preferred_system={:?}",
+                      prefs.auto_save, prefs.recording_mode, prefs.preferred_mic_device, prefs.preferred_system_device);
+                (prefs.auto_save, prefs.preferred_mic_device, prefs.preferred_system_device, prefs.recording_mode)
             }
             Err(e) => {
                 warn!("Failed to load recording preferences, using defaults: {}", e);
-                (true, None, None)
+                (true, None, None, super::recording_preferences::RecordingMode::Mono)
             }
         };
 
@@ -232,7 +232,7 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
 
     // Start recording with resolved devices (replaces start_recording_with_defaults_and_auto_save call)
     let transcription_receiver = manager
-        .start_recording(microphone_device, system_device, auto_save)
+        .start_recording(microphone_device, system_device, auto_save, recording_mode)
         .await
         .map_err(|e| format!("Failed to start recording: {}", e))?;
 
@@ -400,7 +400,7 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
 
     // Start recording with specified devices and auto_save setting
     let transcription_receiver = manager
-        .start_recording(mic_device, system_device, auto_save)
+        .start_recording(mic_device, system_device, auto_save, super::recording_preferences::RecordingMode::Mono)
         .await
         .map_err(|e| format!("Failed to start recording: {}", e))?;
 
