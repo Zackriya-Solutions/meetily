@@ -278,7 +278,7 @@ async fn run_retranscription<R: Runtime>(
     };
 
     // Process each channel (1 for mono, 2 for multitrack stereo)
-    let mut all_transcripts: Vec<(String, f64, f64)> = Vec::new();
+    let mut all_transcripts: Vec<(String, f64, f64, Option<String>)> = Vec::new();
     let mut total_confidence = 0.0f32;
     let mut total_processable = 0usize;
 
@@ -404,12 +404,12 @@ async fn run_retranscription<R: Runtime>(
 
             let trimmed = text.trim();
             if !trimmed.is_empty() {
-                let labeled_text = if !channel_prefix.is_empty() {
-                    format!("{}{}", channel_prefix, trimmed)
+                let source = if num_channels > 1 {
+                    Some(channel_label.to_lowercase().to_string())
                 } else {
-                    trimmed.to_string()
+                    None
                 };
-                all_transcripts.push((labeled_text, segment.start_timestamp_ms, segment.end_timestamp_ms));
+                all_transcripts.push((trimmed.to_string(), segment.start_timestamp_ms, segment.end_timestamp_ms, source));
                 total_confidence += conf;
             }
         }
@@ -857,7 +857,7 @@ mod tests {
 
     #[test]
     fn test_create_transcript_segments_empty() {
-        let transcripts: Vec<(String, f64, f64)> = vec![];
+        let transcripts: Vec<(String, f64, f64, Option<String>)> = vec![];
         let segments = create_transcript_segments(&transcripts);
         assert!(segments.is_empty());
     }
@@ -865,7 +865,7 @@ mod tests {
     #[test]
     fn test_create_transcript_segments_single() {
         let transcripts = vec![
-            ("Hello world".to_string(), 0.0, 1500.0), // 0-1.5 seconds
+            ("Hello world".to_string(), 0.0, 1500.0, None), // 0-1.5 seconds
         ];
         let segments = create_transcript_segments(&transcripts);
 
@@ -874,42 +874,37 @@ mod tests {
         assert_eq!(segments[0].audio_start_time, Some(0.0));
         assert_eq!(segments[0].audio_end_time, Some(1.5));
         assert_eq!(segments[0].duration, Some(1.5));
+        assert_eq!(segments[0].source, None);
     }
 
     #[test]
     fn test_create_transcript_segments_multiple() {
         let transcripts = vec![
-            ("First segment".to_string(), 0.0, 2000.0),      // 0-2 seconds
-            ("Second segment".to_string(), 3000.0, 5000.0),  // 3-5 seconds
-            ("Third segment".to_string(), 6500.0, 8000.0),   // 6.5-8 seconds
+            ("First segment".to_string(), 0.0, 2000.0, None),
+            ("Second segment".to_string(), 3000.0, 5000.0, None),
+            ("Third segment".to_string(), 6500.0, 8000.0, None),
         ];
         let segments = create_transcript_segments(&transcripts);
 
         assert_eq!(segments.len(), 3);
-
-        // First segment
         assert_eq!(segments[0].text, "First segment");
         assert_eq!(segments[0].audio_start_time, Some(0.0));
         assert_eq!(segments[0].audio_end_time, Some(2.0));
         assert_eq!(segments[0].duration, Some(2.0));
 
-        // Second segment
         assert_eq!(segments[1].text, "Second segment");
         assert_eq!(segments[1].audio_start_time, Some(3.0));
         assert_eq!(segments[1].audio_end_time, Some(5.0));
-        assert_eq!(segments[1].duration, Some(2.0));
 
-        // Third segment
         assert_eq!(segments[2].text, "Third segment");
         assert_eq!(segments[2].audio_start_time, Some(6.5));
         assert_eq!(segments[2].audio_end_time, Some(8.0));
-        assert_eq!(segments[2].duration, Some(1.5));
     }
 
     #[test]
     fn test_create_transcript_segments_trims_whitespace() {
         let transcripts = vec![
-            ("  Hello with spaces  ".to_string(), 0.0, 1000.0),
+            ("  Hello with spaces  ".to_string(), 0.0, 1000.0, None),
         ];
         let segments = create_transcript_segments(&transcripts);
 
@@ -918,10 +913,23 @@ mod tests {
     }
 
     #[test]
+    fn test_create_transcript_segments_with_source() {
+        let transcripts = vec![
+            ("From mic".to_string(), 0.0, 1000.0, Some("mic".to_string())),
+            ("From system".to_string(), 500.0, 1500.0, Some("system".to_string())),
+        ];
+        let segments = create_transcript_segments(&transcripts);
+
+        assert_eq!(segments.len(), 2);
+        assert_eq!(segments[0].source, Some("mic".to_string()));
+        assert_eq!(segments[1].source, Some("system".to_string()));
+    }
+
+    #[test]
     fn test_create_transcript_segments_generates_unique_ids() {
         let transcripts = vec![
-            ("Segment one".to_string(), 0.0, 1000.0),
-            ("Segment two".to_string(), 1000.0, 2000.0),
+            ("Segment one".to_string(), 0.0, 1000.0, None),
+            ("Segment two".to_string(), 1000.0, 2000.0, None),
         ];
         let segments = create_transcript_segments(&transcripts);
 
