@@ -12,6 +12,18 @@ use super::devices::AudioDevice;
 use super::recording_state::{AudioChunk, AudioError, RecordingState, DeviceType};
 use super::audio_processing::{audio_to_mono, LoudnessNormalizer, NoiseSuppressionProcessor, HighPassFilter};
 use super::vad::{ContinuousVadProcessor};
+use super::recording_preferences::RecordingMode;
+
+/// Interleave two mono buffers into stereo [L0, R0, L1, R1, ...]
+/// Writes into a pre-allocated buffer to avoid per-window allocation.
+fn interleave_stereo_into(left: &[f32], right: &[f32], out: &mut Vec<f32>) {
+    debug_assert_eq!(left.len(), right.len(), "Stereo interleave requires equal-length buffers");
+    out.reserve(left.len() * 2);
+    for (&l, &r) in left.iter().zip(right.iter()) {
+        out.push(l);
+        out.push(r);
+    }
+}
 
 /// Ring buffer for synchronized audio mixing
 /// Accumulates samples from mic and system streams until we have aligned windows
@@ -695,6 +707,9 @@ pub struct AudioPipeline {
     mixer: ProfessionalAudioMixer,
     // Recording sender for pre-mixed audio
     recording_sender_for_mixed: Option<mpsc::UnboundedSender<AudioChunk>>,
+    // Multitrack recording support
+    recording_mode: RecordingMode,
+    interleave_buffer: Vec<f32>,
 }
 
 impl AudioPipeline {
@@ -708,6 +723,7 @@ impl AudioPipeline {
         mic_device_kind: super::device_detection::InputDeviceKind,
         system_device_name: String,
         system_device_kind: super::device_detection::InputDeviceKind,
+        recording_mode: RecordingMode,
     ) -> Self {
         // Log device characteristics for adaptive buffering
         info!("🎛️ AudioPipeline initializing with device characteristics:");
@@ -761,6 +777,8 @@ impl AudioPipeline {
             ring_buffer,
             mixer,
             recording_sender_for_mixed: None,  // Will be set by manager
+            recording_mode,
+            interleave_buffer: Vec::with_capacity(48000),
         }
     }
 
@@ -867,15 +885,23 @@ impl AudioPipeline {
                                 }
                             }
 
-                            // STEP 4: Send mixed audio for recording (WAV file)
+                            // STEP 4: Send audio for recording
                             if let Some(ref sender) = self.recording_sender_for_mixed {
+                                let (recording_data, rec_channels) = match self.recording_mode {
+                                    RecordingMode::Stereo => {
+                                        self.interleave_buffer.clear();
+                                        interleave_stereo_into(&mic_window, &sys_window, &mut self.interleave_buffer);
+                                        (self.interleave_buffer.clone(), 2u16)
+                                    },
+                                    RecordingMode::Mono => (mixed_with_gain.clone(), 1u16),
+                                };
                                 let recording_chunk = AudioChunk {
-                                    data: mixed_with_gain.clone(),
+                                    data: recording_data,
                                     sample_rate: self.sample_rate,
-                                    channels: 1,
+                                    channels: rec_channels,
                                     timestamp: chunk.timestamp,
                                     chunk_id: self.chunk_id_counter,
-                                    device_type: DeviceType::Microphone,  // Mixed audio
+                                    device_type: DeviceType::Microphone,
                                 };
                                 let _ = sender.send(recording_chunk);
                             }
@@ -970,6 +996,7 @@ impl AudioPipelineManager {
         mic_device_kind: super::device_detection::InputDeviceKind,
         system_device_name: String,
         system_device_kind: super::device_detection::InputDeviceKind,
+        recording_mode: RecordingMode,
     ) -> Result<()> {
         // Log device information for adaptive buffering
         info!("🎙️ Starting pipeline with device info:");
@@ -993,6 +1020,7 @@ impl AudioPipelineManager {
             mic_device_kind,
             system_device_name,
             system_device_kind,
+            recording_mode,
         );
 
         // CRITICAL FIX: Connect recording sender to receive pre-mixed audio

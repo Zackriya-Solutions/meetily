@@ -2,6 +2,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use anyhow::Result;
 use log::{debug, error, info, warn};
+use super::recording_preferences::RecordingMode;
 
 use super::devices::{AudioDevice, list_audio_devices};
 
@@ -116,6 +117,7 @@ impl RecordingManager {
             mic_kind,
             sys_name,
             sys_kind,
+            RecordingMode::Mono, // Temporary default, wired to preferences in Task 6
         )?;
 
         // Give the pipeline a moment to fully initialize before starting streams
