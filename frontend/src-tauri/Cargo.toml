@@ -173,18 +173,22 @@ futures-channel = "0.3.31"
 whisper-rs = { version = "0.13.2", features = ["raw-api", "metal", "coreml"] }
 
 # Windows-specific dependencies
-# Default: CPU-only build (no BLAS)
-# Users can enable features manually:
-#   --features cuda     (NVIDIA GPUs)
+# Default: CPU-only build (works on all hardware)
+# GPU acceleration is opt-in via Cargo features:
+#   --features cuda     (NVIDIA GPUs - recommended for RTX/GTX)
 #   --features vulkan   (AMD/Intel GPUs)
 #   --features openblas (OpenBLAS optimization, requires BLAS_INCLUDE_DIRS)
+#
+# IMPORTANT: Do NOT hardcode GPU backends here. Hardcoding vulkan while the
+# code also enables CUDA at runtime causes a dual-backend conflict that crashes
+# with "pre-allocated tensor in a backend that cannot run the operation".
 [target.'cfg(target_os = "windows")'.dependencies]
-whisper-rs = { version = "0.13.2", features = ["raw-api", "vulkan"] }
+whisper-rs = { version = "0.13.2", features = ["raw-api"] }
 futures-channel = "0.3.31"
 
 # Linux-specific dependencies
-# Default: CPU-only build (no BLAS)
-# Users can enable features manually:
+# Default: CPU-only build (works on all hardware)
+# GPU acceleration is opt-in via Cargo features:
 #   --features cuda     (NVIDIA GPUs)
 #   --features vulkan   (AMD/Intel GPUs)
 #   --features hipblas  (AMD ROCm)

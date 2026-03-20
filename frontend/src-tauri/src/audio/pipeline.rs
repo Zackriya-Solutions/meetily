@@ -25,14 +25,12 @@ struct AudioMixerRingBuffer {
 impl AudioMixerRingBuffer {
     fn new(sample_rate: u32) -> Self {
         // Use 50ms windows for mixing
-        let window_ms = 600.0;
+        let window_ms = 50.0;
         let window_size_samples = (sample_rate as f32 * window_ms / 1000.0) as usize;
 
-        // CRITICAL FIX: Increase max buffer to 400ms for system audio stability
-        // System audio (especially Core Audio on macOS) can have significant jitter
-        // due to sample-by-sample streaming → batching → channel transmission
-        // Accounts for: RNNoise buffering + Core Audio jitter + processing delays
-        let max_buffer_size = window_size_samples * 8;  // 400ms (was 200ms)
+        // Max buffer provides headroom for jitter between mic and system streams.
+        // 400ms is sufficient with || in can_mix (doesn't wait for both buffers).
+        let max_buffer_size = window_size_samples * 8;  // 400ms
 
         info!("🔊 Ring buffer initialized: window={}ms ({} samples), max={}ms ({} samples)",
               window_ms, window_size_samples,
