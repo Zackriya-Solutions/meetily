@@ -12,6 +12,7 @@ export interface RecordingPreferences {
   file_format: string;
   preferred_mic_device: string | null;
   preferred_system_device: string | null;
+  recording_mode: 'Mono' | 'Stereo';
 }
 
 interface RecordingSettingsProps {
@@ -24,7 +25,8 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
     auto_save: true,
     file_format: 'mp4',
     preferred_mic_device: null,
-    preferred_system_device: null
+    preferred_system_device: null,
+    recording_mode: 'Mono'
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -77,6 +79,13 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
     await Analytics.track('auto_save_recording_toggled', {
       enabled: enabled.toString()
     });
+  };
+
+  const handleRecordingModeToggle = async (stereo: boolean) => {
+    const mode = stereo ? 'Stereo' : 'Mono';
+    const newPreferences = { ...preferences, recording_mode: mode as 'Mono' | 'Stereo' };
+    setPreferences(newPreferences);
+    await savePreferences(newPreferences);
   };
 
   const handleDeviceChange = async (devices: SelectedDevices) => {
@@ -172,6 +181,21 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
         <Switch
           checked={preferences.auto_save}
           onCheckedChange={handleAutoSaveToggle}
+          disabled={saving}
+        />
+      </div>
+
+      {/* Separate Audio Tracks Toggle */}
+      <div className="flex items-center justify-between p-4 border rounded-lg">
+        <div className="flex-1">
+          <div className="font-medium">Separate audio tracks (advanced)</div>
+          <div className="text-sm text-gray-600">
+            Record microphone and system audio on separate stereo channels (left/right). Useful for speaker diarization and post-processing.
+          </div>
+        </div>
+        <Switch
+          checked={preferences.recording_mode === 'Stereo'}
+          onCheckedChange={handleRecordingModeToggle}
           disabled={saving}
         />
       </div>
