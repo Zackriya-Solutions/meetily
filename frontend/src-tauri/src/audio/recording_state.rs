@@ -22,6 +22,8 @@ pub struct AudioChunk {
     pub timestamp: f64,
     pub chunk_id: u64,
     pub device_type: DeviceType,
+    /// True for intermediate partial transcriptions during ongoing speech
+    pub is_partial: bool,
 }
 
 /// Processed audio chunk (post-VAD) for recording

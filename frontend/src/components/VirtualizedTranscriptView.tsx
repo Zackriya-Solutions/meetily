@@ -78,6 +78,7 @@ const TranscriptSegment = memo(function TranscriptSegment({
     confidence?: number;
     isStreaming: boolean;
     showConfidence: boolean;
+    isPartial?: boolean;
 }) {
     const displayText = cleanStopWords(text) || (text.trim() === '' ? '[Silence]' : text);
 
@@ -101,6 +102,8 @@ const TranscriptSegment = memo(function TranscriptSegment({
                         <div className="bg-gray-100 border border-gray-200 rounded-lg px-3 py-2">
                             <p className="text-base text-gray-800 leading-relaxed">{displayText}</p>
                         </div>
+                    ) : isPartial ? (
+                        <p className="text-base text-gray-400 italic leading-relaxed">{displayText}</p>
                     ) : (
                         <p className="text-base text-gray-800 leading-relaxed">{displayText}</p>
                     )}
@@ -296,6 +299,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                         confidence={segment.confidence}
                                         isStreaming={isStreaming}
                                         showConfidence={showConfidence}
+                                        isPartial={segment.is_partial}
                                     />
                                 </div>
                             );
@@ -352,6 +356,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                         confidence={segment.confidence}
                                         isStreaming={isStreaming}
                                         showConfidence={showConfidence}
+                                        isPartial={segment.is_partial}
                                     />
                                 </motion.div>
                             );
