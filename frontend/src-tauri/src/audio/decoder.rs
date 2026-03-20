@@ -106,6 +106,42 @@ impl DecodedAudio {
             mono_samples
         }
     }
+
+    /// Extract a single channel from interleaved stereo audio.
+    /// channel_index: 0 = left (mic), 1 = right (system)
+    pub fn extract_channel(&self, channel_index: u16) -> DecodedAudio {
+        if self.channels <= 1 {
+            // Already mono, return clone
+            return self.clone();
+        }
+
+        let mut channel_samples = Vec::with_capacity(self.samples.len() / self.channels as usize);
+        for (i, &sample) in self.samples.iter().enumerate() {
+            if (i % self.channels as usize) == channel_index as usize {
+                channel_samples.push(sample);
+            }
+        }
+
+        info!(
+            "Extracted channel {} from {} interleaved samples → {} mono samples",
+            channel_index,
+            self.samples.len(),
+            channel_samples.len()
+        );
+
+        DecodedAudio {
+            samples: channel_samples,
+            sample_rate: self.sample_rate,
+            channels: 1,
+            duration_seconds: self.duration_seconds,
+        }
+    }
+
+    /// Check if this audio was recorded in multitrack stereo mode
+    /// (mic on left, system on right)
+    pub fn is_multitrack_stereo(&self) -> bool {
+        self.channels == 2
+    }
 }
 
 /// Resample large audio files in fixed-size chunks through the sinc resampler.
