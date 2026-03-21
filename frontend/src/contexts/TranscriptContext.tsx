@@ -428,37 +428,22 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
 
     setTranscripts(prev => {
       if (update.is_partial) {
-        // PARTIAL: Replace any existing partial with same audio_start_time,
-        // or add as new if none exists
-        const existingPartialIdx = prev.findIndex(
-          t => t.is_partial && t.audio_start_time === update.audio_start_time
-        );
-        if (existingPartialIdx >= 0) {
-          // Replace existing partial with updated text
-          const updated = [...prev];
-          updated[existingPartialIdx] = newTranscript;
-          return updated;
-        }
-        // New partial — add it
-        return [...prev, newTranscript];
+        // PARTIAL: Remove ALL existing partials (only one active speech at a time),
+        // then add the new partial at the end
+        const withoutPartials = prev.filter(t => !t.is_partial);
+        return [...withoutPartials, newTranscript];
       }
 
-      // FINAL: Remove any partials that overlap with this final segment's time range,
-      // then add the final
-      const finalStart = update.audio_start_time;
-      const filtered = prev.filter(t => {
-        if (!t.is_partial) return true; // Keep all finals
-        // Remove partials that started at or after this final's start
-        return (t.audio_start_time || 0) < finalStart;
-      });
+      // FINAL: Remove all partials (this final replaces them), then add the final
+      const withoutPartials = prev.filter(t => !t.is_partial);
 
       // Check for exact duplicate
-      const exists = filtered.some(
+      const exists = withoutPartials.some(
         t => t.text === update.text && t.timestamp === update.timestamp
       );
-      if (exists) return filtered;
+      if (exists) return withoutPartials;
 
-      const updated = [...filtered, newTranscript];
+      const updated = [...withoutPartials, newTranscript];
       return updated.sort((a, b) => (a.sequence_id || 0) - (b.sequence_id || 0));
     });
   }, []);
