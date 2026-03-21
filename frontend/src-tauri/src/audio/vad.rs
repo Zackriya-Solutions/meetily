@@ -403,7 +403,9 @@ where
                 warn!("VAD: Chunk {} took {:?} - possible performance issue", chunk_count, elapsed);
             }
 
-            all_segments.extend(segments);
+            // Filter out partial segments (confidence < 0) — only keep finals
+            // Partials are for live preview only, not for batch retranscription
+            all_segments.extend(segments.into_iter().filter(|s| s.confidence >= 0.0));
 
             processed += chunk.len();
             let progress = ((processed * 100) / total_samples) as u32;
@@ -428,7 +430,9 @@ where
         info!("VAD: Complete! Found {} speech segments", all_segments.len());
     } else {
         // Small file - process all at once
-        all_segments = processor.process_audio(samples_mono_16k)?;
+        let segments = processor.process_audio(samples_mono_16k)?;
+        // Filter out partials (confidence < 0) — only keep finals for batch processing
+        all_segments.extend(segments.into_iter().filter(|s| s.confidence >= 0.0));
         let final_segments = processor.flush()?;
         all_segments.extend(final_segments);
     }
