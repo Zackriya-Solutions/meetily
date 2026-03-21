@@ -60,6 +60,15 @@ export class TranscriptService {
   }
 
   /**
+   * Listen for partial transcript updates (live preview during ongoing speech)
+   */
+  async onTranscriptPartial(callback: (text: string) => void): Promise<UnlistenFn> {
+    return listen<{ text: string }>('transcript-partial', (event) => {
+      callback(event.payload.text);
+    });
+  }
+
+  /**
    * Listen for transcription-complete event
    * @param callback - Function to call when transcription processing is complete
    * @returns Promise that resolves to unlisten function

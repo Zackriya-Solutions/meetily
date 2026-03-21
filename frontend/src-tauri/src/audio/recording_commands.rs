@@ -262,15 +262,8 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
         let listener_id = app.listen("transcript-update", move |event: tauri::Event| {
             // Parse the transcript update from the event payload
             if let Ok(update) = serde_json::from_str::<TranscriptUpdate>(event.payload()) {
-                // Only save final (non-partial) segments to disk/JSON
-                // Partials are displayed in frontend but not persisted
-                log::info!("📝 transcript-update: seq={}, is_partial={}, text='{}'",
-                    update.sequence_id, update.is_partial,
-                    if update.text.len() > 50 { format!("{}...", &update.text[..50]) } else { update.text.clone() });
-                if update.is_partial {
-                    log::info!("⏭️ Skipping partial save (seq: {})", update.sequence_id);
-                    return;
-                }
+                // transcript-update only receives finals (partials use transcript-partial event)
+                // No is_partial check needed — guaranteed to be final
 
                 let segment = crate::audio::recording_saver::TranscriptSegment {
                     id: format!("seg_{}", update.sequence_id),
@@ -439,15 +432,8 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
         let listener_id = app.listen("transcript-update", move |event: tauri::Event| {
             // Parse the transcript update from the event payload
             if let Ok(update) = serde_json::from_str::<TranscriptUpdate>(event.payload()) {
-                // Only save final (non-partial) segments to disk/JSON
-                // Partials are displayed in frontend but not persisted
-                log::info!("📝 transcript-update: seq={}, is_partial={}, text='{}'",
-                    update.sequence_id, update.is_partial,
-                    if update.text.len() > 50 { format!("{}...", &update.text[..50]) } else { update.text.clone() });
-                if update.is_partial {
-                    log::info!("⏭️ Skipping partial save (seq: {})", update.sequence_id);
-                    return;
-                }
+                // transcript-update only receives finals (partials use transcript-partial event)
+                // No is_partial check needed — guaranteed to be final
 
                 let segment = crate::audio::recording_saver::TranscriptSegment {
                     id: format!("seg_{}", update.sequence_id),

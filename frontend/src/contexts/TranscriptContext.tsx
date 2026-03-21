@@ -289,12 +289,14 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
       try {
         console.log('🔥 Setting up MAIN transcript listener during component initialization...');
         unlistenFn = await transcriptService.onTranscriptUpdate((update) => {
+          // Final transcript arrived — clear partial preview
+          setPartialText(null);
+
           const now = Date.now();
-          console.log('🎯 MAIN LISTENER: Received transcript update:', {
+          console.log('🎯 MAIN LISTENER: Received final transcript:', {
             sequence_id: update.sequence_id,
             text: update.text.substring(0, 50) + '...',
             timestamp: update.timestamp,
-            is_partial: update.is_partial,
             received_at: new Date(now).toISOString(),
             buffer_size_before: transcriptBuffer.size
           });
@@ -348,6 +350,12 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
     setupListener();
     console.log('Started enhanced listener setup');
 
+    // Setup partial transcript listener (live preview, separate from finals)
+    let unlistenPartialFn: (() => void) | null = null;
+    transcriptService.onTranscriptPartial((text) => {
+      setPartialText(text);
+    }).then(fn => { unlistenPartialFn = fn; });
+
     return () => {
       console.log('🧹 CLEANUP: Cleaning up MAIN transcript listener...');
       if (processingTimer) {
@@ -357,6 +365,9 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
       if (unlistenFn) {
         unlistenFn();
         console.log('🧹 CLEANUP: MAIN transcript listener cleaned up');
+      }
+      if (unlistenPartialFn) {
+        unlistenPartialFn();
       }
     };
   }, [currentMeetingId]); // Add currentMeetingId dependency

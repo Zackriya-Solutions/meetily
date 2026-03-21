@@ -224,26 +224,32 @@ pub fn start_transcription_task<R: Runtime>(
 
                                         // Emit transcript update with NEW recording-relative timestamps
 
-                                        let update = TranscriptUpdate {
-                                            text: transcript,
-                                            timestamp: format_current_timestamp(), // Wall-clock for reference
-                                            source: "Audio".to_string(),
-                                            sequence_id,
-                                            chunk_start_time: chunk_timestamp, // Legacy compatibility
-                                            is_partial,
-                                            confidence: confidence_opt.unwrap_or(0.85), // Default for providers without confidence
-                                            // NEW: Recording-relative timestamps for sync
-                                            audio_start_time,
-                                            audio_end_time,
-                                            duration: chunk_duration,
-                                        };
+                                        if is_partial {
+                                            // Partial: emit separate event (never reaches recording saver)
+                                            let _ = app_clone.emit("transcript-partial",
+                                                serde_json::json!({ "text": transcript }));
+                                        } else {
+                                            // Final: emit to transcript-update (reaches saver + frontend list)
+                                            let update = TranscriptUpdate {
+                                                text: transcript,
+                                                timestamp: format_current_timestamp(),
+                                                source: "Audio".to_string(),
+                                                sequence_id,
+                                                chunk_start_time: chunk_timestamp,
+                                                is_partial: false,
+                                                confidence: confidence_opt.unwrap_or(0.85),
+                                                audio_start_time,
+                                                audio_end_time,
+                                                duration: chunk_duration,
+                                            };
 
-                                        if let Err(e) = app_clone.emit("transcript-update", &update)
-                                        {
-                                            error!(
-                                                "Worker {}: Failed to emit transcript update: {}",
-                                                worker_id, e
-                                            );
+                                            if let Err(e) = app_clone.emit("transcript-update", &update)
+                                            {
+                                                error!(
+                                                    "Worker {}: Failed to emit transcript update: {}",
+                                                    worker_id, e
+                                                );
+                                            }
                                         }
                                         // PERFORMANCE: Removed verbose logging of every emission
                                     } else if !transcript.trim().is_empty() && should_log_this_chunk
