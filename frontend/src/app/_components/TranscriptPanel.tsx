@@ -45,6 +45,7 @@ export function TranscriptPanel({
       endTime: t.audio_end_time,
       text: t.text,
       confidence: t.confidence,
+      is_partial: t.is_partial,
     })),
     [transcripts]
   );

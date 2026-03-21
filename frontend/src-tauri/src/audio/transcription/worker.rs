@@ -142,6 +142,7 @@ pub fn start_transcription_task<R: Runtime>(
 
                             let chunk_timestamp = chunk.timestamp;
                             let chunk_duration = chunk.data.len() as f64 / chunk.sample_rate as f64;
+                            let chunk_is_partial = chunk.is_partial;
 
                             // Transcribe with provider-agnostic approach
                             match transcribe_chunk_with_provider(
@@ -151,7 +152,9 @@ pub fn start_transcription_task<R: Runtime>(
                             )
                             .await
                             {
-                                Ok((transcript, confidence_opt, is_partial)) => {
+                                Ok((transcript, confidence_opt, _is_partial_from_whisper)) => {
+                                    // Use chunk-level partial flag (from VAD) instead of Whisper's
+                                    let is_partial = chunk_is_partial;
                                     // Provider-aware confidence threshold
                                     let confidence_threshold = match &engine_clone {
                                         TranscriptionEngine::Whisper(_) | TranscriptionEngine::Provider(_) => 0.3,

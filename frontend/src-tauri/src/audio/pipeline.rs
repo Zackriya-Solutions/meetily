@@ -624,6 +624,7 @@ impl AudioCapture {
             timestamp,
             chunk_id,
             device_type: self.device_type.clone(),
+            is_partial: false,
         };
 
         // NOTE: Raw audio is NOT sent to recording saver to prevent echo
@@ -853,10 +854,13 @@ impl AudioPipeline {
                                 Ok(speech_segments) => {
                                     for segment in speech_segments {
                                         let duration_ms = segment.end_timestamp_ms - segment.start_timestamp_ms;
+                                        // VAD uses confidence == -1.0 as marker for partial/intermediate segments
+                                        let is_partial_segment = segment.confidence < 0.0;
 
-                                        if segment.samples.len() >= 800 {  // Minimum 50ms at 16kHz - matches Parakeet capability
-                                            info!("📤 Sending VAD segment: {:.1}ms, {} samples",
-                                                  duration_ms, segment.samples.len());
+                                        if segment.samples.len() >= 800 {  // Minimum 50ms at 16kHz
+                                            let label = if is_partial_segment { "partial" } else { "final" };
+                                            info!("📤 Sending VAD {} segment: {:.1}ms, {} samples",
+                                                  label, duration_ms, segment.samples.len());
 
                                             let transcription_chunk = AudioChunk {
                                                 data: segment.samples,
@@ -864,7 +868,8 @@ impl AudioPipeline {
                                                 channels: 1,
                                                 timestamp: segment.start_timestamp_ms / 1000.0,
                                                 chunk_id: self.chunk_id_counter,
-                                                device_type: DeviceType::Microphone,  // Mixed audio
+                                                device_type: DeviceType::Microphone,
+                                                is_partial: is_partial_segment,
                                             };
 
                                             if let Err(e) = self.transcription_sender.send(transcription_chunk) {
@@ -900,6 +905,7 @@ impl AudioPipeline {
                                     timestamp: chunk.timestamp,
                                     chunk_id: self.chunk_id_counter,
                                     device_type: DeviceType::Microphone,
+                                    is_partial: false,
                                 };
                                 let _ = sender.send(recording_chunk);
                             }
@@ -945,6 +951,7 @@ impl AudioPipeline {
                             timestamp: segment.start_timestamp_ms / 1000.0,
                             chunk_id: self.chunk_id_counter,
                             device_type: DeviceType::Microphone,
+                            is_partial: false, // Flush segments are always final
                         };
 
                         if let Err(e) = self.transcription_sender.send(transcription_chunk) {
@@ -1064,12 +1071,13 @@ impl AudioPipelineManager {
         if let Some(sender) = &self.audio_sender {
             // Create a special flush chunk to trigger immediate processing
             let flush_chunk = AudioChunk {
-                data: vec![], // Empty data signals flush
+                data: vec![],
                 sample_rate: 16000,
                 channels: 1,
                 timestamp: 0.0,
-                chunk_id: u64::MAX, // Special ID to indicate flush
+                chunk_id: u64::MAX,
                 device_type: super::recording_state::DeviceType::Microphone,
+                is_partial: false,
             };
 
             if let Err(e) = sender.send(flush_chunk) {
@@ -1091,6 +1099,7 @@ impl AudioPipelineManager {
                         timestamp: 0.0,
                         chunk_id: u64::MAX - (i as u64),
                         device_type: super::recording_state::DeviceType::Microphone,
+                        is_partial: false,
                     };
                     let _ = sender.send(additional_flush);
                 }

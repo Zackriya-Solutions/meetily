@@ -427,29 +427,39 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
     };
 
     setTranscripts(prev => {
-      console.log('📊 Current transcripts count before update:', prev.length);
-
-      // Check if this transcript already exists
-      const exists = prev.some(
-        t => t.text === update.text && t.timestamp === update.timestamp
-      );
-      if (exists) {
-        console.log('🚫 Duplicate transcript detected, skipping:', update.text.substring(0, 30) + '...');
-        return prev;
+      if (update.is_partial) {
+        // PARTIAL: Replace any existing partial with same audio_start_time,
+        // or add as new if none exists
+        const existingPartialIdx = prev.findIndex(
+          t => t.is_partial && t.audio_start_time === update.audio_start_time
+        );
+        if (existingPartialIdx >= 0) {
+          // Replace existing partial with updated text
+          const updated = [...prev];
+          updated[existingPartialIdx] = newTranscript;
+          return updated;
+        }
+        // New partial — add it
+        return [...prev, newTranscript];
       }
 
-      // Add new transcript and sort by sequence_id to maintain order
-      const updated = [...prev, newTranscript];
-      const sorted = updated.sort((a, b) => (a.sequence_id || 0) - (b.sequence_id || 0));
-
-      console.log('✅ Added new transcript. New count:', sorted.length);
-      console.log('📝 Latest transcript:', {
-        id: newTranscript.id,
-        text: newTranscript.text.substring(0, 30) + '...',
-        sequence_id: newTranscript.sequence_id
+      // FINAL: Remove any partials that overlap with this final segment's time range,
+      // then add the final
+      const finalStart = update.audio_start_time;
+      const filtered = prev.filter(t => {
+        if (!t.is_partial) return true; // Keep all finals
+        // Remove partials that started at or after this final's start
+        return (t.audio_start_time || 0) < finalStart;
       });
 
-      return sorted;
+      // Check for exact duplicate
+      const exists = filtered.some(
+        t => t.text === update.text && t.timestamp === update.timestamp
+      );
+      if (exists) return filtered;
+
+      const updated = [...filtered, newTranscript];
+      return updated.sort((a, b) => (a.sequence_id || 0) - (b.sequence_id || 0));
     });
   }, []);
 

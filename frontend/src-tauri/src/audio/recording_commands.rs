@@ -262,14 +262,20 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
         let listener_id = app.listen("transcript-update", move |event: tauri::Event| {
             // Parse the transcript update from the event payload
             if let Ok(update) = serde_json::from_str::<TranscriptUpdate>(event.payload()) {
-                // Create structured transcript segment
+                // Only save final (non-partial) segments to disk/JSON
+                // Partials are displayed in frontend but not persisted
+                if update.is_partial {
+                    log::debug!("Skipping partial transcript save (sequence_id: {})", update.sequence_id);
+                    return;
+                }
+
                 let segment = crate::audio::recording_saver::TranscriptSegment {
                     id: format!("seg_{}", update.sequence_id),
                     text: update.text.clone(),
                     audio_start_time: update.audio_start_time,
                     audio_end_time: update.audio_end_time,
                     duration: update.duration,
-                    display_time: update.timestamp.clone(), // Use wall-clock timestamp for display
+                    display_time: update.timestamp.clone(),
                     confidence: update.confidence,
                     sequence_id: update.sequence_id,
                 };
@@ -430,14 +436,20 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
         let listener_id = app.listen("transcript-update", move |event: tauri::Event| {
             // Parse the transcript update from the event payload
             if let Ok(update) = serde_json::from_str::<TranscriptUpdate>(event.payload()) {
-                // Create structured transcript segment
+                // Only save final (non-partial) segments to disk/JSON
+                // Partials are displayed in frontend but not persisted
+                if update.is_partial {
+                    log::debug!("Skipping partial transcript save (sequence_id: {})", update.sequence_id);
+                    return;
+                }
+
                 let segment = crate::audio::recording_saver::TranscriptSegment {
                     id: format!("seg_{}", update.sequence_id),
                     text: update.text.clone(),
                     audio_start_time: update.audio_start_time,
                     audio_end_time: update.audio_end_time,
                     duration: update.duration,
-                    display_time: update.timestamp.clone(), // Use wall-clock timestamp for display
+                    display_time: update.timestamp.clone(),
                     confidence: update.confidence,
                     sequence_id: update.sequence_id,
                 };
