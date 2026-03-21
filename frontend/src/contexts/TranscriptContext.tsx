@@ -20,6 +20,8 @@ interface TranscriptContextType {
   clearTranscripts: () => void;
   currentMeetingId: string | null;
   markMeetingAsSaved: () => Promise<void>;
+  /** Current partial transcription (live preview of ongoing speech) */
+  partialText: string | null;
 }
 
 const TranscriptContext = createContext<TranscriptContextType | undefined>(undefined);
@@ -28,6 +30,7 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
   const [transcripts, setTranscripts] = useState<Transcript[]>([]);
   const [meetingTitle, setMeetingTitle] = useState('+ New Call');
   const [currentMeetingId, setCurrentMeetingId] = useState<string | null>(null);
+  const [partialText, setPartialText] = useState<string | null>(null);
 
   // Recording state context - provides backend-synced state
   const recordingState = useRecordingState();
@@ -426,24 +429,23 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
       duration: update.duration,
     };
 
+    if (update.is_partial) {
+      // Partial: update the live preview indicator (not in the transcript list)
+      setPartialText(update.text);
+      return;
+    }
+
+    // Final: clear partial preview and add to transcript list
+    setPartialText(null);
+
     setTranscripts(prev => {
-      if (update.is_partial) {
-        // PARTIAL: Remove ALL existing partials (only one active speech at a time),
-        // then add the new partial at the end
-        const withoutPartials = prev.filter(t => !t.is_partial);
-        return [...withoutPartials, newTranscript];
-      }
-
-      // FINAL: Remove all partials (this final replaces them), then add the final
-      const withoutPartials = prev.filter(t => !t.is_partial);
-
       // Check for exact duplicate
-      const exists = withoutPartials.some(
+      const exists = prev.some(
         t => t.text === update.text && t.timestamp === update.timestamp
       );
-      if (exists) return withoutPartials;
+      if (exists) return prev;
 
-      const updated = [...withoutPartials, newTranscript];
+      const updated = [...prev, newTranscript];
       return updated.sort((a, b) => (a.sequence_id || 0) - (b.sequence_id || 0));
     });
   }, []);
@@ -478,6 +480,7 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
   // Clear transcripts (used when starting new recording)
   const clearTranscripts = useCallback(() => {
     setTranscripts([]);
+    setPartialText(null);
     // Don't clear currentMeetingId here - it will be set by recording-started event
   }, []);
 
@@ -516,6 +519,7 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
     clearTranscripts,
     currentMeetingId,
     markMeetingAsSaved,
+    partialText,
   };
 
   return (

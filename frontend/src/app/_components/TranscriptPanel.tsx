@@ -31,7 +31,7 @@ export function TranscriptPanel({
   showModal
 }: TranscriptPanelProps) {
   // Contexts
-  const { transcripts, transcriptContainerRef, copyTranscript } = useTranscripts();
+  const { transcripts, transcriptContainerRef, copyTranscript, partialText } = useTranscripts();
   const { transcriptModelConfig } = useConfig();
   const { isRecording, isPaused } = useRecordingState();
   const { checkPermissions, isChecking, hasSystemAudio, hasMicrophone } = usePermissionCheck();
@@ -115,6 +115,14 @@ export function TranscriptPanel({
               enableStreaming={isRecording}
               showConfidence={true}
             />
+            {/* Live partial transcription preview */}
+            {partialText && isRecording && (
+              <div className="mt-2 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg">
+                <p className="text-sm text-gray-400 italic leading-relaxed">
+                  {partialText}
+                </p>
+              </div>
+            )}
           </div>
         </div>
       </div>

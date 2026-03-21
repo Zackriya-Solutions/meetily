@@ -264,8 +264,11 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
             if let Ok(update) = serde_json::from_str::<TranscriptUpdate>(event.payload()) {
                 // Only save final (non-partial) segments to disk/JSON
                 // Partials are displayed in frontend but not persisted
+                log::info!("📝 transcript-update: seq={}, is_partial={}, text='{}'",
+                    update.sequence_id, update.is_partial,
+                    if update.text.len() > 50 { format!("{}...", &update.text[..50]) } else { update.text.clone() });
                 if update.is_partial {
-                    log::debug!("Skipping partial transcript save (sequence_id: {})", update.sequence_id);
+                    log::info!("⏭️ Skipping partial save (seq: {})", update.sequence_id);
                     return;
                 }
 
@@ -438,8 +441,11 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
             if let Ok(update) = serde_json::from_str::<TranscriptUpdate>(event.payload()) {
                 // Only save final (non-partial) segments to disk/JSON
                 // Partials are displayed in frontend but not persisted
+                log::info!("📝 transcript-update: seq={}, is_partial={}, text='{}'",
+                    update.sequence_id, update.is_partial,
+                    if update.text.len() > 50 { format!("{}...", &update.text[..50]) } else { update.text.clone() });
                 if update.is_partial {
-                    log::debug!("Skipping partial transcript save (sequence_id: {})", update.sequence_id);
+                    log::info!("⏭️ Skipping partial save (seq: {})", update.sequence_id);
                     return;
                 }
 
