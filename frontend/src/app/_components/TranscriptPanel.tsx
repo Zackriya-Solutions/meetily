@@ -114,15 +114,8 @@ export function TranscriptPanel({
               isStopping={isStopping}
               enableStreaming={isRecording}
               showConfidence={true}
+              partialText={partialText}
             />
-            {/* Live partial transcription preview */}
-            {partialText && isRecording && (
-              <div className="mt-2 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg">
-                <p className="text-sm text-gray-400 italic leading-relaxed">
-                  {partialText}
-                </p>
-              </div>
-            )}
           </div>
         </div>
       </div>
