@@ -590,12 +590,17 @@ impl ParakeetEngine {
             }
         }
 
-        // HuggingFace base URL for Parakeet models (version-specific)
-        let base_url = if model_name.contains("-v2-") {
-            "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v2-onnx/resolve/main"
+        // Base URLs for Parakeet models (primary + fallbacks, version-specific)
+        let base_urls: Vec<&str> = if model_name.contains("-v2-") {
+            vec![
+                "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v2-onnx/resolve/main",
+            ]
         } else {
-            // Default to v3 for v3 models
-            "https://meetily.towardsgeneralintelligence.com/models/parakeet-tdt-0.6b-v3-onnx"
+            // v3 models: try custom server first, fall back to HuggingFace
+            vec![
+                "https://meetily.towardsgeneralintelligence.com/models/parakeet-tdt-0.6b-v3-onnx",
+                "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main",
+            ]
         };
 
         // Determine which files to download based on quantization
@@ -713,7 +718,6 @@ impl ParakeetEngine {
         );
 
         for (index, filename) in files_to_download.iter().enumerate() {
-            let file_url = format!("{}/{}", base_url, filename);
             let file_path = model_dir.join(filename);
 
             // Check for existing partial file to resume
@@ -739,257 +743,234 @@ impl ParakeetEngine {
 
             log::info!("Downloading file {}/{}: {} (resuming from {} bytes)", index + 1, total_files, filename, existing_size);
 
-            // Build request with optional Range header for resume
-            let mut request = client.get(&file_url);
-            if existing_size > 0 {
-                request = request.header("Range", format!("bytes={}-", existing_size));
-                log::info!("Resuming download from byte {}", existing_size);
-            }
+            // Try each URL (primary + fallbacks), including mid-stream failures
+            let mut last_error = String::new();
+            let mut file_downloaded_success = false;
 
-            let mut response = request.send().await
-                .map_err(|e| {
-                    anyhow!("Failed to start download for {}: {}", filename, e)
-                })?;
-
-            // Handle response status
-            let (file_total_size, resuming) = if response.status() == reqwest::StatusCode::PARTIAL_CONTENT {
-                // Server supports resume, get remaining size
-                let remaining = response.content_length().unwrap_or(0);
-                log::info!("Server supports resume, remaining: {} bytes", remaining);
-                (existing_size + remaining, true)
-            } else if response.status().is_success() {
-                // Fresh download or server doesn't support resume
-                if existing_size > 0 {
-                    log::warn!("Server doesn't support resume for {}, starting fresh download", filename);
-                }
-                (response.content_length().unwrap_or(0), false)
-            } else if response.status() == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
-                // 416: Range not satisfiable - file complete or invalid range
-                log::warn!("Server returned 416 Range Not Satisfiable for {}", filename);
-
-                let size_tolerance = (expected_size as f64 * 0.99) as u64;
-                if existing_size >= size_tolerance && expected_size > 0 {
-                    // File is complete - skip it
-                    log::info!("File {} complete ({} bytes). Skipping.", filename, existing_size);
-                    continue;
-                } else {
-                    // File incomplete but server won't accept range - delete and retry
+            'url_loop: for (url_index, url_base) in base_urls.iter().enumerate() {
+                let file_url = format!("{}/{}", url_base, filename);
+                let is_fallback = url_index > 0;
+                if is_fallback {
                     log::warn!(
-                        "File {} incomplete ({}/{} bytes). Deleting and retrying.",
-                        filename, existing_size, expected_size
+                        "URL failed for {} ({}), trying fallback {}/{}: {}",
+                        filename, last_error, url_index, base_urls.len() - 1, file_url
                     );
-
-                    if let Err(e) = fs::remove_file(&file_path).await {
-                        let mut active = self.active_downloads.write().await;
-                        active.remove(model_name);
-                        return Err(anyhow!("Failed to delete incomplete file {}: {}", filename, e));
-                    }
-
-                    // Retry without Range header
-                    log::info!("Retrying {} without resume", filename);
-                    response = client.get(&file_url).send().await
-                        .map_err(|e| anyhow!("Retry failed for {}: {}", filename, e))?;
-
-                    if !response.status().is_success() {
-                        let mut active = self.active_downloads.write().await;
-                        active.remove(model_name);
-                        return Err(anyhow!("Retry failed for {} with status: {}", filename, response.status()));
-                    }
-
-                    (response.content_length().unwrap_or(0), false)
-                }
-            } else {
-                // Other errors
-                let mut active = self.active_downloads.write().await;
-                active.remove(model_name);
-                return Err(anyhow!("Download failed for {} with status: {}", filename, response.status()));
-            };
-
-            // Open file for writing (append if resuming, create new if not)
-            let file = if resuming {
-                fs::OpenOptions::new()
-                    .append(true)
-                    .open(&file_path)
-                    .await
-                    .map_err(|e| anyhow!("Failed to open file for resume {}: {}", filename, e))?
-            } else {
-                fs::File::create(&file_path)
-                    .await
-                    .map_err(|e| anyhow!("Failed to create file {}: {}", filename, e))?
-            };
-
-            // Use buffered writer for better I/O performance (8MB buffer)
-            let mut writer = BufWriter::with_capacity(8 * 1024 * 1024, file);
-
-            // Stream download
-            use futures_util::StreamExt;
-            let mut stream = response.bytes_stream();
-            let mut file_downloaded = if resuming { existing_size } else { 0u64 };
-
-            loop {
-                // Check for cancellation before processing chunk
-                {
-                    let cancel_flag = self.cancel_download_flag.read().await;
-                    if cancel_flag.as_ref() == Some(&model_name.to_string()) {
-                        log::info!("Download cancelled for {}", model_name);
-                        // Flush and keep partial file for resume on next attempt
-                        let _ = writer.flush().await;
-                        drop(writer);
-                        // Remove from active downloads on cancellation
-                        let mut active = self.active_downloads.write().await;
-                        active.remove(model_name);
-                        return Err(anyhow!("Download cancelled by user"));
+                    // Emit fallback event so UI can inform the user
+                    if let Some(ref callback) = progress_callback {
+                        callback(DownloadProgress::new(total_downloaded, total_size_bytes, 0.0));
                     }
                 }
 
-                // Add per-chunk timeout (30 seconds) to detect stalled connections
-                let next_result = timeout(Duration::from_secs(30), stream.next()).await;
+                // Re-check existing file size (may have partial data from a previous URL attempt)
+                let current_existing_size: u64 = if file_path.exists() {
+                    fs::metadata(&file_path).await.map(|m| m.len()).unwrap_or(0)
+                } else {
+                    0
+                };
 
-                let chunk = match next_result {
-                    // Timeout - no data received for 30 seconds
-                    Err(_) => {
-                        log::warn!("Download timeout for {}: no data received for 30 seconds", model_name);
-                        let _ = writer.flush().await;
+                // Build request with optional Range header for resume
+                let mut request = client.get(&file_url);
+                if current_existing_size > 0 {
+                    request = request.header("Range", format!("bytes={}-", current_existing_size));
+                    log::info!("Resuming download of {} from byte {}", filename, current_existing_size);
+                }
 
-                        // Remove from active downloads
-                        {
-                            let mut active = self.active_downloads.write().await;
-                            active.remove(model_name);
-                        }
+                // Connect
+                let connect_result = request.send().await;
+                let resp = match connect_result {
+                    Ok(resp) => resp,
+                    Err(e) => {
+                        last_error = format!("Connection failed: {}", e);
+                        log::warn!("URL {} connection failed for {}: {}", file_url, filename, e);
+                        continue 'url_loop;
+                    }
+                };
 
-                        // Update model status to Missing so retry can work
-                        {
-                            let mut models = self.available_models.write().await;
-                            if let Some(model) = models.get_mut(model_name) {
-                                model.status = ModelStatus::Missing;
+                // Handle response status, potentially replacing resp on 416 retry
+                let mut resp = resp;
+                let (file_total_size, resuming) = if resp.status() == reqwest::StatusCode::PARTIAL_CONTENT {
+                    let remaining = resp.content_length().unwrap_or(0);
+                    log::info!("Server supports resume, remaining: {} bytes", remaining);
+                    (current_existing_size + remaining, true)
+                } else if resp.status().is_success() {
+                    if current_existing_size > 0 {
+                        log::warn!("Server doesn't support resume for {}, starting fresh download", filename);
+                    }
+                    (resp.content_length().unwrap_or(0), false)
+                } else if resp.status() == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
+                    let size_tolerance = (expected_size as f64 * 0.99) as u64;
+                    if current_existing_size >= size_tolerance && expected_size > 0 {
+                        log::info!("File {} already complete ({} bytes). Skipping.", filename, current_existing_size);
+                        file_downloaded_success = true;
+                        break 'url_loop;
+                    } else {
+                        // Delete incomplete file and retry fresh on this URL
+                        log::warn!("File {} incomplete ({}/{} bytes), deleting for fresh download", filename, current_existing_size, expected_size);
+                        let _ = fs::remove_file(&file_path).await;
+                        match client.get(&file_url).send().await {
+                            Ok(retry_resp) if retry_resp.status().is_success() => {
+                                let size = retry_resp.content_length().unwrap_or(0);
+                                resp = retry_resp;
+                                (size, false)
+                            }
+                            Ok(retry_resp) => {
+                                last_error = format!("HTTP {} on fresh retry", retry_resp.status());
+                                continue 'url_loop;
+                            }
+                            Err(e) => {
+                                last_error = format!("Fresh retry failed: {}", e);
+                                continue 'url_loop;
                             }
                         }
+                    }
+                } else {
+                    last_error = format!("HTTP {}", resp.status());
+                    log::warn!("URL {} returned {} for {}", file_url, resp.status(), filename);
+                    continue 'url_loop;
+                };
 
-                        return Err(anyhow!("Download timeout - No data received for 30 seconds"));
-                    },
-                    // Stream ended
-                    Ok(None) => break,
-                    // Got chunk result
-                    Ok(Some(chunk_result)) => {
-                        match chunk_result {
-                            Ok(c) => c,
-                            // Detect error type for better user feedback
-                            Err(e) => {
-                                log::error!("Download error for {}: {:?}", model_name, e);
-                                let _ = writer.flush().await;
+                if is_fallback {
+                    log::info!("Fallback URL connected for {}: {}", filename, file_url);
+                }
 
-                                // Remove from active downloads
-                                {
-                                    let mut active = self.active_downloads.write().await;
-                                    active.remove(model_name);
+                // Open file for writing (append if resuming, create new if not)
+                let file = if resuming {
+                    match fs::OpenOptions::new().append(true).open(&file_path).await {
+                        Ok(f) => f,
+                        Err(e) => {
+                            last_error = format!("Failed to open file for resume: {}", e);
+                            continue 'url_loop;
+                        }
+                    }
+                } else {
+                    match fs::File::create(&file_path).await {
+                        Ok(f) => f,
+                        Err(e) => {
+                            // File creation failure is not URL-specific, don't retry
+                            let mut active = self.active_downloads.write().await;
+                            active.remove(model_name);
+                            return Err(anyhow!("Failed to create file {}: {}", filename, e));
+                        }
+                    }
+                };
+
+                let mut writer = BufWriter::with_capacity(8 * 1024 * 1024, file);
+                let mut file_downloaded = if resuming { current_existing_size } else { 0u64 };
+
+                // Stream download
+                use futures_util::StreamExt;
+                let mut stream = resp.bytes_stream();
+
+                let stream_ok = loop {
+                    // Check for cancellation
+                    {
+                        let cancel_flag = self.cancel_download_flag.read().await;
+                        if cancel_flag.as_ref() == Some(&model_name.to_string()) {
+                            log::info!("Download cancelled for {}", model_name);
+                            let _ = writer.flush().await;
+                            drop(writer);
+                            let mut active = self.active_downloads.write().await;
+                            active.remove(model_name);
+                            return Err(anyhow!("Download cancelled by user"));
+                        }
+                    }
+
+                    let next_result = timeout(Duration::from_secs(30), stream.next()).await;
+
+                    match next_result {
+                        Err(_) => {
+                            // Timeout - flush partial data and try next URL
+                            log::warn!("Stream timeout for {} on {}, will try next URL", filename, file_url);
+                            let _ = writer.flush().await;
+                            drop(writer);
+                            last_error = "Stream stalled - no data for 30 seconds".to_string();
+                            break false;
+                        }
+                        Ok(None) => {
+                            // Stream complete
+                            break true;
+                        }
+                        Ok(Some(Ok(chunk))) => {
+                            let chunk_len = chunk.len() as u64;
+                            if let Err(e) = writer.write_all(&chunk).await {
+                                let mut active = self.active_downloads.write().await;
+                                active.remove(model_name);
+                                return Err(anyhow!("Failed to write to file {}: {}", filename, e));
+                            }
+                            file_downloaded += chunk_len;
+                            total_downloaded += chunk_len;
+                            bytes_since_last_report += chunk_len;
+
+                            // Progress reporting
+                            let overall_progress = if total_size_bytes > 0 {
+                                ((total_downloaded as f64 / total_size_bytes as f64) * 100.0).min(99.0) as u8
+                            } else {
+                                ((index as f64 + (file_downloaded as f64 / file_total_size.max(1) as f64)) / total_files as f64 * 100.0) as u8
+                            };
+
+                            let elapsed_since_report = last_report_time.elapsed();
+                            let progress_changed = overall_progress > last_reported_progress;
+                            let time_threshold = elapsed_since_report >= Duration::from_millis(500);
+                            let is_complete = file_downloaded >= file_total_size;
+
+                            if progress_changed || time_threshold || is_complete {
+                                let speed_mbps = if elapsed_since_report.as_secs_f64() >= 0.1 {
+                                    (bytes_since_last_report as f64 / (1024.0 * 1024.0)) / elapsed_since_report.as_secs_f64()
+                                } else {
+                                    let total_elapsed = download_start_time.elapsed().as_secs_f64();
+                                    if total_elapsed > 0.0 {
+                                        ((total_downloaded - already_downloaded) as f64 / (1024.0 * 1024.0)) / total_elapsed
+                                    } else {
+                                        0.0
+                                    }
+                                };
+
+                                last_reported_progress = overall_progress;
+                                last_report_time = Instant::now();
+                                bytes_since_last_report = 0;
+
+                                let progress = DownloadProgress::new(total_downloaded, total_size_bytes, speed_mbps);
+                                if let Some(ref callback) = progress_callback {
+                                    callback(progress);
                                 }
 
-                                // Update model status to Missing so retry can work
                                 {
                                     let mut models = self.available_models.write().await;
                                     if let Some(model) = models.get_mut(model_name) {
-                                        model.status = ModelStatus::Missing;
+                                        model.status = ModelStatus::Downloading { progress: overall_progress };
                                     }
                                 }
-
-                                let error_msg = if e.is_timeout() {
-                                    "Connection timeout - Check your internet"
-                                } else if e.is_connect() {
-                                    "Connection failed - Check your internet"
-                                } else if e.is_body() {
-                                    "Stream interrupted - Network unstable"
-                                } else {
-                                    "Download error"
-                                };
-
-                                return Err(anyhow!("{}: {}", error_msg, e));
                             }
                         }
+                        Ok(Some(Err(e))) => {
+                            // Stream error - flush partial data and try next URL
+                            log::warn!("Stream error for {} on {}: {}", filename, file_url, e);
+                            let _ = writer.flush().await;
+                            drop(writer);
+                            last_error = format!("Stream error: {}", e);
+                            break false;
+                        }
                     }
                 };
 
-                if let Err(e) = writer.write_all(&chunk).await {
-                    // Remove from active downloads on error
-                    {
+                if stream_ok {
+                    // Flush and confirm success
+                    if let Err(e) = writer.flush().await {
                         let mut active = self.active_downloads.write().await;
                         active.remove(model_name);
+                        return Err(anyhow!("Failed to flush file {}: {}", filename, e));
                     }
-
-                    // Update model status to Missing so retry can work
-                    {
-                        let mut models = self.available_models.write().await;
-                        if let Some(model) = models.get_mut(model_name) {
-                            model.status = ModelStatus::Missing;
-                        }
-                    }
-
-                    return Err(anyhow!("Failed to write chunk to file: {}", e));
+                    file_downloaded_success = true;
+                    break 'url_loop;
                 }
-
-                let chunk_len = chunk.len() as u64;
-                file_downloaded += chunk_len;
-                total_downloaded += chunk_len;
-                bytes_since_last_report += chunk_len;
-
-                // Calculate weighted overall progress based on total bytes downloaded
-                let overall_progress = if total_size_bytes > 0 {
-                    ((total_downloaded as f64 / total_size_bytes as f64) * 100.0).min(99.0) as u8
-                } else {
-                    // Fallback to per-file progress if total size unknown
-                    ((index as f64 + (file_downloaded as f64 / file_total_size.max(1) as f64)) / total_files as f64 * 100.0) as u8
-                };
-
-                // Report every 1% progress change OR every 500ms for smooth UI updates
-                let elapsed_since_report = last_report_time.elapsed();
-                let progress_changed = overall_progress > last_reported_progress;
-                let time_threshold = elapsed_since_report >= Duration::from_millis(500);
-                let is_complete = file_downloaded >= file_total_size;
-
-                let should_report = progress_changed || time_threshold || is_complete;
-
-                if should_report {
-                    // Calculate download speed
-                    let speed_mbps = if elapsed_since_report.as_secs_f64() >= 0.1 {
-                        (bytes_since_last_report as f64 / (1024.0 * 1024.0)) / elapsed_since_report.as_secs_f64()
-                    } else {
-                        // Fallback to overall average speed
-                        let total_elapsed = download_start_time.elapsed().as_secs_f64();
-                        if total_elapsed > 0.0 {
-                            ((total_downloaded - already_downloaded) as f64 / (1024.0 * 1024.0)) / total_elapsed
-                        } else {
-                            0.0
-                        }
-                    };
-
-                    last_reported_progress = overall_progress;
-                    last_report_time = Instant::now();
-                    bytes_since_last_report = 0;
-
-                    // Create detailed progress and report
-                    let progress = DownloadProgress::new(total_downloaded, total_size_bytes, speed_mbps);
-                    if let Some(ref callback) = progress_callback {
-                        callback(progress);
-                    }
-
-                    // Update model status
-                    {
-                        let mut models = self.available_models.write().await;
-                        if let Some(model) = models.get_mut(model_name) {
-                            model.status = ModelStatus::Downloading { progress: overall_progress };
-                        }
-                    }
-                }
+                // If !stream_ok, the loop continues to the next URL
             }
 
-            // Flush the buffered writer
-            if let Err(e) = writer.flush().await {
-                // Remove from active downloads on error
-                {
-                    let mut active = self.active_downloads.write().await;
-                    active.remove(model_name);
-                }
+            if !file_downloaded_success {
+                // All URLs exhausted for this file
+                let mut active = self.active_downloads.write().await;
+                active.remove(model_name);
 
-                // Update model status to Missing so retry can work
                 {
                     let mut models = self.available_models.write().await;
                     if let Some(model) = models.get_mut(model_name) {
@@ -997,13 +978,16 @@ impl ParakeetEngine {
                     }
                 }
 
-                return Err(anyhow!("Failed to flush file {}: {}", filename, e));
+                return Err(anyhow!(
+                    "Download failed for {} - all download servers failed (tried {} servers). \
+                    Last error: {}. This may be a server issue; please try again later.",
+                    filename, base_urls.len(), last_error
+                ));
             }
 
             log::info!(
-                "Completed download: {} ({:.2} MB, overall progress: {:.1}%)",
+                "Completed download: {} (overall progress: {:.1}%)",
                 filename,
-                file_downloaded as f64 / 1_048_576.0,
                 (total_downloaded as f64 / total_size_bytes as f64) * 100.0
             );
         }
