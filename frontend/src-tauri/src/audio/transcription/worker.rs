@@ -118,9 +118,25 @@ pub fn start_transcription_task<R: Runtime>(
                     };
 
                     match chunk {
-                        Some(chunk) => {
-                            // PERFORMANCE OPTIMIZATION: Reduce logging in hot path
-                            // Only log every 10th chunk per worker to reduce I/O overhead
+                        Some(mut chunk) => {
+                            // STREAMING PARTIAL OPTIMIZATION: If this chunk is partial,
+                            // drain the queue and skip to the latest partial or next final.
+                            // This prevents stale partials from being transcribed when
+                            // the speaker talks faster than Whisper can process.
+                            if chunk.is_partial {
+                                let mut receiver = work_receiver_clone.lock().await;
+                                while let Ok(next) = receiver.try_recv() {
+                                    chunks_completed_clone.fetch_add(1, Ordering::SeqCst);
+                                    if !next.is_partial {
+                                        // Hit a final — process it instead
+                                        chunk = next;
+                                        break;
+                                    }
+                                    // Skip this stale partial, use the newer one
+                                    chunk = next;
+                                }
+                            }
+
                             let should_log_this_chunk = chunk.chunk_id % 10 == 0;
 
                             if should_log_this_chunk {
