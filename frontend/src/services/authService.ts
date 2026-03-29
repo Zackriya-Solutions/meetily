@@ -4,7 +4,18 @@
  * All auth requests go to the CLOUD_API_URL, not the local backend.
  */
 
-import { invoke } from '@tauri-apps/api/core'
+// Use Tauri invoke when available, fall back to localStorage for browser dev
+const isTauri = typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__
+
+// Lazy-loaded Tauri invoke — awaited on first use to avoid race conditions
+let _tauriInvokePromise: Promise<typeof import('@tauri-apps/api/core').invoke> | null = null
+async function getTauriInvoke() {
+  if (!isTauri) return null
+  if (!_tauriInvokePromise) {
+    _tauriInvokePromise = import('@tauri-apps/api/core').then(m => m.invoke).catch(() => null as any)
+  }
+  return _tauriInvokePromise
+}
 
 // Cloud API URL — configurable via environment or fetched from local backend
 let cloudApiUrl: string = process.env.NEXT_PUBLIC_CLOUD_API_URL || ''
@@ -28,42 +39,67 @@ function getBaseUrl(): string {
   return cloudApiUrl || 'http://localhost:5167'
 }
 
-// ── Token management (Tauri secure store) ───────────────────────────
+// ── Token management (Tauri secure store with browser fallback) ─────
 
 export async function getAccessToken(): Promise<string | null> {
-  try {
-    return await invoke<string | null>('auth_get_access_token')
-  } catch {
-    return null
+  const invoke = await getTauriInvoke()
+  if (invoke) {
+    try { return await invoke<string | null>('auth_get_access_token') } catch { return null }
   }
+  return localStorage.getItem('auth_access_token')
 }
 
 export async function getRefreshToken(): Promise<string | null> {
-  try {
-    return await invoke<string | null>('auth_get_refresh_token')
-  } catch {
-    return null
+  const invoke = await getTauriInvoke()
+  if (invoke) {
+    try { return await invoke<string | null>('auth_get_refresh_token') } catch { return null }
   }
+  return localStorage.getItem('auth_refresh_token')
 }
 
 export async function saveTokens(accessToken: string, refreshToken: string): Promise<void> {
-  await invoke('auth_save_tokens', { accessToken, refreshToken })
+  const invoke = await getTauriInvoke()
+  if (invoke) {
+    await invoke('auth_save_tokens', { accessToken, refreshToken })
+  } else {
+    localStorage.setItem('auth_access_token', accessToken)
+    localStorage.setItem('auth_refresh_token', refreshToken)
+  }
 }
 
 export async function clearTokens(): Promise<void> {
-  await invoke('auth_clear_tokens')
+  const invoke = await getTauriInvoke()
+  if (invoke) {
+    await invoke('auth_clear_tokens')
+  } else {
+    localStorage.removeItem('auth_access_token')
+    localStorage.removeItem('auth_refresh_token')
+  }
 }
 
 async function saveAuthUserId(userId: string): Promise<void> {
-  await invoke('auth_save_user_id', { userId })
+  const invoke = await getTauriInvoke()
+  if (invoke) {
+    await invoke('auth_save_user_id', { userId })
+  } else {
+    localStorage.setItem('auth_user_id', userId)
+  }
 }
 
 export async function getAuthUserId(): Promise<string | null> {
-  try {
-    return await invoke<string | null>('auth_get_user_id')
-  } catch {
-    return null
+  const invoke = await getTauriInvoke()
+  if (invoke) {
+    try { return await invoke<string | null>('auth_get_user_id') } catch { return null }
   }
+  return localStorage.getItem('auth_user_id')
+}
+
+// ── Error extraction (handles Pydantic validation arrays) ───────────
+
+function extractErrorMessage(detail: unknown, fallback: string): string {
+  if (typeof detail === 'string') return detail
+  if (Array.isArray(detail)) return detail.map((d: any) => d.msg || d.message || String(d)).join('; ')
+  return fallback
 }
 
 // ── Authenticated fetch helper ──────────────────────────────────────
@@ -123,7 +159,7 @@ export async function register(
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Registration failed' }))
-    throw new Error(err.detail || 'Registration failed')
+    throw new Error(extractErrorMessage(err.detail, 'Registration failed'))
   }
   const data: AuthResponse = await res.json()
   await saveTokens(data.access_token, data.refresh_token)
@@ -143,7 +179,7 @@ export async function login(
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Login failed' }))
-    throw new Error(err.detail || 'Login failed')
+    throw new Error(extractErrorMessage(err.detail, 'Login failed'))
   }
   const data: AuthResponse = await res.json()
   await saveTokens(data.access_token, data.refresh_token)
@@ -202,7 +238,7 @@ export async function forgotPassword(email: string): Promise<{ message: string }
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Request failed' }))
-    throw new Error(err.detail || 'Request failed')
+    throw new Error(extractErrorMessage(err.detail, 'Request failed'))
   }
   return res.json()
 }
@@ -219,7 +255,7 @@ export async function resetPassword(
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Reset failed' }))
-    throw new Error(err.detail || 'Reset failed')
+    throw new Error(extractErrorMessage(err.detail, 'Reset failed'))
   }
   return res.json()
 }
@@ -237,7 +273,7 @@ export async function changePassword(
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Change failed' }))
-    throw new Error(err.detail || 'Change failed')
+    throw new Error(extractErrorMessage(err.detail, 'Change failed'))
   }
   return res.json()
 }
@@ -252,7 +288,7 @@ export async function verifyEmail(email: string, code: string): Promise<{ messag
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Verification failed' }))
-    throw new Error(err.detail || 'Verification failed')
+    throw new Error(extractErrorMessage(err.detail, 'Verification failed'))
   }
   return res.json()
 }
@@ -265,7 +301,7 @@ export async function resendVerification(email: string): Promise<{ message: stri
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Request failed' }))
-    throw new Error(err.detail || 'Request failed')
+    throw new Error(extractErrorMessage(err.detail, 'Request failed'))
   }
   return res.json()
 }
@@ -279,7 +315,7 @@ export async function updateProfile(displayName: string): Promise<{ message: str
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Update failed' }))
-    throw new Error(err.detail || 'Update failed')
+    throw new Error(extractErrorMessage(err.detail, 'Update failed'))
   }
   return res.json()
 }
@@ -288,7 +324,7 @@ export async function deactivateAccount(): Promise<{ message: string }> {
   const res = await authFetch('/api/auth/deactivate', { method: 'POST' })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Deactivation failed' }))
-    throw new Error(err.detail || 'Deactivation failed')
+    throw new Error(extractErrorMessage(err.detail, 'Deactivation failed'))
   }
   return res.json()
 }
@@ -297,7 +333,7 @@ export async function deleteAccount(): Promise<{ message: string }> {
   const res = await authFetch('/api/auth/account', { method: 'DELETE' })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Deletion failed' }))
-    throw new Error(err.detail || 'Deletion failed')
+    throw new Error(extractErrorMessage(err.detail, 'Deletion failed'))
   }
   return res.json()
 }

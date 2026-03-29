@@ -1,4 +1,8 @@
-import { invoke } from '@tauri-apps/api/core';
+const isTauri = typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__
+let invoke: any = async () => {}
+if (isTauri) {
+  import('@tauri-apps/api/core').then(m => { invoke = m.invoke }).catch(() => {})
+}
 
 export interface AnalyticsProperties {
   [key: string]: string;
@@ -163,13 +167,23 @@ export class Analytics {
 
   // User ID management with persistent storage
   static async getPersistentUserId(): Promise<string> {
+    // Browser fallback: use localStorage
+    if (!isTauri) {
+      let userId = localStorage.getItem('analytics_user_id')
+      if (!userId) {
+        userId = `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+        localStorage.setItem('analytics_user_id', userId)
+      }
+      return userId
+    }
+
     try {
       // First check if we have a stored user ID
       const { Store } = await import('@tauri-apps/plugin-store');
       const store = await Store.load('analytics.json');
-      
+
       let userId = await store.get<string>('user_id');
-      
+
       if (!userId) {
         // Generate new user ID
         userId = `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;

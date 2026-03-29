@@ -166,6 +166,9 @@ export default function RootLayout({
     const cleanedUpRef = { current: false };
 
     const setupListeners = async () => {
+      // Skip Tauri event listeners when running in a browser (not Tauri shell)
+      if (typeof window === 'undefined' || !window.__TAURI_INTERNALS__) return;
+
       // Drag enter/over - show overlay only if beta feature is enabled
       const unlistenDragEnter = await listen('tauri://drag-enter', () => {
         if (loadBetaFeatures().importAndRetranscribe) {
