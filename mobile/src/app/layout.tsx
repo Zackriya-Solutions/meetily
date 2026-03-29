@@ -7,6 +7,7 @@ import { useRouter } from 'next/navigation'
 import { AuthProvider, useAuth } from '@/contexts/AuthContext'
 import { SyncProvider } from '@/contexts/SyncContext'
 import { RecordingProvider } from '@/contexts/RecordingContext'
+import { HeaderProvider } from '@/contexts/HeaderContext'
 import { initUsageService } from '@/services/usageService'
 import { checkBiometricOnResume } from '@/services/biometricAuth'
 import { initNotifications } from '@/services/pushNotifications'
@@ -35,9 +36,10 @@ function AuthGatedApp({ children }: { children: React.ReactNode }) {
   // Not authenticated — show inline auth flow (no page navigation)
   if (!isAuthenticated) {
     return (
-      <main className="flex flex-col h-screen bg-iq-light">
-        <AppHeader title="IQ:capture" />
-        <div className="flex-1 overflow-y-auto">
+      <HeaderProvider>
+        <main className="flex flex-col h-screen bg-iq-light">
+          <AppHeader />
+          <div className="flex-1 overflow-y-auto">
           {authScreen === 'prompt' && (
             <AuthPrompt onNavigate={(page) => setAuthScreen(page)} />
           )}
@@ -75,20 +77,23 @@ function AuthGatedApp({ children }: { children: React.ReactNode }) {
             />
           )}
         </div>
-      </main>
+        </main>
+      </HeaderProvider>
     )
   }
 
   return (
     <SyncProvider>
       <RecordingProvider>
-        <main className="flex flex-col h-screen w-full overflow-x-hidden">
-          <AppHeader />
-          <div className="flex-1 overflow-y-auto overflow-x-hidden pb-16 px-4">
-            {children}
-          </div>
-          <TabBar />
-        </main>
+        <HeaderProvider>
+          <main className="flex flex-col h-screen w-full overflow-x-hidden">
+            <AppHeader />
+            <div className="flex-1 overflow-y-auto overflow-x-hidden pb-16 px-4">
+              {children}
+            </div>
+            <TabBar />
+          </main>
+        </HeaderProvider>
       </RecordingProvider>
     </SyncProvider>
   )

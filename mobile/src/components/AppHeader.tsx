@@ -3,21 +3,11 @@
 import React from 'react'
 import { ChevronLeft } from 'lucide-react'
 import { useRouter } from 'next/navigation'
+import { useHeaderContext } from '@/contexts/HeaderContext'
 
-interface AppHeaderProps {
-  title?: string
-  subtitle?: string
-  showBack?: boolean
-  rightContent?: React.ReactNode
-}
-
-export default function AppHeader({
-  title = 'IQ:capture',
-  subtitle,
-  showBack = false,
-  rightContent,
-}: AppHeaderProps) {
+export default function AppHeader() {
   const router = useRouter()
+  const { title, subtitle, showBack, rightContent } = useHeaderContext()
 
   return (
     <header
