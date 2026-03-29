@@ -1,7 +1,7 @@
 'use client'
 
 import './globals.css'
-import { Source_Sans_3 } from 'next/font/google'
+import { Poppins } from 'next/font/google'
 import { useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { AuthProvider, useAuth } from '@/contexts/AuthContext'
@@ -15,10 +15,10 @@ import { Toaster } from 'sonner'
 import TabBar from '@/components/TabBar'
 import AuthPrompt from '@/components/AuthPrompt'
 
-const sourceSans3 = Source_Sans_3({
+const poppins = Poppins({
   subsets: ['latin'],
-  weight: ['400', '500', '600', '700'],
-  variable: '--font-source-sans-3',
+  weight: ['300', '400', '500', '600', '700'],
+  variable: '--font-poppins',
 })
 
 function AuthGatedApp({ children }: { children: React.ReactNode }) {
@@ -30,9 +30,9 @@ function AuthGatedApp({ children }: { children: React.ReactNode }) {
 
   if (isLoading) {
     return (
-      <main className="flex flex-col items-center justify-center h-screen">
-        <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin" />
-        <p className="text-sm text-gray-500 mt-4">Loading...</p>
+      <main className="flex flex-col items-center justify-center h-screen bg-iq-light">
+        <div className="w-8 h-8 border-4 border-iq-blue border-t-transparent rounded-full animate-spin" />
+        <p className="text-sm text-iq-medium mt-4">Loading...</p>
       </main>
     )
   }
@@ -103,7 +103,7 @@ export default function RootLayout({
           content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no"
         />
       </head>
-      <body className={`${sourceSans3.variable} font-sans antialiased bg-white`}>
+      <body className={`${poppins.variable} font-sans antialiased bg-iq-light text-iq-dark`}>
         <AuthProvider>
           <AuthGatedApp>{children}</AuthGatedApp>
         </AuthProvider>

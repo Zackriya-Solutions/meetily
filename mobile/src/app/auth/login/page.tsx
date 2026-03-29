@@ -27,36 +27,40 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen px-6">
+    <div className="flex flex-col items-center justify-center min-h-screen px-6 bg-iq-light">
       <div className="w-full max-w-sm">
-        <h1 className="text-2xl font-bold text-gray-900 mb-1">Welcome back</h1>
-        <p className="text-sm text-gray-500 mb-6">Sign in to IQ:capture</p>
+        <h1 className="text-2xl font-bold text-iq-dark mb-1">Welcome back</h1>
+        <p className="text-sm text-iq-medium mb-6">Sign in to IQ:capture</p>
 
         {verified && (
-          <p className="text-sm text-green-600 mb-4">Email verified! You can now sign in.</p>
+          <div className="status-banner status-banner-success mb-4">
+            <span className="text-sm text-iq-green">Email verified! You can now sign in.</span>
+          </div>
         )}
         {reset && (
-          <p className="text-sm text-green-600 mb-4">Password reset! Sign in with your new password.</p>
+          <div className="status-banner status-banner-success mb-4">
+            <span className="text-sm text-iq-green">Password reset! Sign in with your new password.</span>
+          </div>
         )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+            <label className="detail-label mb-1 block">Email</label>
             <input
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required
               autoComplete="email"
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full px-3 py-2.5 border border-iq-light-shade rounded-iq-lg text-sm text-iq-dark bg-white focus:outline-none focus:ring-2 focus:ring-iq-blue focus:border-transparent"
               placeholder="you@example.com"
             />
           </div>
 
           <div>
             <div className="flex items-center justify-between mb-1">
-              <label className="block text-sm font-medium text-gray-700">Password</label>
-              <Link href="/auth/forgot-password" className="text-xs text-blue-600 font-medium">
+              <label className="detail-label">Password</label>
+              <Link href="/auth/forgot-password" className="text-xs text-iq-blue font-semibold">
                 Forgot password?
               </Link>
             </div>
@@ -66,27 +70,29 @@ export default function LoginPage() {
               onChange={(e) => setPassword(e.target.value)}
               required
               autoComplete="current-password"
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full px-3 py-2.5 border border-iq-light-shade rounded-iq-lg text-sm text-iq-dark bg-white focus:outline-none focus:ring-2 focus:ring-iq-blue focus:border-transparent"
               placeholder="Your password"
             />
           </div>
 
           {error && (
-            <p className="text-sm text-red-600">{error}</p>
+            <div className="status-banner status-banner-danger">
+              <span className="text-sm text-iq-red">{error}</span>
+            </div>
           )}
 
           <button
             type="submit"
             disabled={isLoading}
-            className="w-full py-2.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
+            className="w-full btn-iq-primary disabled:opacity-50"
           >
             {isLoading ? 'Signing in...' : 'Sign In'}
           </button>
         </form>
 
-        <p className="text-sm text-gray-500 text-center mt-4">
+        <p className="text-sm text-iq-medium text-center mt-4">
           Don't have an account?{' '}
-          <Link href="/auth/register" className="text-blue-600 font-medium">
+          <Link href="/auth/register" className="text-iq-blue font-semibold">
             Create one
           </Link>
         </p>

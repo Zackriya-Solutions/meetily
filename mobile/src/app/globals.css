@@ -15,9 +15,58 @@ html, body {
   --safe-area-bottom: env(safe-area-inset-bottom, 0px);
   --safe-area-left: env(safe-area-inset-left, 0px);
   --safe-area-right: env(safe-area-inset-right, 0px);
+
+  /* IQ Design System */
+  --iq-blue: #2b92d0;
+  --iq-blue-dark: #2276aa;
+  --iq-orange: #f7931d;
+  --iq-green: #2d850f;
+  --iq-red: #d40000;
+  --iq-dark: #3c3c3b;
+  --iq-medium: #6f6f6e;
+  --iq-light: #f8f8f8;
+  --iq-light-shade: #d7d8da;
 }
 
 body {
   padding-top: var(--safe-area-top);
   padding-bottom: var(--safe-area-bottom);
+  color: var(--iq-dark);
+  background-color: var(--iq-light);
+  letter-spacing: -0.01em;
+}
+
+/* IQ Button styles */
+@layer components {
+  .btn-iq-primary {
+    @apply bg-iq-blue text-white rounded-full px-6 py-2.5 text-sm font-semibold;
+  }
+  .btn-iq-outline {
+    @apply border border-iq-blue text-iq-blue rounded-full px-6 py-2.5 text-sm font-semibold bg-transparent;
+  }
+  .btn-iq-danger {
+    @apply bg-iq-red text-white rounded-full px-6 py-2.5 text-sm font-semibold;
+  }
+
+  /* Status banner component */
+  .status-banner {
+    @apply flex items-start gap-2.5 p-3 rounded-iq-md mb-2.5;
+  }
+  .status-banner-success {
+    @apply bg-iq-green/[0.08] border border-iq-green/20;
+  }
+  .status-banner-warning {
+    @apply bg-amber-500/[0.08] border border-amber-500/20;
+  }
+  .status-banner-danger {
+    @apply bg-iq-red/[0.08] border border-iq-red/20;
+  }
+
+  /* Detail grid (label/value pairs) */
+  .detail-label {
+    @apply text-[0.7rem] text-iq-medium font-medium uppercase tracking-wide;
+  }
+  .detail-value {
+    @apply text-[0.85rem] text-iq-dark;
+  }
 }
