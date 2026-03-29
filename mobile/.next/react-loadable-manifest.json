@@ -38,14 +38,12 @@
   "services/database.ts -> @capacitor-community/sqlite": {
     "id": 6868,
     "files": [
-      "static/chunks/33-741d8e14ed274bad.js",
       "static/chunks/318.9d75889d4fb73791.js"
     ]
   },
   "services/pushNotifications.ts -> @capacitor/local-notifications": {
     "id": 3817,
     "files": [
-      "static/chunks/33-741d8e14ed274bad.js",
       "static/chunks/817.0ee30c5438367efa.js"
     ]
   },
@@ -53,13 +51,6 @@
     "id": 2498,
     "files": [
       "static/chunks/498.48a8510839ce1063.js"
-    ]
-  },
-  "services/secureStorage.ts -> @capacitor/preferences": {
-    "id": 2230,
-    "files": [
-      "static/chunks/33-741d8e14ed274bad.js",
-      "static/chunks/230.52d2770c803aa237.js"
     ]
   }
 }
