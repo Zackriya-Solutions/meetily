@@ -36,6 +36,7 @@ function AuthGatedApp({ children }: { children: React.ReactNode }) {
   if (!isAuthenticated) {
     return (
       <main className="flex flex-col h-screen bg-iq-light">
+        <AppHeader title="IQ:capture" />
         <div className="flex-1 overflow-y-auto">
           {authScreen === 'prompt' && (
             <AuthPrompt onNavigate={(page) => setAuthScreen(page)} />
