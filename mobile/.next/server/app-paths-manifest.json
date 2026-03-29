@@ -1,12 +1,12 @@
 {
   "/_not-found/page": "app/_not-found/page.js",
-  "/auth/login/page": "app/auth/login/page.js",
   "/auth/forgot-password/page": "app/auth/forgot-password/page.js",
+  "/auth/login/page": "app/auth/login/page.js",
   "/auth/register/page": "app/auth/register/page.js",
-  "/page": "app/page.js",
-  "/auth/reset-password/page": "app/auth/reset-password/page.js",
-  "/meeting/page": "app/meeting/page.js",
   "/auth/verify-email/page": "app/auth/verify-email/page.js",
-  "/settings/page": "app/settings/page.js",
-  "/record/page": "app/record/page.js"
+  "/meeting/page": "app/meeting/page.js",
+  "/auth/reset-password/page": "app/auth/reset-password/page.js",
+  "/page": "app/page.js",
+  "/record/page": "app/record/page.js",
+  "/settings/page": "app/settings/page.js"
 }
