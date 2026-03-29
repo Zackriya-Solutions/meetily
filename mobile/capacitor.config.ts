@@ -5,9 +5,10 @@ const config: CapacitorConfig = {
   appName: 'IQ:capture',
   webDir: 'out',
   server: {
-    // During development, point to Next.js dev server
-    // url: 'http://localhost:3119',
-    // cleartext: true,
+    // Allow HTTP connections to local dev API
+    cleartext: true,
+    // Allow navigation to API host
+    allowNavigation: ['192.168.0.43', 'localhost', 'api.iqcapture.app'],
   },
   plugins: {
     CapacitorSQLite: {
