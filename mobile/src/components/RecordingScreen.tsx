@@ -38,7 +38,7 @@ export default function RecordingScreen() {
   const handleStop = useCallback(async () => {
     const meetingId = await stopRecording()
     if (meetingId) {
-      router.push(`/meeting/${meetingId}`)
+      router.push(`/meeting?id=${meetingId}`)
     }
   }, [stopRecording, router])
 

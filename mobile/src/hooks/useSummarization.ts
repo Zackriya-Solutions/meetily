@@ -38,10 +38,10 @@ export function useSummarization(meetingId: string | null) {
         if (result.status === 'completed') {
           stopPolling()
           // Update local meeting with summary
-          if (result.summary) {
+          if (result.data) {
             const meeting = await meetingRepository.getMeeting(meetingId)
             await meetingRepository.updateMeeting(meetingId, {
-              summary: result.summary,
+              summary: result.data,
               status: 'completed',
             })
             notifySummaryComplete(meeting?.title || 'Meeting', meetingId)

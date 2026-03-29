@@ -71,7 +71,7 @@ export default function MeetingsList() {
       ) : (
         <div className="flex-1 overflow-y-auto px-4 space-y-2 pb-4">
           {meetings.map((meeting) => (
-            <Link key={meeting.meeting_id} href={`/meeting/${meeting.meeting_id}`}>
+            <Link key={meeting.meeting_id} href={`/meeting?id=${meeting.meeting_id}`}>
               <MeetingCard meeting={meeting} />
             </Link>
           ))}

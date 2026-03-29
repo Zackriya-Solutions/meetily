@@ -76,7 +76,8 @@ export function parseDeepLink(path: string, params: URLSearchParams): string | n
   }
 
   if (normalized.startsWith('/meeting/')) {
-    return normalized
+    const id = normalized.replace('/meeting/', '')
+    return `/meeting?id=${id}`
   }
 
   return null

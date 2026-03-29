@@ -1,0 +1,79 @@
+PODS:
+  - AparajitaCapacitorBiometricAuth (10.0.0):
+    - Capacitor
+  - Capacitor (6.2.1):
+    - CapacitorCordova
+  - CapacitorApp (6.0.3):
+    - Capacitor
+  - CapacitorCommunitySqlite (6.0.2):
+    - Capacitor
+    - SQLCipher
+    - ZIPFoundation
+  - CapacitorCordova (6.2.1)
+  - CapacitorFilesystem (6.0.4):
+    - Capacitor
+  - CapacitorLocalNotifications (6.1.3):
+    - Capacitor
+  - CapacitorNetwork (6.0.4):
+    - Capacitor
+  - CapacitorPreferences (6.0.4):
+    - Capacitor
+  - SQLCipher (4.10.0):
+    - SQLCipher/standard (= 4.10.0)
+  - SQLCipher/common (4.10.0)
+  - SQLCipher/standard (4.10.0):
+    - SQLCipher/common
+  - ZIPFoundation (0.9.20)
+
+DEPENDENCIES:
+  - "AparajitaCapacitorBiometricAuth (from `../../node_modules/.pnpm/@aparajita+capacitor-biometric-auth@10.0.0/node_modules/@aparajita/capacitor-biometric-auth`)"
+  - "Capacitor (from `../../node_modules/.pnpm/@capacitor+ios@6.2.1_@capacitor+core@6.2.1/node_modules/@capacitor/ios`)"
+  - "CapacitorApp (from `../../node_modules/.pnpm/@capacitor+app@6.0.3_@capacitor+core@6.2.1/node_modules/@capacitor/app`)"
+  - "CapacitorCommunitySqlite (from `../../node_modules/.pnpm/@capacitor-community+sqlite@6.0.2_@capacitor+core@6.2.1/node_modules/@capacitor-community/sqlite`)"
+  - "CapacitorCordova (from `../../node_modules/.pnpm/@capacitor+ios@6.2.1_@capacitor+core@6.2.1/node_modules/@capacitor/ios`)"
+  - "CapacitorFilesystem (from `../../node_modules/.pnpm/@capacitor+filesystem@6.0.4_@capacitor+core@6.2.1/node_modules/@capacitor/filesystem`)"
+  - "CapacitorLocalNotifications (from `../../node_modules/.pnpm/@capacitor+local-notifications@6.1.3_@capacitor+core@6.2.1/node_modules/@capacitor/local-notifications`)"
+  - "CapacitorNetwork (from `../../node_modules/.pnpm/@capacitor+network@6.0.4_@capacitor+core@6.2.1/node_modules/@capacitor/network`)"
+  - "CapacitorPreferences (from `../../node_modules/.pnpm/@capacitor+preferences@6.0.4_@capacitor+core@6.2.1/node_modules/@capacitor/preferences`)"
+
+SPEC REPOS:
+  trunk:
+    - SQLCipher
+    - ZIPFoundation
+
+EXTERNAL SOURCES:
+  AparajitaCapacitorBiometricAuth:
+    :path: "../../node_modules/.pnpm/@aparajita+capacitor-biometric-auth@10.0.0/node_modules/@aparajita/capacitor-biometric-auth"
+  Capacitor:
+    :path: "../../node_modules/.pnpm/@capacitor+ios@6.2.1_@capacitor+core@6.2.1/node_modules/@capacitor/ios"
+  CapacitorApp:
+    :path: "../../node_modules/.pnpm/@capacitor+app@6.0.3_@capacitor+core@6.2.1/node_modules/@capacitor/app"
+  CapacitorCommunitySqlite:
+    :path: "../../node_modules/.pnpm/@capacitor-community+sqlite@6.0.2_@capacitor+core@6.2.1/node_modules/@capacitor-community/sqlite"
+  CapacitorCordova:
+    :path: "../../node_modules/.pnpm/@capacitor+ios@6.2.1_@capacitor+core@6.2.1/node_modules/@capacitor/ios"
+  CapacitorFilesystem:
+    :path: "../../node_modules/.pnpm/@capacitor+filesystem@6.0.4_@capacitor+core@6.2.1/node_modules/@capacitor/filesystem"
+  CapacitorLocalNotifications:
+    :path: "../../node_modules/.pnpm/@capacitor+local-notifications@6.1.3_@capacitor+core@6.2.1/node_modules/@capacitor/local-notifications"
+  CapacitorNetwork:
+    :path: "../../node_modules/.pnpm/@capacitor+network@6.0.4_@capacitor+core@6.2.1/node_modules/@capacitor/network"
+  CapacitorPreferences:
+    :path: "../../node_modules/.pnpm/@capacitor+preferences@6.0.4_@capacitor+core@6.2.1/node_modules/@capacitor/preferences"
+
+SPEC CHECKSUMS:
+  AparajitaCapacitorBiometricAuth: 1ae24ba90d7977dffb4bc9040f374a807a510c98
+  Capacitor: c95400d761e376be9da6be5a05f226c0e865cebf
+  CapacitorApp: a19ccb4f5f32d2534be5c6f524d5a9b614a1e8a7
+  CapacitorCommunitySqlite: 0299d20f4b00c2e6aa485a1d8932656753937b9b
+  CapacitorCordova: 8d93e14982f440181be7304aa9559ca631d77fff
+  CapacitorFilesystem: 5b9aec35c0212bd0064e26d278c93e925864f212
+  CapacitorLocalNotifications: 801867e687c42dd2b33c1e22e08f48e6738d2f72
+  CapacitorNetwork: 093efa3664b692a971bdd01be70523291cd6a87f
+  CapacitorPreferences: 5848e0691b36b4bb4acc98e481ab56d451578d30
+  SQLCipher: eb79c64049cb002b4e9fcb30edb7979bf4706dfc
+  ZIPFoundation: dfd3d681c4053ff7e2f7350bc4e53b5dba3f5351
+
+PODFILE CHECKSUM: 5019c2e5dc7d6ca427319761fe4eb49fa0ed694a
+
+COCOAPODS: 1.16.2
