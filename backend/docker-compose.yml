@@ -188,11 +188,16 @@ services:
       - PYTHONPATH=/app
       - DATABASE_PATH=/app/data/meeting_minutes.db
       - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
-    
+      - JWT_SECRET=${JWT_SECRET}
+      - MONGODB_URI=${MONGODB_URI}
+      - SENDGRID_API_KEY=${SENDGRID_API_KEY:-}
+      - SENDGRID_FROM_EMAIL=${SENDGRID_FROM_EMAIL:-noreply@meetily.app}
+      - CORS_ORIGINS=${CORS_ORIGINS:-}
+
     # Add extra host for Docker Desktop compatibility
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    
+
     # Volume mounts
     volumes:
       # Local database directory (created by setup-db.sh)
@@ -201,31 +206,31 @@ services:
       - meeting_app_logs:/app/logs
       # Optional: mount local .env file
       - ${LOCAL_ENV_FILE:-./app/.env}:/app/.env:ro
-    
+
     # Health check
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5167/get-meetings"]
+      test: ["CMD", "curl", "-f", "http://localhost:5167/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 30s
-    
+
     # Resource limits (optional)
     mem_limit: 2g
     mem_reservation: 512m
-    
+
     # Logging configuration
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
-    
+
     # Depends on whisper server for transcription
     depends_on:
       whisper-server:
         condition: service_healthy
-    
+
     # Exclude from macOS profile
     profiles:
       - default
@@ -238,22 +243,27 @@ services:
     image: meetily-backend:latest
     container_name: meetily-backend
     restart: unless-stopped
-    
+
     # Port mapping
     ports:
       - "${APP_PORT:-5167}:5167"
-    
+
     # Environment variables
     environment:
       - PYTHONUNBUFFERED=1
       - PYTHONPATH=/app
       - DATABASE_PATH=/app/data/meeting_minutes.db
       - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
-    
+      - JWT_SECRET=${JWT_SECRET}
+      - MONGODB_URI=${MONGODB_URI}
+      - SENDGRID_API_KEY=${SENDGRID_API_KEY:-}
+      - SENDGRID_FROM_EMAIL=${SENDGRID_FROM_EMAIL:-noreply@meetily.app}
+      - CORS_ORIGINS=${CORS_ORIGINS:-}
+
     # Add extra host for Docker Desktop compatibility
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    
+
     # Volume mounts
     volumes:
       # Local database directory (created by setup-db.sh)
@@ -262,10 +272,10 @@ services:
       - meeting_app_logs:/app/logs
       # Optional: mount local .env file
       - ${LOCAL_ENV_FILE:-./app/.env}:/app/.env:ro
-    
+
     # Health check
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5167/get-meetings"]
+      test: ["CMD", "curl", "-f", "http://localhost:5167/health"]
       interval: 30s
       timeout: 10s
       retries: 3
