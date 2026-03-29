@@ -25,7 +25,7 @@ class RegisterRequest(BaseModel):
     password: str
     display_name: Optional[str] = None
     device_id: str  # Current device's user_id from analytics.json
-    invite_code: Optional[str] = None  # If joining an existing org
+    invite_code: str  # Required — users must be invited to an organisation
 
     @field_validator("email")
     @classmethod

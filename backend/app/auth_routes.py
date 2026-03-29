@@ -281,17 +281,14 @@ async def register(req: RegisterRequest, request: Request):
     now = datetime.now(timezone.utc)
     password_hash = ph.hash(req.password)
 
-    # Handle org assignment via invite code
-    org_id = None
-    org_role = "member"
-    if req.invite_code:
-        invite = await _validate_invite(req.invite_code, req.email)
-        org_id = invite["org_id"]
-        org_role = invite.get("role", "member")
-        await get_invites_collection().update_one(
-            {"code": req.invite_code},
-            {"$set": {"used": True, "used_by": req.email, "used_at": now}},
-        )
+    # Validate invite code — registration is invite-only
+    invite = await _validate_invite(req.invite_code, req.email)
+    org_id = invite["org_id"]
+    org_role = invite.get("role", "member")
+    await get_invites_collection().update_one(
+        {"code": req.invite_code},
+        {"$set": {"used": True, "used_by": req.email, "used_at": now}},
+    )
 
     user_doc = {
         "user_id": user_id,
