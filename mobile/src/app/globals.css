@@ -46,8 +46,7 @@ input, textarea, select {
 }
 
 body {
-  padding-top: var(--safe-area-top);
-  padding-bottom: var(--safe-area-bottom);
+  /* Safe area handled by AppHeader (top) and TabBar (bottom) — not body */
   color: var(--iq-dark);
   background-color: var(--iq-light);
   letter-spacing: -0.01em;
