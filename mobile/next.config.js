@@ -1,7 +1,9 @@
 /** @type {import('next').NextConfig} */
+const isDev = process.env.NODE_ENV === 'development'
 const nextConfig = {
   reactStrictMode: false,
-  output: 'export',
+  // Static export required for Capacitor, but breaks dynamic routes in dev
+  ...(isDev ? {} : { output: 'export' }),
   images: {
     unoptimized: true,
   },

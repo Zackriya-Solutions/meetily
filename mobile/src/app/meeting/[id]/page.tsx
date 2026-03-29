@@ -1,14 +1,12 @@
-import MeetingDetailClient from './client'
+'use client'
 
-// Required for output: 'export' with dynamic routes
-export function generateStaticParams() {
-  return []
-}
+import React from 'react'
+import MeetingDetail from '@/components/MeetingDetail'
 
 export default function MeetingDetailPage({
   params,
 }: {
   params: { id: string }
 }) {
-  return <MeetingDetailClient id={params.id} />
+  return <MeetingDetail meetingId={params.id} />
 }
