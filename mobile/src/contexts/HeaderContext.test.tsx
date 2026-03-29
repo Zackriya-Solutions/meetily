@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
-import { renderHook, act } from '@testing-library/react'
-import React from 'react'
+import { render, renderHook, act } from '@testing-library/react'
+import React, { useState } from 'react'
 import { HeaderProvider, useHeader, useHeaderContext } from './HeaderContext'
 
 function wrapper({ children }: { children: React.ReactNode }) {
@@ -27,17 +27,37 @@ describe('HeaderContext', () => {
   })
 
   it('useHeader resets to defaults on unmount', () => {
-    // First, mount a component that sets header
-    const { unmount: unmountSetter } = renderHook(
-      () => useHeader({ title: 'Settings' }),
-      { wrapper },
-    )
-    const { result } = renderHook(() => useHeaderContext(), { wrapper })
+    // Need a component tree where setter unmounts but reader stays mounted
+    let capturedTitle = ''
+    let toggleSetter: () => void
 
-    // After unmount, header resets to defaults
-    act(() => { unmountSetter() })
-    expect(result.current.title).toBe('IQ:capture')
-    expect(result.current.showBack).toBe(false)
+    function Setter() {
+      useHeader({ title: 'Settings' })
+      return null
+    }
+
+    function Reader() {
+      const { title } = useHeaderContext()
+      capturedTitle = title
+      return null
+    }
+
+    function TestApp() {
+      const [showSetter, setShowSetter] = useState(true)
+      toggleSetter = () => setShowSetter(false)
+      return (
+        <HeaderProvider>
+          {showSetter && <Setter />}
+          <Reader />
+        </HeaderProvider>
+      )
+    }
+
+    render(<TestApp />)
+    expect(capturedTitle).toBe('Settings')
+
+    act(() => { toggleSetter() })
+    expect(capturedTitle).toBe('IQ:capture')
   })
 
   it('useHeader updates when props change', () => {
