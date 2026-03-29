@@ -53,10 +53,11 @@ else:
     _allow_origins = ["*"]
     logger.warning("CORS_ORIGINS not set — allowing all origins (development only)")
 
+_allow_credentials = _cors_raw != ""  # Only allow credentials with explicit origins
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allow_origins,
-    allow_credentials=True,
+    allow_credentials=_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
     max_age=3600,

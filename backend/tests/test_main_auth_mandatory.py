@@ -18,7 +18,10 @@ async def test_health_endpoint_returns_ok(required_env):
     """GET /health must be available and unauthenticated."""
     with patch("mongodb.check_mongo_connection", new_callable=AsyncMock, return_value=True), \
          patch("mongodb.ensure_indexes", new_callable=AsyncMock):
-        from main import app
+        import importlib
+        import main
+        importlib.reload(main)
+        app = main.app
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             resp = await client.get("/health")
