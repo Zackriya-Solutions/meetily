@@ -19,8 +19,13 @@ async function getBiometricPlugin(): Promise<any | null> {
   if (biometricAvailable === false) return null
   if (biometricModule) return biometricModule
 
+  // Not available in browser dev mode
+  if (typeof window !== 'undefined' && !(window as any).Capacitor?.isNativePlatform?.()) {
+    biometricAvailable = false
+    return null
+  }
+
   try {
-    // Try the community biometric plugin
     const mod = await import('@aparajita/capacitor-biometric-auth')
     biometricModule = mod.BiometricAuth
     biometricAvailable = true

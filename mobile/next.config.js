@@ -16,12 +16,14 @@ const nextConfig = {
         os: false,
       }
     }
-    // Optional native Capacitor plugins — not available in browser dev mode
-    config.externals = [
-      ...(config.externals || []),
-      '@capacitor-community/secure-storage',
-      '@aparajita/capacitor-biometric-auth',
-    ]
+    // Stub out optional native Capacitor plugins not available in browser
+    const path = require('path')
+    const stubPath = path.resolve(__dirname, 'src/stubs/empty.js')
+    config.resolve.alias = {
+      ...config.resolve.alias,
+      '@capacitor-community/secure-storage': stubPath,
+      '@aparajita/capacitor-biometric-auth': stubPath,
+    }
     return config
   },
 }

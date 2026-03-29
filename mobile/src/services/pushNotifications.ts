@@ -13,6 +13,12 @@ let notificationId = 1
 
 async function getLocalNotifications(): Promise<any | null> {
   if (localNotificationsModule) return localNotificationsModule
+
+  // Not available in browser
+  if (typeof window !== 'undefined' && !(window as any).Capacitor?.isNativePlatform?.()) {
+    return null
+  }
+
   try {
     const mod = await import('@capacitor/local-notifications')
     localNotificationsModule = mod.LocalNotifications

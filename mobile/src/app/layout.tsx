@@ -25,7 +25,7 @@ function AuthGatedApp({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth()
   const router = useRouter()
 
-  // Check if we're on an auth page (login, register, etc.) — don't gate those
+  // Auth pages (login, register, etc.) are not gated
   const isAuthPage = typeof window !== 'undefined' && window.location.pathname.startsWith('/auth')
 
   if (isLoading) {

@@ -10,13 +10,22 @@
  * directly accessing Preferences or localStorage.
  */
 
-import { Preferences } from '@capacitor/preferences'
+/**
+ * Secure storage abstraction layer.
+ *
+ * On native (Capacitor): uses Keychain/Keystore via secure-storage plugin,
+ * then Capacitor Preferences as fallback.
+ * On web/browser: uses localStorage directly (Capacitor plugins may hang).
+ */
+
+const isNative = typeof window !== 'undefined' && !!(window as any).Capacitor?.isNativePlatform?.()
 
 let secureStorageModule: any = null
 let secureStorageAvailable: boolean | null = null
+let preferencesModule: any = null
 
 async function getSecureStorage(): Promise<any | null> {
-  if (secureStorageAvailable === false) return null
+  if (!isNative || secureStorageAvailable === false) return null
   if (secureStorageModule) return secureStorageModule
 
   try {
@@ -30,27 +39,40 @@ async function getSecureStorage(): Promise<any | null> {
   }
 }
 
+async function getPreferences(): Promise<any | null> {
+  if (!isNative) return null
+  if (preferencesModule) return preferencesModule
+
+  try {
+    const mod = await import('@capacitor/preferences')
+    preferencesModule = mod.Preferences
+    return preferencesModule
+  } catch {
+    return null
+  }
+}
+
 export async function secureGet(key: string): Promise<string | null> {
-  // Try secure storage first (Keychain/Keystore)
-  const secure = await getSecureStorage()
-  if (secure) {
-    try {
-      const result = await secure.get({ key })
-      return result.value
-    } catch {
-      // Key doesn't exist in secure storage — fall through
+  // Native: try secure storage, then Preferences
+  if (isNative) {
+    const secure = await getSecureStorage()
+    if (secure) {
+      try {
+        const result = await secure.get({ key })
+        return result.value
+      } catch { /* fall through */ }
+    }
+
+    const prefs = await getPreferences()
+    if (prefs) {
+      try {
+        const { value } = await prefs.get({ key })
+        if (value) return value
+      } catch { /* fall through */ }
     }
   }
 
-  // Fall back to Capacitor Preferences
-  try {
-    const { value } = await Preferences.get({ key })
-    if (value) return value
-  } catch {
-    // Not available
-  }
-
-  // Final fallback — localStorage
+  // Browser: localStorage
   try {
     return localStorage.getItem(key)
   } catch {
@@ -59,21 +81,16 @@ export async function secureGet(key: string): Promise<string | null> {
 }
 
 export async function secureSet(key: string, value: string): Promise<void> {
-  const secure = await getSecureStorage()
-  if (secure) {
-    try {
-      await secure.set({ key, value })
-      return
-    } catch {
-      // Fall through
+  if (isNative) {
+    const secure = await getSecureStorage()
+    if (secure) {
+      try { await secure.set({ key, value }); return } catch { /* fall through */ }
     }
-  }
 
-  try {
-    await Preferences.set({ key, value })
-    return
-  } catch {
-    // Fall through
+    const prefs = await getPreferences()
+    if (prefs) {
+      try { await prefs.set({ key, value }); return } catch { /* fall through */ }
+    }
   }
 
   try {
@@ -84,13 +101,13 @@ export async function secureSet(key: string, value: string): Promise<void> {
 }
 
 export async function secureRemove(key: string): Promise<void> {
-  // Remove from all backends to ensure cleanup
-  const secure = await getSecureStorage()
-  if (secure) {
-    try { await secure.remove({ key }) } catch { /* ignore */ }
-  }
+  if (isNative) {
+    const secure = await getSecureStorage()
+    if (secure) { try { await secure.remove({ key }) } catch { /* ignore */ } }
 
-  try { await Preferences.remove({ key }) } catch { /* ignore */ }
+    const prefs = await getPreferences()
+    if (prefs) { try { await prefs.remove({ key }) } catch { /* ignore */ } }
+  }
 
   try { localStorage.removeItem(key) } catch { /* ignore */ }
 }
