@@ -1,9 +1,11 @@
 'use client'
 
 import React from 'react'
-import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 
 export default function AuthPrompt() {
+  const router = useRouter()
+
   return (
     <div className="flex flex-col items-center justify-center h-full px-6 text-center">
       <div className="w-16 h-16 bg-iq-blue/10 rounded-full flex items-center justify-center mb-4">
@@ -16,18 +18,18 @@ export default function AuthPrompt() {
         Sign in to record and transcribe your meetings.
       </p>
       <div className="flex gap-3">
-        <Link
-          href="/auth/login"
+        <button
+          onClick={() => router.push('/auth/login')}
           className="btn-iq-primary"
         >
           Sign In
-        </Link>
-        <Link
-          href="/auth/register"
+        </button>
+        <button
+          onClick={() => router.push('/auth/register')}
           className="btn-iq-outline"
         >
           Create Account
-        </Link>
+        </button>
       </div>
     </div>
   )
