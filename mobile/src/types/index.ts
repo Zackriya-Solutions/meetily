@@ -88,6 +88,10 @@ export interface UserProfile {
   devices: DeviceSummary[]
   account_level?: string
   email_verified?: boolean
+  org_id?: string | null
+  org_role?: string | null
+  org_name?: string | null
+  org_brand_template_id?: string | null
 }
 
 export interface DeviceSummary {

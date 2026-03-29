@@ -14,7 +14,7 @@ interface AuthContextValue {
   isLoading: boolean
   error: string | null
   login: (email: string, password: string) => Promise<LoginResult>
-  register: (email: string, password: string, displayName?: string) => Promise<RegisterResult>
+  register: (email: string, password: string, displayName?: string, inviteCode?: string) => Promise<RegisterResult>
   logout: () => Promise<void>
   clearError: () => void
 }
@@ -113,13 +113,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     email: string,
     password: string,
     displayName?: string,
+    inviteCode?: string,
   ): Promise<RegisterResult> => {
     setError(null)
     setIsLoading(true)
     try {
       const deviceId = await getDeviceId()
       const platform = getPlatform()
-      await authService.register(email, password, deviceId, displayName, platform)
+      await authService.register(email, password, deviceId, displayName, platform, inviteCode)
       // Don't set user — email verification required first
       return true
     } catch (e: any) {

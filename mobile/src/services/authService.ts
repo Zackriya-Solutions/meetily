@@ -12,6 +12,14 @@ function getBaseUrl(): string {
   return config.apiUrl
 }
 
+// ── Error extraction (handles Pydantic validation arrays) ──
+
+function extractErrorMessage(detail: unknown, fallback: string): string {
+  if (typeof detail === 'string') return detail
+  if (Array.isArray(detail)) return detail.map((d: any) => d.msg || d.message || String(d)).join('; ')
+  return fallback
+}
+
 // ── Token storage (Secure Storage → Preferences → localStorage) ──
 
 export async function getAccessToken(): Promise<string | null> {
@@ -65,6 +73,7 @@ export async function register(
   deviceId: string,
   displayName?: string,
   platform?: string,
+  inviteCode?: string,
 ): Promise<AuthResponse> {
   const baseUrl = getBaseUrl()
   const res = await fetch(`${baseUrl}/api/auth/register`, {
@@ -76,12 +85,13 @@ export async function register(
       device_id: deviceId,
       display_name: displayName,
       platform: platform || 'mobile',
+      invite_code: inviteCode,
     }),
   })
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Registration failed' }))
-    throw new Error(err.detail || 'Registration failed')
+    throw new Error(extractErrorMessage(err.detail, 'Registration failed'))
   }
 
   const data: AuthResponse = await res.json()
@@ -110,7 +120,7 @@ export async function login(
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Login failed' }))
-    const detail = err.detail || 'Login failed'
+    const detail = extractErrorMessage(err.detail, 'Login failed')
     if (detail === 'EMAIL_NOT_VERIFIED') {
       const error = new Error(detail)
       ;(error as any).code = 'EMAIL_NOT_VERIFIED'
@@ -191,7 +201,7 @@ export async function forgotPassword(email: string): Promise<void> {
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Request failed' }))
-    throw new Error(err.detail || 'Request failed')
+    throw new Error(extractErrorMessage(err.detail, 'Request failed'))
   }
 }
 
@@ -204,7 +214,7 @@ export async function resetPassword(email: string, code: string, newPassword: st
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Reset failed' }))
-    throw new Error(err.detail || 'Reset failed')
+    throw new Error(extractErrorMessage(err.detail, 'Reset failed'))
   }
 }
 
@@ -219,7 +229,7 @@ export async function verifyEmail(email: string, code: string): Promise<void> {
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Verification failed' }))
-    throw new Error(err.detail || 'Verification failed')
+    throw new Error(extractErrorMessage(err.detail, 'Verification failed'))
   }
 }
 
@@ -232,7 +242,7 @@ export async function resendVerification(email: string): Promise<void> {
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Request failed' }))
-    throw new Error(err.detail || 'Request failed')
+    throw new Error(extractErrorMessage(err.detail, 'Request failed'))
   }
 }
 
@@ -245,7 +255,7 @@ export async function changePassword(currentPassword: string, newPassword: strin
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Failed to change password' }))
-    throw new Error(err.detail || 'Failed to change password')
+    throw new Error(extractErrorMessage(err.detail, 'Failed to change password'))
   }
 }
 
@@ -258,7 +268,7 @@ export async function updateProfile(displayName: string): Promise<void> {
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Failed to update profile' }))
-    throw new Error(err.detail || 'Failed to update profile')
+    throw new Error(extractErrorMessage(err.detail, 'Failed to update profile'))
   }
 }
 
@@ -268,7 +278,7 @@ export async function deactivateAccount(): Promise<void> {
   const res = await authFetch('/api/auth/deactivate', { method: 'POST' })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Failed to deactivate account' }))
-    throw new Error(err.detail || 'Failed to deactivate account')
+    throw new Error(extractErrorMessage(err.detail, 'Failed to deactivate account'))
   }
   await clearTokens()
 }
@@ -277,7 +287,7 @@ export async function deleteAccount(): Promise<void> {
   const res = await authFetch('/api/auth/account', { method: 'DELETE' })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Failed to delete account' }))
-    throw new Error(err.detail || 'Failed to delete account')
+    throw new Error(extractErrorMessage(err.detail, 'Failed to delete account'))
   }
   await clearTokens()
 }

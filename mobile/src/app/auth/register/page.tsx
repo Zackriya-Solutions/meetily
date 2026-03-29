@@ -11,11 +11,12 @@ export default function RegisterPage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [displayName, setDisplayName] = useState('')
+  const [inviteCode, setInviteCode] = useState('')
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     clearError()
-    const success = await register(email, password, displayName || undefined)
+    const success = await register(email, password, displayName || undefined, inviteCode)
     if (success) {
       router.replace(`/auth/verify-email?email=${encodeURIComponent(email)}`)
     }
@@ -28,6 +29,19 @@ export default function RegisterPage() {
         <p className="text-sm text-gray-500 mb-6">Get started with IQ:capture</p>
 
         <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Invite Code</label>
+            <input
+              type="text"
+              value={inviteCode}
+              onChange={(e) => setInviteCode(e.target.value)}
+              required
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
+              placeholder="Paste your invite code"
+            />
+            <p className="text-xs text-gray-400 mt-1">Your organisation admin will provide this</p>
+          </div>
+
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Name (optional)</label>
             <input
