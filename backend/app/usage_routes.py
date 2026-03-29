@@ -28,6 +28,7 @@ async def ingest_events(
 ):
     """Batch ingest usage events from a device."""
     user_id = current_user["sub"]
+    org_id = current_user.get("org_id")
     col = get_usage_events_collection()
 
     now = datetime.now(timezone.utc)
@@ -45,6 +46,8 @@ async def ingest_events(
         }
         if event.client_event_id:
             doc["client_event_id"] = event.client_event_id
+        if org_id:
+            doc["org_id"] = org_id
         docs.append(doc)
 
     inserted = 0

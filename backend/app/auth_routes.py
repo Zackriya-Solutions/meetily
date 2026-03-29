@@ -325,7 +325,7 @@ async def register(req: RegisterRequest, request: Request):
     refresh = create_refresh_token(user_id, req.device_id, family_id, org_id=org_id, org_role=org_role)
 
     org_name = await _get_org_name(org_id)
-    await log_event("register", user_id=user_id, email=req.email, ip=ip)
+    await log_event("register", user_id=user_id, email=req.email, ip=ip, org_id=org_id)
     logger.info(f"User registered: {req.email}")
     return AuthResponse(
         access_token=access,
@@ -437,7 +437,7 @@ async def login(req: LoginRequest, request: Request):
     refresh = create_refresh_token(user["user_id"], req.device_id, family_id, org_id=org_id, org_role=org_role)
 
     org_name = await _get_org_name(org_id)
-    await log_event("login", user_id=user["user_id"], email=req.email, ip=ip)
+    await log_event("login", user_id=user["user_id"], email=req.email, ip=ip, org_id=org_id)
     logger.info(f"User logged in: {req.email}")
     return AuthResponse(
         access_token=access,
@@ -501,7 +501,7 @@ async def logout(request: Request, current_user: dict = Depends(get_current_user
         {"user_id": current_user["sub"]},
         {"$set": {"revoked": True}},
     )
-    await log_event("logout", user_id=current_user["sub"], ip=_get_client_ip(request))
+    await log_event("logout", user_id=current_user["sub"], ip=_get_client_ip(request), org_id=current_user.get("org_id"))
     logger.info(f"User logged out: {current_user['sub']}")
     return {"message": "Logged out successfully"}
 
@@ -602,7 +602,7 @@ async def unlink_device(
     )
 
     await log_event("device_unlinked", user_id=user_id, ip=_get_client_ip(request),
-                     metadata={"device_id": device_id})
+                     org_id=user.get("org_id"), metadata={"device_id": device_id})
     logger.info(f"Device {device_id} unlinked from user {user_id}")
     return {"message": "Device unlinked", "device_id": device_id}
 
@@ -806,7 +806,7 @@ async def change_password(
         {"$set": {"password_hash": new_hash, "updated_at": now}},
     )
 
-    await log_event("password_changed", user_id=current_user["sub"], ip=ip)
+    await log_event("password_changed", user_id=current_user["sub"], ip=ip, org_id=user.get("org_id"))
     logger.info(f"Password changed for user {current_user['sub']}")
     return {"message": "Password changed successfully."}
 
@@ -849,7 +849,7 @@ async def deactivate_account(
         {"$set": {"revoked": True}},
     )
 
-    await log_event("account_deactivated", user_id=current_user["sub"], ip=_get_client_ip(request))
+    await log_event("account_deactivated", user_id=current_user["sub"], ip=_get_client_ip(request), org_id=current_user.get("org_id"))
     return {"message": "Account deactivated."}
 
 
@@ -869,7 +869,7 @@ async def delete_account(
     await get_token_families_collection().delete_many({"user_id": user_id})
 
     # Log deletion with minimal info then delete audit trail too
-    await log_event("account_deleted", user_id=user_id, ip=ip)
+    await log_event("account_deleted", user_id=user_id, ip=ip, org_id=current_user.get("org_id"))
 
     logger.info(f"Account deleted (GDPR): {user_id}")
     return {"message": "Account and all associated data deleted."}

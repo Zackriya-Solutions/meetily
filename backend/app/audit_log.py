@@ -18,17 +18,21 @@ async def log_event(
     user_id: str = None,
     email: str = None,
     ip: str = None,
+    org_id: str = None,
     metadata: dict = None,
 ):
     """Write a structured audit log entry. Never raises — failures are logged."""
     try:
-        await get_audit_log_collection().insert_one({
+        doc = {
             "event_type": event_type,
             "user_id": user_id,
             "email": email,
             "ip": ip,
             "timestamp": datetime.now(timezone.utc),
             "metadata": metadata or {},
-        })
+        }
+        if org_id:
+            doc["org_id"] = org_id
+        await get_audit_log_collection().insert_one(doc)
     except Exception as e:
         logger.error(f"Failed to write audit log ({event_type}): {e}")
