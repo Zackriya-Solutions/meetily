@@ -64,7 +64,10 @@ async def get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication required",
         )
-    return _decode_token(credentials.credentials, expected_type="access")
+    payload = _decode_token(credentials.credentials, expected_type="access")
+    # Alias: cloud routes use "user_id", JWT standard uses "sub"
+    payload["user_id"] = payload["sub"]
+    return payload
 
 
 async def get_optional_user(
