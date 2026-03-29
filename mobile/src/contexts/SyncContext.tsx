@@ -4,6 +4,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import { syncService } from '@/services/syncService'
 import { getDatabase, initializeDatabase } from '@/services/database'
 import { useAuth } from './AuthContext'
+import { config } from '@/services/config'
 
 interface SyncContextValue {
   isOnline: boolean
@@ -34,11 +35,21 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
     initializeDatabase().catch(console.warn)
   }, [])
 
-  // Network status
+  // Network status — use browser events + health check for localhost dev
   useEffect(() => {
-    const handleOnline = () => setIsOnline(true)
+    const checkOnline = async () => {
+      if (!navigator.onLine) { setIsOnline(false); return }
+      // Verify with actual API health check (navigator.onLine is unreliable on localhost)
+      try {
+        const res = await fetch(`${config.apiUrl}/health`, { signal: AbortSignal.timeout(3000) }).catch(() => null)
+        setIsOnline(res?.ok ?? navigator.onLine)
+      } catch {
+        setIsOnline(navigator.onLine)
+      }
+    }
+    const handleOnline = () => { setIsOnline(true); checkOnline() }
     const handleOffline = () => setIsOnline(false)
-    setIsOnline(navigator.onLine)
+    checkOnline()
     window.addEventListener('online', handleOnline)
     window.addEventListener('offline', handleOffline)
     return () => {
