@@ -23,6 +23,7 @@ import { DownloadProgressToastProvider } from '@/components/shared/DownloadProgr
 import { UpdateCheckProvider } from '@/components/UpdateCheckProvider'
 import { RecordingPostProcessingProvider } from '@/contexts/RecordingPostProcessingProvider'
 import { AuthProvider } from '@/contexts/AuthContext'
+import { AuthGate } from '@/components/Auth'
 import { ImportAudioDialog, ImportDropOverlay } from '@/components/ImportAudio'
 import { ImportDialogProvider } from '@/contexts/ImportDialogContext'
 import { isAudioExtension, getAudioFormatsDisplayList } from '@/constants/audioFormats'
@@ -236,6 +237,7 @@ export default function RootLayout({
       <body className={`${sourceSans3.variable} font-sans antialiased`}>
         {/* App-level providers (rarely change) */}
         <AuthProvider>
+        <AuthGate>
         <AnalyticsProvider>
           <OnboardingProvider>
             <UpdateCheckProvider>
@@ -279,6 +281,7 @@ export default function RootLayout({
             </UpdateCheckProvider>
           </OnboardingProvider>
         </AnalyticsProvider>
+        </AuthGate>
         </AuthProvider>
 
         <Toaster position="bottom-center" richColors closeButton />
