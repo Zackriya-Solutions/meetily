@@ -25,6 +25,7 @@ class RegisterRequest(BaseModel):
     password: str
     display_name: Optional[str] = None
     device_id: str  # Current device's user_id from analytics.json
+    invite_code: Optional[str] = None  # If joining an existing org
 
     @field_validator("email")
     @classmethod
@@ -74,6 +75,9 @@ class UserProfile(BaseModel):
     display_name: Optional[str] = None
     account_level: Optional[str] = None
     email_verified: Optional[bool] = None
+    org_id: Optional[str] = None
+    org_role: Optional[str] = None
+    org_name: Optional[str] = None
     devices: List[DeviceSummary] = []
 
 
