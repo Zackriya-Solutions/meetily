@@ -37,7 +37,7 @@ export default function MeetingsList() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-iq-blue" />
       </div>
     )
   }
@@ -49,11 +49,11 @@ export default function MeetingsList() {
       {/* Header */}
       <div className="px-4 pt-4 pb-2">
         <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-bold text-gray-900">Meetings</h1>
+          <h1 className="text-2xl font-bold text-iq-dark">Meetings</h1>
           <button
             onClick={handleRefresh}
             disabled={isSyncing}
-            className="text-sm text-blue-600 font-medium disabled:opacity-50"
+            className="text-sm text-iq-blue font-medium disabled:opacity-50"
           >
             {isSyncing ? 'Syncing...' : 'Refresh'}
           </button>
@@ -63,8 +63,8 @@ export default function MeetingsList() {
       {/* Meeting list */}
       {meetings.length === 0 ? (
         <div className="flex-1 flex flex-col items-center justify-center px-6 text-center">
-          <p className="text-gray-500 mb-2">No meetings yet</p>
-          <p className="text-sm text-gray-400">
+          <p className="text-iq-medium mb-2">No meetings yet</p>
+          <p className="text-sm text-iq-medium">
             Tap the Record tab to start your first meeting.
           </p>
         </div>

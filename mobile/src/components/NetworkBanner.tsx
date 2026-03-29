@@ -11,7 +11,7 @@ export default function NetworkBanner() {
 
   return (
     <div className={`px-4 py-2 text-xs font-medium flex items-center gap-2 ${
-      isOnline ? 'bg-yellow-50 text-yellow-700' : 'bg-red-50 text-red-700'
+      isOnline ? 'bg-iq-light text-iq-orange' : 'bg-iq-light text-iq-red'
     }`}>
       {!isOnline && (
         <>

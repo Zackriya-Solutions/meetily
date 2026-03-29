@@ -65,7 +65,7 @@ export default function MeetingDetail({ meetingId }: MeetingDetailProps) {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-iq-blue" />
       </div>
     )
   }
@@ -73,8 +73,8 @@ export default function MeetingDetail({ meetingId }: MeetingDetailProps) {
   if (!meeting) {
     return (
       <div className="flex flex-col items-center justify-center h-full px-6 text-center">
-        <p className="text-gray-500">Meeting not found</p>
-        <button onClick={() => router.back()} className="text-blue-600 text-sm mt-2">
+        <p className="text-iq-medium">Meeting not found</p>
+        <button onClick={() => router.back()} className="text-iq-blue text-sm mt-2">
           Go back
         </button>
       </div>
@@ -84,19 +84,19 @@ export default function MeetingDetail({ meetingId }: MeetingDetailProps) {
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="px-4 pt-4 pb-2 border-b border-gray-100">
+      <div className="px-4 pt-4 pb-2 border-b border-iq-light-shade">
         <div className="flex items-center gap-3 mb-2">
           <button onClick={() => router.back()} className="p-1 -ml-1">
-            <ArrowLeft className="w-5 h-5 text-gray-600" />
+            <ArrowLeft className="w-5 h-5 text-iq-medium" />
           </button>
-          <h1 className="text-lg font-semibold text-gray-900 truncate flex-1">
+          <h1 className="text-lg font-semibold text-iq-dark truncate flex-1">
             {meeting.title || 'Untitled Meeting'}
           </h1>
         </div>
 
         {/* Status indicator for pending operations */}
         {meeting.status !== 'completed' && (
-          <div className="text-xs text-blue-600 mb-2">
+          <div className="text-xs text-iq-blue mb-2">
             {meeting.status === 'pending_upload' && 'Waiting to upload audio...'}
             {meeting.status === 'uploading' && 'Uploading audio...'}
             {meeting.status === 'transcribing' && 'Transcription in progress...'}
@@ -110,8 +110,8 @@ export default function MeetingDetail({ meetingId }: MeetingDetailProps) {
             onClick={() => setActiveTab('transcript')}
             className={`flex items-center gap-1.5 pb-2 text-sm font-medium border-b-2 ${
               activeTab === 'transcript'
-                ? 'border-blue-600 text-blue-600'
-                : 'border-transparent text-gray-500'
+                ? 'border-iq-blue text-iq-blue'
+                : 'border-transparent text-iq-medium'
             }`}
           >
             <FileText className="w-4 h-4" />
@@ -121,8 +121,8 @@ export default function MeetingDetail({ meetingId }: MeetingDetailProps) {
             onClick={() => setActiveTab('summary')}
             className={`flex items-center gap-1.5 pb-2 text-sm font-medium border-b-2 ${
               activeTab === 'summary'
-                ? 'border-blue-600 text-blue-600'
-                : 'border-transparent text-gray-500'
+                ? 'border-iq-blue text-iq-blue'
+                : 'border-transparent text-iq-medium'
             }`}
           >
             <BookOpen className="w-4 h-4" />

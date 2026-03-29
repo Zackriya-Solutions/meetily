@@ -22,8 +22,8 @@ export default function SummaryView({
   if (status === 'summarizing' || isGenerating) {
     return (
       <div className="flex flex-col items-center justify-center h-48 text-center px-6">
-        <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600 mb-3" />
-        <p className="text-gray-500 text-sm">Generating summary...</p>
+        <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-iq-blue mb-3" />
+        <p className="text-iq-medium text-sm">Generating summary...</p>
       </div>
     )
   }
@@ -33,7 +33,7 @@ export default function SummaryView({
 
     return (
       <div className="flex flex-col items-center justify-center h-48 text-center px-6">
-        <p className="text-gray-400 text-sm mb-3">
+        <p className="text-iq-medium text-sm mb-3">
           {canGenerate
             ? 'No summary generated yet.'
             : 'Summary will be available after transcription completes.'}
@@ -41,7 +41,7 @@ export default function SummaryView({
         {canGenerate && onGenerateSummary && (
           <button
             onClick={onGenerateSummary}
-            className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium"
+            className="flex items-center gap-1.5 px-4 py-2 bg-iq-blue text-white rounded-iq-lg text-sm font-medium"
           >
             <Sparkles className="w-4 h-4" />
             Generate Summary
@@ -60,10 +60,10 @@ export default function SummaryView({
 
         return (
           <div key={key}>
-            <h3 className="text-sm font-semibold text-gray-900 mb-2">{section.title}</h3>
+            <h3 className="text-sm font-semibold text-iq-dark mb-2">{section.title}</h3>
             <div className="space-y-2">
               {section.blocks?.map((block: Block, i: number) => (
-                <div key={block.id || i} className="text-sm text-gray-700 leading-relaxed">
+                <div key={block.id || i} className="text-sm text-iq-dark leading-relaxed">
                   {block.content}
                 </div>
               ))}
