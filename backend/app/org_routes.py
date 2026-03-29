@@ -20,6 +20,8 @@ from org_models import (
     InviteResponse,
     OrgDetailResponse,
     OrgMemberResponse,
+    OrgBrandResponse,
+    UpdateOrgBrandRequest,
     UpdateMemberRoleRequest,
 )
 
@@ -226,3 +228,38 @@ async def remove_member(user_id: str, current_user: dict = Depends(get_current_u
         {"$set": {"org_id": None, "org_role": None, "updated_at": datetime.now(timezone.utc)}},
     )
     return {"message": "Member removed from organisation"}
+
+
+@router.get("/brand", response_model=OrgBrandResponse)
+async def get_org_brand(current_user: dict = Depends(get_current_user)):
+    """Get the brand template ID for the current user's organisation."""
+    org_id = _require_org(current_user)
+    org = await get_organisations_collection().find_one({"org_id": org_id})
+    if not org:
+        raise HTTPException(status_code=404, detail="Organisation not found")
+
+    settings = org.get("settings", {})
+    return OrgBrandResponse(
+        org_id=org["org_id"],
+        org_name=org["name"],
+        brand_template_id=settings.get("brand_template_id"),
+    )
+
+
+@router.put("/brand")
+async def set_org_brand(
+    req: UpdateOrgBrandRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Set the brand template for the organisation. Requires admin/owner role."""
+    org_id = _require_admin(current_user)
+    result = await get_organisations_collection().update_one(
+        {"org_id": org_id},
+        {"$set": {
+            "settings.brand_template_id": req.brand_template_id,
+            "updated_at": datetime.now(timezone.utc),
+        }},
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Organisation not found")
+    return {"message": f"Brand template set to {req.brand_template_id}"}

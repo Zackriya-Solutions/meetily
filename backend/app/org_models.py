@@ -58,6 +58,16 @@ class OrgDetailResponse(BaseModel):
     members: List[OrgMemberResponse]
 
 
+class OrgBrandResponse(BaseModel):
+    org_id: str
+    org_name: str
+    brand_template_id: Optional[str] = None
+
+
+class UpdateOrgBrandRequest(BaseModel):
+    brand_template_id: str
+
+
 class UpdateMemberRoleRequest(BaseModel):
     role: str
 

@@ -78,6 +78,7 @@ class UserProfile(BaseModel):
     org_id: Optional[str] = None
     org_role: Optional[str] = None
     org_name: Optional[str] = None
+    org_brand_template_id: Optional[str] = None
     devices: List[DeviceSummary] = []
 
 

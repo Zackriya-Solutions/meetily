@@ -139,7 +139,11 @@ async def _send_verification_email(email: str, code: str):
 # ── Helpers ──────────────────────────────────────────────────────────
 
 
-def _user_to_profile(doc: dict, org_name: Optional[str] = None) -> UserProfile:
+def _user_to_profile(
+    doc: dict,
+    org_name: Optional[str] = None,
+    org_brand_template_id: Optional[str] = None,
+) -> UserProfile:
     """Convert a MongoDB user document to a UserProfile response."""
     devices = []
     for d in doc.get("devices", []):
@@ -165,17 +169,21 @@ def _user_to_profile(doc: dict, org_name: Optional[str] = None) -> UserProfile:
         org_id=doc.get("org_id"),
         org_role=doc.get("org_role"),
         org_name=org_name,
+        org_brand_template_id=org_brand_template_id,
     )
 
 
-async def _get_org_name(org_id: Optional[str]) -> Optional[str]:
-    """Look up organisation name by ID."""
+async def _get_org_info(org_id: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    """Look up organisation name and brand template by ID."""
     if not org_id:
-        return None
+        return None, None
     org = await get_organisations_collection().find_one(
-        {"org_id": org_id}, {"name": 1}
+        {"org_id": org_id}, {"name": 1, "settings": 1}
     )
-    return org["name"] if org else None
+    if not org:
+        return None, None
+    brand_id = org.get("settings", {}).get("brand_template_id")
+    return org["name"], brand_id
 
 
 async def _validate_invite(invite_code: str, email: str) -> dict:
@@ -326,13 +334,13 @@ async def register(req: RegisterRequest, request: Request):
     access = create_access_token(user_id, req.device_id, org_id=org_id, org_role=org_role)
     refresh = create_refresh_token(user_id, req.device_id, family_id, org_id=org_id, org_role=org_role)
 
-    org_name = await _get_org_name(org_id)
+    org_name, org_brand = await _get_org_info(org_id)
     await log_event("register", user_id=user_id, email=req.email, ip=ip, org_id=org_id)
     logger.info(f"User registered: {req.email}")
     return AuthResponse(
         access_token=access,
         refresh_token=refresh,
-        user=_user_to_profile(user_doc, org_name=org_name),
+        user=_user_to_profile(user_doc, org_name=org_name, org_brand_template_id=org_brand),
     )
 
 
@@ -438,13 +446,13 @@ async def login(req: LoginRequest, request: Request):
     access = create_access_token(user["user_id"], req.device_id, org_id=org_id, org_role=org_role)
     refresh = create_refresh_token(user["user_id"], req.device_id, family_id, org_id=org_id, org_role=org_role)
 
-    org_name = await _get_org_name(org_id)
+    org_name, org_brand = await _get_org_info(org_id)
     await log_event("login", user_id=user["user_id"], email=req.email, ip=ip, org_id=org_id)
     logger.info(f"User logged in: {req.email}")
     return AuthResponse(
         access_token=access,
         refresh_token=refresh,
-        user=_user_to_profile(user, org_name=org_name),
+        user=_user_to_profile(user, org_name=org_name, org_brand_template_id=org_brand),
     )
 
 
@@ -487,11 +495,11 @@ async def refresh_token(req: RefreshRequest, request: Request):
     access = create_access_token(user_id, device_id, org_id=org_id, org_role=org_role)
     new_refresh = create_refresh_token(user_id, device_id, new_family_id, org_id=org_id, org_role=org_role)
 
-    org_name = await _get_org_name(org_id)
+    org_name, org_brand = await _get_org_info(org_id)
     return AuthResponse(
         access_token=access,
         refresh_token=new_refresh,
-        user=_user_to_profile(user, org_name=org_name),
+        user=_user_to_profile(user, org_name=org_name, org_brand_template_id=org_brand),
     )
 
 
@@ -515,8 +523,8 @@ async def get_me(current_user: dict = Depends(get_current_user)):
     user = await col.find_one({"user_id": current_user["sub"]})
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    org_name = await _get_org_name(user.get("org_id"))
-    return _user_to_profile(user, org_name=org_name)
+    org_name, org_brand = await _get_org_info(user.get("org_id"))
+    return _user_to_profile(user, org_name=org_name, org_brand_template_id=org_brand)
 
 
 @router.post("/link-device")

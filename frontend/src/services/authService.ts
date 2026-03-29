@@ -127,6 +127,7 @@ export interface UserProfile {
   org_id: string | null
   org_role: string | null
   org_name: string | null
+  org_brand_template_id: string | null
   devices: DeviceSummary[]
 }
 

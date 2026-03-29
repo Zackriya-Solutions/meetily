@@ -1,0 +1,15 @@
+{
+  "id": "homestead",
+  "name": "Home Instead",
+  "logo": "homestead-logo.png",
+  "fonts": { "heading": "Instrument Serif", "body": "Plus Jakarta Sans" },
+  "colors": {
+    "primary": "3C4F26",
+    "secondary": "3B6D03",
+    "heading": "3C4F26",
+    "body": "333333"
+  },
+  "headingSizes": { "h1": 32, "h2": 26, "h3": 22 },
+  "header": "Home Instead — Meeting Notes",
+  "footer": "Home Instead Sheffield & Barnsley — {date}"
+}
