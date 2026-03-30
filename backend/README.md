@@ -396,6 +396,81 @@ chmod +x clean_start_backend.sh
 
 ---
 
+## ☁️ Deploy Auth API to Azure
+
+The backend auth API is hosted as a Docker container on Azure App Service, pulled from the caremanager Azure Container Registry (ACR).
+
+**Live URL**: `https://live-iqcapture-api-ekg4haafg2gubegb.uksouth-01.azurewebsites.net`
+
+### Build and Push to ACR
+
+```bash
+# 1. Log in to ACR
+az acr login --name caremanager
+
+# 2. Build for linux/amd64 (required for Azure App Service, even on Apple Silicon)
+docker build --platform linux/amd64 -f Dockerfile.app -t caremanager.azurecr.io/iqcapture-api:latest .
+
+# 3. Push to ACR
+docker push caremanager.azurecr.io/iqcapture-api:latest
+```
+
+To tag a specific version alongside latest:
+
+```bash
+docker build --platform linux/amd64 -f Dockerfile.app \
+  -t caremanager.azurecr.io/iqcapture-api:latest \
+  -t caremanager.azurecr.io/iqcapture-api:1.0.0 \
+  .
+
+docker push caremanager.azurecr.io/iqcapture-api --all-tags
+```
+
+### Azure Web App Configuration
+
+The Web App (`live-iqcapture-api`) is configured in the Azure Portal with:
+
+- **Image source**: Azure Container Registry → caremanager
+- **Image**: `iqcapture-api`
+- **Tag**: `latest`
+- **Authentication**: Managed identity
+
+**Required environment variables** (set in Azure Portal → Settings → Environment variables):
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `WEBSITES_PORT` | Yes | `5167` |
+| `JWT_SECRET` | Yes | JWT signing key |
+| `MONGODB_URI` | Yes | MongoDB Atlas connection string |
+| `SENDGRID_API_KEY` | No | SendGrid API key for emails |
+| `SENDGRID_FROM_EMAIL` | No | Sender email address |
+| `CORS_ORIGINS` | No | Allowed origins (`*` for dev) |
+
+### Verify Deployment
+
+```bash
+curl -s https://live-iqcapture-api-ekg4haafg2gubegb.uksouth-01.azurewebsites.net/health
+```
+
+Expected: `{"status":"ok"}`
+
+### Redeploy After Code Changes
+
+```bash
+cd backend
+az acr login --name caremanager
+docker build --platform linux/amd64 -f Dockerfile.app -t caremanager.azurecr.io/iqcapture-api:latest .
+docker push caremanager.azurecr.io/iqcapture-api:latest
+```
+
+Then restart the Web App in the Azure Portal or:
+
+```bash
+az webapp restart --name live-iqcapture-api --resource-group <RESOURCE_GROUP>
+```
+
+---
+
 ## 📚 API Documentation
 
 Once services are running:

@@ -19,7 +19,7 @@ function detectEnvironment(): 'production' | 'staging' | 'development' {
 }
 
 const ENV_DEFAULTS: Record<string, string> = {
-  production: 'https://api.iqcapture.app',
+  production: 'https://live-iqcapture-api-ekg4haafg2gubegb.uksouth-01.azurewebsites.net',
   staging: 'https://api-staging.iqcapture.app',
   development: 'http://localhost:5167',
 }

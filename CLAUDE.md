@@ -67,9 +67,29 @@ clean_start_backend.cmd               # Start server
 
 **Available Whisper Models**: `tiny`, `tiny.en`, `base`, `base.en`, `small`, `small.en`, `medium`, `medium.en`, `large-v1`, `large-v2`, `large-v3`, `large-v3-turbo`
 
+### Deploy Auth API to Azure (Docker → ACR → Web App)
+
+The backend auth API is deployed as a Docker container to Azure App Service via the caremanager Azure Container Registry.
+
+**Live URL**: `https://live-iqcapture-api-ekg4haafg2gubegb.uksouth-01.azurewebsites.net`
+
+```bash
+# 1. Log in to ACR
+az acr login --name caremanager
+
+# 2. Build for linux/amd64 (required for Azure App Service, even on Apple Silicon)
+docker build --platform linux/amd64 -f backend/Dockerfile.app -t caremanager.azurecr.io/iqcapture-api:latest backend/
+
+# 3. Push to ACR
+docker push caremanager.azurecr.io/iqcapture-api:latest
+```
+
+The Azure Web App (`live-iqcapture-api`) pulls from this image. After pushing, restart the Web App in the Azure Portal or via CLI to pick up changes.
+
 ### Service Endpoints
 - **Whisper Server**: http://localhost:8178
-- **Backend API**: http://localhost:5167
+- **Backend API (local)**: http://localhost:5167
+- **Backend API (Azure)**: https://live-iqcapture-api-ekg4haafg2gubegb.uksouth-01.azurewebsites.net
 - **Backend Docs**: http://localhost:5167/docs
 - **Frontend Dev**: http://localhost:3118
 
