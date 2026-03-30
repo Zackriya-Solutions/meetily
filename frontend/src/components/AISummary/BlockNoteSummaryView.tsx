@@ -142,7 +142,7 @@ export const BlockNoteSummaryView = forwardRef<BlockNoteSummaryViewRef, BlockNot
       // Generate markdown from current blocks
       const markdown = await editor.blocksToMarkdownLossy(currentBlocks);
 
-      onSave({
+      await onSave({
         markdown: markdown,
         summary_json: currentBlocks as unknown as BlockNoteBlock[]
       });

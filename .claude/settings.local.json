@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/Users/Lucas/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/whisper-rs-0.15.1/src/**)",
+      "Read(//c/Users/Lucas/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/whisper-rs-0.15.1/src//**)",
+      "Bash(gh issue:*)",
+      "Bash(gh pr:*)",
+      "Bash(cargo check:*)",
+      "Bash(pnpm run:*)",
+      "Bash(cargo test:*)",
+      "Bash(rm -rf .next)",
+      "Bash(rm -rf node_modules/.cache)"
+    ]
+  }
+}

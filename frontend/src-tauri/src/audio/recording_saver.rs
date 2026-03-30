@@ -37,8 +37,15 @@ pub struct MeetingMetadata {
     pub audio_file: String,
     pub transcript_file: String,
     pub sample_rate: u32,
+    #[serde(default = "default_channels")]
+    pub channels: u16,
+    #[serde(default = "default_recording_mode")]
+    pub recording_mode: String,
     pub status: String,  // "recording", "completed", "error"
 }
+
+fn default_channels() -> u16 { 1 }
+fn default_recording_mode() -> String { "mono".to_string() }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceInfo {
@@ -55,6 +62,7 @@ pub struct RecordingSaver {
     transcript_segments: Arc<Mutex<Vec<TranscriptSegment>>>,
     chunk_receiver: Option<mpsc::UnboundedReceiver<AudioChunk>>,
     is_saving: Arc<Mutex<bool>>,
+    channels: u16,
 }
 
 impl RecordingSaver {
@@ -67,6 +75,7 @@ impl RecordingSaver {
             transcript_segments: Arc::new(Mutex::new(Vec::new())),
             chunk_receiver: None,
             is_saving: Arc::new(Mutex::new(false)),
+            channels: 1,
         }
     }
 
@@ -137,7 +146,9 @@ impl RecordingSaver {
     ///
     /// # Arguments
     /// * `auto_save` - If true, creates checkpoints and enables saving. If false, audio chunks are discarded.
-    pub fn start_accumulation(&mut self, auto_save: bool) -> mpsc::UnboundedSender<AudioChunk> {
+    /// * `channels` - Number of audio channels (1=mono, 2=stereo interleaved)
+    pub fn start_accumulation(&mut self, auto_save: bool, channels: u16) -> mpsc::UnboundedSender<AudioChunk> {
+        self.channels = channels;
         if auto_save {
             info!("Initializing incremental audio saver for recording (auto-save ENABLED)");
         } else {
@@ -236,7 +247,7 @@ impl RecordingSaver {
 
         // Only initialize incremental saver if checkpoints are needed (auto_save is true)
         if create_checkpoints {
-            let incremental_saver = IncrementalAudioSaver::new(meeting_folder.clone(), 48000)?;
+            let incremental_saver = IncrementalAudioSaver::new(meeting_folder.clone(), 48000, self.channels)?;
             self.incremental_saver = Some(Arc::new(AsyncMutex::new(incremental_saver)));
             info!("✅ Incremental audio saver initialized for meeting: {}", meeting_name);
         } else {
@@ -258,6 +269,8 @@ impl RecordingSaver {
             audio_file: if create_checkpoints { "audio.mp4".to_string() } else { "".to_string() },
             transcript_file: "transcripts.json".to_string(),
             sample_rate: 48000,
+            channels: self.channels,
+            recording_mode: if self.channels >= 2 { "stereo".to_string() } else { "mono".to_string() },
             status: "recording".to_string(),
         };
 
@@ -481,5 +494,54 @@ impl RecordingSaver {
 impl Default for RecordingSaver {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_old_metadata_deserializes_with_defaults() {
+        let old_json = r#"{
+            "version": "1.0",
+            "meeting_id": null,
+            "meeting_name": "Test",
+            "created_at": "2025-01-01T00:00:00Z",
+            "completed_at": null,
+            "duration_seconds": null,
+            "devices": { "microphone": null, "system_audio": null },
+            "audio_file": "audio.mp4",
+            "transcript_file": "transcripts.json",
+            "sample_rate": 48000,
+            "status": "completed"
+        }"#;
+
+        let metadata: MeetingMetadata = serde_json::from_str(old_json).unwrap();
+        assert_eq!(metadata.channels, 1);
+        assert_eq!(metadata.recording_mode, "mono");
+    }
+
+    #[test]
+    fn test_new_metadata_deserializes_stereo() {
+        let new_json = r#"{
+            "version": "1.0",
+            "meeting_id": null,
+            "meeting_name": "Test",
+            "created_at": "2025-01-01T00:00:00Z",
+            "completed_at": null,
+            "duration_seconds": null,
+            "devices": { "microphone": null, "system_audio": null },
+            "audio_file": "audio.mp4",
+            "transcript_file": "transcripts.json",
+            "sample_rate": 48000,
+            "channels": 2,
+            "recording_mode": "stereo",
+            "status": "completed"
+        }"#;
+
+        let metadata: MeetingMetadata = serde_json::from_str(new_json).unwrap();
+        assert_eq!(metadata.channels, 2);
+        assert_eq!(metadata.recording_mode, "stereo");
     }
 }

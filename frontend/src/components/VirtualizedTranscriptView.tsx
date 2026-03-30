@@ -28,6 +28,9 @@ export interface VirtualizedTranscriptViewProps {
     /** Completely disable auto-scroll behavior (for meeting details page) */
     disableAutoScroll?: boolean;
 
+    /** Live partial transcription text (shown above Listening indicator) */
+    partialText?: string | null;
+
     // Pagination props (infinite scroll)
     hasMore?: boolean;
     isLoadingMore?: boolean;
@@ -71,6 +74,7 @@ const TranscriptSegment = memo(function TranscriptSegment({
     confidence,
     isStreaming,
     showConfidence,
+    isPartial,
 }: {
     id: string;
     timestamp: number;
@@ -78,6 +82,7 @@ const TranscriptSegment = memo(function TranscriptSegment({
     confidence?: number;
     isStreaming: boolean;
     showConfidence: boolean;
+    isPartial?: boolean;
 }) {
     const displayText = cleanStopWords(text) || (text.trim() === '' ? '[Silence]' : text);
 
@@ -101,6 +106,8 @@ const TranscriptSegment = memo(function TranscriptSegment({
                         <div className="bg-gray-100 border border-gray-200 rounded-lg px-3 py-2">
                             <p className="text-base text-gray-800 leading-relaxed">{displayText}</p>
                         </div>
+                    ) : isPartial ? (
+                        <p className="text-base text-gray-400 italic leading-relaxed">{displayText}</p>
                     ) : (
                         <p className="text-base text-gray-800 leading-relaxed">{displayText}</p>
                     )}
@@ -119,6 +126,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
     enableStreaming = false,
     showConfidence = true,
     disableAutoScroll = false,
+    partialText = null,
     hasMore = false,
     isLoadingMore = false,
     totalCount = 0,
@@ -296,6 +304,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                         confidence={segment.confidence}
                                         isStreaming={isStreaming}
                                         showConfidence={showConfidence}
+                                        isPartial={segment.is_partial}
                                     />
                                 </div>
                             );
@@ -316,6 +325,19 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                 </span>
                             ) : null}
                         </div>
+                    )}
+
+                    {/* Live partial transcription preview */}
+                    {partialText && isRecording && !isPaused && (
+                        <motion.div
+                            initial={{ opacity: 0, y: 5 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            className="mt-3 mb-1"
+                        >
+                            <p className="text-sm text-gray-400 italic leading-relaxed">
+                                {partialText}
+                            </p>
+                        </motion.div>
                     )}
 
                     {/* Listening indicator when recording */}
@@ -352,6 +374,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                         confidence={segment.confidence}
                                         isStreaming={isStreaming}
                                         showConfidence={showConfidence}
+                                        isPartial={segment.is_partial}
                                     />
                                 </motion.div>
                             );
@@ -372,6 +395,19 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                 </span>
                             ) : null}
                         </div>
+                    )}
+
+                    {/* Live partial transcription preview */}
+                    {partialText && isRecording && !isPaused && (
+                        <motion.div
+                            initial={{ opacity: 0, y: 5 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            className="mt-3 mb-1"
+                        >
+                            <p className="text-sm text-gray-400 italic leading-relaxed">
+                                {partialText}
+                            </p>
+                        </motion.div>
                     )}
 
                     {/* Listening indicator when recording */}

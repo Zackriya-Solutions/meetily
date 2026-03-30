@@ -35,11 +35,12 @@ pub(crate) async fn unload_engine_after_batch(use_parakeet: bool) {
 }
 
 /// Create transcript segments from transcription results.
-/// Each tuple is (text, start_ms, end_ms) from VAD timestamps.
-pub(crate) fn create_transcript_segments(transcripts: &[(String, f64, f64)]) -> Vec<TranscriptSegment> {
+/// Each tuple is (text, start_ms, end_ms, source) from VAD timestamps.
+/// source is None for mono, Some("mic") or Some("system") for multitrack stereo.
+pub(crate) fn create_transcript_segments(transcripts: &[(String, f64, f64, Option<String>)]) -> Vec<TranscriptSegment> {
     transcripts
         .iter()
-        .map(|(text, start_ms, end_ms)| {
+        .map(|(text, start_ms, end_ms, source)| {
             let start_seconds = start_ms / 1000.0;
             let end_seconds = end_ms / 1000.0;
             let duration = end_seconds - start_seconds;
@@ -51,6 +52,7 @@ pub(crate) fn create_transcript_segments(transcripts: &[(String, f64, f64)]) -> 
                 audio_start_time: Some(start_seconds),
                 audio_end_time: Some(end_seconds),
                 duration: Some(duration),
+                source: source.clone(),
             }
         })
         .collect()
@@ -66,7 +68,7 @@ pub(crate) fn write_transcripts_json(folder: &Path, segments: &[TranscriptSegmen
         "last_updated": chrono::Utc::now().to_rfc3339(),
         "total_segments": segments.len(),
         "segments": segments.iter().enumerate().map(|(i, s)| {
-            serde_json::json!({
+            let mut seg = serde_json::json!({
                 "id": s.id,
                 "text": s.text,
                 "timestamp": s.timestamp,
@@ -74,7 +76,11 @@ pub(crate) fn write_transcripts_json(folder: &Path, segments: &[TranscriptSegmen
                 "audio_end_time": s.audio_end_time,
                 "duration": s.duration,
                 "sequence_id": i
-            })
+            });
+            if let Some(ref source) = s.source {
+                seg["source"] = serde_json::json!(source);
+            }
+            seg
         }).collect::<Vec<_>>()
     });
 

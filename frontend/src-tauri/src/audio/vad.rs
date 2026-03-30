@@ -26,6 +26,9 @@ pub struct ContinuousVadProcessor {
     speech_start_sample: usize,
     // State tracking for smart logging
     last_logged_state: bool,
+    // Partial transcription support: emit intermediate segments during ongoing speech
+    partial_interval_samples: usize,  // Emit partial every ~1.5s of speech (24000 samples at 16kHz)
+    samples_since_last_partial: usize,
 }
 
 impl ContinuousVadProcessor {
@@ -77,8 +80,10 @@ impl ContinuousVadProcessor {
             in_speech: false,
             processed_samples: 0,
             speech_start_sample: 0,
-            // Initialize state tracking
             last_logged_state: false,
+            // Partial transcription: emit intermediate segment every ~1.5s of speech
+            partial_interval_samples: 24000, // 1.5s at 16kHz
+            samples_since_last_partial: 0,
         })
     }
 
@@ -247,6 +252,7 @@ impl ContinuousVadProcessor {
                         self.last_logged_state = false;
                     }
                     self.in_speech = false;
+                    self.samples_since_last_partial = 0;
 
                     // Use samples from VAD transition if available, otherwise use accumulated samples
                     let speech_samples = if !samples.is_empty() {
@@ -277,6 +283,28 @@ impl ContinuousVadProcessor {
         // Accumulate speech if we're currently in a speech state
         if self.in_speech {
             self.current_speech.extend_from_slice(chunk);
+            self.samples_since_last_partial += chunk.len();
+
+            // Emit partial (intermediate) segment every ~1.5s of ongoing speech
+            if self.samples_since_last_partial >= self.partial_interval_samples
+                && self.current_speech.len() >= self.partial_interval_samples
+            {
+                let start_ms = (self.speech_start_sample as f64 / 16000.0) * 1000.0;
+                let end_ms = (self.processed_samples as f64 / 16000.0) * 1000.0;
+
+                let partial_segment = SpeechSegment {
+                    samples: self.current_speech.clone(), // All accumulated speech so far
+                    start_timestamp_ms: start_ms,
+                    end_timestamp_ms: end_ms,
+                    confidence: -1.0, // Marker: negative confidence = partial/intermediate
+                };
+
+                debug!("VAD: Emitting partial segment: {:.0}ms duration, {} samples",
+                    end_ms - start_ms, self.current_speech.len());
+
+                self.speech_segments.push_back(partial_segment);
+                self.samples_since_last_partial = 0;
+            }
         }
 
         self.processed_samples += chunk.len();
@@ -375,7 +403,9 @@ where
                 warn!("VAD: Chunk {} took {:?} - possible performance issue", chunk_count, elapsed);
             }
 
-            all_segments.extend(segments);
+            // Filter out partial segments (confidence < 0) — only keep finals
+            // Partials are for live preview only, not for batch retranscription
+            all_segments.extend(segments.into_iter().filter(|s| s.confidence >= 0.0));
 
             processed += chunk.len();
             let progress = ((processed * 100) / total_samples) as u32;
@@ -400,7 +430,9 @@ where
         info!("VAD: Complete! Found {} speech segments", all_segments.len());
     } else {
         // Small file - process all at once
-        all_segments = processor.process_audio(samples_mono_16k)?;
+        let segments = processor.process_audio(samples_mono_16k)?;
+        // Filter out partials (confidence < 0) — only keep finals for batch processing
+        all_segments.extend(segments.into_iter().filter(|s| s.confidence >= 0.0));
         let final_segments = processor.flush()?;
         all_segments.extend(final_segments);
     }

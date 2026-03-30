@@ -20,6 +20,8 @@ interface TranscriptContextType {
   clearTranscripts: () => void;
   currentMeetingId: string | null;
   markMeetingAsSaved: () => Promise<void>;
+  /** Current partial transcription (live preview of ongoing speech) */
+  partialText: string | null;
 }
 
 const TranscriptContext = createContext<TranscriptContextType | undefined>(undefined);
@@ -28,6 +30,7 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
   const [transcripts, setTranscripts] = useState<Transcript[]>([]);
   const [meetingTitle, setMeetingTitle] = useState('+ New Call');
   const [currentMeetingId, setCurrentMeetingId] = useState<string | null>(null);
+  const [partialText, setPartialText] = useState<string | null>(null);
 
   // Recording state context - provides backend-synced state
   const recordingState = useRecordingState();
@@ -286,12 +289,14 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
       try {
         console.log('🔥 Setting up MAIN transcript listener during component initialization...');
         unlistenFn = await transcriptService.onTranscriptUpdate((update) => {
+          // Final transcript arrived — clear partial preview
+          setPartialText(null);
+
           const now = Date.now();
-          console.log('🎯 MAIN LISTENER: Received transcript update:', {
+          console.log('🎯 MAIN LISTENER: Received final transcript:', {
             sequence_id: update.sequence_id,
             text: update.text.substring(0, 50) + '...',
             timestamp: update.timestamp,
-            is_partial: update.is_partial,
             received_at: new Date(now).toISOString(),
             buffer_size_before: transcriptBuffer.size
           });
@@ -345,6 +350,12 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
     setupListener();
     console.log('Started enhanced listener setup');
 
+    // Setup partial transcript listener (live preview, separate from finals)
+    let unlistenPartialFn: (() => void) | null = null;
+    transcriptService.onTranscriptPartial((text) => {
+      setPartialText(text);
+    }).then(fn => { unlistenPartialFn = fn; });
+
     return () => {
       console.log('🧹 CLEANUP: Cleaning up MAIN transcript listener...');
       if (processingTimer) {
@@ -354,6 +365,9 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
       if (unlistenFn) {
         unlistenFn();
         console.log('🧹 CLEANUP: MAIN transcript listener cleaned up');
+      }
+      if (unlistenPartialFn) {
+        unlistenPartialFn();
       }
     };
   }, [currentMeetingId]); // Add currentMeetingId dependency
@@ -426,30 +440,24 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
       duration: update.duration,
     };
 
-    setTranscripts(prev => {
-      console.log('📊 Current transcripts count before update:', prev.length);
+    if (update.is_partial) {
+      // Partial: update the live preview indicator (not in the transcript list)
+      setPartialText(update.text);
+      return;
+    }
 
-      // Check if this transcript already exists
+    // Final: clear partial preview and add to transcript list
+    setPartialText(null);
+
+    setTranscripts(prev => {
+      // Check for exact duplicate
       const exists = prev.some(
         t => t.text === update.text && t.timestamp === update.timestamp
       );
-      if (exists) {
-        console.log('🚫 Duplicate transcript detected, skipping:', update.text.substring(0, 30) + '...');
-        return prev;
-      }
+      if (exists) return prev;
 
-      // Add new transcript and sort by sequence_id to maintain order
       const updated = [...prev, newTranscript];
-      const sorted = updated.sort((a, b) => (a.sequence_id || 0) - (b.sequence_id || 0));
-
-      console.log('✅ Added new transcript. New count:', sorted.length);
-      console.log('📝 Latest transcript:', {
-        id: newTranscript.id,
-        text: newTranscript.text.substring(0, 30) + '...',
-        sequence_id: newTranscript.sequence_id
-      });
-
-      return sorted;
+      return updated.sort((a, b) => (a.sequence_id || 0) - (b.sequence_id || 0));
     });
   }, []);
 
@@ -483,6 +491,7 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
   // Clear transcripts (used when starting new recording)
   const clearTranscripts = useCallback(() => {
     setTranscripts([]);
+    setPartialText(null);
     // Don't clear currentMeetingId here - it will be set by recording-started event
   }, []);
 
@@ -521,6 +530,7 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
     clearTranscripts,
     currentMeetingId,
     markMeetingAsSaved,
+    partialText,
   };
 
   return (

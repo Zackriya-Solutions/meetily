@@ -188,6 +188,10 @@ pub struct TranscriptSegment {
     pub audio_end_time: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration: Option<f64>,
+    /// Audio source: "mic", "system", or None (mono/mixed recording)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

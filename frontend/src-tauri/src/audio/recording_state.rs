@@ -19,9 +19,12 @@ pub enum DeviceType {
 pub struct AudioChunk {
     pub data: Vec<f32>,
     pub sample_rate: u32,
+    pub channels: u16,
     pub timestamp: f64,
     pub chunk_id: u64,
     pub device_type: DeviceType,
+    /// True for intermediate partial transcriptions during ongoing speech
+    pub is_partial: bool,
 }
 
 /// Processed audio chunk (post-VAD) for recording

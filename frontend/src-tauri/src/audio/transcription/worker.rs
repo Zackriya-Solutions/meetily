@@ -118,9 +118,25 @@ pub fn start_transcription_task<R: Runtime>(
                     };
 
                     match chunk {
-                        Some(chunk) => {
-                            // PERFORMANCE OPTIMIZATION: Reduce logging in hot path
-                            // Only log every 10th chunk per worker to reduce I/O overhead
+                        Some(mut chunk) => {
+                            // STREAMING PARTIAL OPTIMIZATION: If this chunk is partial,
+                            // drain the queue and skip to the latest partial or next final.
+                            // This prevents stale partials from being transcribed when
+                            // the speaker talks faster than Whisper can process.
+                            if chunk.is_partial {
+                                let mut receiver = work_receiver_clone.lock().await;
+                                while let Ok(next) = receiver.try_recv() {
+                                    chunks_completed_clone.fetch_add(1, Ordering::SeqCst);
+                                    if !next.is_partial {
+                                        // Hit a final — process it instead
+                                        chunk = next;
+                                        break;
+                                    }
+                                    // Skip this stale partial, use the newer one
+                                    chunk = next;
+                                }
+                            }
+
                             let should_log_this_chunk = chunk.chunk_id % 10 == 0;
 
                             if should_log_this_chunk {
@@ -142,6 +158,7 @@ pub fn start_transcription_task<R: Runtime>(
 
                             let chunk_timestamp = chunk.timestamp;
                             let chunk_duration = chunk.data.len() as f64 / chunk.sample_rate as f64;
+                            let chunk_is_partial = chunk.is_partial;
 
                             // Transcribe with provider-agnostic approach
                             match transcribe_chunk_with_provider(
@@ -151,7 +168,9 @@ pub fn start_transcription_task<R: Runtime>(
                             )
                             .await
                             {
-                                Ok((transcript, confidence_opt, is_partial)) => {
+                                Ok((transcript, confidence_opt, _is_partial_from_whisper)) => {
+                                    // Use chunk-level partial flag (from VAD) instead of Whisper's
+                                    let is_partial = chunk_is_partial;
                                     // Provider-aware confidence threshold
                                     let confidence_threshold = match &engine_clone {
                                         TranscriptionEngine::Whisper(_) | TranscriptionEngine::Provider(_) => 0.3,
@@ -205,26 +224,32 @@ pub fn start_transcription_task<R: Runtime>(
 
                                         // Emit transcript update with NEW recording-relative timestamps
 
-                                        let update = TranscriptUpdate {
-                                            text: transcript,
-                                            timestamp: format_current_timestamp(), // Wall-clock for reference
-                                            source: "Audio".to_string(),
-                                            sequence_id,
-                                            chunk_start_time: chunk_timestamp, // Legacy compatibility
-                                            is_partial,
-                                            confidence: confidence_opt.unwrap_or(0.85), // Default for providers without confidence
-                                            // NEW: Recording-relative timestamps for sync
-                                            audio_start_time,
-                                            audio_end_time,
-                                            duration: chunk_duration,
-                                        };
+                                        if is_partial {
+                                            // Partial: emit separate event (never reaches recording saver)
+                                            let _ = app_clone.emit("transcript-partial",
+                                                serde_json::json!({ "text": transcript }));
+                                        } else {
+                                            // Final: emit to transcript-update (reaches saver + frontend list)
+                                            let update = TranscriptUpdate {
+                                                text: transcript,
+                                                timestamp: format_current_timestamp(),
+                                                source: "Audio".to_string(),
+                                                sequence_id,
+                                                chunk_start_time: chunk_timestamp,
+                                                is_partial: false,
+                                                confidence: confidence_opt.unwrap_or(0.85),
+                                                audio_start_time,
+                                                audio_end_time,
+                                                duration: chunk_duration,
+                                            };
 
-                                        if let Err(e) = app_clone.emit("transcript-update", &update)
-                                        {
-                                            error!(
-                                                "Worker {}: Failed to emit transcript update: {}",
-                                                worker_id, e
-                                            );
+                                            if let Err(e) = app_clone.emit("transcript-update", &update)
+                                            {
+                                                error!(
+                                                    "Worker {}: Failed to emit transcript update: {}",
+                                                    worker_id, e
+                                                );
+                                            }
                                         }
                                         // PERFORMANCE: Removed verbose logging of every emission
                                     } else if !transcript.trim().is_empty() && should_log_this_chunk
