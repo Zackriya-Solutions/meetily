@@ -52,19 +52,19 @@ export default function MeetingsList() {
   }
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col">
       <NetworkBanner />
 
       {/* Meeting list */}
       {meetings.length === 0 ? (
-        <div className="flex-1 flex flex-col items-center justify-center px-6 text-center">
+        <div className="flex flex-col items-center justify-center px-6 py-20 text-center">
           <p className="text-iq-medium mb-2">No meetings yet</p>
           <p className="text-sm text-iq-medium">
             Tap the Record tab to start your first meeting.
           </p>
         </div>
       ) : (
-        <div className="flex-1 overflow-y-auto px-4 space-y-2 pb-4">
+        <div className="space-y-2 pb-4">
           {meetings.map((meeting) => (
             <Link key={meeting.meeting_id} href={`/meeting?id=${meeting.meeting_id}`}>
               <MeetingCard meeting={meeting} />
