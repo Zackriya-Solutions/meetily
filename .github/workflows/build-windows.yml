@@ -53,7 +53,7 @@ jobs:
         id: get-version
         shell: bash
         run: |
-          VERSION=$(grep -o '"version": "[^"]*"' frontend/src-tauri/tauri.conf.json | cut -d'"' -f4)
+          VERSION=$(grep -o '"version": "[^"]*"' desktop/src-tauri/tauri.conf.json | cut -d'"' -f4)
           echo "Application version: $VERSION"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
@@ -97,12 +97,12 @@ jobs:
             # Verify it's a valid PKCS12 file by checking if we can load it
             try {
               $testCert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($certPath, "${{ secrets.SM_CLIENT_CERT_PASSWORD }}")
-              Write-Host "  ✓ Certificate file is valid PKCS12 format"
-              Write-Host "  ✓ Password is correct"
+              Write-Host "  âœ“ Certificate file is valid PKCS12 format"
+              Write-Host "  âœ“ Password is correct"
               Write-Host "  Certificate Subject: $($testCert.Subject)"
               Write-Host "  Certificate Thumbprint: $($testCert.Thumbprint)"
             } catch {
-              Write-Warning "⚠ Certificate validation failed"
+              Write-Warning "âš  Certificate validation failed"
               Write-Warning "Error: $($_.Exception.Message)"
               Write-Warning "This may cause issues with signing, but we'll continue..."
             }
@@ -138,9 +138,9 @@ jobs:
           $aliasMatch = [regex]::Match($keypairOutput, 'key_\d+')
           if ($aliasMatch.Success) {
             $keypairAlias = $aliasMatch.Value
-            Write-Host "✓ Found keypair alias: $keypairAlias"
+            Write-Host "âœ“ Found keypair alias: $keypairAlias"
           } else {
-            Write-Error "✗ Could not find keypair alias in smctl output"
+            Write-Error "âœ— Could not find keypair alias in smctl output"
             Write-Error "Output was: $keypairOutput"
             exit 1
           }
@@ -152,7 +152,7 @@ jobs:
 
           if ($LASTEXITCODE -ne 0) {
             Write-Host ""
-            Write-Error "✗ Certificate sync FAILED"
+            Write-Error "âœ— Certificate sync FAILED"
             Write-Error "Exit code: $LASTEXITCODE"
             Write-Error "Output: $certsyncOutput"
             Write-Error ""
@@ -164,7 +164,7 @@ jobs:
           }
 
           Write-Host ""
-          Write-Host "✓ Certificate synced successfully"
+          Write-Host "âœ“ Certificate synced successfully"
           Write-Host ""
 
           # Verify certificate is now in Windows store
@@ -177,7 +177,7 @@ jobs:
           }
 
           if ($cert) {
-            Write-Host "✓ Certificate found in Windows Certificate Store"
+            Write-Host "âœ“ Certificate found in Windows Certificate Store"
             Write-Host "  Subject: $($cert.Subject)"
             Write-Host "  Issuer: $($cert.Issuer)"
             Write-Host "  Thumbprint: $($cert.Thumbprint)"
@@ -192,7 +192,7 @@ jobs:
           Write-Host ""
           Write-Host "Exporting DIGICERT_KEYPAIR_ALIAS for Tauri signCommand..."
           "DIGICERT_KEYPAIR_ALIAS=$keypairAlias" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          Write-Host "✓ DIGICERT_KEYPAIR_ALIAS=$keypairAlias"
+          Write-Host "âœ“ DIGICERT_KEYPAIR_ALIAS=$keypairAlias"
 
           Write-Host ""
           Write-Host "============================================================"
@@ -267,11 +267,11 @@ jobs:
 
           # Verify client certificate exists
           if (Test-Path $env:SM_CLIENT_CERT_FILE) {
-            Write-Host "✓ Client certificate file exists"
+            Write-Host "âœ“ Client certificate file exists"
             $certInfo = Get-Item $env:SM_CLIENT_CERT_FILE
             Write-Host "  File size: $($certInfo.Length) bytes"
           } else {
-            Write-Error "✗ Client certificate file not found: $env:SM_CLIENT_CERT_FILE"
+            Write-Error "âœ— Client certificate file not found: $env:SM_CLIENT_CERT_FILE"
             exit 1
           }
 
@@ -327,7 +327,7 @@ jobs:
           }
 
           $exeInfo = Get-Item "TestSigning.exe"
-          Write-Host "✓ Test executable compiled successfully"
+          Write-Host "âœ“ Test executable compiled successfully"
           Write-Host "  File: $($exeInfo.FullName)"
           Write-Host "  Size: $($exeInfo.Length) bytes"
 
@@ -348,9 +348,9 @@ jobs:
           $aliasMatch = [regex]::Match($keypairOutput, 'key_\d+')
           if ($aliasMatch.Success) {
             $keypairAlias = $aliasMatch.Value
-            Write-Host "✓ Found keypair alias: $keypairAlias"
+            Write-Host "âœ“ Found keypair alias: $keypairAlias"
           } else {
-            Write-Error "✗ Could not find keypair alias in smctl output"
+            Write-Error "âœ— Could not find keypair alias in smctl output"
             exit 1
           }
           Write-Host ""
@@ -362,15 +362,15 @@ jobs:
           $storeFlag = ""
           $storeName = ""
           if ($certCurrentUser) {
-            Write-Host "✓ Certificate found in CurrentUser\My store"
+            Write-Host "âœ“ Certificate found in CurrentUser\My store"
             $storeFlag = "/s My"
             $storeName = "CurrentUser\My"
           } elseif ($certLocalMachine) {
-            Write-Host "✓ Certificate found in LocalMachine\My store"
+            Write-Host "âœ“ Certificate found in LocalMachine\My store"
             $storeFlag = "/sm /s My"
             $storeName = "LocalMachine\My"
           } else {
-            Write-Error "✗ Certificate not found in CurrentUser\My or LocalMachine\My stores"
+            Write-Error "âœ— Certificate not found in CurrentUser\My or LocalMachine\My stores"
             Write-Error "SHA1 hash: $env:SM_CODE_SIGNING_CERT_SHA1_HASH"
             exit 1
           }
@@ -382,19 +382,19 @@ jobs:
 
           # Test using the exact same command as tauri.conf.json signCommand
           Write-Host "Testing sign-windows.ps1 script (same as Tauri signCommand)..."
-          Write-Host "Command: powershell -ExecutionPolicy Bypass -File frontend/src-tauri/scripts/sign-windows.ps1 -FilePath TestSigning.exe"
+          Write-Host "Command: powershell -ExecutionPolicy Bypass -File desktop/src-tauri/scripts/sign-windows.ps1 -FilePath TestSigning.exe"
           Write-Host ""
 
           # Set DIGICERT_KEYPAIR_ALIAS for the script (already exported to GITHUB_ENV, but set locally too)
           $env:DIGICERT_KEYPAIR_ALIAS = $keypairAlias
 
-          $signOutput = powershell -ExecutionPolicy Bypass -File "frontend/src-tauri/scripts/sign-windows.ps1" -FilePath "TestSigning.exe" 2>&1
+          $signOutput = powershell -ExecutionPolicy Bypass -File "desktop/src-tauri/scripts/sign-windows.ps1" -FilePath "TestSigning.exe" 2>&1
           Write-Host $signOutput
 
           if ($LASTEXITCODE -ne 0) {
             Write-Host ""
             Write-Host "============================================================"
-            Write-Error "✗✗✗ SIGNING FAILED ✗✗✗"
+            Write-Error "âœ—âœ—âœ— SIGNING FAILED âœ—âœ—âœ—"
             Write-Host "============================================================"
             Write-Error "Exit code: $LASTEXITCODE"
             Write-Error "Script output: $signOutput"
@@ -405,7 +405,7 @@ jobs:
             exit 1
           }
           Write-Host ""
-          Write-Host "✓ Test executable signed successfully using sign-windows.ps1"
+          Write-Host "âœ“ Test executable signed successfully using sign-windows.ps1"
 
           # Verify the signature
           Write-Host ""
@@ -432,7 +432,7 @@ jobs:
           if ($signature.Status -ne 'Valid') {
             Write-Host ""
             Write-Host "============================================================"
-            Write-Error "✗✗✗ SIGNATURE VERIFICATION FAILED ✗✗✗"
+            Write-Error "âœ—âœ—âœ— SIGNATURE VERIFICATION FAILED âœ—âœ—âœ—"
             Write-Host "============================================================"
             Write-Error "Expected Status: Valid"
             Write-Error "Actual Status: $($signature.Status)"
@@ -443,7 +443,7 @@ jobs:
           if (-not $signature.TimeStamperCertificate) {
             Write-Host ""
             Write-Host "============================================================"
-            Write-Error "✗✗✗ MISSING TIMESTAMP ✗✗✗"
+            Write-Error "âœ—âœ—âœ— MISSING TIMESTAMP âœ—âœ—âœ—"
             Write-Host "============================================================"
             Write-Error "Timestamp certificate is missing!"
             Write-Error "Without timestamp, signature will become invalid when cert expires"
@@ -451,8 +451,8 @@ jobs:
           }
 
           Write-Host ""
-          Write-Host "✓ Signature verified successfully"
-          Write-Host "✓ Timestamp present"
+          Write-Host "âœ“ Signature verified successfully"
+          Write-Host "âœ“ Timestamp present"
           Write-Host ""
           Write-Host "--- Cleanup ---"
           Remove-Item "TestSigning.exe" -ErrorAction SilentlyContinue
@@ -462,7 +462,7 @@ jobs:
           Remove-Item "TestSigning.pdb" -ErrorAction SilentlyContinue
           Remove-Item "TestSigning.deps.json" -ErrorAction SilentlyContinue
           Remove-Item "TestSigning.runtimeconfig.json" -ErrorAction SilentlyContinue
-          Write-Host "✓ Test files cleaned up"
+          Write-Host "âœ“ Test files cleaned up"
           Write-Host ""
           Write-Host "============================================================"
           Write-Host "=== PRE-BUILD SIGNING TEST PASSED ==="
@@ -584,7 +584,7 @@ jobs:
         shell: pwsh
         run: |
           # Create runtime directory
-          $runtimeDir = "frontend/src-tauri/vulkan-runtime"
+          $runtimeDir = "desktop/src-tauri/vulkan-runtime"
           if (!(Test-Path $runtimeDir)) {
             New-Item -ItemType Directory -Force -Path $runtimeDir | Out-Null
           }
@@ -632,9 +632,9 @@ jobs:
           Write-Host "Contents of vulkan-runtime directory:"
           Get-ChildItem $runtimeDir -ErrorAction SilentlyContinue
 
-      - name: Install frontend dependencies
+      - name: Install desktop dependencies
         run: |
-          cd frontend
+          cd desktop
           pnpm install
 
       - name: Build llama-helper sidecar
@@ -654,17 +654,17 @@ jobs:
           }
 
           # Copy binary to binaries directory
-          New-Item -ItemType Directory -Force -Path "frontend/src-tauri/binaries" | Out-Null
-          Copy-Item "target/release/llama-helper.exe" -Destination "frontend/src-tauri/binaries/llama-helper-x86_64-pc-windows-msvc.exe"
+          New-Item -ItemType Directory -Force -Path "desktop/src-tauri/binaries" | Out-Null
+          Copy-Item "target/release/llama-helper.exe" -Destination "desktop/src-tauri/binaries/llama-helper-x86_64-pc-windows-msvc.exe"
 
-          Write-Host "Copied llama-helper to frontend/src-tauri/binaries/"
-          Get-ChildItem "frontend/src-tauri/binaries/"
+          Write-Host "Copied llama-helper to desktop/src-tauri/binaries/"
+          Get-ChildItem "desktop/src-tauri/binaries/"
 
       - name: Cache FFmpeg binary
         uses: actions/cache@v4
         with:
-          path: frontend/src-tauri/binaries/ffmpeg-*.exe
-          key: ${{ runner.os }}-ffmpeg-${{ hashFiles('frontend/src-tauri/build.rs', 'frontend/src-tauri/build/ffmpeg.rs') }}
+          path: desktop/src-tauri/binaries/ffmpeg-*.exe
+          key: ${{ runner.os }}-ffmpeg-${{ hashFiles('desktop/src-tauri/build.rs', 'desktop/src-tauri/build/ffmpeg.rs') }}
 
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
@@ -679,7 +679,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         with:
-          projectPath: frontend
+          projectPath: desktop
           args: --target x86_64-pc-windows-msvc --features vulkan ${{ steps.build-profile.outputs.args }}
 
       - name: Verify build artifacts
@@ -703,16 +703,16 @@ jobs:
       - name: Generate build summary
         shell: bash
         run: |
-          echo "## 🪟 Windows Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## ðŸªŸ Windows Build Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| **Version** | ${{ steps.get-version.outputs.version }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Build Profile** | ${{ steps.build-profile.outputs.profile }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Target** | x86_64-pc-windows-msvc |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Signed** | ${{ (github.event.inputs.sign-build == 'true') && '✅ Yes' || '❌ No' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Signed** | ${{ (github.event.inputs.sign-build == 'true') && 'âœ… Yes' || 'âŒ No' }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 📦 Build Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "### ðŸ“¦ Build Artifacts" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| File Type | Count |" >> $GITHUB_STEP_SUMMARY
           echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
@@ -722,7 +722,7 @@ jobs:
           echo "| NSIS Signatures | $(find target/x86_64-pc-windows-msvc/${{ steps.build-profile.outputs.profile }}/bundle/nsis -name "*.exe.sig" 2>/dev/null | wc -l) |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "<details>" >> $GITHUB_STEP_SUMMARY
-          echo "<summary>📋 File List</summary>" >> $GITHUB_STEP_SUMMARY
+          echo "<summary>ðŸ“‹ File List</summary>" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           find target/x86_64-pc-windows-msvc/${{ steps.build-profile.outputs.profile }}/bundle -type f \( -name "*.msi" -o -name "*.exe" -o -name "*.sig" \) 2>/dev/null >> $GITHUB_STEP_SUMMARY

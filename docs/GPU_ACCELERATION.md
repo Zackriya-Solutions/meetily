@@ -4,7 +4,7 @@ Meetily's desktop app exposes build-time acceleration options through Cargo feat
 
 ## Auto-Detection Script
 
-[`frontend/scripts/auto-detect-gpu.js`](../frontend/scripts/auto-detect-gpu.js) currently selects features with this logic:
+[`desktop/scripts/auto-detect-gpu.js`](../desktop/scripts/auto-detect-gpu.js) currently selects features with this logic:
 
 - macOS Apple Silicon: `coreml`
 - macOS Intel: `metal`
@@ -14,11 +14,11 @@ Meetily's desktop app exposes build-time acceleration options through Cargo feat
 - BLAS include paths only: `openblas`
 - otherwise: CPU-only
 
-[`frontend/scripts/tauri-auto.js`](../frontend/scripts/tauri-auto.js) uses that result to run `tauri dev` or `tauri build` with the corresponding feature flag.
+[`desktop/scripts/tauri-auto.js`](../desktop/scripts/tauri-auto.js) uses that result to run `tauri dev` or `tauri build` with the corresponding feature flag.
 
 ## Cargo Features
 
-The workspace currently defines these optional transcription acceleration features in [`frontend/src-tauri/Cargo.toml`](../frontend/src-tauri/Cargo.toml):
+The workspace currently defines these optional transcription acceleration features in [`desktop/src-tauri/Cargo.toml`](../desktop/src-tauri/Cargo.toml):
 
 - `cuda`
 - `vulkan`
@@ -36,7 +36,7 @@ The workspace currently defines these optional transcription acceleration featur
 
 ## Manual Examples
 
-From [`frontend/`](../frontend/):
+From [`desktop/`](../desktop/):
 
 ```bash
 pnpm run tauri:dev:cuda

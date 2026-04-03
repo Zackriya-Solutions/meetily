@@ -8,8 +8,8 @@
 
 ## Development Areas
 
-- Desktop app UI: [`frontend/src/`](frontend/src/)
-- Tauri and Rust core: [`frontend/src-tauri/`](frontend/src-tauri/)
+- Desktop app UI: [`desktop/src/`](desktop/src/)
+- Tauri and Rust core: [`desktop/src-tauri/`](desktop/src-tauri/)
 - Workspace manifest: [`Cargo.toml`](Cargo.toml)
 
 ## Expected Workflow
@@ -21,7 +21,7 @@
 
 ## Useful Commands
 
-From [`frontend/`](frontend/):
+From [`desktop/`](desktop/):
 
 ```bash
 pnpm install

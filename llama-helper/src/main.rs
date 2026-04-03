@@ -12,7 +12,8 @@ use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
-use llama_cpp_2::model::{AddBos, LlamaModel, Special};
+use llama_cpp_2::model::{AddBos, LlamaModel};
+use llama_cpp_2::TokenToStringError;
 use serde::{Deserialize, Serialize};
 
 // ============================================================================
@@ -70,10 +71,26 @@ fn detect_vram_gb() -> f32 {
         }
     }
 
-    /// TODO: Vulkan VRAM detection
+    // TODO: Vulkan VRAM detection
 
     eprintln!("VRAM detection not available, using conservative estimate");
     4.0 // Conservative fallback
+}
+
+fn token_to_piece_bytes(model: &LlamaModel, token: llama_cpp_2::token::LlamaToken) -> Result<Vec<u8>> {
+    match model.token_to_piece_bytes(token, 8, true, None) {
+        Err(TokenToStringError::InsufficientBufferSpace(required)) => {
+            model
+                .token_to_piece_bytes(
+                    token,
+                    (-required).try_into().expect("Error buffer size is positive"),
+                    true,
+                    None,
+                )
+                .context("Failed to convert token to bytes")
+        }
+        other => other.context("Failed to convert token to bytes"),
+    }
 }
 
 #[cfg(feature = "metal")]
@@ -368,9 +385,7 @@ impl ModelState {
                 break;
             }
 
-            let output_bytes = model
-                .token_to_bytes(token, Special::Tokenize)
-                .context("Failed to convert token to bytes")?;
+            let output_bytes = token_to_piece_bytes(model, token)?;
 
             let mut token_text = String::with_capacity(32);
             let _ = decoder.decode_to_string(&output_bytes, &mut token_text, false);

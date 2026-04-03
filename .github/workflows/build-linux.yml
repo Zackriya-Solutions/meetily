@@ -68,7 +68,7 @@ jobs:
         id: get-version
         shell: bash
         run: |
-          VERSION=$(grep -o '"version": "[^"]*"' frontend/src-tauri/tauri.conf.json | cut -d'"' -f4)
+          VERSION=$(grep -o '"version": "[^"]*"' desktop/src-tauri/tauri.conf.json | cut -d'"' -f4)
           echo "Application version: $VERSION"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
@@ -181,9 +181,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y fuse libfuse2
 
-      - name: Install frontend dependencies
+      - name: Install desktop dependencies
         run: |
-          cd frontend
+          cd desktop
           pnpm install
 
       - name: Build llama-helper sidecar
@@ -192,11 +192,11 @@ jobs:
           cargo build --release -p llama-helper
           
           # Copy binary to binaries directory
-          mkdir -p frontend/src-tauri/binaries
-          cp target/release/llama-helper frontend/src-tauri/binaries/llama-helper-x86_64-unknown-linux-gnu
+          mkdir -p desktop/src-tauri/binaries
+          cp target/release/llama-helper desktop/src-tauri/binaries/llama-helper-x86_64-unknown-linux-gnu
           
-          echo "Copied llama-helper to frontend/src-tauri/binaries/"
-          ls -la frontend/src-tauri/binaries/
+          echo "Copied llama-helper to desktop/src-tauri/binaries/"
+          ls -la desktop/src-tauri/binaries/
 
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
@@ -211,7 +211,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         with:
-          projectPath: frontend
+          projectPath: desktop
           args: --target x86_64-unknown-linux-gnu --features openblas ${{ steps.build-profile.outputs.args }}
 
       - name: Verify build artifacts
@@ -316,7 +316,7 @@ jobs:
 
       - name: Generate build summary
         run: |
-          echo "## 🐧 Linux Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## ðŸ§ Linux Build Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
@@ -325,9 +325,9 @@ jobs:
           echo "| **Target** | x86_64-unknown-linux-gnu |" >> $GITHUB_STEP_SUMMARY
           echo "| **Ubuntu Version** | ${{ github.event.inputs.ubuntu-version || 'ubuntu-22.04' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Bundle Types** | ${{ steps.build-profile.outputs.args }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Signed** | ${{ github.event.inputs.sign-build == 'true' && '✅ Yes' || '❌ No' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Signed** | ${{ github.event.inputs.sign-build == 'true' && 'âœ… Yes' || 'âŒ No' }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 📦 Build Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "### ðŸ“¦ Build Artifacts" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| File Type | Count |" >> $GITHUB_STEP_SUMMARY
           echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
@@ -336,7 +336,7 @@ jobs:
           echo "| RPM Packages | $(find target/x86_64-unknown-linux-gnu/${{ steps.build-profile.outputs.profile }}/bundle/rpm -name "*.rpm" 2>/dev/null | wc -l) |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "<details>" >> $GITHUB_STEP_SUMMARY
-          echo "<summary>📋 File List</summary>" >> $GITHUB_STEP_SUMMARY
+          echo "<summary>ðŸ“‹ File List</summary>" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           find target/x86_64-unknown-linux-gnu/${{ steps.build-profile.outputs.profile }}/bundle -type f \( -name "*.deb" -o -name "*.AppImage" -o -name "*.rpm" \) 2>/dev/null >> $GITHUB_STEP_SUMMARY

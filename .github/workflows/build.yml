@@ -61,7 +61,7 @@ jobs:
         id: get-version
         shell: bash
         run: |
-          VERSION=$(grep -o '"version": "[^"]*"' frontend/src-tauri/tauri.conf.json | cut -d'"' -f4)
+          VERSION=$(grep -o '"version": "[^"]*"' desktop/src-tauri/tauri.conf.json | cut -d'"' -f4)
           echo "Application version from tauri.conf.json: $VERSION"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
@@ -190,7 +190,7 @@ jobs:
         shell: pwsh
         run: |
           # Create runtime directory
-          $runtimeDir = "frontend/src-tauri/vulkan-runtime"
+          $runtimeDir = "desktop/src-tauri/vulkan-runtime"
           if (!(Test-Path $runtimeDir)) {
             New-Item -ItemType Directory -Force -Path $runtimeDir | Out-Null
           }
@@ -264,12 +264,12 @@ jobs:
             # Verify it's a valid PKCS12 file by checking if we can load it
             try {
               $testCert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($certPath, "${{ secrets.SM_CLIENT_CERT_PASSWORD }}")
-              Write-Host "  ✓ Certificate file is valid PKCS12 format"
-              Write-Host "  ✓ Password is correct"
+              Write-Host "  âœ“ Certificate file is valid PKCS12 format"
+              Write-Host "  âœ“ Password is correct"
               Write-Host "  Certificate Subject: $($testCert.Subject)"
               Write-Host "  Certificate Thumbprint: $($testCert.Thumbprint)"
             } catch {
-              Write-Warning "⚠ Certificate validation failed"
+              Write-Warning "âš  Certificate validation failed"
               Write-Warning "Error: $($_.Exception.Message)"
               Write-Warning "This may cause issues with signing, but we'll continue..."
             }
@@ -305,9 +305,9 @@ jobs:
           $aliasMatch = [regex]::Match($keypairOutput, 'key_\d+')
           if ($aliasMatch.Success) {
             $keypairAlias = $aliasMatch.Value
-            Write-Host "✓ Found keypair alias: $keypairAlias"
+            Write-Host "âœ“ Found keypair alias: $keypairAlias"
           } else {
-            Write-Error "✗ Could not find keypair alias in smctl output"
+            Write-Error "âœ— Could not find keypair alias in smctl output"
             Write-Error "Output was: $keypairOutput"
             exit 1
           }
@@ -319,7 +319,7 @@ jobs:
 
           if ($LASTEXITCODE -ne 0) {
             Write-Host ""
-            Write-Error "✗ Certificate sync FAILED"
+            Write-Error "âœ— Certificate sync FAILED"
             Write-Error "Exit code: $LASTEXITCODE"
             Write-Error "Output: $certsyncOutput"
             Write-Error ""
@@ -331,7 +331,7 @@ jobs:
           }
 
           Write-Host ""
-          Write-Host "✓ Certificate synced successfully"
+          Write-Host "âœ“ Certificate synced successfully"
           Write-Host ""
 
           # Verify certificate is now in Windows store
@@ -344,7 +344,7 @@ jobs:
           }
 
           if ($cert) {
-            Write-Host "✓ Certificate found in Windows Certificate Store"
+            Write-Host "âœ“ Certificate found in Windows Certificate Store"
             Write-Host "  Subject: $($cert.Subject)"
             Write-Host "  Issuer: $($cert.Issuer)"
             Write-Host "  Thumbprint: $($cert.Thumbprint)"
@@ -359,7 +359,7 @@ jobs:
           Write-Host ""
           Write-Host "Exporting DIGICERT_KEYPAIR_ALIAS for Tauri signCommand..."
           "DIGICERT_KEYPAIR_ALIAS=$keypairAlias" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          Write-Host "✓ DIGICERT_KEYPAIR_ALIAS=$keypairAlias"
+          Write-Host "âœ“ DIGICERT_KEYPAIR_ALIAS=$keypairAlias"
 
           Write-Host ""
           Write-Host "============================================================"
@@ -428,9 +428,9 @@ jobs:
           sudo apt install vulkan-sdk -y
           sudo apt-get install -y mesa-vulkan-drivers
 
-      - name: Install frontend dependencies
+      - name: Install desktop dependencies
         run: |
-          cd frontend
+          cd desktop
           pnpm install
 
       - name: rustup install target
@@ -464,8 +464,8 @@ jobs:
       - name: Configure build acceleration
         if: contains(inputs.platform, 'macos')
         run: |
-          echo "✓ macOS build will use Metal GPU acceleration (enabled by default)"
-          echo "✓ CoreML acceleration available for Apple Silicon"
+          echo "âœ“ macOS build will use Metal GPU acceleration (enabled by default)"
+          echo "âœ“ CoreML acceleration available for Apple Silicon"
 
       - name: Patch asset name pattern
         id: patch-release-name
@@ -523,11 +523,11 @@ jobs:
           }
 
           # Copy binary to binaries directory
-          New-Item -ItemType Directory -Force -Path "frontend/src-tauri/binaries" | Out-Null
-          Copy-Item "target/release/llama-helper.exe" -Destination "frontend/src-tauri/binaries/llama-helper-x86_64-pc-windows-msvc.exe"
+          New-Item -ItemType Directory -Force -Path "desktop/src-tauri/binaries" | Out-Null
+          Copy-Item "target/release/llama-helper.exe" -Destination "desktop/src-tauri/binaries/llama-helper-x86_64-pc-windows-msvc.exe"
 
-          Write-Host "Copied llama-helper to frontend/src-tauri/binaries/"
-          Get-ChildItem "frontend/src-tauri/binaries/"
+          Write-Host "Copied llama-helper to desktop/src-tauri/binaries/"
+          Get-ChildItem "desktop/src-tauri/binaries/"
 
       - name: Build llama-helper sidecar (macOS/Linux)
         if: "!contains(inputs.platform, 'windows')"
@@ -554,17 +554,17 @@ jobs:
           fi
 
           # Copy binary to binaries directory
-          mkdir -p frontend/src-tauri/binaries
-          cp target/release/llama-helper frontend/src-tauri/binaries/llama-helper-${TARGET}
+          mkdir -p desktop/src-tauri/binaries
+          cp target/release/llama-helper desktop/src-tauri/binaries/llama-helper-${TARGET}
 
-          echo "Copied llama-helper to frontend/src-tauri/binaries/llama-helper-${TARGET}"
-          ls -la frontend/src-tauri/binaries/
+          echo "Copied llama-helper to desktop/src-tauri/binaries/llama-helper-${TARGET}"
+          ls -la desktop/src-tauri/binaries/
 
       - name: Cache FFmpeg binary
         uses: actions/cache@v4
         with:
-          path: frontend/src-tauri/binaries/ffmpeg-*
-          key: ${{ runner.os }}-ffmpeg-${{ hashFiles('frontend/src-tauri/build.rs', 'frontend/src-tauri/build/ffmpeg.rs') }}    
+          path: desktop/src-tauri/binaries/ffmpeg-*
+          key: ${{ runner.os }}-ffmpeg-${{ hashFiles('desktop/src-tauri/build.rs', 'desktop/src-tauri/build/ffmpeg.rs') }}    
 
       - name: Build with Tauri
         id: tauri-build
@@ -587,7 +587,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         with:
-          projectPath: frontend
+          projectPath: desktop
           tagName: ${{ inputs.release-id && format('v{0}', steps.get-version.outputs.version) || '' }}
           releaseName: ${{ inputs.release-id && format('v{0}', steps.get-version.outputs.version) || '' }}
           releaseId: ${{ inputs.release-id }}

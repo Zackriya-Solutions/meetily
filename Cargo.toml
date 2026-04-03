@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
-    "frontend/src-tauri",
+    "desktop/src-tauri",
     "llama-helper"
 ]
 

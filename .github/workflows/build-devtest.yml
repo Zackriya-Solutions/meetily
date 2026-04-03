@@ -60,7 +60,7 @@ jobs:
         id: get-version
         shell: bash
         run: |
-          VERSION=$(grep -o '"version": "[^"]*"' frontend/src-tauri/tauri.conf.json | cut -d'"' -f4)
+          VERSION=$(grep -o '"version": "[^"]*"' desktop/src-tauri/tauri.conf.json | cut -d'"' -f4)
           echo "Application version: $VERSION"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
@@ -144,9 +144,9 @@ jobs:
           version: 1.4.309.0
           cache: true
 
-      - name: Install frontend dependencies
+      - name: Install desktop dependencies
         run: |
-          cd frontend
+          cd desktop
           pnpm install
 
       # macOS signing setup
@@ -363,11 +363,11 @@ jobs:
           fi
 
           # Copy binary to binaries directory
-          mkdir -p frontend/src-tauri/binaries
-          cp target/release/llama-helper${EXT} frontend/src-tauri/binaries/llama-helper-${{ matrix.target }}${EXT}
+          mkdir -p desktop/src-tauri/binaries
+          cp target/release/llama-helper${EXT} desktop/src-tauri/binaries/llama-helper-${{ matrix.target }}${EXT}
 
-          echo "Copied llama-helper to frontend/src-tauri/binaries/llama-helper-${{ matrix.target }}${EXT}"
-          ls -la frontend/src-tauri/binaries/
+          echo "Copied llama-helper to desktop/src-tauri/binaries/llama-helper-${{ matrix.target }}${EXT}"
+          ls -la desktop/src-tauri/binaries/
 
       # Build step (with code signing)
       - name: Build Tauri app (with code signing)
@@ -392,7 +392,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         with:
-          projectPath: frontend
+          projectPath: desktop
           args: ${{ matrix.args }} ${{ steps.build-features.outputs.features }}
 
       # Build step (without code signing - updater signing only)
@@ -410,7 +410,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         with:
-          projectPath: frontend
+          projectPath: desktop
           args: ${{ matrix.args }} ${{ steps.build-features.outputs.features }}
 
       # Linux post-build processing

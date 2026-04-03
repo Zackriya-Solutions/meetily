@@ -13,15 +13,15 @@ function Test-CommandExists {
 
 Write-Host ""
 
-# Find frontend directory with package.json
+# Find desktop directory with package.json
 if (Test-Path "package.json") {
     Write-Host "Using current directory" -ForegroundColor Cyan
-} elseif (Test-Path "frontend\package.json") {
-    Write-Host "Changing to directory: frontend" -ForegroundColor Cyan
-    Set-Location frontend
+} elseif (Test-Path "desktop\package.json") {
+    Write-Host "Changing to directory: desktop" -ForegroundColor Cyan
+    Set-Location desktop
 } else {
     Write-Host "[ERROR] Could not find package.json" -ForegroundColor Red
-    Write-Host "        Make sure you're in the project root or frontend directory" -ForegroundColor Red
+    Write-Host "        Make sure you're in the project root or desktop directory" -ForegroundColor Red
     exit 1
 }
 

@@ -27,12 +27,12 @@ console.log('=========================================\n');
 
 // Check if latest.json exists
 if (!fs.existsSync(LATEST_JSON_PATH)) {
-  console.error(`❌ Error: latest.json not found at ${LATEST_JSON_PATH}`);
+  console.error(`âŒ Error: latest.json not found at ${LATEST_JSON_PATH}`);
   console.error('\nPlease generate it first:');
   console.error('  node scripts/generate-update-manifest-github.js <version>');
   console.error('\nExample:');
   console.error('  node scripts/generate-update-manifest-github.js 0.1.2 \\');
-  console.error('    frontend/src-tauri/target/release/bundle/updater \\');
+  console.error('    desktop/src-tauri/target/release/bundle/updater \\');
   console.error('    latest.json \\');
   console.error('    "Bug fixes and improvements"');
   process.exit(1);
@@ -43,12 +43,12 @@ let latestJson;
 try {
   const content = fs.readFileSync(LATEST_JSON_PATH, 'utf8');
   latestJson = JSON.parse(content);
-  console.log('✓ latest.json loaded successfully');
+  console.log('âœ“ latest.json loaded successfully');
   console.log(`  Version: ${latestJson.version}`);
   console.log(`  Platforms: ${Object.keys(latestJson.platforms).join(', ')}`);
   console.log('');
 } catch (error) {
-  console.error(`❌ Error reading latest.json: ${error.message}`);
+  console.error(`âŒ Error reading latest.json: ${error.message}`);
   process.exit(1);
 }
 
@@ -67,30 +67,30 @@ const server = http.createServer((req, res) => {
       'Cache-Control': 'no-cache, no-store, must-revalidate',
     });
     res.end(content);
-    console.log(`[${timestamp}] ✓ Served latest.json (${content.length} bytes)`);
+    console.log(`[${timestamp}] âœ“ Served latest.json (${content.length} bytes)`);
   } else {
     // 404 for other routes
     res.writeHead(404, { 'Content-Type': 'text/plain' });
     res.end('Not found');
-    console.log(`[${timestamp}] ✗ 404 - ${req.url}`);
+    console.log(`[${timestamp}] âœ— 404 - ${req.url}`);
   }
 });
 
 // Start server
 server.listen(PORT, () => {
   console.log('=========================================');
-  console.log(`✓ Server running at http://localhost:${PORT}`);
+  console.log(`âœ“ Server running at http://localhost:${PORT}`);
   console.log('=========================================\n');
 
-  console.log('📋 Testing Instructions:\n');
+  console.log('ðŸ“‹ Testing Instructions:\n');
 
   console.log('1. Update tauri.conf.json endpoint:');
-  console.log('   Change the endpoint in frontend/src-tauri/tauri.conf.json to:');
+  console.log('   Change the endpoint in desktop/src-tauri/tauri.conf.json to:');
   console.log(`   "endpoints": ["http://localhost:${PORT}/latest.json"]\n`);
 
   console.log('2. Build an older version:');
   console.log('   - Update version in tauri.conf.json to something older (e.g., 0.1.0)');
-  console.log('   - Run: cd frontend && pnpm tauri:build\n');
+  console.log('   - Run: cd desktop && pnpm tauri:build\n');
 
   console.log('3. Run the app and test updates:');
   console.log('   - The app should detect the update on startup');
@@ -103,7 +103,7 @@ server.listen(PORT, () => {
   console.log('   - Download progress should display');
   console.log('   - App should restart after installation\n');
 
-  console.log('⚠️  IMPORTANT: Restore production endpoint after testing!');
+  console.log('âš ï¸  IMPORTANT: Restore production endpoint after testing!');
   console.log('   Change back to:');
   console.log('   "endpoints": ["https://github.com/spencer-at-axiom/meetfree/releases/latest/download/latest.json"]\n');
 
@@ -115,10 +115,10 @@ server.listen(PORT, () => {
 // Handle server errors
 server.on('error', (error) => {
   if (error.code === 'EADDRINUSE') {
-    console.error(`❌ Error: Port ${PORT} is already in use`);
+    console.error(`âŒ Error: Port ${PORT} is already in use`);
     console.error('Please stop the other process or choose a different port');
   } else {
-    console.error(`❌ Server error: ${error.message}`);
+    console.error(`âŒ Server error: ${error.message}`);
   }
   process.exit(1);
 });
@@ -126,7 +126,7 @@ server.on('error', (error) => {
 // Handle graceful shutdown
 process.on('SIGINT', () => {
   console.log('\n\n=========================================');
-  console.log('✓ Server stopped');
+  console.log('âœ“ Server stopped');
   console.log('=========================================\n');
   process.exit(0);
 });

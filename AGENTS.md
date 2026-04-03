@@ -1,6 +1,6 @@
 # AGENTS.md
 
-This repository's product of record is the native Tauri desktop application in [`frontend/`](frontend/).
+This repository's product of record is the native Tauri desktop application in [`desktop/`](desktop/).
 
 ## Stack
 
@@ -14,11 +14,11 @@ This repository's product of record is the native Tauri desktop application in [
 
 ## What Is Active
 
-- Desktop UI in [`frontend/src/`](frontend/src/)
-- Native commands and services in [`frontend/src-tauri/src/`](frontend/src-tauri/src/)
-- Local database initialization in [`frontend/src-tauri/src/database/manager.rs`](frontend/src-tauri/src/database/manager.rs)
-- Audio capture and transcription pipeline in [`frontend/src-tauri/src/audio/`](frontend/src-tauri/src/audio/)
-- Summary templates in [`frontend/src-tauri/src/summary/`](frontend/src-tauri/src/summary/)
+- Desktop UI in [`desktop/src/`](desktop/src/)
+- Native commands and services in [`desktop/src-tauri/src/`](desktop/src-tauri/src/)
+- Local database initialization in [`desktop/src-tauri/src/database/manager.rs`](desktop/src-tauri/src/database/manager.rs)
+- Audio capture and transcription pipeline in [`desktop/src-tauri/src/audio/`](desktop/src-tauri/src/audio/)
+- Summary templates in [`desktop/src-tauri/src/summary/`](desktop/src-tauri/src/summary/)
 
 ## What Is Not Active
 
@@ -28,7 +28,7 @@ This repository's product of record is the native Tauri desktop application in [
 
 ## Useful Commands
 
-From [`frontend/`](frontend/):
+From [`desktop/`](desktop/):
 
 ```bash
 pnpm install

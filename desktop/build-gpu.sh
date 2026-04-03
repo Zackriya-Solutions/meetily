@@ -11,7 +11,7 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-echo -e "${BLUE}🚀 Meetily GPU-Accelerated Build Script${NC}"
+echo -e "${BLUE}ðŸš€ Meetily GPU-Accelerated Build Script${NC}"
 echo ""
 
 # Export CUDA flags for Linux/NVIDIA
@@ -27,7 +27,7 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
 elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
   OS="linux"
 else
-  echo -e "${RED}❌ Unsupported OS: $OSTYPE${NC}"
+  echo -e "${RED}âŒ Unsupported OS: $OSTYPE${NC}"
   exit 1
 fi
 
@@ -36,23 +36,23 @@ command_exists() {
   command -v "$1" >/dev/null 2>&1
 }
 
-# Find the correct directory - we need to be in frontend root for npm commands
+# Find the correct directory for desktop app commands
 if [ -f "package.json" ]; then
-  FRONTEND_DIR="."
-elif [ -f "frontend/package.json" ]; then
-  cd frontend || {
-    echo -e "${RED}❌ Failed to change to frontend directory${NC}"
+  DESKTOP_DIR="."
+elif [ -f "desktop/package.json" ]; then
+  cd desktop || {
+    echo -e "${RED}âŒ Failed to change to frontend directory${NC}"
     exit 1
   }
-  FRONTEND_DIR="frontend"
+  DESKTOP_DIR="."
 else
-  echo -e "${RED}❌ Could not find package.json${NC}"
-  echo -e "${RED}   Make sure you're in the project root or frontend directory${NC}"
+  echo -e "${RED}âŒ Could not find package.json${NC}"
+  echo -e "${RED}   Make sure you're in the project root or desktop directory${NC}"
   exit 1
 fi
 
 echo ""
-echo -e "${BLUE}📦 Building Meetily...${NC}"
+echo -e "${BLUE}ðŸ“¦ Building Meetily...${NC}"
 echo ""
 
 # Check for pnpm or npm
@@ -61,36 +61,27 @@ if command_exists pnpm; then
 elif command_exists npm; then
   PKG_MGR="npm"
 else
-  echo -e "${RED}❌ Neither npm nor pnpm found${NC}"
+  echo -e "${RED}âŒ Neither npm nor pnpm found${NC}"
   exit 1
 fi
 
 # Detect GPU feature if not already set
 if [ -z "$TAURI_GPU_FEATURE" ]; then
-    echo -e "${BLUE}🔍 Detecting GPU features...${NC}"
+    echo -e "${BLUE}ðŸ” Detecting GPU features...${NC}"
     # Run the detection script and capture output
-    # We need to run it from frontend dir
-    if [ "$FRONTEND_DIR" != "." ]; then
-        cd "$FRONTEND_DIR"
-    fi
-    
     TAURI_GPU_FEATURE=$(node scripts/auto-detect-gpu.js)
-    
-    if [ "$FRONTEND_DIR" != "." ]; then
-        cd ..
-    fi
 fi
 
 if [ -n "$TAURI_GPU_FEATURE" ]; then
-    echo -e "${GREEN}✅ Detected GPU feature: $TAURI_GPU_FEATURE${NC}"
+    echo -e "${GREEN}âœ… Detected GPU feature: $TAURI_GPU_FEATURE${NC}"
     export TAURI_GPU_FEATURE
 else
-    echo -e "${YELLOW}⚠️ No specific GPU feature detected or forced${NC}"
+    echo -e "${YELLOW}âš ï¸ No specific GPU feature detected or forced${NC}"
 fi
 
 # Build llama-helper
 echo ""
-echo -e "${BLUE}🦙 Building llama-helper sidecar (release)...${NC}"
+echo -e "${BLUE}ðŸ¦™ Building llama-helper sidecar (release)...${NC}"
 
 HELPER_DIR="llama-helper"
 if [ ! -d "$HELPER_DIR" ]; then
@@ -100,7 +91,7 @@ if [ ! -d "$HELPER_DIR" ]; then
 fi
 
 if [ ! -d "$HELPER_DIR" ]; then
-    echo -e "${RED}❌ Could not find llama-helper directory${NC}"
+    echo -e "${RED}âŒ Could not find llama-helper directory${NC}"
     exit 1
 fi
 
@@ -121,20 +112,20 @@ echo -e "   Building in $HELPER_DIR with features: ${HELPER_FEATURES:-none}"
 (cd "$HELPER_DIR" && cargo build --release $HELPER_FEATURES)
 
 if [ $? -ne 0 ]; then
-    echo -e "${RED}❌ Failed to build llama-helper${NC}"
+    echo -e "${RED}âŒ Failed to build llama-helper${NC}"
     exit 1
 fi
 
-echo -e "${GREEN}✅ llama-helper built successfully${NC}"
+echo -e "${GREEN}âœ… llama-helper built successfully${NC}"
 
 # Detect target triple
 echo ""
-echo -e "${BLUE}🎯 Detecting target triple...${NC}"
+echo -e "${BLUE}ðŸŽ¯ Detecting target triple...${NC}"
 TARGET_TRIPLE=$(rustc -vV | grep "host:" | awk '{print $2}')
 echo -e "   Target: $TARGET_TRIPLE"
 
 # Copy binary
-BINARIES_DIR="$FRONTEND_DIR/src-tauri/binaries"
+BINARIES_DIR="$DESKTOP_DIR/src-tauri/binaries"
 mkdir -p "$BINARIES_DIR"
 
 # Clean old binaries
@@ -148,9 +139,8 @@ if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "win32" ]]; then
     SIDECAR_BINARY="llama-helper-$TARGET_TRIPLE.exe"
 fi
 
-# The binary is in the workspace target directory, which is one level up from frontend
-# if we are in frontend dir.
-WORKSPACE_ROOT="$FRONTEND_DIR/.."
+# The binary is in the workspace target directory, which is one level up from desktop.
+WORKSPACE_ROOT="$DESKTOP_DIR/.."
 SRC_PATH="$WORKSPACE_ROOT/target/release/$BASE_BINARY"
 DEST_PATH="$BINARIES_DIR/$SIDECAR_BINARY"
 
@@ -161,9 +151,9 @@ fi
 
 if [ -f "$SRC_PATH" ]; then
     cp "$SRC_PATH" "$DEST_PATH"
-    echo -e "${GREEN}✅ Copied binary to $DEST_PATH${NC}"
+    echo -e "${GREEN}âœ… Copied binary to $DEST_PATH${NC}"
 else
-    echo -e "${RED}❌ Binary not found at $SRC_PATH${NC}"
+    echo -e "${RED}âŒ Binary not found at $SRC_PATH${NC}"
     # List contents of target/release to help debugging
     echo -e "${YELLOW}Contents of target/release:${NC}"
     ls -la "$WORKSPACE_ROOT/target/release/" || ls -la "target/release/"
@@ -179,12 +169,12 @@ NO_STRIP=true $PKG_MGR run tauri:build
 
 if [ $? -eq 0 ]; then
   echo ""
-  echo -e "${GREEN}✅ Build completed successfully!${NC}"
+  echo -e "${GREEN}âœ… Build completed successfully!${NC}"
   echo ""
-  echo -e "${GREEN}🎉 Complete Tauri application built with GPU acceleration!${NC}"
+  echo -e "${GREEN}ðŸŽ‰ Complete Tauri application built with GPU acceleration!${NC}"
 else
   echo ""
-  echo -e "${RED}❌ Build failed${NC}"
+  echo -e "${RED}âŒ Build failed${NC}"
   exit 1
 fi
 

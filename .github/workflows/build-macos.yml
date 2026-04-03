@@ -48,7 +48,7 @@ jobs:
         id: get-version
         shell: bash
         run: |
-          VERSION=$(grep -o '"version": "[^"]*"' frontend/src-tauri/tauri.conf.json | cut -d'"' -f4)
+          VERSION=$(grep -o '"version": "[^"]*"' desktop/src-tauri/tauri.conf.json | cut -d'"' -f4)
           echo "Application version: $VERSION"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
@@ -101,9 +101,9 @@ jobs:
           workspaces: ". -> target"
           key: macos-latest-aarch64-apple-darwin
 
-      - name: Install frontend dependencies
+      - name: Install desktop dependencies
         run: |
-          cd frontend
+          cd desktop
           pnpm install
 
       - name: Import Apple Developer Certificate
@@ -132,8 +132,8 @@ jobs:
 
       - name: Configure build acceleration
         run: |
-          echo "✓ macOS build will use Metal GPU acceleration (enabled by default)"
-          echo "✓ CoreML acceleration available for Apple Silicon"
+          echo "âœ“ macOS build will use Metal GPU acceleration (enabled by default)"
+          echo "âœ“ CoreML acceleration available for Apple Silicon"
 
       - name: Build llama-helper sidecar
         run: |
@@ -141,17 +141,17 @@ jobs:
           cargo build --release -p llama-helper --features metal
 
           # Copy binary to binaries directory
-          mkdir -p frontend/src-tauri/binaries
-          cp target/release/llama-helper frontend/src-tauri/binaries/llama-helper-aarch64-apple-darwin
+          mkdir -p desktop/src-tauri/binaries
+          cp target/release/llama-helper desktop/src-tauri/binaries/llama-helper-aarch64-apple-darwin
 
-          echo "Copied llama-helper to frontend/src-tauri/binaries/"
-          ls -la frontend/src-tauri/binaries/
+          echo "Copied llama-helper to desktop/src-tauri/binaries/"
+          ls -la desktop/src-tauri/binaries/
 
       - name: Cache FFmpeg binary
         uses: actions/cache@v4
         with:
-          path: frontend/src-tauri/binaries/ffmpeg-*
-          key: ${{ runner.os }}-ffmpeg-${{ hashFiles('frontend/src-tauri/build.rs', 'frontend/src-tauri/build/ffmpeg.rs') }}
+          path: desktop/src-tauri/binaries/ffmpeg-*
+          key: ${{ runner.os }}-ffmpeg-${{ hashFiles('desktop/src-tauri/build.rs', 'desktop/src-tauri/build/ffmpeg.rs') }}
 
       - name: Build Tauri app (with code signing)
         if: ${{ github.event.inputs.sign-build == 'true' }}
@@ -175,7 +175,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         with:
-          projectPath: frontend
+          projectPath: desktop
           args: --target aarch64-apple-darwin ${{ steps.build-profile.outputs.args }}
 
       - name: Build Tauri app (unsigned)
@@ -192,7 +192,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         with:
-          projectPath: frontend
+          projectPath: desktop
           args: --target aarch64-apple-darwin ${{ steps.build-profile.outputs.args }}
 
       - name: Verify build artifacts
@@ -211,10 +211,10 @@ jobs:
             codesign -dv --verbose=4 "$APP_PATH" 2>&1 | grep -i "signature\|authority"
             echo ""
             echo "Verifying signature..."
-            codesign --verify --deep --strict "$APP_PATH" && echo "✓ Code signature is valid"
+            codesign --verify --deep --strict "$APP_PATH" && echo "âœ“ Code signature is valid"
             echo ""
             echo "Checking notarization..."
-            spctl -a -vvv "$APP_PATH" && echo "✓ App is notarized and will be accepted by Gatekeeper"
+            spctl -a -vvv "$APP_PATH" && echo "âœ“ App is notarized and will be accepted by Gatekeeper"
           else
             echo "No App bundle found to verify"
           fi
@@ -230,7 +230,7 @@ jobs:
             codesign -dv --verbose=4 "$DMG_PATH" 2>&1 | grep -i "signature\|authority"
             echo ""
             echo "Verifying signature..."
-            codesign --verify --deep --strict "$DMG_PATH" && echo "✓ DMG signature is valid"
+            codesign --verify --deep --strict "$DMG_PATH" && echo "âœ“ DMG signature is valid"
             echo ""
             echo "Note: DMG contains notarized .app bundle but DMG itself may not be notarized"
             echo "This is acceptable - users will mount the DMG and run the notarized .app inside"
@@ -252,16 +252,16 @@ jobs:
 
       - name: Generate build summary
         run: |
-          echo "## 🍎 macOS Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## ðŸŽ macOS Build Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| **Version** | ${{ steps.get-version.outputs.version }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Build Profile** | ${{ steps.build-profile.outputs.profile }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Target** | aarch64-apple-darwin (Apple Silicon) |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Signed** | ${{ github.event.inputs.sign-build == 'true' && '✅ Yes' || '❌ No' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Signed** | ${{ github.event.inputs.sign-build == 'true' && 'âœ… Yes' || 'âŒ No' }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 📦 Build Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "### ðŸ“¦ Build Artifacts" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| File Type | Count |" >> $GITHUB_STEP_SUMMARY
           echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
@@ -271,7 +271,7 @@ jobs:
           echo "| APP Signatures | $(find target/aarch64-apple-darwin/${{ steps.build-profile.outputs.profile }}/bundle/macos -name "*.app.tar.gz.sig" 2>/dev/null | wc -l) |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "<details>" >> $GITHUB_STEP_SUMMARY
-          echo "<summary>📋 File List</summary>" >> $GITHUB_STEP_SUMMARY
+          echo "<summary>ðŸ“‹ File List</summary>" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           find target/aarch64-apple-darwin/${{ steps.build-profile.outputs.profile }}/bundle -type f \( -name "*.dmg" -o -name "*.tar.gz" -o -name "*.sig" \) 2>/dev/null >> $GITHUB_STEP_SUMMARY

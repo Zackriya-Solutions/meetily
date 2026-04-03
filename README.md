@@ -34,7 +34,7 @@ The active application code does not currently include:
 
 See [docs/BUILDING.md](docs/BUILDING.md) for verified build commands and platform notes.
 
-The main desktop workflow lives under [`frontend/`](frontend/).
+The main desktop workflow lives under [`desktop/`](desktop/).
 
 The current native build path also requires building [`llama-helper/`](llama-helper/) before Tauri packaging or `cargo check -p meetily`.
 

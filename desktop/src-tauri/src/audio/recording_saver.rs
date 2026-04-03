@@ -238,9 +238,9 @@ impl RecordingSaver {
         if create_checkpoints {
             let incremental_saver = IncrementalAudioSaver::new(meeting_folder.clone(), 48000)?;
             self.incremental_saver = Some(Arc::new(AsyncMutex::new(incremental_saver)));
-            info!("✅ Incremental audio saver initialized for meeting: {}", meeting_name);
+            info!("âœ… Incremental audio saver initialized for meeting: {}", meeting_name);
         } else {
-            info!("⚠️  Skipped incremental audio saver (auto-save disabled)");
+            info!("âš ï¸  Skipped incremental audio saver (auto-save disabled)");
         }
 
         // Create initial metadata
@@ -333,11 +333,11 @@ impl RecordingSaver {
                 anyhow::anyhow!("Failed to rename transcript file: {}", e)
             })?;
 
-        info!("✅ Successfully wrote transcripts.json with {} segments", segments_clone.len());
+        info!("âœ… Successfully wrote transcripts.json with {} segments", segments_clone.len());
         Ok(())
     }
 
-    // in frontend/src-tauri/src/audio/recording_saver.rs
+    // in desktop/src-tauri/src/audio/recording_saver.rs
     pub fn get_stats(&self) -> (usize, u32) {
         if let Some(ref saver) = self.incremental_saver {
             if let Ok(guard) = saver.try_lock() {
@@ -374,8 +374,8 @@ impl RecordingSaver {
         let should_save_audio = self.incremental_saver.is_some();
 
         if !should_save_audio {
-            info!("⚠️  No audio saver initialized (auto-save was disabled) - skipping audio finalization");
-            info!("✅ Transcripts and metadata already saved incrementally");
+            info!("âš ï¸  No audio saver initialized (auto-save was disabled) - skipping audio finalization");
+            info!("âœ… Transcripts and metadata already saved incrementally");
             return Ok(None);
         }
 
@@ -384,11 +384,11 @@ impl RecordingSaver {
             let mut saver = saver_arc.lock().await;
             match saver.finalize().await {
                 Ok(path) => {
-                    info!("✅ Successfully finalized audio: {}", path.display());
+                    info!("âœ… Successfully finalized audio: {}", path.display());
                     path
                 }
                 Err(e) => {
-                    error!("❌ Failed to finalize incremental saver: {}", e);
+                    error!("âŒ Failed to finalize incremental saver: {}", e);
                     return Err(format!("Failed to finalize audio: {}", e));
                 }
             }
@@ -400,17 +400,17 @@ impl RecordingSaver {
         // Save final transcripts.json with validation
         if let Some(folder) = &self.meeting_folder {
             if let Err(e) = self.write_transcripts_json(folder) {
-                error!("❌ Failed to write final transcripts: {}", e);
+                error!("âŒ Failed to write final transcripts: {}", e);
                 return Err(format!("Failed to save transcripts: {}", e));
             }
 
             // Verify transcripts were written correctly
             let transcript_path = folder.join("transcripts.json");
             if !transcript_path.exists() {
-                error!("❌ Transcript file was not created at: {}", transcript_path.display());
+                error!("âŒ Transcript file was not created at: {}", transcript_path.display());
                 return Err("Transcript file verification failed".to_string());
             }
-            info!("✅ Transcripts saved and verified at: {}", transcript_path.display());
+            info!("âœ… Transcripts saved and verified at: {}", transcript_path.display());
         }
 
         // Update metadata to completed status with actual recording duration
@@ -429,11 +429,11 @@ impl RecordingSaver {
             });
 
             if let Err(e) = self.write_metadata(folder, &metadata) {
-                error!("❌ Failed to update metadata to completed: {}", e);
+                error!("âŒ Failed to update metadata to completed: {}", e);
                 return Err(format!("Failed to update metadata: {}", e));
             }
 
-            info!("✅ Metadata updated with duration: {:?}s", metadata.duration_seconds);
+            info!("âœ… Metadata updated with duration: {:?}s", metadata.duration_seconds);
         }
 
         // Emit save event with audio and transcript paths

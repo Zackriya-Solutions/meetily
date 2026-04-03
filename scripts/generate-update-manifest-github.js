@@ -9,17 +9,17 @@
  *   node scripts/generate-update-manifest-github.js <version> [bundle-dir] [output-file] [notes]
  *
  * Example:
- *   node scripts/generate-update-manifest-github.js 0.1.2 frontend/src-tauri/target/release/bundle/updater latest.json "Release notes here"
+ *   node scripts/generate-update-manifest-github.js 0.1.2 desktop/src-tauri/target/release/bundle/updater latest.json "Release notes here"
  */
 
 const fs = require('fs');
 const path = require('path');
 
-const [version, bundleDir = 'frontend/src-tauri/target/release/bundle/updater', outputFile = 'latest.json', notes = ''] = process.argv.slice(2);
+const [version, bundleDir = 'desktop/src-tauri/target/release/bundle/updater', outputFile = 'latest.json', notes = ''] = process.argv.slice(2);
 
 if (!version) {
   console.error('Usage: node generate-update-manifest-github.js <version> [bundle-dir] [output-file] [notes]');
-  console.error('Example: node generate-update-manifest-github.js 0.1.2 frontend/src-tauri/target/release/bundle/updater latest.json "Release notes"');
+  console.error('Example: node generate-update-manifest-github.js 0.1.2 desktop/src-tauri/target/release/bundle/updater latest.json "Release notes"');
   process.exit(1);
 }
 
@@ -126,7 +126,7 @@ bundleFiles.forEach(filename => {
       try {
         signature = fs.readFileSync(sigFile, 'utf8').trim();
       } catch (error) {
-        console.warn(`  ⚠ Failed to read signature file: ${error.message}`);
+        console.warn(`  âš  Failed to read signature file: ${error.message}`);
       }
     }
 
@@ -135,11 +135,11 @@ bundleFiles.forEach(filename => {
       url: githubUrl
     };
 
-    console.log(`✓ Found ${platform}: ${filename}`);
+    console.log(`âœ“ Found ${platform}: ${filename}`);
     if (signature) {
-      console.log(`  ✓ Signature found: ${path.basename(sigFile)}`);
+      console.log(`  âœ“ Signature found: ${path.basename(sigFile)}`);
     } else {
-      console.log(`  ⚠ No signature file found (expected: ${path.basename(sigFile)})`);
+      console.log(`  âš  No signature file found (expected: ${path.basename(sigFile)})`);
     }
   }
 });
@@ -161,7 +161,7 @@ const outputPath = path.resolve(outputFile);
 fs.writeFileSync(outputPath, JSON.stringify(manifest, null, 2));
 
 console.log('');
-console.log(`✓ Manifest generated: ${outputPath}`);
+console.log(`âœ“ Manifest generated: ${outputPath}`);
 console.log(`\nNext steps:`);
 console.log(`1. Create GitHub Release with tag: v${versionClean}`);
 console.log(`   URL: https://github.com/spencer-at-axiom/meetfree/releases/new?tag=v${versionClean}`);

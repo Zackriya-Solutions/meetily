@@ -16,12 +16,12 @@ Verified from the current toolchain and manifests:
 
 ## Desktop App
 
-The application code lives in [`frontend/`](../frontend/).
+The application code lives in [`desktop/`](../desktop/).
 
 ### Install Dependencies
 
 ```bash
-cd frontend
+cd desktop
 pnpm install
 ```
 
@@ -60,10 +60,10 @@ pnpm run tauri:build
 
 The repository also includes wrapper scripts such as:
 
-- [`frontend/clean_run.sh`](../frontend/clean_run.sh)
-- [`frontend/clean_run_windows.bat`](../frontend/clean_run_windows.bat)
-- [`frontend/build-gpu.sh`](../frontend/build-gpu.sh)
-- [`frontend/dev-gpu.sh`](../frontend/dev-gpu.sh)
+- [`desktop/clean_run.sh`](../desktop/clean_run.sh)
+- [`desktop/clean_run_windows.bat`](../desktop/clean_run_windows.bat)
+- [`desktop/build-gpu.sh`](../desktop/build-gpu.sh)
+- [`desktop/dev-gpu.sh`](../desktop/dev-gpu.sh)
 
 These scripts exist in the tree, but the `pnpm` commands above are the clearest direct entry points.
 
@@ -76,7 +76,7 @@ cargo metadata --no-deps --format-version 1
 cargo check -p meetily
 ```
 
-`cargo check -p meetily` also expects a built `llama-helper` binary to be available so the Tauri bundle step can copy it into [`frontend/src-tauri/binaries/`](../frontend/src-tauri/binaries/).
+`cargo check -p meetily` also expects a built `llama-helper` binary to be available so the Tauri bundle step can copy it into [`desktop/src-tauri/binaries/`](../desktop/src-tauri/binaries/).
 
 ## What This Repo Does Not Require
 

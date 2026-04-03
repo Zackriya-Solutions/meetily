@@ -13,10 +13,6 @@ pub fn ensure_llama_helper_binary() {
     let bundled_binary = binaries_dir.join(sidecar_name(&target));
 
     println!(
-        "cargo:warning=Checking llama-helper sidecar for target: {}",
-        target
-    );
-    println!(
         "cargo:rerun-if-changed={}",
         manifest_dir.join("../..").join("llama-helper/Cargo.toml").display()
     );
@@ -24,11 +20,8 @@ pub fn ensure_llama_helper_binary() {
         "cargo:rerun-if-changed={}",
         manifest_dir.join("../..").join("llama-helper/src/main.rs").display()
     );
+
     if bundled_binary.exists() {
-        println!(
-            "cargo:warning=Using cached llama-helper sidecar: {}",
-            bundled_binary.display()
-        );
         return;
     }
 
@@ -72,10 +65,6 @@ fn find_existing_sidecar(manifest_dir: &Path, target: &str, profile: &str) -> Op
 }
 
 fn copy_sidecar(source: &Path, destination: &Path) {
-    println!(
-        "cargo:warning=Bundling llama-helper sidecar from {}",
-        source.display()
-    );
     std::fs::copy(source, destination).unwrap_or_else(|error| {
         panic!(
             "Failed to copy llama-helper sidecar from {} to {}: {error}",
