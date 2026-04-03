@@ -246,7 +246,7 @@ impl RecordingSaver {
         // Create initial metadata
         let metadata = MeetingMetadata {
             version: "1.0".to_string(),
-            meeting_id: None,  // Will be set by backend
+            meeting_id: None,  // Set when the meeting is persisted
             meeting_name: Some(meeting_name.to_string()),
             created_at: chrono::Utc::now().to_rfc3339(),
             completed_at: None,

@@ -1050,8 +1050,8 @@ mod tests {
 
     #[test]
     fn test_extract_duration_from_metadata_wav() {
-        // Test with sample WAV file if available
-        let test_path = Path::new("../../backend/whisper.cpp/samples/jfk.wav");
+        // Test with an optional WAV fixture if one is added to testdata.
+        let test_path = Path::new("../../testdata/jfk.wav");
         if test_path.exists() {
             let result = extract_duration_from_metadata(test_path);
             // Should succeed and return a reasonable duration
@@ -1063,8 +1063,8 @@ mod tests {
 
     #[test]
     fn test_extract_duration_from_metadata_mp3() {
-        // Test with sample MP3 file if available
-        let test_path = Path::new("../../backend/whisper.cpp/samples/jfk.mp3");
+        // Test with an optional MP3 fixture if one is added to testdata.
+        let test_path = Path::new("../../testdata/jfk.mp3");
         if test_path.exists() {
             let result = extract_duration_from_metadata(test_path);
             // MP3 files may not have n_frames metadata, so fallback is expected
@@ -1075,8 +1075,8 @@ mod tests {
 
     #[test]
     fn test_validate_audio_file_with_metadata() {
-        // Test validation with actual audio file
-        let test_path = Path::new("../../backend/whisper.cpp/samples/jfk.wav");
+        // Test validation with an optional audio fixture if one is added to testdata.
+        let test_path = Path::new("../../testdata/jfk.wav");
         if test_path.exists() {
             let result = validate_audio_file(test_path);
             assert!(result.is_ok());

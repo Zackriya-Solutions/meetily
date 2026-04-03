@@ -1,86 +1,45 @@
-# Meeting Summary Templates
+# Summary Templates
 
-This directory contains template definitions for meeting summary generation.
+This directory contains bundled summary templates for the native desktop app.
 
-## Available Templates
+## Loader Behavior
 
-### 1. `daily_standup.json`
-Time-boxed daily updates template designed for engineering/product teams.
+The template loader currently resolves templates in this order:
 
-**Sections:**
-- Date
-- Attendees
-- Yesterday (completed work)
-- Today (planned work)
-- Blockers
-- Notes
+1. User custom templates in the app data directory
+2. Bundled template files
+3. Built-in embedded templates
 
-### 2. `standard_meeting.json`
-General-purpose meeting notes template focusing on key outcomes and actions.
+## Current Template Commands
 
-**Sections:**
-- Summary
-- Key Decisions
-- Action Items
-- Discussion Highlights
+The native app exposes commands to:
 
-## Template Structure
+- list templates
+- fetch template details
+- validate template JSON
 
-Each template JSON file follows this schema:
+## Custom Template Location
 
-```json
-{
-  "name": "Template Name",
-  "description": "Brief description of the template's purpose",
-  "sections": [
-    {
-      "title": "Section Title",
-      "instruction": "Instructions for the LLM on what to extract/include",
-      "format": "paragraph|list|string",
-      "item_format": "Optional: Markdown table format for list items"
-    }
-  ]
-}
-```
+Custom templates are loaded from the app data directory under `Meetily/templates`.
 
-## Custom Templates
+Examples used by the loader:
 
-Users can add custom templates to the application data directory:
+- macOS: `~/Library/Application Support/Meetily/templates/`
+- Windows: `%APPDATA%\\Meetily\\templates\\`
+- Linux: `~/.config/Meetily/templates/`
 
-- **macOS**: `~/Library/Application Support/Meetily/templates/`
-- **Windows**: `%APPDATA%\Meetily\templates\`
-- **Linux**: `~/.config/Meetily/templates/`
+## Template Shape
 
-Custom templates override built-in templates with the same filename.
+Each template JSON file includes:
 
-## Template Fields
+- `name`
+- `description`
+- `sections`
 
-### Root Level
-- `name` (required): Display name for the template
-- `description` (required): Brief explanation of the template's use case
-- `sections` (required): Array of section definitions
+Each section includes:
 
-### Section Object
-- `title` (required): Section heading text
-- `instruction` (required): LLM guidance for this section
-- `format` (required): One of `"paragraph"`, `"list"`, or `"string"`
-- `item_format` (optional): Markdown formatting hint for list items (e.g., table structure)
-- `example_item_format` (optional): Alternative formatting hint
+- `title`
+- `instruction`
+- `format`
 
-## Usage in Code
-
-Templates are loaded using the `templates` module:
-
-```rust
-use crate::summary::templates;
-
-// Get a specific template
-let template = templates::get_template("daily_standup")?;
-
-// List available templates
-let available = templates::list_templates();
-
-// Validate custom template JSON
-let custom_json = std::fs::read_to_string("custom.json")?;
-let validated = templates::validate_template(&custom_json)?;
-```
+Optional section fields such as `item_format` are also supported by the current parser.

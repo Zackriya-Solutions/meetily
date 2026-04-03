@@ -1,41 +1,75 @@
-# System Architecture
+# Architecture
 
-Meetily is a self-contained desktop application built with [Tauri](https://tauri.app/). It combines a Rust-based backend with a Next.js frontend into a single, efficient, and cross-platform application.
+Meetily is a self-contained desktop application built with Tauri.
 
-## High-Level Architecture Diagram
+## High-Level Structure
 
 ```mermaid
 graph TD
-    subgraph User Interface
-        A[Next.js Frontend]
-    end
-
-    subgraph "Core Logic (Rust)"
-        B[Tauri Core]
-        C[Audio Engine]
-        D[Transcription Engine]
-        E[Database]
-        F[Summary Engine]
-    end
-
-    A -- Tauri Commands --> B
-    B -- Manages --> C
-    B -- Manages --> D
-    B -- Manages --> E
-    B -- Manages --> F
+    UI["Next.js / React UI"] --> IPC["Tauri commands and events"]
+    IPC --> Audio["Rust audio capture and processing"]
+    IPC --> Transcription["Local transcription engines"]
+    IPC --> Database["Local SQLite database"]
+    IPC --> Summary["Summary services and template loader"]
 ```
 
-## Component Details
+## Frontend
 
-### Frontend (Next.js)
+The frontend lives in [`frontend/src/`](../frontend/src/).
 
-*   Provides the user interface for managing meetings, displaying transcriptions, and configuring the application.
-*   Communicates with the Rust core through Tauri's command system.
+It is responsible for:
 
-### Backend (Rust Core)
+- Recording controls
+- Meeting and transcript views
+- Summary and template selection
+- Settings and model configuration
+- Analytics consent UI
 
-*   **Tauri Core:** The heart of the application, responsible for managing the window, handling events, and exposing the Rust core to the frontend.
-*   **Audio Engine:** Captures audio from the microphone and system, processes it, and prepares it for transcription.
-*   **Transcription Engine:** Uses local speech-to-text models (Whisper or Parakeet) to transcribe the captured audio. It can be accelerated with a GPU.
-*   **Database:** A local SQLite database that stores meeting metadata, transcripts, and summaries.
-*   **Summary Engine:** Generates meeting summaries using various Large Language Models (LLMs), including local models via Ollama.
+Frontend code talks to the native layer through Tauri `invoke` commands and event listeners.
+
+## Native Layer
+
+The Rust application lives in [`frontend/src-tauri/`](../frontend/src-tauri/).
+
+Key areas:
+
+- [`src/lib.rs`](../frontend/src-tauri/src/lib.rs): command registration and app setup
+- [`src/audio/`](../frontend/src-tauri/src/audio/): device handling, capture, mixing, VAD, recording, import, and retranscription
+- [`src/database/`](../frontend/src-tauri/src/database/): SQLite initialization, migrations, and repositories
+- [`src/summary/`](../frontend/src-tauri/src/summary/): summary generation, provider integration, and templates
+- [`src/whisper_engine/`](../frontend/src-tauri/src/whisper_engine/) and [`src/parakeet_engine/`](../frontend/src-tauri/src/parakeet_engine/): local transcription engines
+
+## Data Flow
+
+### Recording and Transcription
+
+1. The UI starts a recording through a Tauri command.
+2. Rust audio code captures microphone and system audio.
+3. The pipeline applies buffering, normalization, and VAD segmentation.
+4. Speech segments are sent to the selected local transcription engine.
+5. Transcript updates are emitted back to the frontend.
+
+### Storage
+
+The native app stores:
+
+- meetings
+- transcript segments
+- summary state
+- settings
+- notes
+
+in a local SQLite database managed by the Tauri layer.
+
+### Summaries
+
+Summary generation is initiated from the desktop app and uses:
+
+- local providers: Ollama, BuiltInAI
+- optional external providers: OpenAI, Claude, Groq, OpenRouter, custom OpenAI-compatible endpoints
+
+Templates are loaded from built-in definitions, bundled files, and user template files in the app data directory.
+
+## Removed Legacy Path
+
+This repository no longer treats the old FastAPI backend as part of the active product architecture.
