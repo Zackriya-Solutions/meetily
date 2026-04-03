@@ -8,7 +8,7 @@
 // 2. Adaptive timeouts based on device type (Wired: 20-50ms, Bluetooth: 80-200ms)
 // 3. Gap detection and silence insertion for Bluetooth jitter
 // 4. Timestamp-aware mixing to maintain sync
-// 5. Professional audio mixing with RMS-based ducking
+// 5. Adaptive audio mixing with per-source ducking controls
 
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
@@ -252,7 +252,7 @@ pub struct BufferStats {
     pub silence_inserted_ms: f64,
 }
 
-/// Professional audio mixer with RMS-based ducking
+/// Adaptive audio mixer with optional ducking
 struct AudioMixer {
     /// Mic ducking factor (0.0 - 1.0)
     mic_ducking: f32,

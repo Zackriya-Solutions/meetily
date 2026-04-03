@@ -1,57 +1,50 @@
-# GPU Acceleration Guide
+# GPU Acceleration
 
-Meetily supports GPU acceleration for transcription, which can significantly improve performance. This guide provides detailed information on how to set up and configure GPU acceleration for your system.
+Meetily's desktop app exposes build-time acceleration options through Cargo features and helper scripts.
 
-## Supported Backends
+## Auto-Detection Script
 
-Meetily uses the `whisper-rs` library, which supports several GPU acceleration backends:
+[`frontend/scripts/auto-detect-gpu.js`](../frontend/scripts/auto-detect-gpu.js) currently selects features with this logic:
 
-*   **CUDA:** For NVIDIA GPUs.
-*   **Metal:** For Apple Silicon and modern Intel-based Macs.
-*   **Core ML:** An additional acceleration layer for Apple Silicon.
-*   **Vulkan:** A cross-platform solution for modern AMD and Intel GPUs.
-*   **OpenBLAS:** A CPU-based optimization that can provide a significant speed-up over standard CPU processing.
+- macOS Apple Silicon: `coreml`
+- macOS Intel: `metal`
+- Windows or Linux with CUDA available: `cuda`
+- Linux with ROCm available: `hipblas`
+- Windows or Linux with Vulkan SDK and BLAS include paths available: `vulkan`
+- BLAS include paths only: `openblas`
+- otherwise: CPU-only
 
-## Automatic GPU Detection
+[`frontend/scripts/tauri-auto.js`](../frontend/scripts/tauri-auto.js) uses that result to run `tauri dev` or `tauri build` with the corresponding feature flag.
 
-The build scripts (`dev-gpu.sh`, `build-gpu.sh`) are designed to automatically detect your GPU and enable the appropriate feature flag during the build process. The detection is handled by the `scripts/auto-detect-gpu.js` script.
+## Cargo Features
 
-Here's the detection priority:
+The workspace currently defines these optional transcription acceleration features in [`frontend/src-tauri/Cargo.toml`](../frontend/src-tauri/Cargo.toml):
 
-1.  **CUDA (NVIDIA)**
-2.  **Metal (Apple)**
-3.  **Vulkan (AMD/Intel)**
-4.  **OpenBLAS (CPU)**
+- `cuda`
+- `vulkan`
+- `metal`
+- `coreml`
+- `openblas`
+- `openmp`
+- `hipblas`
 
-If no GPU is detected, the application will fall back to CPU-only processing.
+## Platform Notes
 
-## Manual Configuration
+- macOS dependencies enable Metal and CoreML support in the manifest.
+- Windows dependencies currently default to `whisper-rs` raw API without a GPU feature in the target-specific dependency block.
+- Linux dependencies default to `whisper-rs` raw API without a GPU feature in the target-specific dependency block.
 
-If you want to manually configure the GPU acceleration backend, you can do so by enabling the corresponding feature flag in the `frontend/src-tauri/Cargo.toml` file.
+## Manual Examples
 
-For example, to enable CUDA, you would modify the `[features]` section as follows:
+From [`frontend/`](../frontend/):
 
-```toml
-[features]
-default = ["cuda"]
-
-# ... other features
-
-cuda = ["whisper-rs/cuda"]
+```bash
+pnpm run tauri:dev:cuda
+pnpm run tauri:dev:vulkan
+pnpm run tauri:dev:metal
+pnpm run tauri:dev:cpu
 ```
 
-Then, you would build the application using the standard `pnpm tauri:build` command.
+## Important Limitation
 
-## Platform-Specific Instructions
-
-### Linux
-
-For detailed instructions on setting up GPU acceleration on Linux, please refer to the [Linux build instructions](BUILDING.md#--building-on-linux).
-
-### macOS
-
-On macOS, Metal GPU acceleration is enabled by default. No additional configuration is required.
-
-### Windows
-
-To enable GPU acceleration on Windows, you will need to install the appropriate toolkit for your GPU (e.g., the CUDA Toolkit for NVIDIA GPUs) and then build the application with the corresponding feature flag enabled.
+Availability of a feature flag in the manifest does not guarantee that the host machine has the native SDKs required to compile or run that acceleration path.

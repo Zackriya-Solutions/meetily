@@ -18,13 +18,13 @@ use super::vad::{ContinuousVadProcessor};
 struct AudioMixerRingBuffer {
     mic_buffer: VecDeque<f32>,
     system_buffer: VecDeque<f32>,
-    window_size_samples: usize,  // Fixed mixing window (e.g., 50ms)
+    window_size_samples: usize,  // Fixed mixing window (currently 600ms)
     max_buffer_size: usize,  // Safety limit (e.g., 100ms)
 }
 
 impl AudioMixerRingBuffer {
     fn new(sample_rate: u32) -> Self {
-        // Use 50ms windows for mixing
+        // Use a longer window to keep mic/system streams aligned under device jitter.
         let window_ms = 600.0;
         let window_size_samples = (sample_rate as f32 * window_ms / 1000.0) as usize;
 
@@ -142,8 +142,8 @@ impl AudioMixerRingBuffer {
 
 }
 
-/// Simple audio mixer without aggressive ducking
-/// Combines mic + system audio with basic clipping prevention
+/// Simple audio mixer without aggressive ducking.
+/// Combines mic + system audio with basic clipping prevention and proportional limiting.
 struct ProfessionalAudioMixer;
 
 impl ProfessionalAudioMixer {

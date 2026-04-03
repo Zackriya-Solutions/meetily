@@ -15,12 +15,12 @@ interface AnalyticsContextType {
 }
 
 export const AnalyticsContext = createContext<AnalyticsContextType>({
-  isAnalyticsOptedIn: true,
+  isAnalyticsOptedIn: false,
   setIsAnalyticsOptedIn: () => { },
 });
 
 export default function AnalyticsProvider({ children }: AnalyticsProviderProps) {
-  const [isAnalyticsOptedIn, setIsAnalyticsOptedIn] = useState(true);
+  const [isAnalyticsOptedIn, setIsAnalyticsOptedIn] = useState(false);
   const initialized = useRef(false);
 
   useEffect(() => {
@@ -33,11 +33,11 @@ export default function AnalyticsProvider({ children }: AnalyticsProviderProps) 
       const store = await load('analytics.json', {
         autoSave: false,
         defaults: {
-          analyticsOptedIn: true
+          analyticsOptedIn: false
         }
       });
       if (!(await store.has('analyticsOptedIn'))) {
-        await store.set('analyticsOptedIn', true);
+        await store.set('analyticsOptedIn', false);
       }
       const analyticsOptedIn = await store.get('analyticsOptedIn')
 
@@ -66,7 +66,7 @@ export default function AnalyticsProvider({ children }: AnalyticsProviderProps) 
       const store = await load('analytics.json', {
         autoSave: false,
         defaults: {
-          analyticsOptedIn: true
+          analyticsOptedIn: false
         }
       });
       await store.set('platform', deviceInfo.platform);

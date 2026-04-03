@@ -63,7 +63,7 @@ export function About() {
                 {/* <h1 className="text-xl font-bold text-gray-900">Meetily</h1> */}
                 <span className="text-sm text-gray-500"> v{currentVersion}</span>
                 <p className="text-medium text-gray-600 mt-1">
-                    Real-time notes and summaries that never leave your machine.
+                    Local meeting capture and transcription with optional summary providers.
                 </p>
                 <div className="mt-3">
                     <Button
@@ -99,7 +99,7 @@ export function About() {
                 <div className="grid grid-cols-2 gap-2">
                     <div className="bg-gray-50 rounded p-3 hover:bg-gray-100 transition-colors">
                         <h3 className="font-bold text-sm text-gray-900 mb-1">Privacy-first</h3>
-                        <p className="text-xs text-gray-600 leading-relaxed">Your data & AI processing workflow can now stay within your premise. No cloud, no leaks.</p>
+                        <p className="text-xs text-gray-600 leading-relaxed">Recording, transcription, and storage stay local. Summary generation can stay local or use a provider you configure.</p>
                     </div>
                     <div className="bg-gray-50 rounded p-3 hover:bg-gray-100 transition-colors">
                         <h3 className="font-bold text-sm text-gray-900 mb-1">Use Any Model</h3>
@@ -111,15 +111,15 @@ export function About() {
                     </div>
                     <div className="bg-gray-50 rounded p-3 hover:bg-gray-100 transition-colors">
                         <h3 className="font-bold text-sm text-gray-900 mb-1">Works everywhere</h3>
-                        <p className="text-xs text-gray-600 leading-relaxed">Google Meet, Zoom, Teams-online or offline.</p>
+                        <p className="text-xs text-gray-600 leading-relaxed">Captures desktop meeting audio without platform-specific integrations.</p>
                     </div>
                 </div>
             </div>
 
-            {/* Coming Soon - Compact */}
+            {/* Scope - Compact */}
             <div className="bg-blue-50 rounded p-3">
                 <p className="text-s text-blue-800">
-                    <span className="font-bold">Coming soon:</span> A library of on-device AI agents-automating follow-ups, action tracking, and more.
+                    <span className="font-bold">Current scope:</span> Native meeting capture, local transcription, local storage, template-based summaries, import, retranscription, and optional cloud summary providers.
                 </p>
             </div>
 

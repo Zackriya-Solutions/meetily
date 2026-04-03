@@ -26,7 +26,7 @@
 - [ ] Self-reviewed the code
 - [ ] Added comments for complex code
 - [ ] Updated README if needed
-- [ ] Branch is up to date with devtest
+- [ ] Branch is up to date with main
 - [ ] No merge conflicts
 
 ## Screenshots (if applicable)
