@@ -1,7 +1,6 @@
 "use client";
 
-import { Summary, SummaryResponse, Transcript } from '@/types';
-import { EditableTitle } from '@/components/EditableTitle';
+import { BlockNoteBlock, Summary, SummaryResponse, Transcript } from '@/types';
 import { BlockNoteSummaryView, BlockNoteSummaryViewRef } from '@/components/AISummary/BlockNoteSummaryView';
 import { EmptyStateSummary } from '@/components/EmptyStateSummary';
 import { ModelConfig } from '@/components/ModelSettingsModal';
@@ -17,10 +16,6 @@ interface SummaryPanelProps {
     created_at: string;
   };
   meetingTitle: string;
-  onTitleChange: (title: string) => void;
-  isEditingTitle: boolean;
-  onStartEditTitle: () => void;
-  onFinishEditTitle: () => void;
   isTitleDirty: boolean;
   summaryRef: RefObject<BlockNoteSummaryViewRef>;
   isSaving: boolean;
@@ -37,7 +32,7 @@ interface SummaryPanelProps {
   onStopGeneration: () => void;
   customPrompt: string;
   summaryResponse: SummaryResponse | null;
-  onSaveSummary: (summary: Summary | { markdown?: string; summary_json?: any[] }) => Promise<void>;
+  onSaveSummary: (summary: Summary | { markdown?: string; summary_json?: BlockNoteBlock[] }) => Promise<void>;
   onSummaryChange: (summary: Summary) => void;
   onDirtyChange: (isDirty: boolean) => void;
   summaryError: string | null;
@@ -53,10 +48,6 @@ interface SummaryPanelProps {
 export function SummaryPanel({
   meeting,
   meetingTitle,
-  onTitleChange,
-  isEditingTitle,
-  onStartEditTitle,
-  onFinishEditTitle,
   isTitleDirty,
   summaryRef,
   isSaving,
@@ -195,7 +186,7 @@ export function SummaryPanel({
             isGenerating={isSummaryLoading}
           />
         </div>
-      ) : transcripts?.length > 0 && (
+      ) : aiSummary ? (
         <div className="flex-1 overflow-y-auto min-h-0">
           {summaryResponse && (
             <div className="fixed bottom-0 left-0 right-0 bg-white shadow-lg p-4 max-h-1/3 overflow-y-auto">
@@ -271,7 +262,7 @@ export function SummaryPanel({
             </div>
           )}
         </div>
-      )}
+      ) : null}
     </div>
   );
 }

@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
-import { Summary, SummaryResponse } from '@/types';
+import { Summary, SummaryDataResponse, SummaryResponse, Transcript, TranscriptSegmentData } from '@/types';
 import Analytics from '@/lib/analytics';
 import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
@@ -17,6 +17,27 @@ import { useCopyOperations } from '@/hooks/meeting-details/useCopyOperations';
 import { useMeetingOperations } from '@/hooks/meeting-details/useMeetingOperations';
 import { useConfig } from '@/contexts/ConfigContext';
 
+interface MeetingPageContentProps {
+  meeting: {
+    id: string;
+    title: string;
+    created_at: string;
+    transcripts: Transcript[];
+    folder_path?: string;
+  };
+  summaryData: Summary | SummaryDataResponse | null;
+  shouldAutoGenerate?: boolean;
+  onAutoGenerateComplete?: () => void;
+  onMeetingUpdated?: () => Promise<void>;
+  onRefetchTranscripts?: () => Promise<void>;
+  segments?: TranscriptSegmentData[];
+  hasMore?: boolean;
+  isLoadingMore?: boolean;
+  totalCount?: number;
+  loadedCount?: number;
+  onLoadMore?: () => void;
+}
+
 export default function PageContent({
   meeting,
   summaryData,
@@ -31,21 +52,7 @@ export default function PageContent({
   totalCount,
   loadedCount,
   onLoadMore,
-}: {
-  meeting: any;
-  summaryData: Summary | null;
-  shouldAutoGenerate?: boolean;
-  onAutoGenerateComplete?: () => void;
-  onMeetingUpdated?: () => Promise<void>;
-  onRefetchTranscripts?: () => Promise<void>;
-  // Pagination props
-  segments?: any[];
-  hasMore?: boolean;
-  isLoadingMore?: boolean;
-  totalCount?: number;
-  loadedCount?: number;
-  onLoadMore?: () => void;
-}) {
+}: MeetingPageContentProps) {
   console.log('📄 PAGE CONTENT: Initializing with data:', {
     meetingId: meeting.id,
     summaryDataKeys: summaryData ? Object.keys(summaryData) : null,
@@ -106,7 +113,14 @@ export default function PageContent({
     }
   };
 
-  const summaryGeneration = useSummaryGeneration({
+  const {
+    handleGenerateSummary,
+    handleStopGeneration,
+    handleRegenerateSummary,
+    summaryStatus,
+    summaryError,
+    getSummaryStatusMessage,
+  } = useSummaryGeneration({
     meeting,
     transcripts: meetingData.transcripts,
     modelConfig: modelConfig,
@@ -142,7 +156,7 @@ export default function PageContent({
     const autoGenerate = async () => {
       if (shouldAutoGenerate && meetingData.transcripts.length > 0 && !cancelled) {
         console.log(`🤖 Auto-generating summary with ${modelConfig.provider}/${modelConfig.model}...`);
-        await summaryGeneration.handleGenerateSummary('');
+        await handleGenerateSummary('');
 
         // Notify parent that auto-generation is complete (only if not cancelled)
         if (onAutoGenerateComplete && !cancelled) {
@@ -157,7 +171,15 @@ export default function PageContent({
     return () => {
       cancelled = true;
     };
-  }, [shouldAutoGenerate, meeting.id]); // Re-run if meeting changes
+  }, [
+    shouldAutoGenerate,
+    meeting.id,
+    meetingData.transcripts.length,
+    modelConfig.provider,
+    modelConfig.model,
+    onAutoGenerateComplete,
+    handleGenerateSummary,
+  ]);
 
   return (
     <motion.div
@@ -191,10 +213,6 @@ export default function PageContent({
         <SummaryPanel
           meeting={meeting}
           meetingTitle={meetingData.meetingTitle}
-          onTitleChange={meetingData.handleTitleChange}
-          isEditingTitle={meetingData.isEditingTitle}
-          onStartEditTitle={() => meetingData.setIsEditingTitle(true)}
-          onFinishEditTitle={() => meetingData.setIsEditingTitle(false)}
           isTitleDirty={meetingData.isTitleDirty}
           summaryRef={meetingData.blockNoteSummaryRef}
           isSaving={meetingData.isSaving}
@@ -202,21 +220,21 @@ export default function PageContent({
           onCopySummary={copyOperations.handleCopySummary}
           onOpenFolder={meetingOperations.handleOpenMeetingFolder}
           aiSummary={meetingData.aiSummary}
-          summaryStatus={summaryGeneration.summaryStatus}
+          summaryStatus={summaryStatus}
           transcripts={meetingData.transcripts}
           modelConfig={modelConfig}
           setModelConfig={setModelConfig}
           onSaveModelConfig={handleSaveModelConfig}
-          onGenerateSummary={summaryGeneration.handleGenerateSummary}
-          onStopGeneration={summaryGeneration.handleStopGeneration}
+          onGenerateSummary={handleGenerateSummary}
+          onStopGeneration={handleStopGeneration}
           customPrompt={customPrompt}
           summaryResponse={summaryResponse}
           onSaveSummary={meetingData.handleSaveSummary}
           onSummaryChange={meetingData.handleSummaryChange}
           onDirtyChange={meetingData.setIsSummaryDirty}
-          summaryError={summaryGeneration.summaryError}
-          onRegenerateSummary={summaryGeneration.handleRegenerateSummary}
-          getSummaryStatusMessage={summaryGeneration.getSummaryStatusMessage}
+          summaryError={summaryError}
+          onRegenerateSummary={handleRegenerateSummary}
+          getSummaryStatusMessage={getSummaryStatusMessage}
           availableTemplates={templates.availableTemplates}
           selectedTemplate={templates.selectedTemplate}
           onTemplateSelect={templates.handleTemplateSelection}

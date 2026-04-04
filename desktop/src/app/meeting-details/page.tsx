@@ -1,7 +1,7 @@
 "use client"
 import { useSidebar } from "@/components/Sidebar/SidebarProvider";
 import { useState, useEffect, useCallback, Suspense } from "react";
-import { Transcript, Summary } from "@/types";
+import { Transcript, Summary, SummaryDataResponse, Block } from "@/types";
 import PageContent from "./page-content";
 import { useRouter, useSearchParams } from "next/navigation";
 import Analytics from "@/lib/analytics";
@@ -9,6 +9,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { LoaderIcon } from "lucide-react";
 import { useConfig } from "@/contexts/ConfigContext";
 import { usePaginatedTranscripts } from "@/hooks/usePaginatedTranscripts";
+import type { ModelConfig } from "@/services/configService";
 
 interface MeetingDetailsResponse {
   id: string;
@@ -19,6 +20,29 @@ interface MeetingDetailsResponse {
   folder_path?: string;
 }
 
+interface OllamaModelInfo {
+  name: string;
+}
+
+interface SummaryApiResponse {
+  status: string;
+  data?: SummaryDataResponse | string | null;
+  error?: string;
+}
+
+interface LegacySummaryBlock extends Partial<Block> {
+  content?: string;
+}
+
+interface LegacySummarySection {
+  title?: string;
+  blocks?: LegacySummaryBlock[];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
 function MeetingDetailsContent() {
   const searchParams = useSearchParams();
   const meetingId = searchParams.get('id');
@@ -27,7 +51,7 @@ function MeetingDetailsContent() {
   const { isAutoSummary } = useConfig(); // Get auto-summary toggle state
   const router = useRouter();
   const [meetingDetails, setMeetingDetails] = useState<MeetingDetailsResponse | null>(null);
-  const [meetingSummary, setMeetingSummary] = useState<Summary | null>(null);
+  const [meetingSummary, setMeetingSummary] = useState<Summary | SummaryDataResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [shouldAutoGenerate, setShouldAutoGenerate] = useState<boolean>(false);
@@ -51,8 +75,8 @@ function MeetingDetailsContent() {
   // Check if gemma3:1b model is available in Ollama
   const checkForGemmaModel = useCallback(async (): Promise<boolean> => {
     try {
-      const models = await invoke('get_ollama_models', { endpoint: null }) as any[];
-      const hasGemma = models.some((m: any) => m.name === 'gemma3:1b');
+      const models = await invoke<OllamaModelInfo[]>('get_ollama_models', { endpoint: null });
+      const hasGemma = models.some((model) => model.name === 'gemma3:1b');
       console.log('🔍 Checked for gemma3:1b:', hasGemma);
       return hasGemma;
     } catch (error) {
@@ -81,7 +105,7 @@ function MeetingDetailsContent() {
 
     try {
       // Check what's currently in database
-      const currentConfig = await invoke('model_cfg_get') as any;
+      const currentConfig = await invoke<ModelConfig | null>('model_cfg_get');
 
       // If DB already has a model, use it (never override!)
       if (currentConfig && currentConfig.model) {
@@ -99,7 +123,7 @@ function MeetingDetailsContent() {
 
         await invoke('model_cfg_set', {
           provider: 'ollama',
-          model: '',
+          model: 'gemma3:1b',
           whisperModel: 'large-v3',
           apiKey: null,
           ollamaEndpoint: null,
@@ -201,9 +225,9 @@ function MeetingDetailsContent() {
 
     const fetchMeetingSummary = async () => {
       try {
-        const summary = await invoke('api_get_summary', {
+        const summary = await invoke<SummaryApiResponse>('api_get_summary', {
           meetingId: meetingId,
-        }) as any;
+        });
 
         console.log('FETCH SUMMARY: Raw response:', summary);
 
@@ -215,14 +239,15 @@ function MeetingDetailsContent() {
           return;
         }
 
-        const summaryData = summary.data || {};
+        const summaryData = summary.data ?? {};
 
         // Parse if it's a JSON string (backend may return double-encoded JSON)
-        let parsedData = summaryData;
+        let parsedData: SummaryDataResponse | Record<string, unknown> = isRecord(summaryData) ? summaryData : {};
         if (typeof summaryData === 'string') {
           try {
-            parsedData = JSON.parse(summaryData);
-          } catch (e) {
+            const parsedJson: unknown = JSON.parse(summaryData);
+            parsedData = isRecord(parsedJson) ? parsedJson : {};
+          } catch {
             parsedData = {};
           }
         }
@@ -230,27 +255,27 @@ function MeetingDetailsContent() {
         console.log('🔍 FETCH SUMMARY: Parsed data:', parsedData);
 
         // Priority 1: BlockNote JSON format
-        if (parsedData.summary_json) {
-          setMeetingSummary(parsedData as any);
+        if ('summary_json' in parsedData && Array.isArray(parsedData.summary_json)) {
+          setMeetingSummary(parsedData as SummaryDataResponse);
           return;
         }
 
         // Priority 2: Markdown format
-        if (parsedData.markdown) {
-          setMeetingSummary(parsedData as any);
+        if ('markdown' in parsedData && typeof parsedData.markdown === 'string') {
+          setMeetingSummary(parsedData as SummaryDataResponse);
           return;
         }
 
         // Legacy format - apply formatting
         console.log('LEGACY FORMAT: Detected legacy format, applying section formatting');
 
-        const { MeetingName, _section_order, ...restSummaryData } = parsedData;
+        const { _section_order, ...restSummaryData } = parsedData;
 
         // Format the summary data with consistent styling - PRESERVE ORDER
         const formattedSummary: Summary = {};
 
         // Use section order if available to maintain exact order and handle duplicates
-        const sectionKeys = _section_order || Object.keys(restSummaryData);
+        const sectionKeys = Array.isArray(_section_order) ? _section_order : Object.keys(restSummaryData);
 
         console.log('LEGACY FORMAT: Processing sections:', sectionKeys);
 
@@ -262,17 +287,18 @@ function MeetingDetailsContent() {
               typeof section === 'object' &&
               'title' in section &&
               'blocks' in section) {
-              const typedSection = section as { title?: string; blocks?: any[] };
+              const typedSection = section as LegacySummarySection;
 
               // Ensure blocks is an array before mapping
               if (Array.isArray(typedSection.blocks)) {
                 formattedSummary[key] = {
                   title: typedSection.title || key,
-                  blocks: typedSection.blocks.map((block: any) => ({
+                  blocks: typedSection.blocks.map((block, index) => ({
                     ...block,
-                    // type: 'bullet',
+                    id: block.id ?? `${key}-${index}`,
+                    type: block.type ?? 'bullet',
                     color: 'default',
-                    content: block?.content?.trim() || ''
+                    content: typeof block.content === 'string' ? block.content.trim() : '',
                   }))
                 };
               } else {

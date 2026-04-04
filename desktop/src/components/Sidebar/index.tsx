@@ -1,14 +1,11 @@
 'use client';
 
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
-import { ChevronDown, ChevronRight, File, Settings, Calendar, StickyNote, Home, Trash2, Mic, Square, Plus, Pencil, NotebookPen, SearchIcon, X, Upload } from 'lucide-react';
+import { ChevronDown, ChevronRight, File, Settings, Calendar, Home, Trash2, Mic, Square, Plus, Pencil, NotebookPen, SearchIcon, X, Upload } from 'lucide-react';
 import { useRouter, usePathname } from 'next/navigation';
 import { useSidebar } from './SidebarProvider';
 import type { CurrentMeeting } from '@/components/Sidebar/SidebarProvider';
 import { ConfirmationModal } from '../ConfirmationModel/confirmation-modal';
-import { ModelConfig } from '@/components/ModelSettingsModal';
-import { SettingTabs } from '../SettingTabs';
-import { TranscriptModelProps } from '@/components/TranscriptSettings';
 import Analytics from '@/lib/analytics';
 import { invoke } from '@tauri-apps/api/core';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
@@ -25,9 +22,7 @@ import {
 } from "@/components/ui/dialog"
 import { VisuallyHidden } from "@/components/ui/visually-hidden"
 
-import { MessageToast } from '../MessageToast';
 import Logo from '../Logo';
-import { ComplianceNotification } from '../ComplianceNotification';
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from '../ui/input-group';
 
 interface SidebarItem {
@@ -63,19 +58,6 @@ const Sidebar: React.FC = () => {
   const { betaFeatures } = useConfig();
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set(['meetings']));
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const [showModelSettings, setShowModelSettings] = useState(false);
-  const [modelConfig, setModelConfig] = useState<ModelConfig>({
-    provider: 'ollama',
-    model: '',
-    whisperModel: '',
-    apiKey: null,
-    ollamaEndpoint: null
-  });
-  const [transcriptModelConfig, setTranscriptModelConfig] = useState<TranscriptModelProps>({
-    provider: 'parakeet',
-    model: 'parakeet-tdt-0.6b-v3-int8',
-  });
-  const [settingsSaveSuccess, setSettingsSaveSuccess] = useState<boolean | null>(null);
 
   // State for edit modal
   const [editModalState, setEditModalState] = useState<{ isOpen: boolean; meetingId: string | null; currentTitle: string }>({
@@ -94,136 +76,8 @@ const Sidebar: React.FC = () => {
     }
   }, [expandedFolders]);
 
-  // useEffect(() => {
-  //   if (settingsSaveSuccess !== null) {
-  //     const timer = setTimeout(() => {
-  //       setSettingsSaveSuccess(null);
-  //     }, 3000);
-  //   }
-  // }, [settingsSaveSuccess]);
-
 
   const [deleteModalState, setDeleteModalState] = useState<{ isOpen: boolean; itemId: string | null }>({ isOpen: false, itemId: null });
-
-  useEffect(() => {
-    // Note: Don't set hardcoded defaults - let DB be the source of truth
-    const fetchModelConfig = async () => {
-      try {
-        const data = await invoke('model_cfg_get') as any;
-        if (data && data.provider !== null) {
-          // Fetch API key if not included and provider requires it
-          if (data.provider !== 'ollama' && !data.apiKey) {
-            try {
-              const apiKeyData = await invoke('model_api_key_get', {
-                provider: data.provider
-              }) as string;
-              data.apiKey = apiKeyData;
-            } catch (err) {
-              console.error('Failed to fetch API key:', err);
-            }
-          }
-          setModelConfig(data);
-        }
-      } catch (error) {
-        console.error('Failed to fetch model config:', error);
-      }
-    };
-
-    fetchModelConfig();
-  }, []);
-
-
-  useEffect(() => {
-    // Note: Don't set hardcoded defaults - let DB be the source of truth
-    const fetchTranscriptSettings = async () => {
-      try {
-        const data = await invoke('transcript_cfg_get') as any;
-        if (data && data.provider !== null) {
-          setTranscriptModelConfig(data);
-        }
-      } catch (error) {
-        console.error('Failed to fetch transcript settings:', error);
-      }
-    };
-    fetchTranscriptSettings();
-  }, []);
-
-  // Listen for model config updates from other components
-  useEffect(() => {
-    const setupListener = async () => {
-      const { listen } = await import('@tauri-apps/api/event');
-      const unlisten = await listen<ModelConfig>('model-config-updated', (event) => {
-        console.log('Sidebar received model-config-updated event:', event.payload);
-        setModelConfig(event.payload);
-      });
-
-      return unlisten;
-    };
-
-    let cleanup: (() => void) | undefined;
-    setupListener().then(fn => cleanup = fn);
-
-    return () => {
-      cleanup?.();
-    };
-  }, []);
-
-
-
-  // Handle model config save
-  const handleSaveModelConfig = async (config: ModelConfig) => {
-    try {
-      await invoke('model_cfg_set', {
-        provider: config.provider,
-        model: config.model,
-        whisperModel: config.whisperModel,
-        apiKey: config.apiKey,
-        ollamaEndpoint: config.ollamaEndpoint,
-      });
-
-      setModelConfig(config);
-      console.log('Model config saved successfully');
-      setSettingsSaveSuccess(true);
-
-      // Emit event to sync other components
-      const { emit } = await import('@tauri-apps/api/event');
-      await emit('model-config-updated', config);
-
-      // Track settings change
-      await Analytics.trackSettingsChanged('model_config', `${config.provider}_${config.model}`);
-    } catch (error) {
-      console.error('Error saving model config:', error);
-      setSettingsSaveSuccess(false);
-    }
-  };
-
-  const handleSaveTranscriptConfig = async (updatedConfig?: TranscriptModelProps) => {
-    try {
-      const configToSave = updatedConfig || transcriptModelConfig;
-      const payload = {
-        provider: configToSave.provider,
-        model: configToSave.model,
-        apiKey: configToSave.apiKey ?? null
-      };
-      console.log('Saving transcript config with payload:', payload);
-
-      await invoke('transcript_cfg_set', {
-        provider: payload.provider,
-        model: payload.model,
-        apiKey: payload.apiKey,
-      });
-
-
-      setSettingsSaveSuccess(true);
-
-      // Track settings change
-      const transcriptConfigToSave = updatedConfig || transcriptModelConfig;
-      await Analytics.trackSettingsChanged('transcript_config', `${transcriptConfigToSave.provider}_${transcriptConfigToSave.model}`);
-    } catch (error) {
-      console.error('Failed to save transcript config:', error);
-      setSettingsSaveSuccess(false);
-    }
-  };
 
   // Handle search input changes
   const handleSearchChange = useCallback(async (value: string) => {
@@ -303,7 +157,7 @@ const Sidebar: React.FC = () => {
         })
         .filter((item): item is SidebarItem => item !== undefined); // Type-safe filter
     }
-  }, [sidebarItems, searchQuery, searchResults, expandedFolders]);
+  }, [sidebarItems, searchQuery, searchResults]);
 
   // Check if search returned no results
   const hasNoSearchResults = searchQuery.trim() && filteredSidebarItems.every(item => !item.children?.length);
@@ -311,10 +165,6 @@ const Sidebar: React.FC = () => {
 
   const handleDelete = async (itemId: string) => {
     console.log('Deleting item:', itemId);
-    const payload = {
-      meetingId: itemId
-    };
-
     try {
       const { invoke } = await import('@tauri-apps/api/core');
       await invoke('meeting_delete', {
@@ -425,15 +275,16 @@ const Sidebar: React.FC = () => {
 
   // Expose setShowModelSettings to window for Rust tray to call
   useEffect(() => {
-    (window as any).openSettings = () => {
-      setShowModelSettings(true);
+    const appWindow = window as Window & { openSettings?: () => void };
+    appWindow.openSettings = () => {
+      router.push('/settings');
     };
 
     // Cleanup on unmount
     return () => {
-      delete (window as any).openSettings;
+      delete appWindow.openSettings;
     };
-  }, []);
+  }, [router]);
 
   const renderCollapsedIcons = () => {
     if (!isCollapsed) return null;
@@ -555,7 +406,7 @@ const Sidebar: React.FC = () => {
     const isExpanded = expandedFolders.has(item.id);
     const paddingLeft = `${depth * 12 + 12}px`;
     const isActive = item.type === 'file' && currentMeeting?.id === item.id;
-    const isMeetingItem = item.id.includes('-') && !item.id.startsWith('intro-call');
+    const isMeetingItem = item.type === 'file' && item.id !== 'intro-call';
 
     // Check if this item has a matching transcript snippet
     const matchingResult = isMeetingItem ? findMatchingSnippet(item.id) : null;
@@ -582,8 +433,7 @@ const Sidebar: React.FC = () => {
               toggleFolder(item.id);
             } else {
               setCurrentMeeting({ id: item.id, title: item.title });
-              const basePath = item.id.startsWith('intro-call') ? '/' :
-                item.id.includes('-') ? `/meeting-details?id=${item.id}` : `/notes/${item.id}`;
+              const basePath = item.id === 'intro-call' ? '/' : `/meeting-details?id=${item.id}`;
               router.push(basePath);
             }
           }}
@@ -592,8 +442,6 @@ const Sidebar: React.FC = () => {
             <>
               {item.id === 'meetings' ? (
                 <Calendar className="w-4 h-4 mr-2" />
-              ) : item.id === 'notes' ? (
-                <StickyNote className="w-4 h-4 mr-2" />
               ) : null}
               <span className={depth === 0 ? "" : "font-medium"}>{item.title}</span>
               <div className="ml-auto">

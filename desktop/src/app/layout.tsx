@@ -68,7 +68,6 @@ export default function RootLayout({
   children: React.ReactNode
 }) {
   const [showOnboarding, setShowOnboarding] = useState(false)
-  const [onboardingCompleted, setOnboardingCompleted] = useState(false)
 
   // Import audio state
   const [showDropOverlay, setShowDropOverlay] = useState(false)
@@ -80,7 +79,6 @@ export default function RootLayout({
     invoke<{ completed: boolean } | null>('get_onboarding_status')
       .then((status) => {
         const isComplete = status?.completed ?? false
-        setOnboardingCompleted(isComplete)
 
         if (!isComplete) {
           console.log('[Layout] Onboarding not completed, showing onboarding flow')
@@ -93,7 +91,6 @@ export default function RootLayout({
         console.error('[Layout] Failed to check onboarding status:', error)
         // Default to showing onboarding if we can't check
         setShowOnboarding(true)
-        setOnboardingCompleted(false)
       })
   }, [])
 
@@ -224,7 +221,6 @@ export default function RootLayout({
   const handleOnboardingComplete = () => {
     console.log('[Layout] Onboarding completed, reloading app')
     setShowOnboarding(false)
-    setOnboardingCompleted(true)
     // Optionally reload the window to ensure all state is fresh
     window.location.reload()
   }
