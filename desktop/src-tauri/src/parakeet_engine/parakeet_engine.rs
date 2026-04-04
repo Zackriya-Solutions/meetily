@@ -560,7 +560,7 @@ impl ParakeetEngine {
         }
     }
 
-    /// Download a Parakeet model from HuggingFace (backward-compatible wrapper)
+    /// Download a Parakeet model from Hugging Face
     pub async fn download_model(
         &self,
         model_name: &str,
@@ -633,12 +633,12 @@ impl ParakeetEngine {
             }
         }
 
-        // HuggingFace base URL for Parakeet models (version-specific)
+        // Hugging Face base URL for Parakeet models (version-specific)
         let base_url = if model_name.contains("-v2-") {
             "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v2-onnx/resolve/main".to_string()
         } else {
             // Default to v3 for v3 models
-            crate::brand::model_download_url("parakeet-tdt-0.6b-v3-onnx")
+            "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main".to_string()
         };
 
         // Determine which files to download based on quantization
