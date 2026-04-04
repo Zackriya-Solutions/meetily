@@ -168,10 +168,15 @@
   .custom-scrollbar::-webkit-scrollbar-thumb {
     background: #d1d5db;
     border-radius: 3px;
+    transition: background 0.2s ease;
   }
 
   .custom-scrollbar::-webkit-scrollbar-thumb:hover {
     background: #9ca3af;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-thumb:active {
+    background: #6b7280;
   }
 
   /* Firefox scrollbar */

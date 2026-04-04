@@ -7,15 +7,24 @@ interface LogoProps {
 
 const Logo = React.forwardRef<HTMLButtonElement, LogoProps>(({ isCollapsed }, _ref) => {
   return (
-    isCollapsed ? (
-      <div className="flex items-center justify-start mb-2 bg-transparent border-none p-0">
-        <Image src="/logo-collapsed.png" alt="Logo" width={40} height={32} />
-      </div>
-    ) : (
-      <span className="text-lg text-center border rounded-full bg-blue-50 border-white font-semibold text-gray-700 mb-2 block items-center">
-        <span>MeetFree</span>
-      </span>
-    )
+    <div className="relative overflow-hidden transition-all duration-300">
+      {isCollapsed ? (
+        <div className="flex items-center justify-start mb-2 bg-transparent border-none p-0 animate-fade-in">
+          <Image src="/logo-collapsed.png" alt="MeetFree" width={40} height={32} />
+        </div>
+      ) : (
+        <div className="mb-2 animate-fade-in">
+          <Image
+            src="/logo.png"
+            alt="MeetFree"
+            width={845}
+            height={295}
+            className="h-auto w-full max-w-[180px]"
+            priority
+          />
+        </div>
+      )}
+    </div>
   );
 });
 
