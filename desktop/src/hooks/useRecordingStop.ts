@@ -1,6 +1,5 @@
-import { useEffect, useCallback, useRef } from 'react';
+import { useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { listen } from '@tauri-apps/api/event';
 import { toast } from 'sonner';
 import { useTranscripts } from '@/contexts/TranscriptContext';
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
@@ -9,18 +8,20 @@ import Analytics from '@/lib/analytics';
 
 type SummaryStatus = 'idle' | 'processing' | 'summarizing' | 'regenerating' | 'completed' | 'error';
 
-interface RecordingStoppedPayload {
-  message: string;
+export interface RecordingStoppedPayload {
+  meeting_id: string;
+  meeting_title: string;
   folder_path?: string;
-  meeting_name?: string;
-  meeting_id?: string;
-  transcript_count?: number;
-  transcription_timed_out?: boolean;
+  transcript_count: number;
+  duration_seconds: number;
+  source_type: string;
+  transcription_timed_out: boolean;
   save_error?: string;
+  finalized_at: string;
 }
 
 interface UseRecordingStopReturn {
-  handleRecordingStop: (callApi: boolean) => Promise<void>;
+  handleRecordingStop: (callApi: boolean, payload?: RecordingStoppedPayload) => Promise<void>;
   isStopping: boolean;
   isProcessingTranscript: boolean;
   isSavingTranscript: boolean;
@@ -46,7 +47,6 @@ export function useRecordingStop(
     flushBuffer,
     clearTranscripts,
     meetingTitle,
-    markMeetingAsSaved,
   } = useTranscripts();
 
   const {
@@ -56,101 +56,57 @@ export function useRecordingStop(
   } = useSidebar();
 
   const router = useRouter();
-
   const stopInProgressRef = useRef(false);
-  const recordingStoppedPayloadRef = useRef<RecordingStoppedPayload | null>(null);
-  const payloadWaitersRef = useRef<Array<(payload: RecordingStoppedPayload) => void>>([]);
+  const lastProcessedFinalizationKeyRef = useRef<string | null>(null);
 
-  useEffect(() => {
-    let unlistenStopped: (() => void) | undefined;
-    let unlistenStarted: (() => void) | undefined;
-
-    const setupListeners = async () => {
-      try {
-        unlistenStopped = await listen<RecordingStoppedPayload>('recording-stopped', (event) => {
-          const payload = event.payload;
-          recordingStoppedPayloadRef.current = payload;
-
-          const waiters = [...payloadWaitersRef.current];
-          payloadWaitersRef.current = [];
-          waiters.forEach((resolve) => resolve(payload));
-        });
-
-        unlistenStarted = await listen('recording-started', () => {
-          recordingStoppedPayloadRef.current = null;
-          payloadWaitersRef.current = [];
-        });
-      } catch (error) {
-        console.error('Failed to setup recording stop listeners:', error);
-      }
-    };
-
-    setupListeners();
-
-    return () => {
-      unlistenStopped?.();
-      unlistenStarted?.();
-    };
-  }, []);
-
-  const waitForRecordingStoppedPayload = useCallback((): Promise<RecordingStoppedPayload> => {
-    if (recordingStoppedPayloadRef.current) {
-      return Promise.resolve(recordingStoppedPayloadRef.current);
-    }
-
-    return new Promise((resolve, reject) => {
-      const waiter = (payload: RecordingStoppedPayload) => {
-        window.clearTimeout(timeoutId);
-        payloadWaitersRef.current = payloadWaitersRef.current.filter((candidate) => candidate !== waiter);
-        resolve(payload);
-      };
-
-      const timeoutId = window.setTimeout(() => {
-        payloadWaitersRef.current = payloadWaitersRef.current.filter((candidate) => candidate !== waiter);
-        reject(new Error('Timed out waiting for recording completion from the backend'));
-      }, 5000);
-
-      payloadWaitersRef.current.push(waiter);
-    });
-  }, []);
-
-  const handleRecordingStop = useCallback(async (isCallApi: boolean) => {
+  const handleRecordingStop = useCallback(async (isCallApi: boolean, payload?: RecordingStoppedPayload) => {
     if (stopInProgressRef.current) {
       return;
     }
-    stopInProgressRef.current = true;
 
+    stopInProgressRef.current = true;
     try {
-      if (!isCallApi) {
-        throw new Error('Failed to stop recording');
+      if (!isCallApi && !payload) {
+        throw new Error('Missing backend finalization result');
       }
+      if (!payload) {
+        throw new Error('Stop command completed without finalization data');
+      }
+
+      const dedupeKey = `${payload.meeting_id}:${payload.finalized_at}`;
+      const globalScope = window as Window & { __meetfreeLastFinalizationKey?: string };
+      if (
+        lastProcessedFinalizationKeyRef.current === dedupeKey ||
+        globalScope.__meetfreeLastFinalizationKey === dedupeKey
+      ) {
+        return;
+      }
+      lastProcessedFinalizationKeyRef.current = dedupeKey;
+      globalScope.__meetfreeLastFinalizationKey = dedupeKey;
 
       setStatus(RecordingStatus.STOPPING, 'Stopping recording...');
       setIsRecording(false);
       setIsRecordingDisabled(true);
 
       setStatus(RecordingStatus.PROCESSING_TRANSCRIPTS, 'Finalizing recording...');
-      const stopPayload = await waitForRecordingStoppedPayload();
-
       flushBuffer();
       await new Promise((resolve) => setTimeout(resolve, 250));
 
-      const meetingId = stopPayload.meeting_id;
-      const meetingName = stopPayload.meeting_name || meetingTitle || 'New Meeting';
-      const transcriptCount = stopPayload.transcript_count ?? transcriptsRef.current.length;
-
-      if (!meetingId) {
-        throw new Error(stopPayload.save_error || 'Meeting save completed without returning an ID');
+      if (!payload.meeting_id) {
+        throw new Error(payload.save_error || 'Meeting finalization returned no meeting ID');
       }
 
+      const meetingId = payload.meeting_id;
+      const meetingName = payload.meeting_title || meetingTitle || 'New Meeting';
+      const transcriptCount = payload.transcript_count ?? transcriptsRef.current.length;
+
       setStatus(RecordingStatus.SAVING, 'Refreshing meeting library...');
-      await markMeetingAsSaved();
       await refetchMeetings();
       setCurrentMeeting({ id: meetingId, title: meetingName });
       setStatus(RecordingStatus.COMPLETED);
 
       toast.success('Recording saved successfully!', {
-        description: stopPayload.transcription_timed_out
+        description: payload.transcription_timed_out
           ? `${transcriptCount} transcript segments saved. Transcription hit the shutdown timeout, so some late segments may be missing.`
           : `${transcriptCount} transcript segments saved.`,
         action: {
@@ -165,12 +121,7 @@ export function useRecordingStop(
 
       try {
         const freshTranscripts = [...transcriptsRef.current];
-        let durationSeconds = 0;
-        if (freshTranscripts.length > 0 && freshTranscripts[0].audio_start_time !== undefined) {
-          const lastTranscript = freshTranscripts[freshTranscripts.length - 1];
-          durationSeconds = lastTranscript.audio_end_time || lastTranscript.audio_start_time || 0;
-        }
-
+        const durationSeconds = payload.duration_seconds || 0;
         const transcriptWordCount = freshTranscripts
           .map(t => t.text.split(/\s+/).length)
           .reduce((a, b) => a + b, 0);
@@ -212,7 +163,7 @@ export function useRecordingStop(
         clearTranscripts();
         Analytics.trackPageView('meeting_details');
         setStatus(RecordingStatus.IDLE);
-      }, 2000);
+      }, 1200);
     } catch (error) {
       console.error('Error in handleRecordingStop:', error);
       if (isCallApi) {
@@ -227,39 +178,21 @@ export function useRecordingStop(
         });
       }
     } finally {
-      recordingStoppedPayloadRef.current = null;
       stopInProgressRef.current = false;
     }
   }, [
     setStatus,
     setIsRecording,
     setIsRecordingDisabled,
-    waitForRecordingStoppedPayload,
     flushBuffer,
     meetingTitle,
     transcriptsRef,
-    markMeetingAsSaved,
     refetchMeetings,
     setCurrentMeeting,
     setIsMeetingActive,
     router,
     clearTranscripts,
   ]);
-
-  const handleRecordingStopRef = useRef(handleRecordingStop);
-  useEffect(() => {
-    handleRecordingStopRef.current = handleRecordingStop;
-  });
-
-  useEffect(() => {
-    (window as Window & { handleRecordingStop?: (callApi?: boolean) => void }).handleRecordingStop = (callApi: boolean = true) => {
-      handleRecordingStopRef.current(callApi);
-    };
-
-    return () => {
-      delete (window as Window & { handleRecordingStop?: (callApi?: boolean) => void }).handleRecordingStop;
-    };
-  }, []);
 
   const summaryStatus: SummaryStatus = status === RecordingStatus.PROCESSING_TRANSCRIPTS ? 'processing' : 'idle';
 

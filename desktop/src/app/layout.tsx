@@ -14,10 +14,9 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { RecordingStateProvider } from '@/contexts/RecordingStateContext'
 import { OllamaDownloadProvider } from '@/contexts/OllamaDownloadContext'
 import { TranscriptProvider } from '@/contexts/TranscriptContext'
-import { ConfigProvider, useConfig } from '@/contexts/ConfigContext'
+import { ConfigProvider } from '@/contexts/ConfigContext'
 import { OnboardingProvider } from '@/contexts/OnboardingContext'
 import { OnboardingFlow } from '@/components/onboarding'
-import { loadBetaFeatures } from '@/types/betaFeatures'
 import { DownloadProgressToastProvider } from '@/components/shared/DownloadProgressToast'
 import { UpdateCheckProvider } from '@/components/UpdateCheckProvider'
 import { RecordingPostProcessingProvider } from '@/contexts/RecordingPostProcessingProvider'
@@ -44,13 +43,6 @@ function ConditionalImportDialog({
   handleImportDialogClose: (open: boolean) => void;
   importFilePath: string | null;
 }) {
-  const { betaFeatures } = useConfig();
-
-  // Only mount ImportAudioDialog (and its hooks/listeners) when feature is enabled
-  if (!betaFeatures.importAndRetranscribe) {
-    return null;
-  }
-
   return (
     <ImportAudioDialog
       open={showImportDialog}
@@ -125,16 +117,6 @@ export default function RootLayout({
 
   // Handle file drop for audio import
   const handleFileDrop = useCallback((paths: string[]) => {
-    // Check if beta features are enabled (read from localStorage directly since we're outside ConfigProvider)
-    const betaFeatures = loadBetaFeatures();
-
-    if (!betaFeatures.importAndRetranscribe) {
-      toast.error('Beta feature disabled', {
-        description: 'Enable "Import Audio & Retranscribe" in Settings > Beta to use this feature.'
-      });
-      return;
-    }
-
     // Find the first audio file
     const audioFile = paths.find(p => {
       const ext = p.split('.').pop()?.toLowerCase();
@@ -160,11 +142,9 @@ export default function RootLayout({
     const cleanedUpRef = { current: false };
 
     const setupListeners = async () => {
-      // Drag enter/over - show overlay only if beta feature is enabled
+      // Drag enter/over - show overlay for supported audio drop flow.
       const unlistenDragEnter = await listen('tauri://drag-enter', () => {
-        if (loadBetaFeatures().importAndRetranscribe) {
-          setShowDropOverlay(true);
-        }
+        setShowDropOverlay(true);
       });
       if (cleanedUpRef.current) {
         unlistenDragEnter();

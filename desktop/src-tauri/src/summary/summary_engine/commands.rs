@@ -2,11 +2,17 @@
 // Exposes model download, status, and management functionality to frontend
 
 use std::sync::Arc;
+use std::path::PathBuf;
 
 use tauri::{AppHandle, Emitter, Manager, Runtime, State};
+use tauri_plugin_dialog::DialogExt;
 use tokio::sync::Mutex;
 
-use super::model_manager::{DownloadProgress, ModelInfo, ModelManager};
+use super::model_manager::{DownloadProgress, ModelFileValidationResult, ModelInfo, ModelManager};
+use super::models::get_available_models;
+use super::recommendation::{
+    detect_system_profile, fallback_system_profile, select_recommended_model,
+};
 
 // ============================================================================
 // Global State
@@ -232,6 +238,110 @@ pub async fn builtin_ai_delete_model(
         .map_err(|e| e.to_string())
 }
 
+fn normalize_model_file_path(path: String) -> Option<PathBuf> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(trimmed))
+}
+
+async fn pick_model_file_with_dialog<R: Runtime>(app: &AppHandle<R>) -> Result<Option<PathBuf>, String> {
+    let app_clone = app.clone();
+    let selected_path = tokio::task::spawn_blocking(move || {
+        app_clone
+            .dialog()
+            .file()
+            .add_filter("GGUF Models", &["gguf"])
+            .blocking_pick_file()
+    })
+    .await
+    .map_err(|e| format!("File picker task failed: {}", e))?;
+
+    match selected_path {
+        Some(path) => Ok(Some(PathBuf::from(path.to_string()))),
+        None => Ok(None),
+    }
+}
+
+#[tauri::command]
+pub async fn builtin_ai_validate_model_file<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, ModelManagerState>,
+    model_name: String,
+    file_path: String,
+) -> Result<ModelFileValidationResult, String> {
+    let manager = {
+        {
+            let manager_lock = state.0.lock().await;
+            if manager_lock.is_none() {
+                drop(manager_lock);
+                init_model_manager(&app)
+                    .await
+                    .map_err(|e| format!("Failed to initialize model manager: {}", e))?;
+            }
+        }
+
+        let manager_lock = state.0.lock().await;
+        manager_lock
+            .as_ref()
+            .ok_or_else(|| "Model manager not initialized".to_string())?
+            .clone()
+    };
+
+    let selected_path = if let Some(path) = normalize_model_file_path(file_path) {
+        path
+    } else {
+        pick_model_file_with_dialog(&app)
+            .await?
+            .ok_or_else(|| "No model file selected".to_string())?
+    };
+
+    manager
+        .validate_model_file(&model_name, &selected_path)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn builtin_ai_import_model_file<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, ModelManagerState>,
+    model_name: String,
+    file_path: String,
+) -> Result<ModelInfo, String> {
+    let manager = {
+        {
+            let manager_lock = state.0.lock().await;
+            if manager_lock.is_none() {
+                drop(manager_lock);
+                init_model_manager(&app)
+                    .await
+                    .map_err(|e| format!("Failed to initialize model manager: {}", e))?;
+            }
+        }
+
+        let manager_lock = state.0.lock().await;
+        manager_lock
+            .as_ref()
+            .ok_or_else(|| "Model manager not initialized".to_string())?
+            .clone()
+    };
+
+    let selected_path = if let Some(path) = normalize_model_file_path(file_path) {
+        path
+    } else {
+        pick_model_file_with_dialog(&app)
+            .await?
+            .ok_or_else(|| "No model file selected".to_string())?
+    };
+
+    manager
+        .import_model_file(&model_name, &selected_path)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Check if a model is ready to use
 #[tauri::command]
 pub async fn builtin_ai_is_model_ready<R: Runtime>(
@@ -355,48 +465,33 @@ pub async fn init_model_manager_at_startup<R: Runtime>(app: &AppHandle<R>) -> Re
     Ok(())
 }
 
-/// Get recommended summary model based on platform and system RAM
+/// Get recommended summary model based on hardware profile.
 /// macOS + >16GB RAM → gemma3:4b (2.5 GB, balanced)
 /// Otherwise → gemma3:1b (1019 MB, fast)
 #[tauri::command]
 pub async fn builtin_ai_get_recommended_model() -> Result<String, String> {
-    // Get system RAM in GB
-    let system_ram_gb = get_system_ram_gb()?;
+    let models = get_available_models();
+    let system_profile = detect_system_profile().unwrap_or_else(|error| {
+        log::warn!(
+            "Failed to detect system profile for recommendation: {}. Using fallback.",
+            error
+        );
+        fallback_system_profile()
+    });
 
-    // Check if running on macOS
-    let is_macos = cfg!(target_os = "macos");
-
-    log::info!(
-        "System RAM detected: {} GB, Platform: {}",
-        system_ram_gb,
-        if is_macos { "macOS" } else { "other" }
-    );
-
-    // Recommend model: gemma3:4b only on macOS with >16GB RAM
-    let recommended = if is_macos && system_ram_gb > 16 {
-        "gemma3:4b" // macOS + >16GB RAM: gemma3:4b (2.5 GB, balanced)
-    } else {
-        "gemma3:1b" // All other cases: gemma3:1b (806 MB, fast)
-    };
+    let recommended = select_recommended_model(&models, &system_profile)
+        .unwrap_or_else(|| "gemma3:1b".to_string());
 
     log::info!(
-        "Recommended summary model: {} (macOS={}, {}GB RAM)",
+        "Recommended summary model: {} (platform={}, ram={}GB)",
         recommended,
-        is_macos,
-        system_ram_gb
+        if system_profile.is_macos {
+            "macos"
+        } else {
+            "other"
+        },
+        system_profile.total_ram_gb
     );
-    Ok(recommended.to_string())
+    Ok(recommended)
 }
 
-/// Get total system RAM in gigabytes
-fn get_system_ram_gb() -> Result<u64, String> {
-    use sysinfo::System;
-
-    let mut sys = System::new_all();
-    sys.refresh_memory();
-
-    let total_memory_bytes = sys.total_memory();
-    let total_memory_gb = total_memory_bytes / (1024 * 1024 * 1024);
-
-    Ok(total_memory_gb)
-}

@@ -1,18 +1,18 @@
 'use client';
 
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
-import { ChevronDown, ChevronRight, File, Settings, Calendar, Home, Trash2, Mic, Square, Plus, Pencil, NotebookPen, SearchIcon, X, Upload } from 'lucide-react';
+import { ChevronDown, ChevronRight, File, Settings, Calendar, Home, Trash2, Mic, Square, Plus, Pencil, NotebookPen, SearchIcon, X, Upload, FileOutput } from 'lucide-react';
 import { useRouter, usePathname } from 'next/navigation';
 import { useSidebar } from './SidebarProvider';
 import type { CurrentMeeting } from '@/components/Sidebar/SidebarProvider';
 import { ConfirmationModal } from '../ConfirmationModel/confirmation-modal';
 import Analytics from '@/lib/analytics';
+import { getVersion } from '@tauri-apps/api/app';
 import { invoke } from '@tauri-apps/api/core';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { toast } from 'sonner';
 import { useRecordingState } from '@/contexts/RecordingStateContext';
 import { useImportDialog } from '@/contexts/ImportDialogContext';
-import { useConfig } from '@/contexts/ConfigContext';
 
 import {
   Dialog,
@@ -32,6 +32,13 @@ interface SidebarItem {
   children?: SidebarItem[];
 }
 
+interface BatchExportResult {
+  meeting_id: string;
+  output_path: string | null;
+  success: boolean;
+  error: string | null;
+}
+
 const Sidebar: React.FC = () => {
   const router = useRouter();
   const pathname = usePathname();
@@ -48,6 +55,8 @@ const Sidebar: React.FC = () => {
     searchTranscripts,
     searchResults,
     isSearching,
+    searchFilters,
+    setSearchFilters,
     meetings,
     setMeetings
   } = useSidebar();
@@ -55,9 +64,13 @@ const Sidebar: React.FC = () => {
   // Get recording state from RecordingStateContext (single source of truth)
   const { isRecording } = useRecordingState();
   const { openImportDialog } = useImportDialog();
-  const { betaFeatures } = useConfig();
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set(['meetings']));
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const hasActiveSearchFilters =
+    !!searchFilters.dateFrom ||
+    !!searchFilters.dateTo ||
+    searchFilters.sourceType !== 'all' ||
+    searchFilters.hasSummary !== 'all';
 
   // State for edit modal
   const [editModalState, setEditModalState] = useState<{ isOpen: boolean; meetingId: string | null; currentTitle: string }>({
@@ -78,16 +91,18 @@ const Sidebar: React.FC = () => {
 
 
   const [deleteModalState, setDeleteModalState] = useState<{ isOpen: boolean; itemId: string | null }>({ isOpen: false, itemId: null });
+  const [isBatchExportOpen, setIsBatchExportOpen] = useState(false);
+  const [batchDestinationRoot, setBatchDestinationRoot] = useState('');
+  const [selectedForBatchExport, setSelectedForBatchExport] = useState<Set<string>>(new Set());
+  const [isBatchExporting, setIsBatchExporting] = useState(false);
+  const [batchExportResults, setBatchExportResults] = useState<BatchExportResult[] | null>(null);
+  const [appVersion, setAppVersion] = useState<string>('');
 
   // Handle search input changes
   const handleSearchChange = useCallback(async (value: string) => {
     setSearchQuery(value);
 
-    // If search query is empty, just return to normal view
-    if (!value.trim()) return;
-
-    // Search through transcripts
-    await searchTranscripts(value);
+    await searchTranscripts(value, searchFilters);
 
     // Make sure the meetings folder is expanded when searching
     if (!expandedFolders.has('meetings')) {
@@ -95,11 +110,17 @@ const Sidebar: React.FC = () => {
       newExpanded.add('meetings');
       setExpandedFolders(newExpanded);
     }
-  }, [expandedFolders, searchTranscripts]);
+  }, [expandedFolders, searchFilters, searchTranscripts]);
+
+  const handleFilterChange = useCallback(async (patch: Partial<typeof searchFilters>) => {
+    const nextFilters = { ...searchFilters, ...patch };
+    setSearchFilters(nextFilters);
+    await searchTranscripts(searchQuery, nextFilters);
+  }, [searchFilters, setSearchFilters, searchTranscripts, searchQuery]);
 
   // Combine search results with sidebar items
   const filteredSidebarItems = useMemo(() => {
-    if (!searchQuery.trim()) return sidebarItems;
+    if (!searchQuery.trim() && !hasActiveSearchFilters) return sidebarItems;
 
     // If we have search results, highlight matching meetings
     if (searchResults.length > 0) {
@@ -107,7 +128,7 @@ const Sidebar: React.FC = () => {
       const matchedMeetingIds = new Set(searchResults.map(result => result.id));
 
       return sidebarItems
-        .map(folder => {
+        .map<SidebarItem | undefined>(folder => {
           // Always include folders in the results
           if (folder.type === 'folder') {
             if (!folder.children) return folder;
@@ -116,6 +137,10 @@ const Sidebar: React.FC = () => {
             const filteredChildren = folder.children.filter(item => {
               // Include if the meeting ID is in our search results
               if (matchedMeetingIds.has(item.id)) return true;
+
+              if (!searchQuery.trim()) {
+                return false;
+              }
 
               // Or if the title matches the search query
               return item.title.toLowerCase().includes(searchQuery.toLowerCase());
@@ -129,14 +154,25 @@ const Sidebar: React.FC = () => {
 
           // For non-folder items, check if they match the search
           return (matchedMeetingIds.has(folder.id) ||
-            folder.title.toLowerCase().includes(searchQuery.toLowerCase()))
+            (!!searchQuery.trim() && folder.title.toLowerCase().includes(searchQuery.toLowerCase())))
             ? folder : undefined;
         })
         .filter((item): item is SidebarItem => item !== undefined); // Type-safe filter
     } else {
+      if (!searchQuery.trim()) {
+        return sidebarItems
+          .map<SidebarItem | undefined>(folder => {
+            if (folder.type === 'folder') {
+              return { ...folder, children: [] };
+            }
+            return undefined;
+          })
+          .filter((item): item is SidebarItem => item !== undefined);
+      }
+
       // Fall back to title-only filtering if no transcript results
       return sidebarItems
-        .map(folder => {
+        .map<SidebarItem | undefined>(folder => {
           // Always include folders in the results
           if (folder.type === 'folder') {
             if (!folder.children) return folder;
@@ -157,10 +193,14 @@ const Sidebar: React.FC = () => {
         })
         .filter((item): item is SidebarItem => item !== undefined); // Type-safe filter
     }
-  }, [sidebarItems, searchQuery, searchResults]);
+  }, [sidebarItems, searchQuery, searchResults, hasActiveSearchFilters]);
 
   // Check if search returned no results
-  const hasNoSearchResults = searchQuery.trim() && filteredSidebarItems.every(item => !item.children?.length);
+  const hasNoSearchResults = (searchQuery.trim() || hasActiveSearchFilters) && filteredSidebarItems.every(item => !item.children?.length);
+  const batchExportCandidates = useMemo(
+    () => meetings.filter((meeting: CurrentMeeting) => meeting.id !== 'intro-call'),
+    [meetings]
+  );
 
 
   const handleDelete = async (itemId: string) => {
@@ -262,6 +302,70 @@ const Sidebar: React.FC = () => {
     setEditingTitle('');
   };
 
+  const handleOpenBatchExport = () => {
+    setIsBatchExportOpen(true);
+    setBatchExportResults(null);
+    setSelectedForBatchExport(new Set(batchExportCandidates.map((meeting) => meeting.id)));
+  };
+
+  const handleToggleBatchMeeting = (meetingId: string, checked: boolean) => {
+    setSelectedForBatchExport((prev) => {
+      const next = new Set(prev);
+      if (checked) {
+        next.add(meetingId);
+      } else {
+        next.delete(meetingId);
+      }
+      return next;
+    });
+  };
+
+  const handlePickBatchFolder = async () => {
+    try {
+      const selected = await invoke<string | null>('select_recording_folder');
+      if (selected) {
+        setBatchDestinationRoot(selected);
+      }
+    } catch (error) {
+      console.error('Failed to select batch export folder:', error);
+      toast.error('Failed to select export destination');
+    }
+  };
+
+  const handleBatchExport = async () => {
+    if (selectedForBatchExport.size === 0) {
+      toast.error('Select at least one meeting');
+      return;
+    }
+    if (!batchDestinationRoot.trim()) {
+      toast.error('Select a destination folder');
+      return;
+    }
+
+    try {
+      setIsBatchExporting(true);
+      setBatchExportResults(null);
+      const response = await invoke<{ results: BatchExportResult[] }>('meetings_export_markdown_batch', {
+        meetingIds: Array.from(selectedForBatchExport),
+        destinationRoot: batchDestinationRoot,
+      });
+      setBatchExportResults(response.results);
+
+      const successCount = response.results.filter((result) => result.success).length;
+      const failureCount = response.results.length - successCount;
+      if (failureCount > 0) {
+        toast.warning(`Exported ${successCount} meetings, ${failureCount} failed`);
+      } else {
+        toast.success(`Exported ${successCount} meetings`);
+      }
+    } catch (error) {
+      console.error('Batch export failed:', error);
+      toast.error(`Batch export failed: ${String(error)}`);
+    } finally {
+      setIsBatchExporting(false);
+    }
+  };
+
   const toggleFolder = (folderId: string) => {
     // Normal toggle behavior for all folders
     const newExpanded = new Set(expandedFolders);
@@ -285,6 +389,18 @@ const Sidebar: React.FC = () => {
       delete appWindow.openSettings;
     };
   }, [router]);
+
+  useEffect(() => {
+    const loadVersion = async () => {
+      try {
+        const version = await getVersion();
+        setAppVersion(version);
+      } catch (error) {
+        console.error('Failed to load app version:', error);
+      }
+    };
+    void loadVersion();
+  }, []);
 
   const renderCollapsedIcons = () => {
     if (!isCollapsed) return null;
@@ -340,23 +456,37 @@ const Sidebar: React.FC = () => {
             </TooltipContent>
           </Tooltip>
 
-          {betaFeatures.importAndRetranscribe && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  onClick={() => openImportDialog()}
-                  className="h-9 w-9 flex items-center justify-center rounded-lg transition-colors duration-150 hover:bg-blue-50 text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
-                  aria-label="Import audio"
-                >
-                  <Upload className="w-4 h-4" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="right">
-                <p>Import Audio</p>
-              </TooltipContent>
-            </Tooltip>
-          )}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={() => openImportDialog()}
+                className="h-9 w-9 flex items-center justify-center rounded-lg transition-colors duration-150 hover:bg-blue-50 text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                aria-label="Import audio"
+              >
+                <Upload className="w-4 h-4" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right">
+              <p>Import Audio</p>
+            </TooltipContent>
+          </Tooltip>
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={handleOpenBatchExport}
+                className="h-9 w-9 flex items-center justify-center rounded-lg transition-colors duration-150 hover:bg-emerald-50 text-emerald-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+                aria-label="Batch export markdown"
+              >
+                <FileOutput className="w-4 h-4" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right">
+              <p>Batch Export</p>
+            </TooltipContent>
+          </Tooltip>
 
           <Tooltip>
             <TooltipTrigger asChild>
@@ -572,6 +702,44 @@ const Sidebar: React.FC = () => {
                     }
                   </InputGroup>
                 </div>
+
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  <input
+                    type="date"
+                    value={searchFilters.dateFrom}
+                    onChange={(e) => void handleFilterChange({ dateFrom: e.target.value })}
+                    className="h-8 rounded border border-gray-200 px-2 text-xs text-gray-700"
+                    aria-label="Filter from date"
+                  />
+                  <input
+                    type="date"
+                    value={searchFilters.dateTo}
+                    onChange={(e) => void handleFilterChange({ dateTo: e.target.value })}
+                    className="h-8 rounded border border-gray-200 px-2 text-xs text-gray-700"
+                    aria-label="Filter to date"
+                  />
+                  <select
+                    value={searchFilters.sourceType}
+                    onChange={(e) => void handleFilterChange({ sourceType: e.target.value as typeof searchFilters.sourceType })}
+                    className="h-8 rounded border border-gray-200 px-2 text-xs text-gray-700 bg-white"
+                    aria-label="Filter source type"
+                  >
+                    <option value="all">All Sources</option>
+                    <option value="recorded">Recorded</option>
+                    <option value="imported">Imported</option>
+                    <option value="retranscribed">Retranscribed</option>
+                  </select>
+                  <select
+                    value={searchFilters.hasSummary}
+                    onChange={(e) => void handleFilterChange({ hasSummary: e.target.value as typeof searchFilters.hasSummary })}
+                    className="h-8 rounded border border-gray-200 px-2 text-xs text-gray-700 bg-white"
+                    aria-label="Filter summary availability"
+                  >
+                    <option value="all">All Summaries</option>
+                    <option value="yes">With Summary</option>
+                    <option value="no">No Summary</option>
+                  </select>
+                </div>
               </div>
             )}
           </div>
@@ -664,15 +832,22 @@ const Sidebar: React.FC = () => {
               )}
             </button>
 
-            {betaFeatures.importAndRetranscribe && (
-              <button
-                onClick={() => openImportDialog()}
-                className="w-full flex items-center justify-center px-3 py-2 text-sm font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 active:bg-blue-200 rounded-lg transition-all duration-150 border border-blue-200"
-              >
-                <Upload className="w-4 h-4 mr-2" />
-                <span>Import Audio</span>
-              </button>
-            )}
+            <button
+              onClick={() => openImportDialog()}
+              className="w-full flex items-center justify-center px-3 py-2 text-sm font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 active:bg-blue-200 rounded-lg transition-all duration-150 border border-blue-200"
+            >
+              <Upload className="w-4 h-4 mr-2" />
+              <span>Import Audio</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleOpenBatchExport}
+              className="w-full flex items-center justify-center px-3 py-2 text-sm font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 active:bg-emerald-200 rounded-lg transition-all duration-150 border border-emerald-200"
+            >
+              <FileOutput className="w-4 h-4 mr-2" />
+              <span>Batch Export</span>
+            </button>
 
             <button
               type="button"
@@ -688,7 +863,7 @@ const Sidebar: React.FC = () => {
               <span>Settings</span>
             </button>
             <div className="w-full flex items-center justify-center px-3 py-1 text-xs text-gray-400 font-mono">
-              v0.1.0
+              {appVersion ? `v${appVersion}` : 'v...'}
             </div>
           </div>
         )}
@@ -701,6 +876,105 @@ const Sidebar: React.FC = () => {
         onConfirm={handleDeleteConfirm}
         onCancel={() => setDeleteModalState({ isOpen: false, itemId: null })}
       />
+
+      <Dialog open={isBatchExportOpen} onOpenChange={setIsBatchExportOpen}>
+        <DialogContent className="sm:max-w-[680px]">
+          <DialogTitle>Batch Export Markdown</DialogTitle>
+          <div className="space-y-4 py-2">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Destination Root Folder
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={batchDestinationRoot}
+                  onChange={(e) => setBatchDestinationRoot(e.target.value)}
+                  placeholder="Select destination folder"
+                  className="flex-1 h-9 rounded border border-gray-300 px-3 text-sm"
+                />
+                <button
+                  type="button"
+                  onClick={() => void handlePickBatchFolder()}
+                  className="h-9 px-3 rounded border border-gray-300 text-sm hover:bg-gray-50"
+                >
+                  Browse
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-sm font-medium text-gray-700">Meetings</label>
+                <button
+                  type="button"
+                  onClick={() => setSelectedForBatchExport(new Set(batchExportCandidates.map((meeting) => meeting.id)))}
+                  className="text-xs text-blue-600 hover:text-blue-700"
+                >
+                  Select all
+                </button>
+              </div>
+              <div className="max-h-64 overflow-y-auto border rounded-md divide-y">
+                {batchExportCandidates.length === 0 ? (
+                  <div className="p-3 text-sm text-gray-500">No meetings available.</div>
+                ) : (
+                  batchExportCandidates.map((meeting) => (
+                    <label key={meeting.id} className="flex items-center justify-between gap-3 p-3 text-sm">
+                      <span className="truncate">{meeting.title}</span>
+                      <input
+                        type="checkbox"
+                        checked={selectedForBatchExport.has(meeting.id)}
+                        onChange={(e) => handleToggleBatchMeeting(meeting.id, e.target.checked)}
+                      />
+                    </label>
+                  ))
+                )}
+              </div>
+            </div>
+
+            {batchExportResults && (
+              <div className="border rounded-md divide-y">
+                {batchExportResults.map((result) => {
+                  const meeting = batchExportCandidates.find((candidate) => candidate.id === result.meeting_id);
+                  return (
+                    <div key={result.meeting_id} className="p-3 text-sm">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-medium truncate">{meeting?.title ?? result.meeting_id}</span>
+                        <span className={result.success ? "text-green-600" : "text-red-600"}>
+                          {result.success ? "Success" : "Failed"}
+                        </span>
+                      </div>
+                      {result.output_path && (
+                        <p className="text-xs text-gray-500 truncate mt-1">{result.output_path}</p>
+                      )}
+                      {result.error && (
+                        <p className="text-xs text-red-600 mt-1">{result.error}</p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <button
+              type="button"
+              onClick={() => setIsBatchExportOpen(false)}
+              className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md transition-colors"
+            >
+              Close
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleBatchExport()}
+              disabled={isBatchExporting}
+              className="px-4 py-2 text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 rounded-md transition-colors"
+            >
+              {isBatchExporting ? 'Exporting...' : 'Export Markdown'}
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Edit Meeting Title Modal */}
       <Dialog open={editModalState.isOpen} onOpenChange={(open) => {

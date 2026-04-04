@@ -1,5 +1,9 @@
 # Roadmap to v0.1.0
 
+> Archived document for historical context only. Active release planning and technical behavior live in the `v0.2.0` docs:
+> - `docs/technical-design-v0.2.0.md`
+> - `docs/execution-plan-v0.2.0.md`
+
 ## Release Definition
 
 v0.1.0 should be the first dependable release of this fork, not the first release with the most features.

@@ -17,7 +17,18 @@ pub async fn transcript_search<R: Runtime>(
     query: String,
     auth_token: Option<String>,
 ) -> Result<Vec<api::TranscriptSearchResult>, String> {
+    // Deprecated compatibility wrapper. Prefer `transcript_search_with_filters`.
     api::api_search_transcripts(app, state, query, auth_token).await
+}
+
+#[tauri::command]
+pub async fn transcript_search_with_filters<R: Runtime>(
+    app: AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+    request: api::TranscriptSearchRequest,
+    auth_token: Option<String>,
+) -> Result<api::TranscriptSearchResponse, String> {
+    api::api_search_transcripts_with_filters(app, state, request, auth_token).await
 }
 
 #[tauri::command]

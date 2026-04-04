@@ -654,12 +654,19 @@ async fn run_import<R: Runtime>(
     let app_state = app
         .try_state::<AppState>()
         .ok_or_else(|| anyhow!("App state not available"))?;
+    let app_preferences = crate::preferences::load_app_preferences(&app)
+        .await
+        .unwrap_or_default();
 
     let meeting_id = create_meeting_with_transcripts(
         app_state.db_manager.pool(),
         &title,
         &segments,
         meeting_folder.to_string_lossy().to_string(),
+        "imported",
+        language.as_deref(),
+        duration_seconds,
+        &app_preferences.transcript_cleanup,
     )
     .await?;
 
@@ -709,9 +716,16 @@ async fn create_meeting_with_transcripts(
     title: &str,
     segments: &[TranscriptSegment],
     folder_path: String,
+    source_type: &str,
+    language: Option<&str>,
+    duration_seconds: f64,
+    cleanup_settings: &crate::preferences::TranscriptCleanupSettings,
 ) -> Result<String> {
     let meeting_id = format!("meeting-{}", Uuid::new_v4());
     let now = chrono::Utc::now();
+    let recording_started_at =
+        (now - chrono::Duration::milliseconds((duration_seconds * 1000.0) as i64)).to_rfc3339();
+    let recording_ended_at = now.to_rfc3339();
 
     // Start transaction
     let mut conn = pool
@@ -724,27 +738,44 @@ async fn create_meeting_with_transcripts(
 
     // Insert meeting
     sqlx::query(
-        "INSERT INTO meetings (id, title, created_at, updated_at, folder_path)
-         VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO meetings (
+            id, title, created_at, updated_at, folder_path,
+            source_type, language, duration_seconds, recording_started_at, recording_ended_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&meeting_id)
     .bind(title)
     .bind(now)
     .bind(now)
     .bind(&folder_path)
+    .bind(source_type)
+    .bind(language)
+    .bind(duration_seconds)
+    .bind(&recording_started_at)
+    .bind(&recording_ended_at)
     .execute(&mut *tx)
     .await
     .map_err(|e| anyhow!("Failed to create meeting: {}", e))?;
 
     // Insert transcripts
     for segment in segments {
+        let raw_text = segment
+            .raw_text
+            .clone()
+            .unwrap_or_else(|| segment.text.clone());
+        let cleaned_text =
+            crate::transcript_processing::clean_for_storage(&raw_text, cleanup_settings);
         sqlx::query(
-            "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration)
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO transcripts (
+                id, meeting_id, transcript, raw_transcript, processing_version, timestamp,
+                audio_start_time, audio_end_time, duration
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&segment.id)
         .bind(&meeting_id)
-        .bind(&segment.text)
+        .bind(cleaned_text)
+        .bind(raw_text)
+        .bind("v0.2.0")
         .bind(&segment.timestamp)
         .bind(segment.audio_start_time)
         .bind(segment.audio_end_time)
@@ -984,7 +1015,7 @@ pub async fn validate_audio_file_command(path: String) -> Result<AudioFileInfo, 
     validate_audio_file(Path::new(&path)).map_err(|e| e.to_string())
 }
 
-/// Start importing an audio file (Beta gated using configContext.betaFeatures)
+/// Start importing an audio file as a first-class workflow.
 #[tauri::command]
 pub async fn start_import_audio_command<R: Runtime>(
     app: AppHandle<R>,
@@ -1218,6 +1249,7 @@ mod tests {
             TranscriptSegment {
                 id: "t-1".to_string(),
                 text: "Hello world".to_string(),
+                raw_text: Some("Hello world".to_string()),
                 timestamp: "2024-01-01T00:00:00Z".to_string(),
                 audio_start_time: Some(0.0),
                 audio_end_time: Some(1.5),
@@ -1226,6 +1258,7 @@ mod tests {
             TranscriptSegment {
                 id: "t-2".to_string(),
                 text: "Second segment".to_string(),
+                raw_text: Some("Second segment".to_string()),
                 timestamp: "2024-01-01T00:00:01Z".to_string(),
                 audio_start_time: Some(2.0),
                 audio_end_time: Some(3.5),

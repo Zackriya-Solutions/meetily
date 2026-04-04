@@ -20,7 +20,31 @@ export function useMeetingOperations({
     }
   }, [meeting.id]);
 
+  const handleExportMarkdown = useCallback(async () => {
+    try {
+      const result = await invokeTauri<{
+        meeting_id: string;
+        output_path?: string;
+        wrote_file: boolean;
+      }>('meeting_export_markdown', {
+        meetingId: meeting.id,
+      });
+
+      if (result.wrote_file) {
+        toast.success('Markdown exported', {
+          description: result.output_path || 'Export completed in meeting folder.',
+        });
+      } else {
+        toast.info('Markdown preview generated');
+      }
+    } catch (error) {
+      console.error('Failed to export meeting markdown:', error);
+      toast.error(error as string || 'Failed to export markdown');
+    }
+  }, [meeting.id]);
+
   return {
     handleOpenMeetingFolder,
+    handleExportMarkdown,
   };
 }

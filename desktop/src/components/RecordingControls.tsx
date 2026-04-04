@@ -14,7 +14,7 @@ import { useRecordingState } from '@/contexts/RecordingStateContext';
 interface RecordingControlsProps {
   isRecording: boolean;
   barHeights: string[];
-  onRecordingStop: (callApi?: boolean) => void;
+  onRecordingStop: (callApi?: boolean, payload?: RecordingFinalizationResult) => void;
   onRecordingStart: () => void;
   onTranscriptReceived: (summary: SummaryResponse) => void;
   onTranscriptionError?: (message: string) => void;
@@ -26,6 +26,18 @@ interface RecordingControlsProps {
     systemDevice: string | null;
   };
   meetingName?: string;
+}
+
+interface RecordingFinalizationResult {
+  meeting_id: string;
+  meeting_title: string;
+  folder_path?: string;
+  transcript_count: number;
+  duration_seconds: number;
+  source_type: string;
+  transcription_timed_out: boolean;
+  save_error?: string;
+  finalized_at: string;
 }
 
 export const RecordingControls: React.FC<RecordingControlsProps> = ({
@@ -142,18 +154,18 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
       const savePath = `${dataDir}/recording-${timestamp}.wav`;
       console.log('Saving recording to:', savePath);
-      console.log('About to call stop_recording command');
-      const result = await invoke('stop_recording', {
+      console.log('About to call stop_and_finalize_recording command');
+      const result = await invoke<RecordingFinalizationResult>('stop_and_finalize_recording', {
         args: {
           save_path: savePath
         }
       });
-      console.log('stop_recording command completed successfully:', result);
+      console.log('stop_and_finalize_recording command completed successfully:', result);
       // setShowPlayback(true);
       setIsProcessing(false);
       // Track successful transcription
       Analytics.trackTranscriptionSuccess();
-      onRecordingStop(true);
+      onRecordingStop(true, result);
     } catch (error) {
       console.error('Failed to stop recording:', error);
       if (error instanceof Error) {

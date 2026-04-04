@@ -44,16 +44,20 @@ pub mod config;
 pub mod console_utils;
 pub mod database;
 pub mod groq;
+pub mod markdown_export;
 pub mod notifications;
 pub mod ollama;
 pub mod onboarding;
 pub mod openai;
 pub mod openrouter;
 pub mod parakeet_engine;
+pub mod preferences;
 pub mod state;
 pub mod summary;
+pub mod transcript_processing;
 pub mod tray;
 pub mod utils;
+pub mod vocabulary;
 pub mod whisper_engine;
 
 use audio::{list_audio_devices, trigger_audio_permission, AudioDevice};
@@ -138,17 +142,13 @@ async fn start_recording<R: Runtime>(
 }
 
 #[tauri::command]
-async fn stop_recording<R: Runtime>(app: AppHandle<R>, args: RecordingArgs) -> Result<(), String> {
+async fn stop_and_finalize_recording<R: Runtime>(
+    app: AppHandle<R>,
+    args: RecordingArgs,
+) -> Result<audio::recording_commands::MeetingFinalizationResult, String> {
     log_info!("Attempting to stop recording...");
 
-    // Check the actual audio recording system state instead of the flag
-    if !audio::recording_commands::is_recording().await {
-        log_info!("Recording is already stopped");
-        return Ok(());
-    }
-
-    // Call the actual audio recording system to stop
-    match audio::recording_commands::stop_recording(
+    match audio::recording_commands::stop_and_finalize_recording(
         app.clone(),
         audio::recording_commands::RecordingArgs {
             save_path: args.save_path.clone(),
@@ -156,21 +156,9 @@ async fn stop_recording<R: Runtime>(app: AppHandle<R>, args: RecordingArgs) -> R
     )
     .await
     {
-        Ok(_) => {
+        Ok(finalization_result) => {
             RECORDING_FLAG.store(false, Ordering::SeqCst);
             tray::update_tray_menu(&app);
-
-            // Create the save directory if it doesn't exist
-            if let Some(parent) = std::path::Path::new(&args.save_path).parent() {
-                if !parent.exists() {
-                    log_info!("Creating directory: {:?}", parent);
-                    if let Err(e) = std::fs::create_dir_all(parent) {
-                        let err_msg = format!("Failed to create save directory: {}", e);
-                        log_error!("{}", err_msg);
-                        return Err(err_msg);
-                    }
-                }
-            }
 
             // Show recording stopped notification through NotificationManager
             // This respects user's notification preferences
@@ -186,7 +174,7 @@ async fn stop_recording<R: Runtime>(app: AppHandle<R>, args: RecordingArgs) -> R
                 log_info!("Successfully showed recording stopped notification");
             }
 
-            Ok(())
+            Ok(finalization_result)
         }
         Err(e) => {
             log_error!("Failed to stop audio recording: {}", e);
@@ -196,6 +184,12 @@ async fn stop_recording<R: Runtime>(app: AppHandle<R>, args: RecordingArgs) -> R
             Err(format!("Failed to stop recording: {}", e))
         }
     }
+}
+
+#[tauri::command]
+async fn stop_recording<R: Runtime>(app: AppHandle<R>, args: RecordingArgs) -> Result<(), String> {
+    // Deprecated compatibility wrapper. Prefer `stop_and_finalize_recording`.
+    stop_and_finalize_recording(app, args).await.map(|_| ())
 }
 
 #[tauri::command]

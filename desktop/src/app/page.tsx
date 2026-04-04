@@ -214,7 +214,7 @@ export default function Home() {
                   <div className="bg-white rounded-full shadow-lg flex items-center">
                     <RecordingControls
                       isRecording={recordingState.isRecording}
-                      onRecordingStop={(callApi = true) => handleRecordingStop(callApi)}
+                      onRecordingStop={(callApi = true, payload) => handleRecordingStop(callApi, payload)}
                       onRecordingStart={handleRecordingStart}
                       onTranscriptReceived={() => { }}
                       onStopInitiated={() => setIsStopping(true)}

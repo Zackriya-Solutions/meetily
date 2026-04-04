@@ -215,6 +215,7 @@ export default function PageContent({
           isSaving={meetingData.isSaving}
           onSaveAll={meetingData.saveAllChanges}
           onCopySummary={copyOperations.handleCopySummary}
+          onExportMarkdown={meetingOperations.handleExportMarkdown}
           onOpenFolder={meetingOperations.handleOpenMeetingFolder}
           aiSummary={meetingData.aiSummary}
           summaryStatus={summaryStatus}

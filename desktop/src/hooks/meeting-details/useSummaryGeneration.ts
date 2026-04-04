@@ -424,7 +424,7 @@ export function useSummaryGeneration({
         const selectedModel = modelConfig.model;
 
         if (!selectedModel) {
-          toast.error('No built-in AI model selected', {
+          toast.error('No MeetFree Built-in model selected', {
             description: 'Please select a model in settings',
             duration: 5000,
           });
@@ -458,7 +458,7 @@ export function useSummaryGeneration({
             }
 
             if (status.type === 'not_downloaded') {
-              toast.error('Built-in AI model not downloaded', {
+              toast.error('MeetFree Built-in model not downloaded', {
                 description: `${selectedModel} needs to be downloaded. Please download it in model settings.`,
                 duration: 7000,
               });
@@ -472,7 +472,7 @@ export function useSummaryGeneration({
               const errorDesc = status.type === 'error'
                 ? status.Error || 'The model file has an error'
                 : 'The model file is corrupted';
-              toast.error('Built-in AI model not available', {
+              toast.error('MeetFree Built-in model not available', {
                 description: `${errorDesc}. Please check model settings.`,
                 duration: 7000,
               });
@@ -484,7 +484,7 @@ export function useSummaryGeneration({
           }
 
           // Fallback if we couldn't get model info
-          toast.error('Built-in AI model not ready', {
+          toast.error('MeetFree Built-in model not ready', {
             description: 'Please ensure the model is downloaded in settings',
             duration: 5000,
           });
@@ -496,8 +496,8 @@ export function useSummaryGeneration({
 
         // Model is ready, continue to backend call
       } catch (error) {
-        console.error('Error validating built-in AI model:', error);
-        toast.error('Failed to validate built-in AI model', {
+        console.error('Error validating MeetFree Built-in model:', error);
+        toast.error('Failed to validate MeetFree Built-in model', {
           description: error instanceof Error ? error.message : String(error),
           duration: 5000,
         });

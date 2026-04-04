@@ -171,8 +171,9 @@ export function ModelSettingsModal({
   // Use global download context instead of local state
   const { isDownloading, getProgress, downloadingModels } = useOllamaDownload();
 
-  // Built-in AI models state
+  // MeetFree Built-in models state
   const [builtinAiModels, setBuiltinAiModels] = useState<any[]>([]);
+  const [recommendedBuiltinModel, setRecommendedBuiltinModel] = useState<string>(DEFAULT_BUILTIN_SUMMARY_MODEL);
 
   // Cache models by endpoint to avoid refetching when reverting endpoint changes
   const modelsCache = useRef<Map<string, OllamaModel[]>>(new Map());
@@ -212,6 +213,21 @@ export function ModelSettingsModal({
       setIsApiKeyLocked(false);
     }
   }, [apiKey]);
+
+  useEffect(() => {
+    const fetchRecommendation = async () => {
+      try {
+        const recommended = await invoke<string>('builtin_ai_get_recommended_model');
+        if (recommended?.trim()) {
+          setRecommendedBuiltinModel(recommended);
+        }
+      } catch (error) {
+        console.warn('[ModelSettingsModal] Failed to fetch recommended MeetFree Built-in model:', error);
+      }
+    };
+
+    fetchRecommendation();
+  }, []);
 
   const modelOptions: Record<string, string[]> = {
     ollama: models.map((model) => model.name),
@@ -511,8 +527,8 @@ export function ModelSettingsModal({
         }
       }
     } catch (err) {
-      console.error('Error loading Built-in AI models:', err);
-      toast.error('Failed to load Built-in AI models');
+      console.error('Error loading MeetFree Built-in models:', err);
+      toast.error('Failed to load MeetFree Built-in models');
     }
   };
 
@@ -693,7 +709,7 @@ export function ModelSettingsModal({
 
   // Function to download recommended model
   const downloadRecommendedModel = async () => {
-    const recommendedModel = DEFAULT_BUILTIN_SUMMARY_MODEL;
+    const recommendedModel = recommendedBuiltinModel || DEFAULT_BUILTIN_SUMMARY_MODEL;
 
     // Prevent duplicate downloads (defense in depth - backend also checks)
     if (isDownloading(recommendedModel)) {
@@ -807,7 +823,7 @@ export function ModelSettingsModal({
                 const defaultModel = providerModels && providerModels.length > 0
                   ? providerModels[0]
                   : provider === DEFAULT_SUMMARY_PROVIDER
-                    ? DEFAULT_BUILTIN_SUMMARY_MODEL
+                    ? recommendedBuiltinModel
                     : '';
                 const model = (savedModel && providerModels?.includes(savedModel))
                   ? savedModel
@@ -853,7 +869,7 @@ export function ModelSettingsModal({
               <SelectContent className="max-h-64 overflow-y-auto">
                 <SelectGroup>
                   <SelectLabel>Local First</SelectLabel>
-                  <SelectItem value="builtin-ai">Built-in AI (Default, offline)</SelectItem>
+                  <SelectItem value="builtin-ai">MeetFree Built-in (Default, offline)</SelectItem>
                   <SelectItem value="ollama">Ollama (Advanced local)</SelectItem>
                 </SelectGroup>
 
@@ -939,7 +955,7 @@ export function ModelSettingsModal({
           </AlertTitle>
           <AlertDescription>
             {modelConfig.provider === 'builtin-ai' && (
-              <p>Built-in AI is the default `v0.1.0` path. Summaries stay on this machine once the local model is downloaded.</p>
+              <p>MeetFree Built-in keeps summaries on this machine once the local model is downloaded.</p>
             )}
             {modelConfig.provider === 'ollama' && (
               <p>Ollama keeps summary generation local, but assumes a working local Ollama runtime and model inventory.</p>

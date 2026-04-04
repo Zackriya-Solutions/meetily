@@ -62,7 +62,8 @@ impl MeetingsRepository {
 
         // Get meeting details
         let meeting: Option<MeetingModel> = sqlx::query_as(
-            "SELECT id, title, created_at, updated_at, folder_path FROM meetings WHERE id = ?",
+            "SELECT id, title, created_at, updated_at, folder_path, source_type, language, duration_seconds, recording_started_at, recording_ended_at, markdown_export_path
+             FROM meetings WHERE id = ?",
         )
         .bind(meeting_id)
         .fetch_optional(&mut *transaction)
@@ -101,6 +102,13 @@ impl MeetingsRepository {
                 title: meeting.title,
                 created_at: meeting.created_at.0.to_rfc3339(),
                 updated_at: meeting.updated_at.0.to_rfc3339(),
+                folder_path: meeting.folder_path,
+                source_type: meeting.source_type,
+                language: meeting.language,
+                duration_seconds: meeting.duration_seconds,
+                recording_started_at: meeting.recording_started_at,
+                recording_ended_at: meeting.recording_ended_at,
+                markdown_export_path: meeting.markdown_export_path,
                 transcripts: meeting_transcripts,
             }))
         } else {
@@ -121,7 +129,8 @@ impl MeetingsRepository {
         }
 
         let meeting: Option<MeetingModel> = sqlx::query_as(
-            "SELECT id, title, created_at, updated_at, folder_path FROM meetings WHERE id = ?",
+            "SELECT id, title, created_at, updated_at, folder_path, source_type, language, duration_seconds, recording_started_at, recording_ended_at, markdown_export_path
+             FROM meetings WHERE id = ?",
         )
         .bind(meeting_id)
         .fetch_optional(pool)

@@ -5,8 +5,6 @@ import { TranscriptModelProps } from '@/components/TranscriptSettings';
 import { SelectedDevices } from '@/components/DeviceSelection';
 import { configService, ModelConfig } from '@/services/configService';
 import { invoke } from '@tauri-apps/api/core';
-import Analytics from '@/lib/analytics';
-import { BetaFeatures, BetaFeatureKey, loadBetaFeatures, saveBetaFeatures } from '@/types/betaFeatures';
 import {
   DEFAULT_BUILTIN_SUMMARY_MODEL,
   DEFAULT_PARAKEET_MODEL,
@@ -47,6 +45,16 @@ export interface NotificationSettings {
   };
 }
 
+export interface TranscriptCleanupPreferences {
+  enabled: boolean;
+  remove_fillers: boolean;
+}
+
+export interface AppPreferences {
+  auto_export_markdown_on_finalize: boolean;
+  transcript_cleanup: TranscriptCleanupPreferences;
+}
+
 interface ConfigContextType {
   // Model configuration
   modelConfig: ModelConfig;
@@ -67,10 +75,6 @@ interface ConfigContextType {
   // UI preferences
   showConfidenceIndicator: boolean;
   toggleConfidenceIndicator: (checked: boolean) => void;
-
-  // Beta features
-  betaFeatures: BetaFeatures;
-  toggleBetaFeature: (featureKey: BetaFeatureKey, enabled: boolean) => void;
 
   // Ollama models
   models: OllamaModel[];
@@ -93,9 +97,11 @@ interface ConfigContextType {
   // Preference settings (lazy loaded)
   notificationSettings: NotificationSettings | null;
   storageLocations: StorageLocations | null;
+  appPreferences: AppPreferences | null;
   isLoadingPreferences: boolean;
   loadPreferences: () => Promise<void>;
   updateNotificationSettings: (settings: NotificationSettings) => Promise<void>;
+  updateAppPreferences: (preferences: AppPreferences) => Promise<void>;
 }
 
 const ConfigContext = createContext<ConfigContextType | undefined>(undefined);
@@ -168,17 +174,27 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     return false;
   });
 
-  // Beta features state (localStorage)
-  const [betaFeatures, setBetaFeatures] = useState<BetaFeatures>(() => {
-    return loadBetaFeatures();
-  });
-
   // Preference settings state (lazy loaded)
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettings | null>(null);
   const [storageLocations, setStorageLocations] = useState<StorageLocations | null>(null);
+  const [appPreferences, setAppPreferences] = useState<AppPreferences | null>(null);
   const [isLoadingPreferences, setIsLoadingPreferences] = useState(false);
   const preferencesLoadedRef = useRef(false);
   const isLoadingRef = useRef(false);
+
+  // Load app-level preferences at startup so transcript display behavior is consistent
+  useEffect(() => {
+    const loadAppPreferences = async () => {
+      try {
+        const preferences = await invoke<AppPreferences>('get_app_preferences');
+        setAppPreferences(preferences);
+      } catch (error) {
+        console.error('[ConfigContext] Failed to load app preferences at startup:', error);
+      }
+    };
+
+    loadAppPreferences();
+  }, []);
 
   // Load Ollama models (uses saved endpoint, re-runs when endpoint changes after config load)
   useEffect(() => {
@@ -394,22 +410,6 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  // Toggle beta feature with localStorage persistence and analytics
-  const toggleBetaFeature = useCallback((featureKey: BetaFeatureKey, enabled: boolean) => {
-    setBetaFeatures(prev => {
-      const updated = { ...prev, [featureKey]: enabled };
-      saveBetaFeatures(updated);
-
-      // Track analytics with specific feature
-      Analytics.track('beta_feature_toggled', {
-        feature: featureKey,
-        enabled: enabled.toString(),
-      }).catch(err => console.error('Failed to track beta feature toggle:', err));
-
-      return updated;
-    });
-  }, []);
-
   // Update individual provider API key
   const updateProviderApiKey = useCallback((provider: string, apiKey: string | null) => {
     setProviderApiKeys(prev => ({ ...prev, [provider]: apiKey }));
@@ -454,6 +454,20 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
         recordings: recordingsDir
       });
 
+      try {
+        const preferences = await invoke<AppPreferences>('get_app_preferences');
+        setAppPreferences(preferences);
+      } catch (preferencesError) {
+        console.error('[ConfigContext] Failed to load app preferences:', preferencesError);
+        setAppPreferences({
+          auto_export_markdown_on_finalize: false,
+          transcript_cleanup: {
+            enabled: true,
+            remove_fillers: true,
+          },
+        });
+      }
+
       // Mark as loaded
       preferencesLoadedRef.current = true;
     } catch (error) {
@@ -472,6 +486,16 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     } catch (error) {
       console.error('[ConfigContext] Failed to update notification settings:', error);
       throw error; // Re-throw so component can handle error
+    }
+  }, []);
+
+  const updateAppPreferences = useCallback(async (preferences: AppPreferences) => {
+    try {
+      const saved = await invoke<AppPreferences>('set_app_preferences', { preferences });
+      setAppPreferences(saved);
+    } catch (error) {
+      console.error('[ConfigContext] Failed to update app preferences:', error);
+      throw error;
     }
   }, []);
 
@@ -502,16 +526,16 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     setSelectedLanguage: handleSetSelectedLanguage,
     showConfidenceIndicator,
     toggleConfidenceIndicator,
-    betaFeatures,
-    toggleBetaFeature,
     models,
     modelOptions,
     error,
     notificationSettings,
     storageLocations,
+    appPreferences,
     isLoadingPreferences,
     loadPreferences,
     updateNotificationSettings,
+    updateAppPreferences,
   }), [
     modelConfig,
     isAutoSummary,
@@ -524,16 +548,16 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     handleSetSelectedLanguage,
     showConfidenceIndicator,
     toggleConfidenceIndicator,
-    betaFeatures,
-    toggleBetaFeature,
     models,
     modelOptions,
     error,
     notificationSettings,
     storageLocations,
+    appPreferences,
     isLoadingPreferences,
     loadPreferences,
     updateNotificationSettings,
+    updateAppPreferences,
   ]);
 
   return (

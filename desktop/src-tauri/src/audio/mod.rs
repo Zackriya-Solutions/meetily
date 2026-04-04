@@ -85,7 +85,8 @@ pub use pipeline::AudioPipelineManager;
 pub use post_processor::{PostProcessRequest, PostProcessResponse, PostProcessor};
 pub use recording_commands::{
     get_transcription_status, is_recording, start_recording, start_recording_with_devices,
-    stop_recording, RecordingArgs, TranscriptUpdate, TranscriptionStatus,
+    stop_and_finalize_recording, stop_recording, MeetingFinalizationResult, RecordingArgs,
+    TranscriptUpdate, TranscriptionStatus,
 };
 pub use recording_manager::RecordingManager;
 pub use recording_preferences::{get_default_recordings_folder, RecordingPreferences};

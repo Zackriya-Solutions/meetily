@@ -14,7 +14,13 @@ use tokio::io::{AsyncWriteExt, BufWriter};
 use tokio::sync::RwLock;
 use tokio::time::timeout;
 
-use super::models::{get_available_models, get_model_by_name};
+use super::{
+    models::{get_available_models, get_model_by_name},
+    recommendation::{
+        detect_system_profile, evaluate_model_compatibility, fallback_system_profile,
+        ModelCompatibility,
+    },
+};
 
 // ============================================================================
 // Model Status Types
@@ -99,11 +105,28 @@ pub struct ModelInfo {
     /// Context window size in tokens
     pub context_size: u32,
 
+    /// Hardware suitability tier computed from machine RAM.
+    pub compatibility: ModelCompatibility,
+
+    /// Approximate RAM needed for stable local inference.
+    pub memory_estimate_gb: f32,
+
     /// Description
     pub description: String,
 
     /// GGUF filename on disk
     pub gguf_file: String,
+}
+
+/// Validation result for importing a built-in model file.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelFileValidationResult {
+    pub model_name: String,
+    pub file_path: PathBuf,
+    pub valid: bool,
+    pub file_size_mb: u64,
+    pub expected_size_mb: u64,
+    pub issues: Vec<String>,
 }
 
 // ============================================================================
@@ -187,6 +210,13 @@ impl ModelManager {
 
         let model_defs = get_available_models();
         let mut models_map = HashMap::new();
+        let system_profile = detect_system_profile().unwrap_or_else(|error| {
+            log::warn!(
+                "Failed to detect system profile for model recommendation: {}. Using fallback.",
+                error
+            );
+            fallback_system_profile()
+        });
 
         for model_def in model_defs {
             let model_path = self.models_dir.join(&model_def.gguf_file);
@@ -270,6 +300,11 @@ impl ModelManager {
                 path: model_path,
                 size_mb: model_def.size_mb,
                 context_size: model_def.context_size,
+                compatibility: evaluate_model_compatibility(
+                    model_def.memory_estimate_gb,
+                    &system_profile,
+                ),
+                memory_estimate_gb: model_def.memory_estimate_gb,
                 description: model_def.description.clone(),
                 gguf_file: model_def.gguf_file.clone(),
             };
@@ -799,6 +834,146 @@ impl ModelManager {
         }
     }
 
+    /// Validate a user-provided model file for a specific supported built-in model.
+    pub async fn validate_model_file(
+        &self,
+        model_name: &str,
+        file_path: &PathBuf,
+    ) -> Result<ModelFileValidationResult> {
+        let model_def = get_model_by_name(model_name)
+            .ok_or_else(|| anyhow!("Unsupported model for import: {}", model_name))?;
+
+        let mut issues = Vec::new();
+        let mut file_size_mb = 0u64;
+
+        match fs::metadata(file_path).await {
+            Ok(metadata) => {
+                if !metadata.is_file() {
+                    issues.push("Selected path is not a file".to_string());
+                } else {
+                    file_size_mb = metadata.len() / (1024 * 1024);
+                }
+            }
+            Err(e) => issues.push(format!("Failed to read file metadata: {}", e)),
+        }
+
+        if !matches!(model_def.template.as_str(), "gemma3") {
+            issues.push(format!(
+                "Unsupported template '{}' for model '{}'",
+                model_def.template, model_def.name
+            ));
+        }
+
+        if file_path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| !ext.eq_ignore_ascii_case("gguf"))
+            .unwrap_or(true)
+        {
+            issues.push("File extension must be .gguf".to_string());
+        }
+
+        if let Err(e) = self.validate_gguf_file(file_path).await {
+            issues.push(format!("Invalid model header: {}", e));
+        }
+
+        if file_size_mb > 0 {
+            let expected = model_def.size_mb;
+            let min_expected = (expected as f64 * 0.5) as u64;
+            let max_expected = (expected as f64 * 2.0) as u64;
+            if file_size_mb < min_expected || file_size_mb > max_expected {
+                issues.push(format!(
+                    "File size {} MB is outside sane range ({}-{} MB) for model {}",
+                    file_size_mb, min_expected, max_expected, model_def.name
+                ));
+            }
+        }
+
+        Ok(ModelFileValidationResult {
+            model_name: model_def.name.clone(),
+            file_path: file_path.clone(),
+            valid: issues.is_empty(),
+            file_size_mb,
+            expected_size_mb: model_def.size_mb,
+            issues,
+        })
+    }
+
+    /// Import a validated file into the managed models directory for a supported model.
+    pub async fn import_model_file(
+        &self,
+        model_name: &str,
+        source_path: &PathBuf,
+    ) -> Result<ModelInfo> {
+        let validation = self.validate_model_file(model_name, source_path).await?;
+        if !validation.valid {
+            return Err(anyhow!(
+                "Model file validation failed: {}",
+                validation.issues.join("; ")
+            ));
+        }
+
+        let model_def = get_model_by_name(model_name)
+            .ok_or_else(|| anyhow!("Unsupported model for import: {}", model_name))?;
+
+        if !self.models_dir.exists() {
+            fs::create_dir_all(&self.models_dir).await?;
+        }
+
+        let destination = self.models_dir.join(&model_def.gguf_file);
+        let temp_destination = self
+            .models_dir
+            .join(format!("{}.importing", &model_def.gguf_file));
+
+        let source_canonical = std::fs::canonicalize(source_path)
+            .map_err(|e| anyhow!("Failed to resolve source path '{}': {}", source_path.display(), e))?;
+        let destination_canonical = std::fs::canonicalize(&destination).ok();
+
+        if let Some(dest) = destination_canonical {
+            if dest == source_canonical {
+                self.scan_models().await?;
+                return self.get_model_info(model_name).await.ok_or_else(|| {
+                    anyhow!(
+                        "Model imported but could not refresh model info for '{}'",
+                        model_name
+                    )
+                });
+            }
+        }
+
+        if temp_destination.exists() {
+            let _ = fs::remove_file(&temp_destination).await;
+        }
+
+        fs::copy(&source_canonical, &temp_destination)
+            .await
+            .map_err(|e| anyhow!("Failed to copy model file into managed directory: {}", e))?;
+
+        if destination.exists() {
+            fs::remove_file(&destination)
+                .await
+                .map_err(|e| anyhow!("Failed to replace existing model file: {}", e))?;
+        }
+
+        fs::rename(&temp_destination, &destination)
+            .await
+            .map_err(|e| anyhow!("Failed to finalize imported model file: {}", e))?;
+
+        if let Err(e) = self.validate_gguf_file(&destination).await {
+            let _ = fs::remove_file(&destination).await;
+            return Err(anyhow!(
+                "Imported file failed final validation and was removed: {}",
+                e
+            ));
+        }
+
+        self.scan_models().await?;
+
+        self.get_model_info(model_name)
+            .await
+            .ok_or_else(|| anyhow!("Imported model '{}' but failed to refresh state", model_name))
+    }
+
     /// Cancel an ongoing download
     pub async fn cancel_download(&self, model_name: &str) -> Result<()> {
         log::info!("Cancelling download for model: {}", model_name);
@@ -854,5 +1029,92 @@ impl ModelManager {
     /// Get models directory path
     pub fn get_models_directory(&self) -> PathBuf {
         self.models_dir.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ModelManager;
+    use tokio::fs;
+    use tokio::io::AsyncWriteExt;
+
+    async fn write_fake_file(path: &std::path::Path, bytes: &[u8]) {
+        let mut file = fs::File::create(path)
+            .await
+            .expect("failed to create test file");
+        file.write_all(bytes)
+            .await
+            .expect("failed to write test file");
+        file.flush().await.expect("failed to flush test file");
+    }
+
+    #[tokio::test]
+    async fn validate_model_file_rejects_unknown_model() {
+        let tempdir = tempfile::tempdir().expect("failed to create tempdir");
+        let manager = ModelManager::new_with_models_dir(Some(tempdir.path().join("models")))
+            .expect("failed to create model manager");
+        manager.init().await.expect("failed to init model manager");
+
+        let candidate = tempdir.path().join("candidate.gguf");
+        write_fake_file(&candidate, b"GGUF").await;
+
+        let result = manager.validate_model_file("unknown:model", &candidate).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn validate_model_file_reports_header_and_extension_issues() {
+        let tempdir = tempfile::tempdir().expect("failed to create tempdir");
+        let manager = ModelManager::new_with_models_dir(Some(tempdir.path().join("models")))
+            .expect("failed to create model manager");
+        manager.init().await.expect("failed to init model manager");
+
+        let candidate = tempdir.path().join("candidate.bin");
+        write_fake_file(&candidate, b"NOPE").await;
+
+        let result = manager
+            .validate_model_file("gemma3:1b", &candidate)
+            .await
+            .expect("validation call should succeed");
+        assert!(!result.valid);
+        assert!(!result.issues.is_empty());
+        assert!(
+            result
+                .issues
+                .iter()
+                .any(|issue| issue.to_lowercase().contains("extension")),
+            "expected extension issue, got {:?}",
+            result.issues
+        );
+        assert!(
+            result
+                .issues
+                .iter()
+                .any(|issue| issue.to_lowercase().contains("magic")
+                    || issue.to_lowercase().contains("header")),
+            "expected header/magic issue, got {:?}",
+            result.issues
+        );
+    }
+
+    #[tokio::test]
+    async fn import_model_file_rejects_invalid_candidate() {
+        let tempdir = tempfile::tempdir().expect("failed to create tempdir");
+        let models_dir = tempdir.path().join("models");
+        let manager = ModelManager::new_with_models_dir(Some(models_dir.clone()))
+            .expect("failed to create model manager");
+        manager.init().await.expect("failed to init model manager");
+
+        let candidate = tempdir.path().join("tiny.gguf");
+        write_fake_file(&candidate, b"NOPE").await;
+
+        let import_result = manager.import_model_file("gemma3:1b", &candidate).await;
+        assert!(import_result.is_err());
+
+        let destination = models_dir.join("gemma-3-1b-it-Q8_0.gguf");
+        assert!(
+            !destination.exists(),
+            "invalid import should not create managed model file"
+        );
     }
 }

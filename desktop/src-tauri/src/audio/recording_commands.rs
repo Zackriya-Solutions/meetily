@@ -14,7 +14,7 @@ use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tokio::task::JoinHandle;
 
 use crate::api::api::TranscriptSegment as PersistedTranscriptSegment;
-use crate::database::repositories::transcript::TranscriptsRepository;
+use crate::database::repositories::transcript::{SaveTranscriptOptions, TranscriptsRepository};
 
 use super::{
     default_input_device,  // Get default microphone
@@ -62,14 +62,16 @@ pub struct TranscriptionStatus {
 }
 
 #[derive(Debug, Serialize, Clone)]
-struct RecordingStoppedPayload {
-    message: String,
-    folder_path: Option<String>,
-    meeting_name: Option<String>,
-    meeting_id: Option<String>,
-    transcript_count: usize,
-    transcription_timed_out: bool,
-    save_error: Option<String>,
+pub struct MeetingFinalizationResult {
+    pub meeting_id: String,
+    pub meeting_title: String,
+    pub folder_path: Option<String>,
+    pub transcript_count: usize,
+    pub duration_seconds: f64,
+    pub source_type: String,
+    pub transcription_timed_out: bool,
+    pub save_error: Option<String>,
+    pub finalized_at: String,
 }
 
 fn fallback_meeting_name() -> String {
@@ -82,14 +84,22 @@ async fn persist_recording_to_database<R: Runtime>(
     meeting_name: Option<String>,
     meeting_folder: Option<std::path::PathBuf>,
     transcript_segments: Vec<crate::audio::recording_saver::TranscriptSegment>,
+    options: SaveTranscriptOptions,
 ) -> Result<String, String> {
     let meeting_title = meeting_name.unwrap_or_else(fallback_meeting_name);
     let folder_path = meeting_folder.map(|path| path.to_string_lossy().to_string());
+    let preferences = crate::preferences::load_app_preferences(app)
+        .await
+        .unwrap_or_default();
     let transcripts_to_save: Vec<PersistedTranscriptSegment> = transcript_segments
         .into_iter()
         .map(|segment| PersistedTranscriptSegment {
             id: segment.id,
-            text: segment.text,
+            text: crate::transcript_processing::clean_for_storage(
+                &segment.text,
+                &preferences.transcript_cleanup,
+            ),
+            raw_text: Some(segment.text),
             timestamp: segment.display_time,
             audio_start_time: Some(segment.audio_start_time),
             audio_end_time: Some(segment.audio_end_time),
@@ -110,6 +120,7 @@ async fn persist_recording_to_database<R: Runtime>(
         &meeting_title,
         &transcripts_to_save,
         folder_path,
+        options,
     )
     .await
     .map_err(|e| format!("Failed to save meeting transcript: {}", e))
@@ -553,11 +564,12 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
     Ok(())
 }
 
-/// Stop recording with optimized graceful shutdown ensuring NO transcript chunks are lost
-pub async fn stop_recording<R: Runtime>(
+/// Stop recording with optimized graceful shutdown ensuring NO transcript chunks are lost.
+/// Returns canonical finalization metadata for all stop entrypoints.
+pub async fn stop_and_finalize_recording<R: Runtime>(
     app: AppHandle<R>,
     _args: RecordingArgs,
-) -> Result<(), String> {
+) -> Result<MeetingFinalizationResult, String> {
     info!(
         "🛑 Starting optimized recording shutdown - ensuring ALL transcript chunks are preserved"
     );
@@ -565,7 +577,17 @@ pub async fn stop_recording<R: Runtime>(
     // Check if recording is active
     if !IS_RECORDING.load(Ordering::SeqCst) {
         info!("Recording was not active");
-        return Ok(());
+        return Ok(MeetingFinalizationResult {
+            meeting_id: String::new(),
+            meeting_title: fallback_meeting_name(),
+            folder_path: None,
+            transcript_count: 0,
+            duration_seconds: 0.0,
+            source_type: "recorded".to_string(),
+            transcription_timed_out: false,
+            save_error: None,
+            finalized_at: chrono::Utc::now().to_rfc3339(),
+        });
     }
 
     // Emit shutdown progress to frontend
@@ -787,7 +809,14 @@ pub async fn stop_recording<R: Runtime>(
     );
 
     // Perform final cleanup with the manager if available
-    let (meeting_folder, meeting_name, meeting_id, transcript_count, save_error) =
+    let (
+        meeting_folder,
+        meeting_name,
+        meeting_id,
+        transcript_count,
+        duration_seconds,
+        save_error,
+    ) =
         if let Some(mut manager) = manager_for_cleanup {
             info!("🧹 Performing final cleanup and saving recording data");
 
@@ -796,12 +825,33 @@ pub async fn stop_recording<R: Runtime>(
             let meeting_name = manager.get_meeting_name();
             let transcript_segments = manager.get_transcript_segments();
             let transcript_count = transcript_segments.len();
+            let duration_seconds = manager
+                .get_active_recording_duration()
+                .or_else(|| transcript_segments.last().map(|segment| segment.audio_end_time))
+                .unwrap_or(0.0);
+
+            let recording_ended_at = chrono::Utc::now();
+            let recording_started_at = if duration_seconds > 0.0 {
+                recording_ended_at
+                    - chrono::Duration::milliseconds((duration_seconds * 1000.0) as i64)
+            } else {
+                recording_ended_at
+            };
+
+            let save_options = SaveTranscriptOptions {
+                source_type: Some("recorded".to_string()),
+                duration_seconds: Some(duration_seconds),
+                recording_started_at: Some(recording_started_at.to_rfc3339()),
+                recording_ended_at: Some(recording_ended_at.to_rfc3339()),
+                ..Default::default()
+            };
 
             let save_result = persist_recording_to_database(
                 &app,
                 meeting_name.clone(),
                 meeting_folder.clone(),
                 transcript_segments,
+                save_options,
             )
             .await;
 
@@ -846,6 +896,7 @@ pub async fn stop_recording<R: Runtime>(
                 meeting_name,
                 meeting_id,
                 transcript_count,
+                duration_seconds,
                 save_error,
             )
         } else {
@@ -855,6 +906,7 @@ pub async fn stop_recording<R: Runtime>(
                 None,
                 None,
                 0,
+                0.0,
                 Some("Recording manager unavailable during shutdown".to_string()),
             )
         };
@@ -886,28 +938,71 @@ pub async fn stop_recording<R: Runtime>(
         }),
     );
 
-    let stop_payload = RecordingStoppedPayload {
-        message: if save_error.is_some() {
-            "Recording stopped, but saving the meeting failed".to_string()
-        } else {
-            "Recording stopped and meeting saved successfully".to_string()
-        },
+    let finalization_result = MeetingFinalizationResult {
+        meeting_id: meeting_id.unwrap_or_default(),
+        meeting_title: meeting_name_str.unwrap_or_else(fallback_meeting_name),
         folder_path: folder_path_str,
-        meeting_name: meeting_name_str,
-        meeting_id,
         transcript_count,
+        duration_seconds,
+        source_type: "recorded".to_string(),
         transcription_timed_out,
         save_error,
+        finalized_at: chrono::Utc::now().to_rfc3339(),
     };
 
-    app.emit("recording-stopped", &stop_payload)
+    app.emit("recording-stopped", &finalization_result)
         .map_err(|e| e.to_string())?;
+
+    // Optional async auto-export path. Export failure must not block finalize success.
+    if !finalization_result.meeting_id.is_empty() && finalization_result.save_error.is_none() {
+        let prefs = crate::preferences::load_app_preferences(&app)
+            .await
+            .unwrap_or_default();
+        if prefs.auto_export_markdown_on_finalize {
+            let app_for_export = app.clone();
+            let meeting_id_for_export = finalization_result.meeting_id.clone();
+            tauri::async_runtime::spawn(async move {
+                let pool = {
+                    let state = app_for_export.state::<crate::state::AppState>();
+                    state.db_manager.pool().clone()
+                };
+
+                if let Err(error) = crate::markdown_export::export_meeting_markdown(
+                    &app_for_export,
+                    &pool,
+                    &meeting_id_for_export,
+                    None,
+                    false,
+                )
+                .await
+                {
+                    warn!(
+                        "Auto-export markdown failed for meeting {}: {}",
+                        meeting_id_for_export, error
+                    );
+                } else {
+                    info!(
+                        "Auto-export markdown succeeded for meeting {}",
+                        meeting_id_for_export
+                    );
+                }
+            });
+        }
+    }
 
     // Update tray menu to reflect stopped state
     crate::tray::update_tray_menu(&app);
 
     info!("🎉 Recording stopped successfully with ZERO transcript chunks lost");
-    Ok(())
+    Ok(finalization_result)
+}
+
+/// Compatibility wrapper for legacy callers.
+pub async fn stop_recording<R: Runtime>(
+    app: AppHandle<R>,
+    args: RecordingArgs,
+) -> Result<(), String> {
+    stop_and_finalize_recording(app, args).await.map(|_| ())
 }
 
 /// Check if recording is active

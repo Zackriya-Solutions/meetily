@@ -25,7 +25,17 @@ interface TranscriptSearchResult {
   title: string;
   matchContext: string;
   timestamp: string;
+  score: number;
+  sourceType: string;
+  hasSummary: boolean;
 };
+
+export interface TranscriptSearchFilters {
+  dateFrom: string;
+  dateTo: string;
+  sourceType: 'all' | 'recorded' | 'imported' | 'retranscribed';
+  hasSummary: 'all' | 'yes' | 'no';
+}
 
 interface SidebarContextType {
   currentMeeting: CurrentMeeting | null;
@@ -38,9 +48,11 @@ interface SidebarContextType {
   isMeetingActive: boolean;
   setIsMeetingActive: (active: boolean) => void;
   handleRecordingToggle: () => void;
-  searchTranscripts: (query: string) => Promise<void>;
+  searchTranscripts: (query: string, filters?: TranscriptSearchFilters) => Promise<void>;
   searchResults: TranscriptSearchResult[];
   isSearching: boolean;
+  searchFilters: TranscriptSearchFilters;
+  setSearchFilters: (filters: TranscriptSearchFilters) => void;
   // Summary polling management
   activeSummaryPolls: Map<string, NodeJS.Timeout>;
   startSummaryPolling: (meetingId: string, processId: string, onUpdate: (result: any) => void) => void;
@@ -66,8 +78,14 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
   const [meetings, setMeetings] = useState<CurrentMeeting[]>([]);
   const [sidebarItems, setSidebarItems] = useState<SidebarItem[]>([]);
   const [isMeetingActive, setIsMeetingActive] = useState(false);
-  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [searchResults, setSearchResults] = useState<TranscriptSearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
+  const [searchFilters, setSearchFilters] = useState<TranscriptSearchFilters>({
+    dateFrom: '',
+    dateTo: '',
+    sourceType: 'all',
+    hasSummary: 'all',
+  });
   const [activeSummaryPolls, setActiveSummaryPolls] = useState<Map<string, NodeJS.Timeout>>(new Map());
 
   // Use recording state from RecordingStateContext (single source of truth)
@@ -148,8 +166,14 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
   };
 
   // Function to search through meeting transcripts
-  const searchTranscripts = async (query: string) => {
-    if (!query.trim()) {
+  const searchTranscripts = async (query: string, filters: TranscriptSearchFilters = searchFilters) => {
+    const hasActiveFilters =
+      !!filters.dateFrom ||
+      !!filters.dateTo ||
+      filters.sourceType !== 'all' ||
+      filters.hasSummary !== 'all';
+
+    if (!query.trim() && !hasActiveFilters) {
       setSearchResults([]);
       return;
     }
@@ -157,9 +181,25 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
     try {
       setIsSearching(true);
 
+      const hasSummary =
+        filters.hasSummary === 'yes'
+          ? true
+          : filters.hasSummary === 'no'
+            ? false
+            : null;
 
-      const results = await invoke('transcript_search', { query }) as TranscriptSearchResult[];
-      setSearchResults(results);
+      const request = {
+        query: query.trim() || null,
+        dateFrom: filters.dateFrom || null,
+        dateTo: filters.dateTo || null,
+        sourceType: filters.sourceType !== 'all' ? filters.sourceType : null,
+        hasSummary,
+        limit: 200,
+        offset: 0,
+      };
+
+      const response = await invoke<{ results: TranscriptSearchResult[] }>('transcript_search_with_filters', { request });
+      setSearchResults(response.results || []);
     } catch (error) {
       console.error('Error searching transcripts:', error);
       setSearchResults([]);
@@ -288,6 +328,8 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
       searchTranscripts,
       searchResults,
       isSearching,
+      searchFilters,
+      setSearchFilters,
       activeSummaryPolls,
       startSummaryPolling,
       stopSummaryPolling,

@@ -51,6 +51,9 @@ pub struct ModelDef {
     /// This is used for chunking in processor.rs
     pub context_size: u32,
 
+    /// Approximate memory (GB) needed for stable local inference.
+    pub memory_estimate_gb: f32,
+
     /// Model layer count (for GPU offloading calculation)
     pub layer_count: u32,
 
@@ -76,6 +79,7 @@ pub fn get_available_models() -> Vec<ModelDef> {
                     .to_string(),
             size_mb: 1019,
             context_size: 32768,
+            memory_estimate_gb: 1.8,
             layer_count: 26,
             sampling: SamplingParams {
                 temperature: 1.0,
@@ -97,6 +101,7 @@ pub fn get_available_models() -> Vec<ModelDef> {
                     .to_string(),
             size_mb: 2374,
             context_size: 32768, // Supports 128k, but 32k is good for local·
+            memory_estimate_gb: 3.5,
             layer_count: 35,
             sampling: SamplingParams {
                 temperature: 1.0,

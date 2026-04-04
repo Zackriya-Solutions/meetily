@@ -4,6 +4,7 @@ macro_rules! app_invoke_handler {
             // Core app commands
             start_recording,
             stop_recording,
+            stop_and_finalize_recording,
             is_recording,
             get_transcription_status,
             read_audio_file,
@@ -111,6 +112,7 @@ macro_rules! app_invoke_handler {
             // Meeting API commands
             api::meetings::meetings_list,
             api::meetings::transcript_search,
+            api::meetings::transcript_search_with_filters,
             api::meetings::meeting_delete,
             api::meetings::meeting_get,
             api::meetings::meeting_meta_get,
@@ -119,6 +121,12 @@ macro_rules! app_invoke_handler {
             api::meetings::transcript_save,
             api::meetings::meeting_folder_open,
             api::meetings::external_url_open,
+            markdown_export::meeting_export_markdown,
+            markdown_export::meetings_export_markdown_batch,
+            vocabulary::vocabulary_list,
+            vocabulary::vocabulary_upsert,
+            vocabulary::vocabulary_delete,
+            vocabulary::transcript_postprocess_preview,
 
             // Settings and config API commands exposed to the frontend
             api::config::model_cfg_get,
@@ -128,6 +136,8 @@ macro_rules! app_invoke_handler {
             api::config::transcript_cfg_set,
             api::config::transcript_api_key_get,
             api::config::provider_api_key_delete,
+            preferences::get_app_preferences,
+            preferences::set_app_preferences,
             api::custom_openai::custom_openai_cfg_set,
             api::custom_openai::custom_openai_cfg_get,
             api::custom_openai::custom_openai_conn_test,
@@ -145,6 +155,8 @@ macro_rules! app_invoke_handler {
             summary::summary_engine::builtin_ai_download_model,
             summary::summary_engine::builtin_ai_cancel_download,
             summary::summary_engine::builtin_ai_delete_model,
+            summary::summary_engine::builtin_ai_validate_model_file,
+            summary::summary_engine::builtin_ai_import_model_file,
             summary::summary_engine::builtin_ai_is_model_ready,
             summary::summary_engine::builtin_ai_get_available_summary_model,
             summary::summary_engine::builtin_ai_get_recommended_model,

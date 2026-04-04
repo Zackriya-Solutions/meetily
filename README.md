@@ -29,7 +29,6 @@ The current codebase includes:
 
 The active application code does not currently include:
 
-- Speaker diarization in the live transcription path.
 - PDF or DOCX export pipelines.
 - A production FastAPI backend path for meeting storage or summarization.
 
@@ -45,7 +44,9 @@ The current native build path also requires building [`llama-helper/`](llama-hel
 
 - [docs/architecture.md](docs/architecture.md)
 - [docs/technical-design.md](docs/technical-design.md)
-- [docs/roadmap-v0.1.0.md](docs/roadmap-v0.1.0.md)
+- [docs/technical-design-v0.2.0.md](docs/technical-design-v0.2.0.md)
+- [docs/execution-plan-v0.2.0.md](docs/execution-plan-v0.2.0.md)
+- [docs/roadmap-v0.1.0.md](docs/roadmap-v0.1.0.md) (archived)
 - [docs/BUILDING.md](docs/BUILDING.md)
 - [PRIVACY_POLICY.md](PRIVACY_POLICY.md)
 - [CONTRIBUTING.md](CONTRIBUTING.md)

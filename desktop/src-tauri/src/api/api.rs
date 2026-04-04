@@ -1,5 +1,6 @@
 use log::{debug as log_debug, error as log_error, info as log_info, warn as log_warn};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use tauri::{AppHandle, Runtime};
 
 use crate::{
@@ -7,7 +8,11 @@ use crate::{
         models::MeetingModel,
         repositories::{
             meeting::MeetingsRepository, setting::SettingsRepository,
-            transcript::TranscriptsRepository,
+            transcript::{
+                SaveTranscriptOptions, TranscriptSearchFilters as RepoTranscriptSearchFilters,
+                TranscriptsRepository,
+            },
+            vocabulary::{VocabularyRepository, VocabularyRule},
         },
     },
     state::AppState,
@@ -27,6 +32,37 @@ pub struct TranscriptSearchResult {
     #[serde(rename = "matchContext")]
     pub match_context: String,
     pub timestamp: String,
+    pub score: f64,
+    #[serde(rename = "sourceType")]
+    pub source_type: String,
+    #[serde(rename = "hasSummary")]
+    pub has_summary: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct TranscriptSearchRequest {
+    pub query: Option<String>,
+    #[serde(rename = "dateFrom")]
+    pub date_from: Option<String>,
+    #[serde(rename = "dateTo")]
+    pub date_to: Option<String>,
+    #[serde(rename = "sourceType")]
+    pub source_type: Option<String>,
+    #[serde(rename = "hasSummary")]
+    pub has_summary: Option<bool>,
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TranscriptSearchResponse {
+    pub results: Vec<TranscriptSearchResult>,
+    #[serde(rename = "totalCount")]
+    pub total_count: i64,
+    pub limit: i64,
+    pub offset: i64,
+    #[serde(rename = "hasMore")]
+    pub has_more: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -55,6 +91,19 @@ pub struct MeetingDetails {
     pub title: String,
     pub created_at: String,
     pub updated_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub folder_path: Option<String>,
+    pub source_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recording_started_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recording_ended_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub markdown_export_path: Option<String>,
     pub transcripts: Vec<MeetingTranscript>,
 }
 
@@ -81,6 +130,17 @@ pub struct MeetingMetadata {
     pub updated_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub folder_path: Option<String>,
+    pub source_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recording_started_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recording_ended_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub markdown_export_path: Option<String>,
 }
 
 /// Paginated transcripts response with total count
@@ -95,6 +155,9 @@ pub struct PaginatedTranscriptsResponse {
 pub struct TranscriptSegment {
     pub id: String,
     pub text: String,
+    #[serde(default)]
+    #[serde(rename = "rawText")]
+    pub raw_text: Option<String>,
     pub timestamp: String,
     // NEW: Recording-relative timestamps for playback synchronization
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -103,6 +166,30 @@ pub struct TranscriptSegment {
     pub audio_end_time: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration: Option<f64>,
+}
+
+async fn get_cached_vocabulary_rules_for_meeting(
+    pool: &sqlx::SqlitePool,
+    meeting_id: &str,
+    cache: &mut HashMap<String, Vec<VocabularyRule>>,
+) -> Vec<VocabularyRule> {
+    if let Some(rules) = cache.get(meeting_id) {
+        return rules.clone();
+    }
+
+    let loaded = VocabularyRepository::get_effective_rules_for_meeting(pool, Some(meeting_id))
+        .await
+        .unwrap_or_else(|error| {
+            log_warn!(
+                "Failed to load vocabulary rules for meeting {}: {}",
+                meeting_id,
+                error
+            );
+            Vec::new()
+        });
+
+    cache.insert(meeting_id.to_string(), loaded.clone());
+    loaded
 }
 
 // API Commands for Tauri
@@ -156,8 +243,25 @@ pub async fn api_search_transcripts<R: Runtime>(
 
     let pool = state.db_manager.pool();
 
-    match TranscriptsRepository::search_transcripts(pool, &query).await {
-        Ok(results) => {
+    match TranscriptsRepository::search_transcripts_legacy(pool, &query).await {
+        Ok(hits) => {
+            let mut cache = HashMap::<String, Vec<VocabularyRule>>::new();
+            let mut results = Vec::with_capacity(hits.len());
+            for hit in hits {
+                let rules =
+                    get_cached_vocabulary_rules_for_meeting(pool, &hit.id, &mut cache).await;
+                let match_context = crate::vocabulary::apply_vocabulary_rules(&hit.match_context, &rules);
+                results.push(TranscriptSearchResult {
+                    id: hit.id,
+                    title: hit.title,
+                    match_context,
+                    timestamp: hit.timestamp,
+                    score: hit.score,
+                    source_type: hit.source_type,
+                    has_summary: hit.has_summary,
+                });
+            }
+
             log_info!(
                 "Search completed successfully with {} results.",
                 results.len()
@@ -169,6 +273,67 @@ pub async fn api_search_transcripts<R: Runtime>(
             Err(format!("Failed to search transcripts: {}", e))
         }
     }
+}
+
+#[tauri::command]
+pub async fn api_search_transcripts_with_filters<R: Runtime>(
+    _app: AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+    request: TranscriptSearchRequest,
+    auth_token: Option<String>,
+) -> Result<TranscriptSearchResponse, String> {
+    log_info!(
+        "api_search_transcripts_with_filters called (auth_token: {}, query={:?}, date_from={:?}, date_to={:?}, source_type={:?}, has_summary={:?}, limit={:?}, offset={:?})",
+        auth_token.is_some(),
+        request.query,
+        request.date_from,
+        request.date_to,
+        request.source_type,
+        request.has_summary,
+        request.limit,
+        request.offset
+    );
+
+    let filters = RepoTranscriptSearchFilters {
+        query: request.query,
+        date_from: request.date_from,
+        date_to: request.date_to,
+        source_type: request.source_type,
+        has_summary: request.has_summary,
+        limit: request.limit.unwrap_or(50),
+        offset: request.offset.unwrap_or(0),
+    };
+
+    let pool = state.db_manager.pool();
+    let page = TranscriptsRepository::search_transcripts(pool, &filters)
+        .await
+        .map_err(|e| format!("Failed to search transcripts: {}", e))?;
+
+    let mut cache = HashMap::<String, Vec<VocabularyRule>>::new();
+    let mut results = Vec::with_capacity(page.items.len());
+    for hit in page.items {
+        let rules = get_cached_vocabulary_rules_for_meeting(pool, &hit.id, &mut cache).await;
+        let match_context = crate::vocabulary::apply_vocabulary_rules(&hit.match_context, &rules);
+        results.push(TranscriptSearchResult {
+            id: hit.id,
+            title: hit.title,
+            match_context,
+            timestamp: hit.timestamp,
+            score: hit.score,
+            source_type: hit.source_type,
+            has_summary: hit.has_summary,
+        });
+    }
+
+    let has_more = page.offset + (results.len() as i64) < page.total_count;
+
+    Ok(TranscriptSearchResponse {
+        results,
+        total_count: page.total_count,
+        limit: page.limit,
+        offset: page.offset,
+        has_more,
+    })
 }
 
 #[tauri::command]
@@ -501,7 +666,21 @@ pub async fn api_get_meeting<R: Runtime>(
     let pool = state.db_manager.pool();
 
     match MeetingsRepository::get_meeting(pool, &meeting_id).await {
-        Ok(Some(meeting)) => {
+        Ok(Some(mut meeting)) => {
+            let rules = VocabularyRepository::get_effective_rules_for_meeting(pool, Some(&meeting_id))
+                .await
+                .unwrap_or_else(|error| {
+                    log_warn!(
+                        "Failed to load vocabulary rules for meeting {}: {}",
+                        meeting_id,
+                        error
+                    );
+                    Vec::new()
+                });
+            for transcript in &mut meeting.transcripts {
+                transcript.text = crate::vocabulary::apply_vocabulary_rules(&transcript.text, &rules);
+            }
+
             log_info!("Successfully retrieved meeting {}", meeting_id);
             Ok(meeting)
         }
@@ -539,6 +718,12 @@ pub async fn api_get_meeting_metadata<R: Runtime>(
                 created_at: meeting.created_at.0.to_rfc3339(),
                 updated_at: meeting.updated_at.0.to_rfc3339(),
                 folder_path: meeting.folder_path,
+                source_type: meeting.source_type,
+                language: meeting.language,
+                duration_seconds: meeting.duration_seconds,
+                recording_started_at: meeting.recording_started_at,
+                recording_ended_at: meeting.recording_ended_at,
+                markdown_export_path: meeting.markdown_export_path,
             })
         }
         Ok(None) => {
@@ -593,6 +778,25 @@ pub async fn api_get_meeting_transcripts<R: Runtime>(
                     duration: t.duration,
                 })
                 .collect::<Vec<_>>();
+            let rules =
+                VocabularyRepository::get_effective_rules_for_meeting(pool, Some(&meeting_id))
+                    .await
+                    .unwrap_or_else(|error| {
+                        log_warn!(
+                            "Failed to load vocabulary rules for meeting {}: {}",
+                            meeting_id,
+                            error
+                        );
+                        Vec::new()
+                    });
+            let meeting_transcripts = meeting_transcripts
+                .into_iter()
+                .map(|mut transcript| {
+                    transcript.text =
+                        crate::vocabulary::apply_vocabulary_rules(&transcript.text, &rules);
+                    transcript
+                })
+                .collect::<Vec<_>>();
 
             let has_more = (offset + meeting_transcripts.len() as i64) < total_count;
 
@@ -645,7 +849,7 @@ pub async fn api_save_meeting_title<R: Runtime>(
 
 #[tauri::command]
 pub async fn api_save_transcript<R: Runtime>(
-    _app: AppHandle<R>,
+    app: AppHandle<R>,
     state: tauri::State<'_, AppState>,
     meeting_title: String,
     transcripts: Vec<serde_json::Value>,
@@ -690,6 +894,24 @@ pub async fn api_save_transcript<R: Runtime>(
                    first_seg.duration);
     }
 
+    let preferences = crate::preferences::load_app_preferences(&app)
+        .await
+        .unwrap_or_default();
+    let transcripts_to_save = transcripts_to_save
+        .into_iter()
+        .map(|segment| {
+            let cleaned = crate::transcript_processing::clean_for_storage(
+                &segment.text,
+                &preferences.transcript_cleanup,
+            );
+            TranscriptSegment {
+                text: cleaned,
+                raw_text: Some(segment.raw_text.unwrap_or(segment.text)),
+                ..segment
+            }
+        })
+        .collect::<Vec<_>>();
+
     let pool = state.db_manager.pool();
 
     // Now, call the repository with the correctly typed data.
@@ -698,6 +920,7 @@ pub async fn api_save_transcript<R: Runtime>(
         &meeting_title,
         &transcripts_to_save,
         folder_path,
+        SaveTranscriptOptions::default(),
     )
     .await
     {
@@ -736,7 +959,8 @@ pub async fn open_meeting_folder<R: Runtime>(
 
     // Get meeting with folder_path
     let meeting: Option<MeetingModel> = sqlx::query_as(
-        "SELECT id, title, created_at, updated_at, folder_path FROM meetings WHERE id = ?",
+        "SELECT id, title, created_at, updated_at, folder_path, source_type, language, duration_seconds, recording_started_at, recording_ended_at, markdown_export_path
+         FROM meetings WHERE id = ?",
     )
     .bind(&meeting_id)
     .fetch_optional(pool)

@@ -6,7 +6,7 @@ import { listen } from '@tauri-apps/api/event';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { cn } from '@/lib/utils';
-import { Download, RefreshCw, BadgeAlert, Trash2 } from 'lucide-react';
+import { Download, RefreshCw, BadgeAlert, Trash2, FileUp } from 'lucide-react';
 import { toast } from 'sonner';
 
 interface ModelInfo {
@@ -18,6 +18,8 @@ interface ModelInfo {
   };
   size_mb: number;
   context_size: number;
+  compatibility: 'recommended' | 'compatible' | 'may_be_slow' | 'not_recommended';
+  memory_estimate_gb: number;
   description: string;
   gguf_file: string;
 }
@@ -40,6 +42,22 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
   const [downloadProgress, setDownloadProgress] = useState<Record<string, number>>({});
   const [downloadProgressInfo, setDownloadProgressInfo] = useState<Record<string, DownloadProgressInfo>>({});
   const [downloadingModels, setDownloadingModels] = useState<Set<string>>(new Set());
+  const [importingModels, setImportingModels] = useState<Set<string>>(new Set());
+
+  const getCompatibilityMeta = (compatibility: ModelInfo['compatibility']) => {
+    switch (compatibility) {
+      case 'recommended':
+        return { label: 'Recommended', className: 'bg-green-100 text-green-700' };
+      case 'compatible':
+        return { label: 'Compatible', className: 'bg-blue-100 text-blue-700' };
+      case 'may_be_slow':
+        return { label: 'May Be Slow', className: 'bg-amber-100 text-amber-700' };
+      case 'not_recommended':
+        return { label: 'Not Recommended', className: 'bg-red-100 text-red-700' };
+      default:
+        return { label: 'Compatible', className: 'bg-gray-100 text-gray-700' };
+    }
+  };
 
   const fetchModels = async () => {
     try {
@@ -55,7 +73,7 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
         }
       }
     } catch (error) {
-      console.error('Failed to fetch built-in AI models:', error);
+      console.error('Failed to fetch MeetFree Built-in models:', error);
       toast.error('Failed to load models');
     } finally {
       setIsLoading(false);
@@ -254,6 +272,47 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
     }
   };
 
+  const importModel = async (modelName: string) => {
+    setImportingModels((prev) => new Set([...prev, modelName]));
+    try {
+      const validation = await invoke<{
+        model_name: string;
+        file_path: string;
+        valid: boolean;
+        file_size_mb: number;
+        expected_size_mb: number;
+        issues: string[];
+      }>('builtin_ai_validate_model_file', { modelName, filePath: '' });
+
+      if (!validation.valid) {
+        const message = validation.issues[0] ?? 'Selected file is not compatible with this model.';
+        toast.error(`Import validation failed: ${message}`);
+        return;
+      }
+
+      await invoke('builtin_ai_import_model_file', {
+        modelName,
+        filePath: validation.file_path,
+      });
+
+      toast.success(`${modelName} imported successfully`);
+      await fetchModels();
+    } catch (error) {
+      const message = String(error);
+      if (message.includes('No model file selected')) {
+        return;
+      }
+      console.error('Failed to import model file:', error);
+      toast.error(`Failed to import ${modelName}: ${message}`);
+    } finally {
+      setImportingModels((prev) => {
+        const next = new Set(prev);
+        next.delete(modelName);
+        return next;
+      });
+    }
+  };
+
   // Don't show loading spinner if we have downloads in progress - show the model list instead
   if (isLoading && downloadingModels.size === 0) {
     return (
@@ -269,7 +328,7 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
     return (
       <Alert>
         <AlertDescription>
-          No models found. Download a model to get started with Built-in AI.
+          No models found. Download a model to get started with MeetFree Built-in.
         </AlertDescription>
       </Alert>
     );
@@ -278,7 +337,7 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
-        <h4 className="text-sm font-bold">Built-in AI Models</h4>
+        <h4 className="text-sm font-bold">MeetFree Built-in Models</h4>
       </div>
 
       <div className="grid gap-4">
@@ -286,10 +345,12 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
           const progress = downloadProgress[model.name];
           const progressInfo = downloadProgressInfo[model.name];
           const modelIsDownloading = downloadingModels.has(model.name);
+          const modelIsImporting = importingModels.has(model.name);
           const isAvailable = model.status.type === 'available';
           const isNotDownloaded = model.status.type === 'not_downloaded';
           const isCorrupted = model.status.type === 'corrupted';
           const isError = model.status.type === 'error';
+          const compatibilityMeta = getCompatibilityMeta(model.compatibility);
 
           return (
             <div
@@ -302,10 +363,10 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
                 selectedModel === model.name
                   ? 'ring-2 ring-gray-800 border-gray-800'
                   : 'border-gray-200 hover:border-gray-300',
-                isAvailable && !modelIsDownloading && 'cursor-pointer'
+                isAvailable && !modelIsDownloading && !modelIsImporting && 'cursor-pointer'
               )}
               onClick={() => {
-                if (isAvailable && !modelIsDownloading) {
+                if (isAvailable && !modelIsDownloading && !modelIsImporting) {
                   onModelSelect(model.name);
                 }
               }}
@@ -343,6 +404,11 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
                         Not Downloaded
                       </span>
                     )}
+                    {!modelIsDownloading && (
+                      <span className={cn('px-2 py-0.5 text-xs font-medium rounded', compatibilityMeta.className)}>
+                        {compatibilityMeta.label}
+                      </span>
+                    )}
                   </div>
                   <div className="text-sm text-gray-600">
                     {model.description && (
@@ -358,6 +424,7 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
                       </p>
                     )}
                     <div className="text-xs text-gray-500">
+                      <span className="block">~{model.memory_estimate_gb.toFixed(1)} GB RAM suggested</span>
                       <span>{model.size_mb}MB • {model.context_size} tokens</span>
                     </div>
                   </div>
@@ -366,18 +433,33 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
                 <div className="ml-4 flex items-center gap-2">
                   {/* Not Downloaded - Show Download button */}
                   {isNotDownloaded && !modelIsDownloading && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="min-w-[100px]"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        downloadModel(model.name);
-                      }}
-                    >
-                      <Download className="mr-2 h-4 w-4" />
-                      Download
-                    </Button>
+                    <>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="min-w-[100px]"
+                        disabled={modelIsImporting}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          downloadModel(model.name);
+                        }}
+                      >
+                        <Download className="mr-2 h-4 w-4" />
+                        Download
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={modelIsImporting}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          importModel(model.name);
+                        }}
+                      >
+                        <FileUp className="mr-2 h-4 w-4" />
+                        {modelIsImporting ? 'Importing...' : 'Import File'}
+                      </Button>
+                    </>
                   )}
 
                   {/* Downloading - Show Cancel button */}
@@ -397,26 +479,12 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
 
                   {/* Error - Show Retry button */}
                   {isError && !modelIsDownloading && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="min-w-[100px]"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        downloadModel(model.name);
-                      }}
-                    >
-                      <RefreshCw className="mr-2 h-4 w-4" />
-                      Retry
-                    </Button>
-                  )}
-
-                  {/* Corrupted - Show both Retry and Delete buttons */}
-                  {isCorrupted && !modelIsDownloading && (
                     <>
                       <Button
                         variant="outline"
                         size="sm"
+                        className="min-w-[100px]"
+                        disabled={modelIsImporting}
                         onClick={(e) => {
                           e.stopPropagation();
                           downloadModel(model.name);
@@ -428,6 +496,37 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
                       <Button
                         variant="outline"
                         size="sm"
+                        disabled={modelIsImporting}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          importModel(model.name);
+                        }}
+                      >
+                        <FileUp className="mr-2 h-4 w-4" />
+                        {modelIsImporting ? 'Importing...' : 'Import File'}
+                      </Button>
+                    </>
+                  )}
+
+                  {/* Corrupted - Show both Retry and Delete buttons */}
+                  {isCorrupted && !modelIsDownloading && (
+                    <>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={modelIsImporting}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          downloadModel(model.name);
+                        }}
+                      >
+                        <RefreshCw className="mr-2 h-4 w-4" />
+                        Retry
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={modelIsImporting}
                         onClick={(e) => {
                           e.stopPropagation();
                           deleteModel(model.name);
@@ -435,6 +534,18 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
                       >
                         <Trash2 className="mr-2 h-4 w-4" />
                         Delete
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={modelIsImporting}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          importModel(model.name);
+                        }}
+                      >
+                        <FileUp className="mr-2 h-4 w-4" />
+                        {modelIsImporting ? 'Importing...' : 'Import File'}
                       </Button>
                     </>
                   )}

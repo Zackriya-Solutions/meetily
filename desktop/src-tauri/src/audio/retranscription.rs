@@ -490,6 +490,9 @@ async fn run_retranscription<R: Runtime>(
     let app_state = app
         .try_state::<AppState>()
         .ok_or_else(|| anyhow!("App state not available"))?;
+    let app_preferences = crate::preferences::load_app_preferences(&app)
+        .await
+        .unwrap_or_default();
 
     // Wrap delete+insert+update in a transaction to prevent data loss
     let pool = app_state.db_manager.pool();
@@ -508,13 +511,25 @@ async fn run_retranscription<R: Runtime>(
         .map_err(|e| anyhow!("Failed to delete existing transcripts: {}", e))?;
 
     for segment in &segments {
+        let raw_text = segment
+            .raw_text
+            .clone()
+            .unwrap_or_else(|| segment.text.clone());
+        let cleaned_text = crate::transcript_processing::clean_for_storage(
+            &raw_text,
+            &app_preferences.transcript_cleanup,
+        );
         sqlx::query(
-            "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration)
-             VALUES (?, ?, ?, ?, ?, ?, ?)"
+            "INSERT INTO transcripts (
+                id, meeting_id, transcript, raw_transcript, processing_version, timestamp,
+                audio_start_time, audio_end_time, duration
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
         .bind(&segment.id)
         .bind(&meeting_id)
-        .bind(&segment.text)
+        .bind(cleaned_text)
+        .bind(raw_text)
+        .bind("v0.2.0")
         .bind(&segment.timestamp)
         .bind(segment.audio_start_time)
         .bind(segment.audio_end_time)
@@ -523,6 +538,26 @@ async fn run_retranscription<R: Runtime>(
         .await
         .map_err(|e| anyhow!("Failed to insert transcript: {}", e))?;
     }
+
+    let recording_ended_at = chrono::Utc::now();
+    let recording_started_at =
+        recording_ended_at - chrono::Duration::milliseconds((duration_seconds * 1000.0) as i64);
+
+    sqlx::query(
+        "UPDATE meetings
+         SET source_type = ?, language = ?, duration_seconds = ?, recording_started_at = ?, recording_ended_at = ?, updated_at = ?
+         WHERE id = ?",
+    )
+    .bind("retranscribed")
+    .bind(&language)
+    .bind(duration_seconds)
+    .bind(recording_started_at.to_rfc3339())
+    .bind(recording_ended_at.to_rfc3339())
+    .bind(recording_ended_at)
+    .bind(&meeting_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| anyhow!("Failed to update meeting metadata: {}", e))?;
 
     tx.commit()
         .await

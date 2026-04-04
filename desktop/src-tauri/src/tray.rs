@@ -1,7 +1,7 @@
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem},
     tray::TrayIconBuilder,
-    AppHandle, Emitter, Manager, Runtime,
+    AppHandle, Manager, Runtime,
 };
 
 #[derive(Debug, Clone)]
@@ -74,10 +74,10 @@ fn toggle_recording_handler<R: Runtime>(app: &AppHandle<R>) {
             let timestamp = chrono::Local::now().format("%Y-%m-%dT%H-%M-%S").to_string();
             let save_path = data_dir.join(format!("recording-{}.wav", timestamp));
 
-            // Call Rust stop_recording command (like pause/resume pattern)
-            let stop_result = crate::audio::recording_commands::stop_recording(
+            // Call canonical backend finalization path.
+            let stop_result = crate::stop_and_finalize_recording(
                 app_clone.clone(),
-                crate::audio::recording_commands::RecordingArgs {
+                crate::RecordingArgs {
                     save_path: save_path.to_string_lossy().to_string(),
                 },
             )
@@ -87,15 +87,6 @@ fn toggle_recording_handler<R: Runtime>(app: &AppHandle<R>) {
             match stop_result {
                 Ok(_) => {
                     log::info!("Tray toggle: Recording stopped successfully");
-
-                    // Trigger frontend post-processing via event (works from any page)
-                    // (SQLite save, navigation, analytics)
-                    if let Err(e) = app_clone.emit("recording-stop-complete", true) {
-                        log::error!(
-                            "Tray toggle: Failed to emit recording-stop-complete event: {}",
-                            e
-                        );
-                    }
                 }
                 Err(e) => {
                     log::error!("Tray toggle: Failed to stop recording: {}", e);
@@ -173,10 +164,10 @@ fn stop_recording_handler<R: Runtime>(app: &AppHandle<R>) {
         let timestamp = chrono::Local::now().format("%Y-%m-%dT%H-%M-%S").to_string();
         let save_path = data_dir.join(format!("recording-{}.wav", timestamp));
 
-        // Call Rust stop_recording command (like pause/resume pattern)
-        let stop_result = crate::audio::recording_commands::stop_recording(
+        // Call canonical backend finalization path.
+        let stop_result = crate::stop_and_finalize_recording(
             app_clone.clone(),
-            crate::audio::recording_commands::RecordingArgs {
+            crate::RecordingArgs {
                 save_path: save_path.to_string_lossy().to_string(),
             },
         )
@@ -186,12 +177,6 @@ fn stop_recording_handler<R: Runtime>(app: &AppHandle<R>) {
         match stop_result {
             Ok(_) => {
                 log::info!("Tray: Recording stopped successfully");
-
-                // Trigger frontend post-processing via event (works from any page)
-                // (SQLite save, navigation, analytics)
-                if let Err(e) = app_clone.emit("recording-stop-complete", true) {
-                    log::error!("Tray: Failed to emit recording-stop-complete event: {}", e);
-                }
             }
             Err(e) => {
                 log::error!("Tray: Failed to stop recording: {}", e);

@@ -347,7 +347,7 @@ fn provider_name(provider: &LLMProvider) -> &str {
         LLMProvider::Claude => "Claude",
         LLMProvider::Groq => "Groq",
         LLMProvider::Ollama => "Ollama",
-        LLMProvider::BuiltInAI => "Built-in AI",
+        LLMProvider::BuiltInAI => "MeetFree Built-in",
         LLMProvider::OpenRouter => "OpenRouter",
         LLMProvider::CustomOpenAI => "Custom OpenAI",
     }

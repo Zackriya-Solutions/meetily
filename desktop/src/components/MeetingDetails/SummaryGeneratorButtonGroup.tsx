@@ -86,7 +86,7 @@ export function SummaryGeneratorButtonGroup({
 
       // Check if specific model is configured
       if (!selectedModel) {
-        toast.error('No built-in AI model selected', {
+        toast.error('No MeetFree Built-in model selected', {
           description: 'Please select a model in settings',
           duration: 5000,
         });
@@ -166,7 +166,7 @@ export function SummaryGeneratorButtonGroup({
       setSettingsDialogOpen(true);
 
     } catch (error) {
-      console.error('Error checking built-in AI models:', error);
+      console.error('Error checking MeetFree Built-in models:', error);
       toast.error('Failed to check model status', {
         description: error instanceof Error ? error.message : String(error),
         duration: 5000,

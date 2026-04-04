@@ -6,9 +6,26 @@ export interface BuiltInModelInfo {
   path: string;
   size_mb: number;
   context_size: number;
+  compatibility: BuiltInModelCompatibility;
+  memory_estimate_gb: number;
   description: string;
   gguf_file: string;
 }
+
+export interface BuiltInModelFileValidationResult {
+  model_name: string;
+  file_path: string;
+  valid: boolean;
+  file_size_mb: number;
+  expected_size_mb: number;
+  issues: string[];
+}
+
+export type BuiltInModelCompatibility =
+  | 'recommended'
+  | 'compatible'
+  | 'may_be_slow'
+  | 'not_recommended';
 
 export type BuiltInModelStatus =
   | { type: 'not_downloaded' }
@@ -90,6 +107,14 @@ export class BuiltInAIAPI {
 
   static async deleteModel(modelName: string): Promise<void> {
     await invoke('builtin_ai_delete_model', { modelName });
+  }
+
+  static async validateModelFile(modelName: string, filePath: string = ''): Promise<BuiltInModelFileValidationResult> {
+    return await invoke('builtin_ai_validate_model_file', { modelName, filePath });
+  }
+
+  static async importModelFile(modelName: string, filePath: string = ''): Promise<BuiltInModelInfo> {
+    return await invoke('builtin_ai_import_model_file', { modelName, filePath });
   }
 
   static async getModelsDirectory(): Promise<string> {

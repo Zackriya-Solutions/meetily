@@ -222,6 +222,23 @@ pub async fn api_process_transcript<R: Runtime>(
     let pool = state.db_manager.pool().clone();
     let final_prompt = custom_prompt.unwrap_or_else(|| "".to_string());
     let final_template_id = template_id.unwrap_or_else(|| "daily_standup".to_string());
+    let summary_input_text = match crate::vocabulary::apply_to_meeting_text(
+        &pool,
+        Some(&m_id),
+        &text,
+    )
+    .await
+    {
+        Ok(corrected) => corrected,
+        Err(error) => {
+            log_warn!(
+                "Failed to apply vocabulary rules for summary input (meeting_id={}): {}. Falling back to original text.",
+                &m_id,
+                error
+            );
+            text.clone()
+        }
+    };
 
     // Create or reset the process entry in the database
     SummaryProcessesRepository::create_or_reset_process(&pool, &m_id)
@@ -237,7 +254,7 @@ pub async fn api_process_transcript<R: Runtime>(
     TranscriptChunksRepository::save_transcript_data(
         &pool,
         &m_id,
-        &text,
+        &summary_input_text,
         &model,
         &model_name,
         chunk_size,
@@ -255,7 +272,7 @@ pub async fn api_process_transcript<R: Runtime>(
             app,
             pool,
             meeting_id_clone.clone(),
-            text,
+            summary_input_text,
             model,
             model_name,
             final_prompt,

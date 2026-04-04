@@ -17,13 +17,15 @@ export interface RecordingState {
 }
 
 export interface RecordingStoppedPayload {
-  message: string;
+  meeting_id: string;
+  meeting_title: string;
   folder_path?: string;
-  meeting_name?: string;
-  meeting_id?: string;
-  transcript_count?: number;
-  transcription_timed_out?: boolean;
+  transcript_count: number;
+  duration_seconds: number;
+  source_type: string;
+  transcription_timed_out: boolean;
   save_error?: string;
+  finalized_at: string;
 }
 
 /**
@@ -87,8 +89,8 @@ export class RecordingService {
    * @param savePath - Path to save audio file
    * @returns Promise<void>
    */
-  async stopRecording(savePath: string): Promise<void> {
-    return invoke('stop_recording', {
+  async stopAndFinalizeRecording(savePath: string): Promise<RecordingStoppedPayload> {
+    return invoke<RecordingStoppedPayload>('stop_and_finalize_recording', {
       args: { save_path: savePath }
     });
   }

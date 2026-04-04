@@ -5,6 +5,7 @@ pub mod client;
 pub mod commands;
 pub mod model_manager;
 pub mod models;
+pub mod recommendation;
 pub mod sidecar;
 #[cfg(test)]
 pub(crate) mod test_utils;
@@ -17,10 +18,13 @@ pub use commands::{
     __cmd__builtin_ai_cancel_download, __cmd__builtin_ai_delete_model,
     __cmd__builtin_ai_download_model, __cmd__builtin_ai_get_available_summary_model,
     __cmd__builtin_ai_get_model_info, __cmd__builtin_ai_get_recommended_model,
-    __cmd__builtin_ai_is_model_ready, __cmd__builtin_ai_list_models, builtin_ai_cancel_download,
-    builtin_ai_delete_model, builtin_ai_download_model, builtin_ai_get_available_summary_model,
-    builtin_ai_get_model_info, builtin_ai_get_recommended_model, builtin_ai_is_model_ready,
-    builtin_ai_list_models, init_model_manager, ModelManagerState,
+    __cmd__builtin_ai_import_model_file, __cmd__builtin_ai_is_model_ready,
+    __cmd__builtin_ai_list_models, __cmd__builtin_ai_validate_model_file,
+    builtin_ai_cancel_download, builtin_ai_delete_model, builtin_ai_download_model,
+    builtin_ai_get_available_summary_model, builtin_ai_get_model_info,
+    builtin_ai_get_recommended_model, builtin_ai_import_model_file, builtin_ai_is_model_ready,
+    builtin_ai_list_models, builtin_ai_validate_model_file, init_model_manager, ModelManagerState,
 };
 pub use model_manager::{ModelInfo, ModelStatus};
 pub use models::{get_available_models, get_default_model, get_model_by_name, ModelDef};
+pub use recommendation::ModelCompatibility;
