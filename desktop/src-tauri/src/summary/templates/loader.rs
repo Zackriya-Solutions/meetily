@@ -23,7 +23,7 @@ pub fn set_bundled_templates_dir(path: PathBuf) {
 /// - Windows: %APPDATA%\meetfree\templates\
 /// - Linux: ~/.config/meetfree/templates/
 fn get_custom_templates_dirs() -> Vec<PathBuf> {
-    crate::brand::custom_template_dirs_with_legacy()
+    crate::brand::custom_template_dir().into_iter().collect()
 }
 
 /// Load a template from the bundled resources directory

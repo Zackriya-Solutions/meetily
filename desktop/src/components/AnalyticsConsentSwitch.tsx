@@ -158,7 +158,7 @@ export default function AnalyticsConsentSwitch() {
         <div>
           <h3 className="text-base font-semibold text-gray-800 mb-2">Usage Analytics</h3>
           <p className="text-sm text-gray-600 mb-4">
-            Help us improve Meetfree by sharing anonymous usage data. No personal content is collected—everything stays on your device.
+            Help us improve MeetFree by sharing anonymous usage data. No personal content is collected—everything stays on your device.
           </p>
         </div>
 

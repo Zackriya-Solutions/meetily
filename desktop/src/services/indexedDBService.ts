@@ -31,8 +31,7 @@ export interface StoredTranscript {
 
 class IndexedDBService {
   private db: IDBDatabase | null = null;
-  private readonly DB_NAME = 'MeetfreeRecoveryDB';
-  private readonly LEGACY_DB_NAME = 'MeetilyRecoveryDB';
+  private readonly DB_NAME = 'MeetFreeRecoveryDB';
   private readonly DB_VERSION = 1;
   private initPromise: Promise<void> | null = null;
 
@@ -98,27 +97,6 @@ class IndexedDBService {
   }
 
   private async resolveDbName(): Promise<string> {
-    const listDatabases = (indexedDB as IDBFactory & { databases?: () => Promise<Array<{ name?: string }>> }).databases;
-    if (!listDatabases) {
-      return this.DB_NAME;
-    }
-
-    try {
-      const dbs = await listDatabases.call(indexedDB);
-      const names = new Set((dbs ?? []).map((db) => db.name).filter(Boolean));
-
-      if (names.has(this.DB_NAME)) {
-        return this.DB_NAME;
-      }
-
-      if (names.has(this.LEGACY_DB_NAME)) {
-        console.warn(`Using legacy recovery DB "${this.LEGACY_DB_NAME}"`);
-        return this.LEGACY_DB_NAME;
-      }
-    } catch (error) {
-      console.warn('Failed to enumerate IndexedDB databases, using default DB name', error);
-    }
-
     return this.DB_NAME;
   }
 

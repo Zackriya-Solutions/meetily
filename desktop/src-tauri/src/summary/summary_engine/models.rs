@@ -71,9 +71,7 @@ pub fn get_available_models() -> Vec<ModelDef> {
             display_name: "Gemma 3 1B (Fast)".to_string(),
             gguf_file: "gemma-3-1b-it-Q8_0.gguf".to_string(),
             template: "gemma3".to_string(),
-            download_url:
-                "https://meetily.towardsgeneralintelligence.com/models/gemma-3-1b-it-Q8_0.gguf"
-                    .to_string(),
+            download_url: crate::brand::model_download_url("gemma-3-1b-it-Q8_0.gguf"),
             size_mb: 1019,
             context_size: 32768,
             layer_count: 26,
@@ -92,9 +90,7 @@ pub fn get_available_models() -> Vec<ModelDef> {
             display_name: "Gemma 3 4B (Balanced)".to_string(),
             gguf_file: "gemma-3-4b-it-Q4_K_M.gguf".to_string(),
             template: "gemma3".to_string(),
-            download_url:
-                "https://meetily.towardsgeneralintelligence.com/models/gemma-3-4b-it-Q4_K_M.gguf"
-                    .to_string(),
+            download_url: crate::brand::model_download_url("gemma-3-4b-it-Q4_K_M.gguf"),
             size_mb: 2374,
             context_size: 32768, // Supports 128k, but 32k is good for local·
             layer_count: 35,

@@ -27,7 +27,7 @@ impl<R: Runtime> NotificationManager<R> {
 
         // Load initial settings
         let settings = consent_manager
-            .get_settings_with_migration()
+            .get_settings()
             .await
             .unwrap_or_else(|_| NotificationSettings::default());
 

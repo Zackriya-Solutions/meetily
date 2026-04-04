@@ -187,9 +187,8 @@ impl SidecarManager {
         }
 
         Err(anyhow!(
-            "llama-helper binary not found. Build with 'cd llama-helper && cargo build --release' or set {} (fallback: {}).",
-            brand::LLAMA_HELPER_ENV,
-            brand::LEGACY_LLAMA_HELPER_ENV
+            "llama-helper binary not found. Build with 'cd llama-helper && cargo build --release' or set {}.",
+            brand::LLAMA_HELPER_ENV
         ))
     }
 
@@ -617,12 +616,8 @@ impl Drop for SidecarManager {
 
 fn allow_fuzzy_sidecar_lookup() -> bool {
     cfg!(debug_assertions)
-        && [
-            brand::LLAMA_HELPER_ALLOW_FUZZY_ENV,
-            brand::LEGACY_LLAMA_HELPER_ALLOW_FUZZY_ENV,
-        ]
-        .into_iter()
-        .find_map(|key| std::env::var(key).ok())
+        && std::env::var(brand::LLAMA_HELPER_ALLOW_FUZZY_ENV)
+            .ok()
         .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "True"))
 }
 
@@ -663,21 +658,6 @@ fn sidecar_override_from_env() -> Option<PathBuf> {
             if path.exists() {
                 log::info!(
                     "Using llama-helper from {}: {}",
-                    brand::LLAMA_HELPER_ENV,
-                    path.display()
-                );
-                return Some(path);
-            }
-        }
-    }
-
-    if let Ok(env_path) = std::env::var(brand::LEGACY_LLAMA_HELPER_ENV) {
-        if !env_path.is_empty() {
-            let path = PathBuf::from(env_path);
-            if path.exists() {
-                log::warn!(
-                    "{} is deprecated; use {}. Using legacy helper path: {}",
-                    brand::LEGACY_LLAMA_HELPER_ENV,
                     brand::LLAMA_HELPER_ENV,
                     path.display()
                 );

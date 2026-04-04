@@ -32,7 +32,7 @@ export function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
   }, []);
 
   // 4-Step Onboarding Flow (System-Recommended Models):
-  // Step 1: Welcome - Introduce Meetfree features
+  // Step 1: Welcome - Introduce MeetFree features
   // Step 2: Setup Overview - Database initialization + show recommended downloads
   // Step 3: Download Progress - Download Parakeet + Gemma (auto-selected based on RAM)
   // Step 4: Permissions - Request mic + system audio (macOS only)

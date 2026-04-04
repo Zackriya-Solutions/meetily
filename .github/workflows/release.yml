@@ -75,7 +75,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               tag_name: `v${{ steps.get-version.outputs.version }}`,
-              name: `Meetfree v${{ steps.get-version.outputs.version }}`,
+              name: `MeetFree v${{ steps.get-version.outputs.version }}`,
               draft: true,
               prerelease: false,
               generate_release_notes: true

@@ -114,7 +114,7 @@ export function PermissionsStep() {
   return (
     <OnboardingContainer
       title="Grant Permissions"
-      description="Meetfree needs access to your microphone and system audio to record meetings"
+      description="MeetFree needs access to your microphone and system audio to record meetings"
       step={4}
       hideProgress={true}
       showNavigation={allPermissionsGranted}

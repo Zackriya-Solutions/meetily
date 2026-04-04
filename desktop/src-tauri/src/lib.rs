@@ -400,9 +400,6 @@ pub fn run() {
         )))
         .setup(|_app| {
             log::info!("Application setup complete");
-            if let Err(e) = brand::migrate_legacy_brand_paths(&_app.handle()) {
-                log::warn!("Brand migration skipped due to error: {}", e);
-            }
 
             // Initialize system tray
             if let Err(e) = tray::create_tray(_app.handle()) {
@@ -711,13 +708,8 @@ pub fn run() {
             audio::permissions::check_screen_recording_permission_command,
             audio::permissions::request_screen_recording_permission_command,
             audio::permissions::trigger_system_audio_permission_command,
-            // Database import commands
+            // Database setup commands
             database::commands::check_first_launch,
-            database::commands::select_legacy_database_path,
-            database::commands::detect_legacy_database,
-            database::commands::check_default_legacy_database,
-            database::commands::check_homebrew_database,
-            database::commands::import_and_initialize_database,
             database::commands::initialize_fresh_database,
             // Database and Models path commands
             database::commands::get_database_directory,

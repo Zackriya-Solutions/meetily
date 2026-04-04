@@ -111,11 +111,7 @@ impl<R: Runtime> ConsentManager<R> {
 
     /// Get the path where notification settings are stored
     fn get_settings_path() -> Result<PathBuf> {
-        let mut roots = crate::brand::config_roots_with_legacy();
-        let mut path = roots
-            .drain(..1)
-            .next()
-            .ok_or_else(|| anyhow!("Could not find config directory"))?;
+        let mut path = crate::brand::config_root().map_err(|e| anyhow!(e.to_string()))?;
         path.push("notifications.json");
 
         // Ensure parent directory exists
@@ -133,24 +129,6 @@ impl<R: Runtime> ConsentManager<R> {
             let settings: NotificationSettings = serde_json::from_str(&content)?;
             log_info!("Loaded notification settings from disk");
             return Ok(settings);
-        }
-
-        let legacy_paths: Vec<PathBuf> = crate::brand::config_roots_with_legacy()
-            .into_iter()
-            .skip(1)
-            .map(|p| p.join("notifications.json"))
-            .collect();
-
-        for legacy_path in legacy_paths {
-            if legacy_path.exists() {
-                let content = tokio::fs::read_to_string(&legacy_path).await?;
-                let settings: NotificationSettings = serde_json::from_str(&content)?;
-                log_info!(
-                    "Loaded legacy notification settings from {}",
-                    legacy_path.display()
-                );
-                return Ok(settings);
-            }
         }
 
         log_info!("No notification settings file found, using defaults");
@@ -247,12 +225,9 @@ impl<R: Runtime> ConsentManager<R> {
         Ok(default_settings)
     }
 
-    /// Get settings with migration if needed
-    pub async fn get_settings_with_migration(&self) -> Result<NotificationSettings> {
+    /// Get settings and persist defaults for any new fields
+    pub async fn get_settings(&self) -> Result<NotificationSettings> {
         let settings = self.load_settings().await.unwrap_or_default();
-
-        // Perform any necessary migrations here
-        // For example, if we add new settings in the future
 
         self.save_settings(&settings).await?;
         Ok(settings)

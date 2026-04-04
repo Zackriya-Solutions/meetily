@@ -11,7 +11,7 @@ import { toast } from 'sonner';
 
 
 export function About() {
-    const [currentVersion, setCurrentVersion] = useState<string>('0.3.0');
+    const [currentVersion, setCurrentVersion] = useState<string>('0.1.0');
     const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
     const [isChecking, setIsChecking] = useState(false);
     const [showUpdateDialog, setShowUpdateDialog] = useState(false);
@@ -23,7 +23,7 @@ export function About() {
 
     const handleContactClick = async () => {
         try {
-            await invoke('external_url_open', { url: 'https://meetily.zackriya.com/#about' });
+            await invoke('external_url_open', { url: 'https://github.com/spencer-at-axiom/meetfree' });
         } catch (error) {
             console.error('Failed to open link:', error);
         }
@@ -54,13 +54,13 @@ export function About() {
                 <div className="mb-3">
                     <Image
                         src="icon_128x128.png"
-                        alt="Meetfree Logo"
+                        alt="MeetFree Logo"
                         width={64}
                         height={64}
                         className="mx-auto"
                     />
                 </div>
-                {/* <h1 className="text-xl font-bold text-gray-900">Meetfree</h1> */}
+                {/* <h1 className="text-xl font-bold text-gray-900">MeetFree</h1> */}
                 <span className="text-sm text-gray-500"> v{currentVersion}</span>
                 <p className="text-medium text-gray-600 mt-1">
                     Local meeting capture and transcription with optional summary providers.
@@ -95,7 +95,7 @@ export function About() {
 
             {/* Features Grid - Compact */}
             <div className="space-y-3">
-                <h2 className="text-base font-semibold text-gray-800">What makes Meetfree different</h2>
+                <h2 className="text-base font-semibold text-gray-800">What makes MeetFree different</h2>
                 <div className="grid grid-cols-2 gap-2">
                     <div className="bg-gray-50 rounded p-3 hover:bg-gray-100 transition-colors">
                         <h3 className="font-bold text-sm text-gray-900 mb-1">Privacy-first</h3>

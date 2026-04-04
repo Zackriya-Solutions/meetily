@@ -1,6 +1,6 @@
 [package]
 name = "meetfree"
-version = "0.3.0"
+version = "0.1.0"
 description = "A Tauri app for meeting capture and summaries"
 authors = ["Sujith S"]
 license = "MIT"

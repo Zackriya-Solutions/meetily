@@ -143,12 +143,7 @@ impl ParakeetEngine {
                 current_dir.join("models").join("parakeet")
             } else {
                 // Production mode
-                crate::brand::data_roots_with_legacy()
-                    .into_iter()
-                    .next()
-                    .ok_or_else(|| anyhow!("Could not find system data directory"))?
-                    .join("models")
-                    .join("parakeet")
+                crate::brand::data_root()?.join("models").join("parakeet")
             }
         };
 
@@ -640,10 +635,10 @@ impl ParakeetEngine {
 
         // HuggingFace base URL for Parakeet models (version-specific)
         let base_url = if model_name.contains("-v2-") {
-            "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v2-onnx/resolve/main"
+            "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v2-onnx/resolve/main".to_string()
         } else {
             // Default to v3 for v3 models
-            "https://meetily.towardsgeneralintelligence.com/models/parakeet-tdt-0.6b-v3-onnx"
+            crate::brand::model_download_url("parakeet-tdt-0.6b-v3-onnx")
         };
 
         // Determine which files to download based on quantization

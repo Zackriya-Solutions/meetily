@@ -2,7 +2,7 @@
 """
 Meeting Transcript Database Injector
 
-Injects CSV-based transcript data into the Meetfree SQLite database,
+Injects CSV-based transcript data into the MeetFree SQLite database,
 creating meeting entries identical to those from normal recordings.
 
 Usage:
@@ -27,31 +27,26 @@ from pathlib import Path
 
 
 def get_default_db_path() -> Path:
-    """Get default DB path (prefers Meetfree, falls back to legacy Meetily)."""
+    """Get default DB path for MeetFree."""
     system = platform.system()
-    candidates: list[Path]
+    base_path: Path
 
     if system == "Darwin":  # macOS
         app_support = Path.home() / "Library" / "Application Support"
-        candidates = [app_support / "Meetfree", app_support / "Meetily"]
+        base_path = app_support / "MeetFree"
     elif system == "Windows":
         appdata = os.environ.get("APPDATA", "")
         if appdata:
             appdata_path = Path(appdata)
-            candidates = [appdata_path / "Meetfree", appdata_path / "Meetily"]
+            base_path = appdata_path / "MeetFree"
         else:
             roaming = Path.home() / "AppData" / "Roaming"
-            candidates = [roaming / "Meetfree", roaming / "Meetily"]
+            base_path = roaming / "MeetFree"
     else:  # Linux and others
         config = Path.home() / ".config"
-        candidates = [config / "Meetfree", config / "Meetily"]
+        base_path = config / "MeetFree"
 
-    for base_path in candidates:
-        db_path = base_path / "meeting_minutes.sqlite"
-        if db_path.exists():
-            return db_path
-
-    return candidates[0] / "meeting_minutes.sqlite"
+    return base_path / "meeting_minutes.sqlite"
 
 
 def estimate_duration(text: str) -> float:
@@ -237,7 +232,7 @@ def verify_injection(db_path: str, meeting_id: str) -> dict:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Inject CSV transcript data into Meetfree database",
+        description="Inject CSV transcript data into MeetFree database",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 CSV Format (minimal - just 'text' column required):
@@ -292,7 +287,7 @@ Example usage:
     if not db_path.exists():
         print(f"Error: Database not found at {db_path}", file=sys.stderr)
         print(
-            "Make sure Meetfree has been run at least once to create the database.",
+            "Make sure MeetFree has been run at least once to create the database.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -357,7 +352,7 @@ Example usage:
     except Exception as e:
         print(f"Warning: Verification failed: {e}", file=sys.stderr)
 
-    print("\nThe meeting should now appear in the Meetfree sidebar.")
+    print("\nThe meeting should now appear in the MeetFree sidebar.")
 
 
 if __name__ == "__main__":

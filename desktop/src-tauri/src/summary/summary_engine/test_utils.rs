@@ -63,8 +63,6 @@ pub(crate) fn test_env_lock() -> MutexGuard<'static, ()> {
 pub(crate) fn clear_test_env() {
     env::remove_var(brand::LLAMA_HELPER_ENV);
     env::remove_var(brand::LLAMA_HELPER_ALLOW_FUZZY_ENV);
-    env::remove_var(brand::LEGACY_LLAMA_HELPER_ENV);
-    env::remove_var(brand::LEGACY_LLAMA_HELPER_ALLOW_FUZZY_ENV);
     env::remove_var("LLAMA_IDLE_TIMEOUT");
 }
 

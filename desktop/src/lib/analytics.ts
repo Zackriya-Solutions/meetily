@@ -184,12 +184,6 @@ export class Analytics {
       // Fallback to session storage
       let userId = sessionStorage.getItem('meetfree_user_id');
       if (!userId) {
-        userId = sessionStorage.getItem('meetily_user_id');
-        if (userId) {
-          sessionStorage.setItem('meetfree_user_id', userId);
-        }
-      }
-      if (!userId) {
         userId = `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
         sessionStorage.setItem('meetfree_user_id', userId);
         sessionStorage.setItem('is_first_launch', 'true');
