@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
-import { ChevronDown, ChevronRight, File, Settings, ChevronLeftCircle, ChevronRightCircle, Calendar, StickyNote, Home, Trash2, Mic, Square, Plus, Search, Pencil, NotebookPen, SearchIcon, X, Upload } from 'lucide-react';
+import { ChevronDown, ChevronRight, File, Settings, Calendar, StickyNote, Home, Trash2, Mic, Square, Plus, Pencil, NotebookPen, SearchIcon, X, Upload } from 'lucide-react';
 import { useRouter, usePathname } from 'next/navigation';
 import { useSidebar } from './SidebarProvider';
 import type { CurrentMeeting } from '@/components/Sidebar/SidebarProvider';
@@ -28,7 +28,6 @@ import { VisuallyHidden } from "@/components/ui/visually-hidden"
 import { MessageToast } from '../MessageToast';
 import Logo from '../Logo';
 import { ComplianceNotification } from '../ComplianceNotification';
-import { Input } from '../ui/input';
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from '../ui/input-group';
 
 interface SidebarItem {
@@ -41,6 +40,9 @@ interface SidebarItem {
 const Sidebar: React.FC = () => {
   const router = useRouter();
   const pathname = usePathname();
+  const isHomePage = pathname === '/';
+  const isMeetingPage = pathname?.includes('/meeting-details');
+  const isSettingsPage = pathname === '/settings';
   const {
     currentMeeting,
     setCurrentMeeting,
@@ -303,6 +305,9 @@ const Sidebar: React.FC = () => {
     }
   }, [sidebarItems, searchQuery, searchResults, expandedFolders]);
 
+  // Check if search returned no results
+  const hasNoSearchResults = searchQuery.trim() && filteredSidebarItems.every(item => !item.children?.length);
+
 
   const handleDelete = async (itemId: string) => {
     console.log('Deleting item:', itemId);
@@ -432,24 +437,31 @@ const Sidebar: React.FC = () => {
 
   const renderCollapsedIcons = () => {
     if (!isCollapsed) return null;
-
-    const isHomePage = pathname === '/';
-    const isMeetingPage = pathname?.includes('/meeting-details');
-    const isSettingsPage = pathname === '/settings';
+    const navButtonClass = (active: boolean) =>
+      `h-9 w-9 flex items-center justify-center rounded-lg transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
+        active ? 'bg-gray-100 text-gray-900' : 'hover:bg-gray-100 text-gray-700'
+      }`;
 
     return (
       <TooltipProvider>
-        <div className="flex flex-col items-center space-y-4 mt-4">
-          <Logo isCollapsed={isCollapsed} />
+        <div className="flex flex-col items-center space-y-3 mt-3">
+          <button
+            type="button"
+            onClick={toggleCollapse}
+            className="bg-transparent border-none p-1 rounded-md hover:bg-gray-100/80 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+            aria-label="Expand sidebar"
+          >
+            <Logo isCollapsed={isCollapsed} />
+          </button>
 
           <Tooltip>
             <TooltipTrigger asChild>
               <button
                 onClick={() => router.push('/')}
-                className={`p-2 rounded-lg transition-colors duration-150 ${isHomePage ? 'bg-gray-100' : 'hover:bg-gray-100'
-                  }`}
+                className={navButtonClass(isHomePage)}
+                aria-label="Go to home"
               >
-                <Home className="w-5 h-5 text-gray-600" />
+                <Home className="w-4 h-4" />
               </button>
             </TooltipTrigger>
             <TooltipContent side="right">
@@ -462,12 +474,13 @@ const Sidebar: React.FC = () => {
               <button
                 onClick={handleRecordingToggle}
                 disabled={isRecording}
-                className={`p-2 ${isRecording ? 'bg-red-500 cursor-not-allowed' : 'bg-red-500 hover:bg-red-600'} rounded-full transition-colors duration-150 shadow-sm`}
+                className={`h-9 w-9 flex items-center justify-center ${isRecording ? 'bg-red-400 cursor-not-allowed' : 'bg-red-500 hover:bg-red-600'} rounded-full transition-colors duration-150 shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400`}
+                aria-label={isRecording ? 'Recording in progress' : 'Start recording'}
               >
                 {isRecording ? (
-                  <Square className="w-5 h-5 text-white" />
+                  <Square className="w-4 h-4 text-white" />
                 ) : (
-                  <Mic className="w-5 h-5 text-white" />
+                  <Mic className="w-4 h-4 text-white" />
                 )}
               </button>
             </TooltipTrigger>
@@ -480,10 +493,12 @@ const Sidebar: React.FC = () => {
             <Tooltip>
               <TooltipTrigger asChild>
                 <button
+                  type="button"
                   onClick={() => openImportDialog()}
-                  className="p-2 rounded-lg transition-colors duration-150 hover:bg-blue-100 bg-blue-50"
+                  className="h-9 w-9 flex items-center justify-center rounded-lg transition-colors duration-150 hover:bg-blue-50 text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                  aria-label="Import audio"
                 >
-                  <Upload className="w-5 h-5 text-blue-600" />
+                  <Upload className="w-4 h-4" />
                 </button>
               </TooltipTrigger>
               <TooltipContent side="right">
@@ -499,10 +514,10 @@ const Sidebar: React.FC = () => {
                   if (isCollapsed) toggleCollapse();
                   toggleFolder('meetings');
                 }}
-                className={`p-2 rounded-lg transition-colors duration-150 ${isMeetingPage ? 'bg-gray-100' : 'hover:bg-gray-100'
-                  }`}
+                className={navButtonClass(isMeetingPage)}
+                aria-label="Open meetings"
               >
-                <NotebookPen className="w-5 h-5 text-gray-600" />
+                <NotebookPen className="w-4 h-4" />
               </button>
             </TooltipTrigger>
             <TooltipContent side="right">
@@ -514,10 +529,10 @@ const Sidebar: React.FC = () => {
             <TooltipTrigger asChild>
               <button
                 onClick={() => router.push('/settings')}
-                className={`p-2 rounded-lg transition-colors duration-150 ${isSettingsPage ? 'bg-gray-100' : 'hover:bg-gray-100'
-                  }`}
+                className={navButtonClass(isSettingsPage)}
+                aria-label="Open settings"
               >
-                <Settings className="w-5 h-5 text-gray-600" />
+                <Settings className="w-4 h-4" />
               </button>
             </TooltipTrigger>
             <TooltipContent side="right">
@@ -551,11 +566,15 @@ const Sidebar: React.FC = () => {
     return (
       <div key={item.id}>
         <div
-          className={`flex items-center transition-all duration-150 group ${item.type === 'folder' && depth === 0
-            ? 'p-3 text-lg font-semibold h-10 mx-3 mt-3 rounded-lg'
-            : `px-3 py-2 my-0.5 rounded-md text-sm ${isActive ? 'bg-blue-100 text-blue-700 font-medium' :
-              hasTranscriptMatch ? 'bg-yellow-50' : 'hover:bg-gray-50'
-            } cursor-pointer`
+          className={`flex items-center transition-all duration-150 group border ${item.type === 'folder' && depth === 0
+            ? 'h-9 mx-3 mt-2 px-3 rounded-md border-transparent text-xs font-semibold uppercase tracking-wide text-gray-600'
+            : `px-3 py-2 my-0.5 rounded-md text-sm ${
+              isActive
+                ? 'bg-blue-50 border-blue-200 text-blue-700 font-medium shadow-sm'
+                : hasTranscriptMatch
+                ? 'bg-yellow-50 border-yellow-200 hover:bg-yellow-100 hover:shadow-sm'
+                : 'border-transparent hover:bg-gray-50 hover:border-gray-200'
+              } cursor-pointer`
             }`}
           style={item.type === 'folder' && depth === 0 ? {} : { paddingLeft }}
           onClick={() => {
@@ -574,7 +593,7 @@ const Sidebar: React.FC = () => {
               {item.id === 'meetings' ? (
                 <Calendar className="w-4 h-4 mr-2" />
               ) : item.id === 'notes' ? (
-                <Calendar className="w-4 h-4 mr-2" />
+                <StickyNote className="w-4 h-4 mr-2" />
               ) : null}
               <span className={depth === 0 ? "" : "font-medium"}>{item.title}</span>
               <div className="ml-auto">
@@ -600,25 +619,27 @@ const Sidebar: React.FC = () => {
                     <Plus className="w-3.5 h-3.5 text-blue-600" />
                   </div>
                 )}
-                <span className="flex-1 break-words">{item.title}</span>
+                <span className="flex-1 truncate">{item.title}</span>
                 {isMeetingItem && (
-                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
+                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity duration-200 ease-in-out">
                     <button
+                      type="button"
                       onClick={(e) => {
                         e.stopPropagation();
                         handleEditStart(item.id, item.title);
                       }}
-                      className="hover:text-blue-600 p-1 rounded-md hover:bg-blue-50 flex-shrink-0"
+                      className="hover:text-blue-600 p-1 rounded-md hover:bg-blue-50 flex-shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 transition-all duration-150"
                       aria-label="Edit meeting title"
                     >
                       <Pencil className="w-4 h-4" />
                     </button>
                     <button
+                      type="button"
                       onClick={(e) => {
                         e.stopPropagation();
                         setDeleteModalState({ isOpen: true, itemId: item.id });
                       }}
-                      className="hover:text-red-600 p-1 rounded-md hover:bg-red-50 flex-shrink-0"
+                      className="hover:text-red-600 p-1 rounded-md hover:bg-red-50 flex-shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 transition-all duration-150"
                       aria-label="Delete meeting"
                     >
                       <Trash2 className="w-4 h-4" />
@@ -629,8 +650,16 @@ const Sidebar: React.FC = () => {
 
               {/* Show transcript match snippet if available */}
               {hasTranscriptMatch && (
-                <div className="mt-1 ml-8 text-xs text-gray-500 bg-yellow-50 p-1.5 rounded border border-yellow-100 line-clamp-2">
-                  <span className="font-medium text-yellow-600">Match:</span> {matchingResult.matchContext}
+                <div className="mt-2 ml-8 text-xs bg-yellow-50/80 backdrop-blur-sm p-2 rounded-md border border-yellow-200/50 shadow-sm">
+                  <div className="flex items-start gap-1.5">
+                    <SearchIcon className="w-3 h-3 text-yellow-600 mt-0.5 flex-shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <span className="font-medium text-yellow-700 block mb-0.5">Match found:</span>
+                      <p className="text-gray-600 line-clamp-2 leading-relaxed">
+                        {matchingResult.matchContext}
+                      </p>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
@@ -647,50 +676,47 @@ const Sidebar: React.FC = () => {
 
   return (
     <div className="fixed top-0 left-0 h-screen z-40">
-      {/* Floating collapse button */}
-      <button
-        onClick={toggleCollapse}
-        className="absolute -right-6 top-20 z-50 p-1 bg-white hover:bg-gray-100 rounded-full shadow-lg border"
-        style={{ transform: 'translateX(50%)' }}
-      >
-        {isCollapsed ? (
-          <ChevronRightCircle className="w-6 h-6" />
-        ) : (
-          <ChevronLeftCircle className="w-6 h-6" />
-        )}
-      </button>
-
       <div
         className={`h-screen bg-white border-r shadow-sm flex flex-col transition-all duration-300 ${isCollapsed ? 'w-16' : 'w-64'
           }`}
       >
-        {/*  Header with traffic light spacing */}
-        <div className="flex-shrink-0 h-22 flex items-center">
-
-          {/* Title container */}
-
-
-
+        <div className="flex-shrink-0">
           <div className="flex-1">
             {!isCollapsed && (
-              <div className="p-3">
-                {/* <span className="text-lg text-center border rounded-full bg-blue-50 border-white font-semibold text-gray-700 mb-2 block items-center">
-                  <span>MeetFree</span>
-                </span> */}
-                <Logo isCollapsed={isCollapsed} />
+              <div className="px-3 pt-3 pb-2">
+                <button
+                  type="button"
+                  onClick={toggleCollapse}
+                  className="block w-full text-left rounded-md hover:bg-gray-100/80 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                  aria-label="Collapse sidebar"
+                >
+                  <Logo isCollapsed={isCollapsed} />
+                </button>
 
-                <div className="relative mb-1">
+                <div className="relative mt-2">
                   <InputGroup >
-                    <InputGroupInput placeholder='Search meeting content...' value={searchQuery}
+                    <InputGroupInput
+                      aria-label="Search meeting content"
+                      placeholder='Search meeting content...'
+                      value={searchQuery}
                       onChange={(e) => handleSearchChange(e.target.value)}
+                      disabled={isSearching}
                     />
                     <InputGroupAddon>
-                      <SearchIcon />
+                      {isSearching ? (
+                        <div className="animate-spin">
+                          <SearchIcon className="w-4 h-4" />
+                        </div>
+                      ) : (
+                        <SearchIcon />
+                      )}
                     </InputGroupAddon>
                     {searchQuery &&
                       <InputGroupAddon align={'inline-end'}>
                         <InputGroupButton
+                          aria-label="Clear search"
                           onClick={() => handleSearchChange('')}
+                          disabled={isSearching}
                         >
                           <X />
                         </InputGroupButton>
@@ -708,13 +734,17 @@ const Sidebar: React.FC = () => {
           {/* Fixed navigation items */}
           <div className="flex-shrink-0">
             {!isCollapsed && (
-              <div
+              <button
+                type="button"
                 onClick={() => router.push('/')}
-                className="p-3  text-lg font-semibold items-center hover:bg-gray-100 h-10   flex mx-3 mt-3 rounded-lg cursor-pointer"
+                className={`w-[calc(100%-1.5rem)] px-3 h-9 text-sm font-semibold items-center flex mx-3 mt-2 rounded-md transition-colors ${
+                  isHomePage ? 'bg-gray-100 text-gray-900' : 'hover:bg-gray-100 text-gray-700'
+                } focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500`}
+                aria-label="Go to home"
               >
                 <Home className="w-4 h-4 mr-2" />
                 <span>Home</span>
-              </div>
+              </button>
             )}
           </div>
 
@@ -727,10 +757,10 @@ const Sidebar: React.FC = () => {
                 {filteredSidebarItems.filter(item => item.type === 'folder').map(item => (
                   <div key={item.id}>
                     <div
-                      className="flex items-center transition-all duration-150 p-3 text-lg font-semibold h-10 mx-3 mt-3 rounded-lg"
+                      className="flex items-center transition-all duration-150 h-8 mx-3 mt-2 px-3 rounded-md text-xs font-semibold uppercase tracking-wide text-gray-600"
                     >
-                      <NotebookPen className="w-4 h-4 mr-2 text-gray-600" />
-                      <span className="text-gray-700">{item.title}</span>
+                      <NotebookPen className="w-3.5 h-3.5 mr-2 text-gray-500" />
+                      <span>{item.title}</span>
                       {searchQuery && item.id === 'meetings' && isSearching && (
                         <span className="ml-2 text-xs text-blue-500 animate-pulse">Searching...</span>
                       )}
@@ -743,13 +773,21 @@ const Sidebar: React.FC = () => {
             {/* Scrollable meeting items */}
             {!isCollapsed && (
               <div className="flex-1 overflow-y-auto custom-scrollbar min-h-0">
-                {filteredSidebarItems
-                  .filter(item => item.type === 'folder' && expandedFolders.has(item.id) && item.children)
-                  .map(item => (
-                    <div key={`${item.id}-children`} className="mx-3">
-                      {item.children!.map(child => renderItem(child, 1))}
-                    </div>
-                  ))}
+                {hasNoSearchResults ? (
+                  <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
+                    <SearchIcon className="w-12 h-12 text-gray-300 mb-3" />
+                    <p className="text-sm font-medium text-gray-600">No results found</p>
+                    <p className="text-xs text-gray-400 mt-1">Try a different search term</p>
+                  </div>
+                ) : (
+                  filteredSidebarItems
+                    .filter(item => item.type === 'folder' && expandedFolders.has(item.id) && item.children)
+                    .map(item => (
+                      <div key={`${item.id}-children`} className="mx-3">
+                        {item.children!.map(child => renderItem(child, 1))}
+                      </div>
+                    ))
+                )}
               </div>
             )}
           </div>
@@ -758,11 +796,12 @@ const Sidebar: React.FC = () => {
         {/* Footer */}
         {!isCollapsed && (
 
-          <div className="flex-shrink-0 p-2 border-t border-gray-100">
+          <div className="flex-shrink-0 p-3 border-t border-gray-100 space-y-2">
             <button
+              type="button"
               onClick={handleRecordingToggle}
               disabled={isRecording}
-              className={`w-full flex items-center justify-center px-3 py-2 text-sm font-medium text-white ${isRecording ? 'bg-red-300 cursor-not-allowed' : 'bg-red-500 hover:bg-red-600'} rounded-lg transition-colors shadow-sm`}
+              className={`w-full flex items-center justify-center px-4 py-2.5 text-sm font-semibold text-white ${isRecording ? 'bg-red-400 cursor-not-allowed' : 'bg-red-500 hover:bg-red-600 active:bg-red-700'} rounded-lg transition-all duration-150 shadow-md hover:shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 focus-visible:ring-offset-2`}
             >
               {isRecording ? (
                 <>
@@ -780,7 +819,7 @@ const Sidebar: React.FC = () => {
             {betaFeatures.importAndRetranscribe && (
               <button
                 onClick={() => openImportDialog()}
-                className="w-full flex items-center justify-center px-3 py-2 mt-1 text-sm font-medium text-gray-700 bg-blue-100 hover:bg-blue-200 rounded-lg transition-colors shadow-sm"
+                className="w-full flex items-center justify-center px-3 py-2 text-sm font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 active:bg-blue-200 rounded-lg transition-all duration-150 border border-blue-200"
               >
                 <Upload className="w-4 h-4 mr-2" />
                 <span>Import Audio</span>
@@ -788,13 +827,19 @@ const Sidebar: React.FC = () => {
             )}
 
             <button
+              type="button"
               onClick={() => router.push('/settings')}
-              className="w-full flex items-center justify-center px-3 py-1.5 mt-1 mb-1 text-sm font-medium text-gray-700 bg-gray-200 hover:bg-gray-300 rounded-lg transition-colors shadow-sm"
+              className={`w-full flex items-center justify-center px-3 py-2 text-sm font-medium rounded-lg transition-all duration-150 ${
+                isSettingsPage
+                  ? 'text-gray-900 bg-gray-100 border border-gray-300'
+                  : 'text-gray-600 bg-transparent hover:bg-gray-50 border border-transparent'
+              } focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500`}
+              aria-label="Open settings"
             >
               <Settings className="w-4 h-4 mr-2" />
               <span>Settings</span>
             </button>
-            <div className="w-full flex items-center justify-center px-3 py-1 text-xs text-gray-400">
+            <div className="w-full flex items-center justify-center px-3 py-1 text-xs text-gray-400 font-mono">
               v0.1.0
             </div>
           </div>
