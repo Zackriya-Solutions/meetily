@@ -2,56 +2,73 @@
 
 # MeetFree
 
-MeetFree is a native Tauri desktop application for recording meetings, transcribing speech locally, storing meeting data in a local SQLite database, and generating summaries with either local or optional external models.
+MeetFree is a local-first desktop app for meeting capture, transcription, search, and summaries.
 
-## Current Scope
+Built with Tauri + Next.js + Rust. Data stays on-device by default.
 
-The current codebase includes:
+## Why MeetFree
 
-- A desktop app built with Tauri, Next.js, React, and Rust.
-- Local audio capture for microphone and system audio.
-- Local transcription engines for Whisper and Parakeet.
-- Local meeting storage in SQLite via the Tauri app.
-- Summary generation with Ollama, BuiltInAI, OpenAI, Claude, Groq, OpenRouter, and custom OpenAI-compatible endpoints.
-- Summary template discovery from built-in, bundled, and user template directories.
-- Meeting import and retranscription workflows.
-- Analytics code is currently disabled in this fork.
+- Reliable backend-owned recording finalization
+- Fast transcript retrieval with SQLite FTS5
+- Portable markdown export (single and batch)
+- First-class import and retranscribe workflows
+- Flexible summary providers, including MeetFree Built-in
 
-## Privacy Model
+## What’s Included in v0.2.0
 
-- Recording, transcription, and meeting storage run locally inside the desktop app.
-- Summary generation can stay local when you use Ollama or BuiltInAI.
-- Summary generation sends data to an external provider only when you configure and select one.
-- Provider API keys are stored in the operating system credential store when available.
-- Analytics are optional and default to off.
+- Record -> finalize -> persist pipeline with durable metadata
+- Structured transcript search with filters and ranked snippets
+- Markdown export with YAML frontmatter + standard sections
+- Transcript cleanup + vocabulary corrections across display, export, and summary input
+- Built-in model recommendation metadata + validated file import for supported models
 
-## Not In This Repo
+## Quick Start
 
-The active application code does not currently include:
+### Prerequisites
 
-- PDF or DOCX export pipelines.
-- A production FastAPI backend path for meeting storage or summarization.
+- Node.js 20+
+- pnpm
+- Rust toolchain
 
-## Build From Source
+### Run locally
 
-See [docs/BUILDING.md](docs/BUILDING.md) for verified build commands and platform notes.
+```bash
+pnpm --dir desktop install
+pnpm --dir desktop tauri:dev
+```
 
-The main desktop workflow lives under [`desktop/`](desktop/).
+### Release checks
 
-The current native build path also requires building [`llama-helper/`](llama-helper/) before Tauri packaging or `cargo check -p meetfree`.
+```bash
+cargo check -p meetfree
+cargo test -p meetfree --lib
+pnpm --dir desktop lint
+pnpm --dir desktop build
+```
 
-## Documentation
+## Architecture
 
-- [docs/architecture.md](docs/architecture.md)
-- [docs/technical-design.md](docs/technical-design.md)
+- Frontend: `desktop/src/`
+- Native backend: `desktop/src-tauri/src/`
+- Database init + migrations: `desktop/src-tauri/src/database/` and `desktop/src-tauri/migrations/`
+- Audio/transcription pipeline: `desktop/src-tauri/src/audio/`
+- Summary engine/providers: `desktop/src-tauri/src/summary/`
+
+## Privacy
+
+- Recording, transcription, and storage run locally
+- Cloud providers are optional and user-configured
+- Provider keys are stored in OS-backed secure storage when available
+
+## Active Documentation
+
 - [docs/technical-design-v0.2.0.md](docs/technical-design-v0.2.0.md)
 - [docs/execution-plan-v0.2.0.md](docs/execution-plan-v0.2.0.md)
-- [docs/roadmap-v0.1.0.md](docs/roadmap-v0.1.0.md) (archived)
+- [docs/architecture.md](docs/architecture.md)
 - [docs/BUILDING.md](docs/BUILDING.md)
 - [PRIVACY_POLICY.md](PRIVACY_POLICY.md)
 - [CONTRIBUTING.md](CONTRIBUTING.md)
 
-## Repository Notes
+Archived historical roadmap:
 
-- The product of record in this repository is the native Tauri application.
-- Legacy backend-era documentation and code paths have been removed from this fork.
+- [docs/roadmap-v0.1.0.md](docs/roadmap-v0.1.0.md)
