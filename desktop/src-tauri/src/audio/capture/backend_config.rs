@@ -51,12 +51,12 @@ impl AudioCaptureBackend {
         }
     }
 
-    /// Convert to string (lowercase)
-    pub fn to_string(&self) -> String {
+    /// Stable storage key used for persisted preferences and commands.
+    pub fn as_storage_key(&self) -> &'static str {
         match self {
-            AudioCaptureBackend::ScreenCaptureKit => "screencapturekit".to_string(),
+            AudioCaptureBackend::ScreenCaptureKit => "screencapturekit",
             #[cfg(target_os = "macos")]
-            AudioCaptureBackend::CoreAudio => "coreaudio".to_string(),
+            AudioCaptureBackend::CoreAudio => "coreaudio",
         }
     }
 
@@ -76,8 +76,8 @@ impl AudioCaptureBackend {
         }
     }
 
-    /// Get default backend for current platform
-    pub fn default() -> Self {
+    /// Get the platform-default backend.
+    pub fn platform_default() -> Self {
         #[cfg(target_os = "macos")]
         return AudioCaptureBackend::CoreAudio;
 
@@ -88,13 +88,13 @@ impl AudioCaptureBackend {
 
 impl Default for AudioCaptureBackend {
     fn default() -> Self {
-        Self::default()
+        Self::platform_default()
     }
 }
 
 impl std::fmt::Display for AudioCaptureBackend {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.name())
+        write!(f, "{}", self.as_storage_key())
     }
 }
 

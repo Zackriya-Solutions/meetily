@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { PermissionStatus, OnboardingPermissions } from '@/types/onboarding';
@@ -30,6 +30,10 @@ interface ParakeetProgressInfo {
   downloadedMb: number;
   totalMb: number;
   speedMbps: number;
+}
+
+interface ParakeetModelInfo {
+  status?: unknown;
 }
 
 interface OnboardingContextType {
@@ -210,7 +214,7 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
       unlistenComplete.then(fn => fn());
       unlistenError.then(fn => fn());
     };
-  }, [selectedSummaryModel]);
+  }, []);
 
   // Listen to summary model (Built-in AI) download progress
   useEffect(() => {
@@ -354,7 +358,7 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
     }
   };
 
-  const completeOnboarding = async () => {
+  const completeOnboarding = useCallback(async () => {
     try {
       // Set completion flag to prevent race conditions with auto-save
       isCompletingRef.current = true;
@@ -379,10 +383,10 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
       isCompletingRef.current = false; // Reset flag on error
       throw error; // Re-throw so PermissionsStep can handle it
     }
-  };
+  }, [selectedSummaryModel]);
 
   // Start background downloads for models (parallel - Parakeet first, then Gemma immediately)
-  const startBackgroundDownloads = async (includeGemma: boolean) => {
+  const startBackgroundDownloads = useCallback(async (includeGemma: boolean) => {
     console.log('[OnboardingContext] Starting background downloads, includeGemma:', includeGemma);
     setIsBackgroundDownloading(true);
 
@@ -407,12 +411,12 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
       setIsBackgroundDownloading(false);
       throw error;
     }
-  };
+  }, [parakeetDownloaded, selectedSummaryModel, summaryModelDownloaded]);
 
   // Check if any models are currently downloading (for re-entry)
   const checkActiveDownloads = async () => {
     try {
-      const models = await invoke<any[]>('parakeet_get_available_models');
+      const models = await invoke<ParakeetModelInfo[]>('parakeet_get_available_models');
       const isDownloading = models.some(m => m.status && (typeof m.status === 'object' ? 'Downloading' in m.status : m.status === 'Downloading'));
       
       if (isDownloading) {
@@ -427,7 +431,7 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
     }
   };
 
-  const retryParakeetDownload = async () => {
+  const retryParakeetDownload = useCallback(async () => {
     console.log('[OnboardingContext] Retrying Parakeet download');
     try {
       await invoke('parakeet_retry_download', { modelName: PARAKEET_MODEL });
@@ -435,7 +439,7 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
       console.error('[OnboardingContext] Retry failed:', error);
       throw error;
     }
-  };
+  }, []);
 
   const setPermissionStatus = useCallback((permission: keyof OnboardingPermissions, status: PermissionStatus) => {
     setPermissions((prev: OnboardingPermissions) => ({
@@ -464,34 +468,56 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
     });
   }, []);
 
+  const value = useMemo<OnboardingContextType>(() => ({
+    currentStep,
+    parakeetDownloaded,
+    parakeetProgress,
+    parakeetProgressInfo,
+    summaryModelDownloaded,
+    summaryModelProgress,
+    summaryModelProgressInfo,
+    selectedSummaryModel,
+    databaseExists,
+    isBackgroundDownloading,
+    permissions,
+    permissionsSkipped,
+    goToStep,
+    goNext,
+    goPrevious,
+    setParakeetDownloaded,
+    setSummaryModelDownloaded,
+    setSelectedSummaryModel,
+    setDatabaseExists,
+    setPermissionStatus,
+    setPermissionsSkipped,
+    completeOnboarding,
+    startBackgroundDownloads,
+    retryParakeetDownload,
+  }), [
+    currentStep,
+    parakeetDownloaded,
+    parakeetProgress,
+    parakeetProgressInfo,
+    summaryModelDownloaded,
+    summaryModelProgress,
+    summaryModelProgressInfo,
+    selectedSummaryModel,
+    databaseExists,
+    isBackgroundDownloading,
+    permissions,
+    permissionsSkipped,
+    goToStep,
+    goNext,
+    goPrevious,
+    setPermissionStatus,
+    completeOnboarding,
+    startBackgroundDownloads,
+    retryParakeetDownload,
+  ]);
+
   return (
     <OnboardingContext.Provider
-      value={{
-        currentStep,
-        parakeetDownloaded,
-        parakeetProgress,
-        parakeetProgressInfo,
-        summaryModelDownloaded,
-        summaryModelProgress,
-        summaryModelProgressInfo,
-        selectedSummaryModel,
-        databaseExists,
-        isBackgroundDownloading,
-        permissions,
-        permissionsSkipped,
-        goToStep,
-        goNext,
-        goPrevious,
-        setParakeetDownloaded,
-        setSummaryModelDownloaded,
-        setSelectedSummaryModel,
-        setDatabaseExists,
-        setPermissionStatus,
-        setPermissionsSkipped,
-        completeOnboarding,
-        startBackgroundDownloads,
-        retryParakeetDownload,
-      }}
+      value={value}
     >
       {children}
     </OnboardingContext.Provider>

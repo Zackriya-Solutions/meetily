@@ -523,7 +523,7 @@ async fn run_retranscription<R: Runtime>(
             "INSERT INTO transcripts (
                 id, meeting_id, transcript, raw_transcript, processing_version, timestamp,
                 audio_start_time, audio_end_time, duration
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&segment.id)
         .bind(&meeting_id)

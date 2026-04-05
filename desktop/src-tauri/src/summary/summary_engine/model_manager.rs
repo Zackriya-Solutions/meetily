@@ -925,8 +925,13 @@ impl ModelManager {
             .models_dir
             .join(format!("{}.importing", &model_def.gguf_file));
 
-        let source_canonical = std::fs::canonicalize(source_path)
-            .map_err(|e| anyhow!("Failed to resolve source path '{}': {}", source_path.display(), e))?;
+        let source_canonical = std::fs::canonicalize(source_path).map_err(|e| {
+            anyhow!(
+                "Failed to resolve source path '{}': {}",
+                source_path.display(),
+                e
+            )
+        })?;
         let destination_canonical = std::fs::canonicalize(&destination).ok();
 
         if let Some(dest) = destination_canonical {
@@ -969,9 +974,12 @@ impl ModelManager {
 
         self.scan_models().await?;
 
-        self.get_model_info(model_name)
-            .await
-            .ok_or_else(|| anyhow!("Imported model '{}' but failed to refresh state", model_name))
+        self.get_model_info(model_name).await.ok_or_else(|| {
+            anyhow!(
+                "Imported model '{}' but failed to refresh state",
+                model_name
+            )
+        })
     }
 
     /// Cancel an ongoing download
@@ -1058,7 +1066,9 @@ mod tests {
         let candidate = tempdir.path().join("candidate.gguf");
         write_fake_file(&candidate, b"GGUF").await;
 
-        let result = manager.validate_model_file("unknown:model", &candidate).await;
+        let result = manager
+            .validate_model_file("unknown:model", &candidate)
+            .await;
         assert!(result.is_err());
     }
 

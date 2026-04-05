@@ -6,8 +6,9 @@ import { EmptyStateSummary } from '@/components/EmptyStateSummary';
 import { ModelConfig } from '@/components/ModelSettingsModal';
 import { SummaryGeneratorButtonGroup } from './SummaryGeneratorButtonGroup';
 import { SummaryUpdaterButtonGroup } from './SummaryUpdaterButtonGroup';
-import { RefObject } from 'react';
+import { RefObject, useCallback, useEffect, useRef, useState } from 'react';
 import { type SummaryPayload } from '@/contracts/summaryContract';
+import { toast } from 'sonner';
 
 interface SummaryPanelProps {
   isTitleDirty: boolean;
@@ -65,6 +66,45 @@ export function SummaryPanel({
   onOpenModelSettings
 }: SummaryPanelProps) {
   const isSummaryLoading = summaryStatus === 'processing' || summaryStatus === 'summarizing' || summaryStatus === 'regenerating';
+  const [isSearchVisible, setIsSearchVisible] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (isSearchVisible) {
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+    }
+  }, [isSearchVisible]);
+
+  const runSearch = useCallback(() => {
+    const query = searchQuery.trim();
+    if (!query) {
+      return;
+    }
+
+    const browserWindow = window as Window & {
+      find?: (
+        text: string,
+        caseSensitive?: boolean,
+        backwards?: boolean,
+        wrapAround?: boolean,
+        wholeWord?: boolean,
+        searchInFrames?: boolean,
+        showDialog?: boolean,
+      ) => boolean;
+    };
+
+    const found = browserWindow.find?.(query, false, false, true, false, true, false) ?? false;
+    if (!found) {
+      toast.info('No matching text found in the summary.');
+    }
+  }, [searchQuery]);
+
+  const handleFind = useCallback(() => {
+    setIsSearchVisible((prev) => !prev);
+    setSearchQuery('');
+  }, []);
 
   return (
     <div className="flex-1 min-w-0 flex flex-col bg-white overflow-hidden">
@@ -108,14 +148,36 @@ export function SummaryPanel({
                 onSave={onSaveAll}
                 onCopy={onCopySummary}
                 onExportMarkdown={onExportMarkdown}
-                onFind={() => {
-                  // TODO: Implement find in summary functionality
-                  console.log('Find in summary clicked');
-                }}
+                onFind={handleFind}
                 onOpenFolder={onOpenFolder}
                 hasSummary={!!aiSummary}
               />
             </div>
+          </div>
+        )}
+
+        {isSearchVisible && aiSummary && (
+          <div className="mt-3 flex items-center gap-2">
+            <input
+              ref={searchInputRef}
+              type="search"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  runSearch();
+                }
+              }}
+              placeholder="Find text in summary"
+              className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+            />
+            <button
+              type="button"
+              onClick={runSearch}
+              className="rounded-md border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+            >
+              Find Next
+            </button>
           </div>
         )}
       </div>

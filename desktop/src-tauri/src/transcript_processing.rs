@@ -34,7 +34,8 @@ fn clean_repetitions(text: &str) -> String {
         cleaned.push(current);
 
         let mut repeat_count = 1usize;
-        while i + repeat_count < words.len() && words[i + repeat_count].eq_ignore_ascii_case(current)
+        while i + repeat_count < words.len()
+            && words[i + repeat_count].eq_ignore_ascii_case(current)
         {
             repeat_count += 1;
         }

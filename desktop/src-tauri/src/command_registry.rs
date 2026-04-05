@@ -20,7 +20,6 @@ macro_rules! app_invoke_handler {
             console_utils::show_console,
             console_utils::hide_console,
             console_utils::toggle_console,
-
             // Whisper commands
             whisper_engine::commands::whisper_init,
             whisper_engine::commands::whisper_get_available_models,
@@ -46,7 +45,6 @@ macro_rules! app_invoke_handler {
             whisper_engine::parallel_commands::calculate_optimal_workers,
             whisper_engine::parallel_commands::prepare_audio_chunks,
             whisper_engine::parallel_commands::test_parallel_processing_setup,
-
             // Parakeet commands
             parakeet_engine::commands::parakeet_init,
             parakeet_engine::commands::parakeet_get_available_models,
@@ -62,7 +60,6 @@ macro_rules! app_invoke_handler {
             parakeet_engine::commands::parakeet_cancel_download,
             parakeet_engine::commands::parakeet_delete_corrupted_model,
             parakeet_engine::commands::open_parakeet_models_folder,
-
             // Recording and audio workflow commands
             audio::recording_commands::pause_recording,
             audio::recording_commands::resume_recording,
@@ -87,7 +84,6 @@ macro_rules! app_invoke_handler {
             audio::recording_preferences::get_current_audio_backend,
             audio::recording_preferences::set_audio_backend,
             audio::recording_preferences::get_audio_backend_info,
-
             // System audio and permissions commands
             audio::system_audio_commands::start_system_audio_capture_command,
             audio::system_audio_commands::list_system_audio_devices_command,
@@ -98,7 +94,6 @@ macro_rules! app_invoke_handler {
             audio::permissions::check_screen_recording_permission_command,
             audio::permissions::request_screen_recording_permission_command,
             audio::permissions::trigger_system_audio_permission_command,
-
             // Provider and model discovery commands
             ollama::get_ollama_models,
             ollama::pull_ollama_model,
@@ -108,7 +103,6 @@ macro_rules! app_invoke_handler {
             anthropic::anthropic::get_anthropic_models,
             groq::groq::get_groq_models,
             openrouter::get_openrouter_models,
-
             // Meeting API commands
             api::meetings::meetings_list,
             api::meetings::transcript_search,
@@ -127,7 +121,6 @@ macro_rules! app_invoke_handler {
             vocabulary::vocabulary_upsert,
             vocabulary::vocabulary_delete,
             vocabulary::transcript_postprocess_preview,
-
             // Settings and config API commands exposed to the frontend
             api::config::model_cfg_get,
             api::config::model_cfg_set,
@@ -141,7 +134,6 @@ macro_rules! app_invoke_handler {
             api::custom_openai::custom_openai_cfg_set,
             api::custom_openai::custom_openai_cfg_get,
             api::custom_openai::custom_openai_conn_test,
-
             // Summary and template commands
             summary::api_process_transcript,
             summary::api_get_summary,
@@ -160,7 +152,6 @@ macro_rules! app_invoke_handler {
             summary::summary_engine::builtin_ai_is_model_ready,
             summary::summary_engine::builtin_ai_get_available_summary_model,
             summary::summary_engine::builtin_ai_get_recommended_model,
-
             // Notifications commands
             notifications::commands::get_notification_settings,
             notifications::commands::set_notification_settings,
@@ -176,7 +167,6 @@ macro_rules! app_invoke_handler {
             notifications::commands::initialize_notification_manager_manual,
             notifications::commands::test_notification_with_auto_consent,
             notifications::commands::get_notification_stats,
-
             // Database and onboarding commands
             database::commands::check_first_launch,
             database::commands::initialize_fresh_database,
@@ -186,7 +176,6 @@ macro_rules! app_invoke_handler {
             onboarding::save_onboarding_status_cmd,
             onboarding::reset_onboarding_status_cmd,
             onboarding::complete_onboarding,
-
             // Import and retranscription commands
             audio::retranscription::start_retranscription_command,
             audio::retranscription::cancel_retranscription_command,
@@ -196,7 +185,6 @@ macro_rules! app_invoke_handler {
             audio::import::start_import_audio_command,
             audio::import::cancel_import_command,
             audio::import::is_import_in_progress_command,
-
             // Platform-specific commands
             #[cfg(target_os = "macos")]
             utils::open_system_settings

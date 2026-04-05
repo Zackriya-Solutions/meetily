@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { toast } from 'sonner';
 
@@ -141,12 +141,15 @@ export function OllamaDownloadProvider({ children }: { children: React.ReactNode
     };
   }, []);
 
-  const contextValue: OllamaDownloadContextType = {
+  const isDownloading = useCallback((modelName: string) => downloadingModels.has(modelName), [downloadingModels]);
+  const getProgress = useCallback((modelName: string) => downloadProgress.get(modelName), [downloadProgress]);
+
+  const contextValue = useMemo<OllamaDownloadContextType>(() => ({
     downloadProgress,
     downloadingModels,
-    isDownloading: (modelName: string) => downloadingModels.has(modelName),
-    getProgress: (modelName: string) => downloadProgress.get(modelName),
-  };
+    isDownloading,
+    getProgress,
+  }), [downloadProgress, downloadingModels, getProgress, isDownloading]);
 
   return (
     <OllamaDownloadContext.Provider value={contextValue}>

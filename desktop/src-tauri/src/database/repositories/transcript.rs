@@ -64,7 +64,9 @@ impl TranscriptsRepository {
         let mut transaction = conn.begin().await?;
 
         let now = Utc::now();
-        let source_type = options.source_type.unwrap_or_else(|| "recorded".to_string());
+        let source_type = options
+            .source_type
+            .unwrap_or_else(|| "recorded".to_string());
         let processing_version = options
             .processing_version
             .unwrap_or_else(|| "v0.2.0".to_string());

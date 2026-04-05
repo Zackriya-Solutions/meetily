@@ -10,8 +10,8 @@ pub mod speakers;
 
 // Re-export all public functions to preserve existing API
 pub use configuration::{
-    get_device_and_config, parse_audio_device, AudioDevice, AudioTranscriptionEngine,
-    DeviceControl, DeviceType, LAST_AUDIO_CAPTURE,
+    get_device_and_config, get_device_and_config_blocking, parse_audio_device, AudioDevice,
+    AudioTranscriptionEngine, DeviceControl, DeviceType, LAST_AUDIO_CAPTURE,
 };
 pub use discovery::{list_audio_devices, trigger_audio_permission};
 pub use microphone::{default_input_device, find_builtin_input_device};

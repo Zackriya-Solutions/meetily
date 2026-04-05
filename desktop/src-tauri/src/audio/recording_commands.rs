@@ -809,14 +809,7 @@ pub async fn stop_and_finalize_recording<R: Runtime>(
     );
 
     // Perform final cleanup with the manager if available
-    let (
-        meeting_folder,
-        meeting_name,
-        meeting_id,
-        transcript_count,
-        duration_seconds,
-        save_error,
-    ) =
+    let (meeting_folder, meeting_name, meeting_id, transcript_count, duration_seconds, save_error) =
         if let Some(mut manager) = manager_for_cleanup {
             info!("🧹 Performing final cleanup and saving recording data");
 
@@ -827,7 +820,11 @@ pub async fn stop_and_finalize_recording<R: Runtime>(
             let transcript_count = transcript_segments.len();
             let duration_seconds = manager
                 .get_active_recording_duration()
-                .or_else(|| transcript_segments.last().map(|segment| segment.audio_end_time))
+                .or_else(|| {
+                    transcript_segments
+                        .last()
+                        .map(|segment| segment.audio_end_time)
+                })
                 .unwrap_or(0.0);
 
             let recording_ended_at = chrono::Utc::now();
@@ -857,7 +854,10 @@ pub async fn stop_and_finalize_recording<R: Runtime>(
 
             let (meeting_id, save_error) = match save_result {
                 Ok(meeting_id) => {
-                    info!("✅ Recording persisted to SQLite with meeting_id={}", meeting_id);
+                    info!(
+                        "✅ Recording persisted to SQLite with meeting_id={}",
+                        meeting_id
+                    );
                     if let Err(e) = manager.set_persisted_meeting_id(meeting_id.clone()) {
                         warn!("Failed to persist meeting_id into metadata: {}", e);
                     }
@@ -886,7 +886,9 @@ pub async fn stop_and_finalize_recording<R: Runtime>(
                     // Don't fail shutdown - transcripts are already preserved
                 }
                 Err(_) => {
-                    warn!("⏱️ File I/O timeout (5 minutes) reached during save, continuing shutdown");
+                    warn!(
+                        "⏱️ File I/O timeout (5 minutes) reached during save, continuing shutdown"
+                    );
                     // Don't fail shutdown - transcripts are already preserved
                 }
             }

@@ -2,7 +2,7 @@
 
 ## Status
 
-Implemented design baseline for `v0.2.0` completion.
+Planned design baseline for `v0.2.0`. This document is aspirational and does not describe the current shipped implementation in full.
 
 This document defines:
 

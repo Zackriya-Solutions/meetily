@@ -2,11 +2,11 @@ use crate::audio;
 use crate::database;
 use crate::notifications;
 use crate::notifications::commands::NotificationManagerState;
+use crate::parakeet_engine;
 use crate::state;
 use crate::summary;
 use crate::tray;
 use crate::whisper_engine;
-use crate::parakeet_engine;
 use std::sync::Arc;
 use tauri::{App, AppHandle, Builder, Manager, Wry};
 use tokio::sync::RwLock;
@@ -134,7 +134,10 @@ fn initialize_bundled_templates(app: &AppHandle<Wry>) {
     log::info!("Initializing bundled templates directory...");
     if let Ok(resource_path) = app.path().resource_dir() {
         let templates_dir = resource_path.join("templates");
-        log::info!("Setting bundled templates directory to: {:?}", templates_dir);
+        log::info!(
+            "Setting bundled templates directory to: {:?}",
+            templates_dir
+        );
         summary::templates::set_bundled_templates_dir(templates_dir);
     } else {
         log::warn!("Failed to resolve resource directory for templates");

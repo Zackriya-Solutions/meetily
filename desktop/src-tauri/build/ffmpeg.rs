@@ -70,7 +70,7 @@ fn download_and_extract_ffmpeg(
     }
 
     let temp_dir = std::env::temp_dir();
-    let archive_filename = url.split('/').last().unwrap_or("ffmpeg-archive");
+    let archive_filename = url.split('/').next_back().unwrap_or("ffmpeg-archive");
     let archive_path = temp_dir.join(format!("ffmpeg-build-{}-{}", target, archive_filename));
 
     {

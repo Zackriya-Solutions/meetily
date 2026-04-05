@@ -4,9 +4,10 @@ import { CurrentMeeting, useSidebar } from '@/components/Sidebar/SidebarProvider
 import { invoke as invokeTauri } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
 import { type SummaryPayload } from '@/contracts/summaryContract';
+import type { MeetingDetails } from '@/types/meeting';
 
 interface UseMeetingDataProps {
-  meeting: any;
+  meeting: MeetingDetails;
   summaryData: SummaryPayload | null;
   onMeetingUpdated?: () => Promise<void>;
 }
@@ -37,8 +38,7 @@ export function useMeetingData({ meeting, summaryData, onMeetingUpdated: _onMeet
   const [isTitleDirty, setIsTitleDirty] = useState(false);
   const [aiSummary, setAiSummary] = useState<SummaryPayload | null>(summaryData);
   const [isSaving, setIsSaving] = useState(false);
-  const [, setIsSummaryDirty] = useState(false);
-  const [, setError] = useState<string>('');
+  const [isSummaryDirty, setIsSummaryDirty] = useState(false);
 
   // Ref for BlockNoteSummaryView
   const blockNoteSummaryRef = useRef<BlockNoteSummaryViewRef>(null);
@@ -81,7 +81,6 @@ export function useMeetingData({ meeting, summaryData, onMeetingUpdated: _onMeet
       return true;
     } catch (error) {
       console.error('Failed to save meeting title:', error);
-      setError(`Failed to save meeting title: ${getErrorMessage(error)}`);
       return false;
     }
   }, [meeting.id, meetingTitle, sidebarMeetings, setMeetings, setCurrentMeeting]);
@@ -103,7 +102,6 @@ export function useMeetingData({ meeting, summaryData, onMeetingUpdated: _onMeet
       console.log('Save meeting summary success');
     } catch (error) {
       console.error('Failed to save meeting summary:', error);
-      setError(`Failed to save meeting summary: ${getErrorMessage(error)}`);
       throw error;
     }
   }, [meeting.id]);
@@ -124,10 +122,10 @@ export function useMeetingData({ meeting, summaryData, onMeetingUpdated: _onMeet
         await handleSaveSummary(aiSummary);
       }
 
-      toast.success("Changes saved successfully");
+      toast.success('Changes saved successfully');
     } catch (error) {
       console.error('Failed to save changes:', error);
-      toast.error("Failed to save changes", { description: getErrorMessage(error) });
+      toast.error('Failed to save changes', { description: getErrorMessage(error) });
     } finally {
       setIsSaving(false);
     }
@@ -150,6 +148,7 @@ export function useMeetingData({ meeting, summaryData, onMeetingUpdated: _onMeet
     meetingTitle,
     isEditingTitle,
     isTitleDirty,
+    isSummaryDirty,
     aiSummary,
     isSaving,
     blockNoteSummaryRef,

@@ -86,12 +86,6 @@ impl WhisperEngine {
     /// Create a new WhisperEngine with optional custom models directory
     /// If models_dir is None, uses default location (app data dir for production, local for dev)
     pub fn new_with_models_dir(models_dir: Option<PathBuf>) -> Result<Self> {
-        // PERFORMANCE: Suppress verbose whisper.cpp and Metal logs
-        // These C library logs bypass Rust logging and clutter output
-        // Set environment variables to reduce C library verbosity
-        std::env::set_var("GGML_METAL_LOG_LEVEL", "1"); // 0=off, 1=error, 2=warn, 3=info
-        std::env::set_var("WHISPER_LOG_LEVEL", "1"); // Reduce whisper.cpp verbosity
-
         let models_dir = if let Some(dir) = models_dir {
             // Use provided directory (for production with app_data_dir)
             dir

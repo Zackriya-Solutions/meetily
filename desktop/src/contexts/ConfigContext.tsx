@@ -1,7 +1,7 @@
 'use client';
 
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, ReactNode, useRef } from 'react';
-import { TranscriptModelProps } from '@/components/TranscriptSettings';
+import type { TranscriptModelProps } from '@/types/config';
 import { SelectedDevices } from '@/components/DeviceSelection';
 import { configService, ModelConfig } from '@/services/configService';
 import { invoke } from '@tauri-apps/api/core';
@@ -234,16 +234,15 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
 
   // Sync language preference to Rust on mount (fixes startup desync bug)
   useEffect(() => {
-    if (selectedLanguage) {
-      invoke('set_language_preference', { language: selectedLanguage })
-        .then(() => {
-          console.log('[ConfigContext] Synced language preference to Rust on startup:', selectedLanguage);
-        })
-        .catch(err => {
-          console.error('[ConfigContext] Failed to sync language preference to Rust on startup:', err);
-        });
+    if (!selectedLanguage) {
+      return;
     }
-  }, []); 
+
+    invoke('set_language_preference', { language: selectedLanguage })
+      .catch(err => {
+        console.error('[ConfigContext] Failed to sync language preference to Rust:', err);
+      });
+  }, [selectedLanguage]);
 
   // Load model configuration on mount
   useEffect(() => {
@@ -341,6 +340,9 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
 
   // Listen for model config updates from other components
   useEffect(() => {
+    let isActive = true;
+    let cleanup: (() => void) | undefined;
+
     const setupListener = async () => {
       const { listen } = await import('@tauri-apps/api/event');
       const unlisten = await listen<ModelConfig>('model-config-updated', (event) => {
@@ -352,13 +354,17 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
           updateProviderApiKey(event.payload.provider, event.payload.apiKey);
         }
       });
-      return unlisten;
+      if (!isActive) {
+        unlisten();
+        return;
+      }
+      cleanup = unlisten;
     };
 
-    let cleanup: (() => void) | undefined;
-    setupListener().then(fn => cleanup = fn);
+    void setupListener();
 
     return () => {
+      isActive = false;
       cleanup?.();
     };
   }, []);
@@ -383,7 +389,7 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
   }, []);
 
   // Calculate model options based on available models
-  const modelOptions: Record<ModelConfig['provider'], string[]> = {
+  const modelOptions = useMemo<Record<ModelConfig['provider'], string[]>>(() => ({
     ollama: models.map(model => model.name),
     claude: ['claude-3-5-sonnet-latest'],
     groq: ['llama-3.3-70b-versatile'],
@@ -391,7 +397,7 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     openai: ['gpt-4', 'gpt-4-turbo', 'gpt-3.5-turbo'],
     'builtin-ai': [],
     'custom-openai': [],
-  };
+  }), [models]);
 
   // Toggle confidence indicator with localStorage persistence
   const toggleConfidenceIndicator = useCallback((checked: boolean) => {
@@ -505,10 +511,6 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     if (typeof window !== 'undefined') {
       localStorage.setItem('primaryLanguage', lang);
     }
-    // Sync with Rust in-memory state for live recording
-    invoke('set_language_preference', { language: lang }).catch(err =>
-      console.error('Failed to sync language preference to Rust:', err)
-    );
   }, []);
 
   const value: ConfigContextType = useMemo(() => ({

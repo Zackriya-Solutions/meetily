@@ -2,7 +2,7 @@
 
 import { Button } from '@/components/ui/button';
 import { ButtonGroup } from '@/components/ui/button-group';
-import { Copy, Save, Loader2, FileDown } from 'lucide-react';
+import { Copy, Save, Loader2, FileDown, Search } from 'lucide-react';
 import Analytics from '@/lib/analytics';
 
 interface SummaryUpdaterButtonGroupProps {
@@ -22,7 +22,7 @@ export function SummaryUpdaterButtonGroup({
   onSave,
   onCopy,
   onExportMarkdown,
-  onFind: _onFind,
+  onFind,
   onOpenFolder: _onOpenFolder,
   hasSummary
 }: SummaryUpdaterButtonGroupProps) {
@@ -85,8 +85,7 @@ export function SummaryUpdaterButtonGroup({
         </Button>
       )}
 
-      {/* Find button */}
-      {/* {onFind && (
+      {onFind && (
         <Button
           variant="outline"
           size="sm"
@@ -101,7 +100,7 @@ export function SummaryUpdaterButtonGroup({
           <Search />
           <span className="hidden lg:inline">Find</span>
         </Button>
-      )} */}
+      )}
     </ButtonGroup>
   );
 }

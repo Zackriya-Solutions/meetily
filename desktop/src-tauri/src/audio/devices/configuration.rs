@@ -107,8 +107,8 @@ pub fn parse_audio_device(name: &str) -> Result<AudioDevice> {
     AudioDevice::from_name(name)
 }
 
-/// Get device and config for audio operations
-pub async fn get_device_and_config(
+/// Get device and config for audio operations using a blocking call path.
+pub fn get_device_and_config_blocking(
     audio_device: &AudioDevice,
 ) -> Result<(cpal::Device, cpal::SupportedStreamConfig)> {
     #[cfg(target_os = "windows")]
@@ -174,4 +174,11 @@ pub async fn get_device_and_config(
 
         Err(anyhow!("Device not found: {}", audio_device.name))
     }
+}
+
+/// Get device and config for audio operations
+pub async fn get_device_and_config(
+    audio_device: &AudioDevice,
+) -> Result<(cpal::Device, cpal::SupportedStreamConfig)> {
+    get_device_and_config_blocking(audio_device)
 }

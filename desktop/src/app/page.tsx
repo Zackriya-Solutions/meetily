@@ -31,7 +31,7 @@ export default function Home() {
   const { transcriptModelConfig, selectedDevices } = useConfig();
   const recordingState = useRecordingState();
 
-  const { status, isStopping, isProcessing } = recordingState;
+  const { status, isStopping, isProcessing, hasCompletedInitialSync } = recordingState;
 
   const { hasMicrophone } = usePermissionCheck();
   const { setIsMeetingActive, isCollapsed: sidebarCollapsed, refetchMeetings } = useSidebar();
@@ -63,6 +63,10 @@ export default function Home() {
 
   useEffect(() => {
     const performStartupChecks = async () => {
+      if (!hasCompletedInitialSync) {
+        return;
+      }
+
       try {
         if (
           recordingState.isRecording ||
@@ -70,7 +74,6 @@ export default function Home() {
           status === RecordingStatus.PROCESSING_TRANSCRIPTS ||
           status === RecordingStatus.SAVING
         ) {
-          console.log('Skipping recovery check - recording in progress or processing');
           return;
         }
 
@@ -92,8 +95,8 @@ export default function Home() {
       }
     };
 
-    performStartupChecks();
-  }, [checkForRecoverableTranscripts, recordingState.isRecording, status]);
+    void performStartupChecks();
+  }, [checkForRecoverableTranscripts, hasCompletedInitialSync, recordingState.isRecording, status]);
 
   useEffect(() => {
     if (recoverableMeetings.length > 0) {

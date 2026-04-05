@@ -70,7 +70,10 @@ pub fn compatibility_rank(value: &ModelCompatibility) -> u8 {
     }
 }
 
-pub fn select_recommended_model(models: &[ModelDef], system_profile: &SystemProfile) -> Option<String> {
+pub fn select_recommended_model(
+    models: &[ModelDef],
+    system_profile: &SystemProfile,
+) -> Option<String> {
     models
         .iter()
         .map(|model| {

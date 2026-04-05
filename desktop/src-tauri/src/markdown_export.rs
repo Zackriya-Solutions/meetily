@@ -79,13 +79,10 @@ pub async fn export_meeting_markdown<R: Runtime>(
 
     let summary_markdown = fetch_summary_markdown(pool, &meeting_id).await?;
     let transcript_rows = fetch_transcript_rows(pool, &meeting_id).await?;
-    let vocabulary = crate::vocabulary::get_effective_rules_for_meeting(pool, Some(meeting_id)).await?;
-    let rendered_markdown = render_meeting_markdown(
-        &meeting,
-        &summary_markdown,
-        &transcript_rows,
-        &vocabulary,
-    );
+    let vocabulary =
+        crate::vocabulary::get_effective_rules_for_meeting(pool, Some(meeting_id)).await?;
+    let rendered_markdown =
+        render_meeting_markdown(&meeting, &summary_markdown, &transcript_rows, &vocabulary);
 
     if preview_mode {
         return Ok(MeetingMarkdownExportResult {
@@ -97,9 +94,10 @@ pub async fn export_meeting_markdown<R: Runtime>(
     }
 
     let destination_dir = resolve_single_destination_dir(app, &meeting, destination_root)?;
-    let output_path = write_markdown_with_collision(&destination_dir, &meeting.title, &rendered_markdown)
-        .await
-        .map_err(|e| format!("Failed to write markdown export: {}", e))?;
+    let output_path =
+        write_markdown_with_collision(&destination_dir, &meeting.title, &rendered_markdown)
+            .await
+            .map_err(|e| format!("Failed to write markdown export: {}", e))?;
 
     sqlx::query("UPDATE meetings SET markdown_export_path = ?, updated_at = ? WHERE id = ?")
         .bind(output_path.to_string_lossy().to_string())
@@ -179,9 +177,10 @@ async fn export_single_batch_meeting<R: Runtime>(
             sanitize_filename(&meeting.title),
             &meeting.id
         ));
-        let output_path = write_markdown_with_collision(&subfolder, &meeting.title, &rendered_markdown)
-            .await
-            .map_err(|e| format!("Failed to write markdown export: {}", e))?;
+        let output_path =
+            write_markdown_with_collision(&subfolder, &meeting.title, &rendered_markdown)
+                .await
+                .map_err(|e| format!("Failed to write markdown export: {}", e))?;
 
         sqlx::query("UPDATE meetings SET markdown_export_path = ?, updated_at = ? WHERE id = ?")
             .bind(output_path.to_string_lossy().to_string())
@@ -270,7 +269,16 @@ async fn fetch_meeting_export_data(
     .map_err(|e| format!("Failed to fetch meeting metadata: {}", e))?;
 
     Ok(row.map(
-        |(id, title, created_at, updated_at, folder_path, source_type, language, duration_seconds)| {
+        |(
+            id,
+            title,
+            created_at,
+            updated_at,
+            folder_path,
+            source_type,
+            language,
+            duration_seconds,
+        )| {
             MeetingExportData {
                 id,
                 title,
@@ -306,7 +314,10 @@ async fn fetch_transcript_rows(
         .collect())
 }
 
-async fn fetch_summary_markdown(pool: &sqlx::SqlitePool, meeting_id: &str) -> Result<String, String> {
+async fn fetch_summary_markdown(
+    pool: &sqlx::SqlitePool,
+    meeting_id: &str,
+) -> Result<String, String> {
     let row = sqlx::query_as::<_, (Option<String>,)>(
         "SELECT result
          FROM summary_processes
@@ -355,7 +366,8 @@ fn render_meeting_markdown(
         transcript_rows
             .iter()
             .map(|row| {
-                let corrected = crate::vocabulary::apply_vocabulary_rules(row.text.trim(), vocabulary);
+                let corrected =
+                    crate::vocabulary::apply_vocabulary_rules(row.text.trim(), vocabulary);
                 format!("- **{}** {}", row.timestamp, corrected)
             })
             .collect::<Vec<_>>()
@@ -366,9 +378,18 @@ fn render_meeting_markdown(
     output.push_str("---\n");
     output.push_str(&format!("id: {}\n", yaml_quote(&meeting.id)));
     output.push_str(&format!("title: {}\n", yaml_quote(&meeting.title)));
-    output.push_str(&format!("created_at: {}\n", yaml_quote(&meeting.created_at)));
-    output.push_str(&format!("updated_at: {}\n", yaml_quote(&meeting.updated_at)));
-    output.push_str(&format!("source_type: {}\n", yaml_quote(&meeting.source_type)));
+    output.push_str(&format!(
+        "created_at: {}\n",
+        yaml_quote(&meeting.created_at)
+    ));
+    output.push_str(&format!(
+        "updated_at: {}\n",
+        yaml_quote(&meeting.updated_at)
+    ));
+    output.push_str(&format!(
+        "source_type: {}\n",
+        yaml_quote(&meeting.source_type)
+    ));
     output.push_str(&format!(
         "language: {}\n",
         meeting
@@ -384,10 +405,7 @@ fn render_meeting_markdown(
             .map(|seconds| format!("{:.3}", seconds))
             .unwrap_or_else(|| "null".to_string())
     ));
-    output.push_str(&format!(
-        "transcript_count: {}\n",
-        transcript_rows.len()
-    ));
+    output.push_str(&format!("transcript_count: {}\n", transcript_rows.len()));
     output.push_str(&format!(
         "exported_at: {}\n",
         yaml_quote(&chrono::Utc::now().to_rfc3339())
@@ -395,7 +413,10 @@ fn render_meeting_markdown(
     output.push_str("---\n\n");
 
     output.push_str("## Summary\n\n");
-    output.push_str(&empty_section_fallback(&summary_section, "_No summary available._"));
+    output.push_str(&empty_section_fallback(
+        &summary_section,
+        "_No summary available._",
+    ));
     output.push_str("\n\n## Action Items\n\n");
     output.push_str(&empty_section_fallback(
         &action_items_section,
@@ -464,7 +485,11 @@ fn split_summary_sections(summary_markdown: &str) -> (String, String, String) {
         return (trimmed.to_string(), String::new(), String::new());
     }
 
-    (summary_lines.join("\n").trim().to_string(), action_items.trim().to_string(), decisions.trim().to_string())
+    (
+        summary_lines.join("\n").trim().to_string(),
+        action_items.trim().to_string(),
+        decisions.trim().to_string(),
+    )
 }
 
 fn parse_markdown_heading(line: &str) -> Option<String> {

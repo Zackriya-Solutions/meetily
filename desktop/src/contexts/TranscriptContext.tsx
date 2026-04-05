@@ -1,6 +1,16 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect, useRef, useCallback, ReactNode, MutableRefObject } from 'react';
+import React, {
+  createContext,
+  useContext,
+  useState,
+  useEffect,
+  useRef,
+  useCallback,
+  useMemo,
+  ReactNode,
+  MutableRefObject,
+} from 'react';
 import { Transcript, TranscriptUpdate } from '@/types';
 import { toast } from 'sonner';
 import { useRecordingState } from './RecordingStateContext';
@@ -8,13 +18,24 @@ import { transcriptService } from '@/services/transcriptService';
 import { recordingService } from '@/services/recordingService';
 import { indexedDBService } from '@/services/indexedDBService';
 
+interface TranscriptHistorySegment {
+  id: string;
+  text: string;
+  display_time: string;
+  sequence_id?: number;
+  confidence?: number;
+  audio_start_time?: number;
+  audio_end_time?: number;
+  duration?: number;
+}
+
 interface TranscriptContextType {
   transcripts: Transcript[];
   transcriptsRef: MutableRefObject<Transcript[]>
   addTranscript: (update: TranscriptUpdate) => void;
   copyTranscript: () => void;
   flushBuffer: () => void;
-  transcriptContainerRef: React.RefObject<HTMLDivElement>;
+  transcriptContainerRef: React.RefCallback<HTMLDivElement>;
   meetingTitle: string;
   setMeetingTitle: (title: string) => void;
   clearTranscripts: () => void;
@@ -28,6 +49,7 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
   const [transcripts, setTranscripts] = useState<Transcript[]>([]);
   const [meetingTitle, setMeetingTitle] = useState('+ New Call');
   const [currentMeetingId, setCurrentMeetingId] = useState<string | null>(null);
+  const [transcriptContainerElement, setTranscriptContainerElement] = useState<HTMLDivElement | null>(null);
 
   // Recording state context - provides backend-synced state
   const recordingState = useRecordingState();
@@ -36,7 +58,7 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
   const transcriptsRef = useRef<Transcript[]>(transcripts);
   const currentMeetingIdRef = useRef<string | null>(null);
   const isUserAtBottomRef = useRef<boolean>(true);
-  const transcriptContainerRef = useRef<HTMLDivElement>(null);
+  const transcriptContainerElementRef = useRef<HTMLDivElement | null>(null);
   const finalFlushRef = useRef<(() => void) | null>(null);
 
   // Keep ref updated with current transcripts
@@ -49,9 +71,14 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
   }, [currentMeetingId]);
 
   // Smart auto-scroll: Track user scroll position
+  const transcriptContainerRef = useCallback((node: HTMLDivElement | null) => {
+    transcriptContainerElementRef.current = node;
+    setTranscriptContainerElement(node);
+  }, []);
+
   useEffect(() => {
     const handleScroll = () => {
-      const container = transcriptContainerRef.current;
+      const container = transcriptContainerElementRef.current;
       if (!container) return;
 
       const { scrollTop, scrollHeight, clientHeight } = container;
@@ -59,21 +86,21 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
       isUserAtBottomRef.current = isAtBottom;
     };
 
-    const container = transcriptContainerRef.current;
+    const container = transcriptContainerElement;
     if (container) {
       container.addEventListener('scroll', handleScroll);
       return () => container.removeEventListener('scroll', handleScroll);
     }
-  }, []);
+  }, [transcriptContainerElement]);
 
   // Auto-scroll when transcripts change (only if user is at bottom)
   useEffect(() => {
     // Only auto-scroll if user was at the bottom before new content
-    if (isUserAtBottomRef.current && transcriptContainerRef.current) {
+    if (isUserAtBottomRef.current && transcriptContainerElementRef.current) {
       // Wait for Framer Motion animation to complete (150ms) before scrolling
       // This ensures scrollHeight includes the full rendered height of the new transcript
       const scrollTimeout = setTimeout(() => {
-        const container = transcriptContainerRef.current;
+        const container = transcriptContainerElementRef.current;
         if (container) {
           container.scrollTo({
             top: container.scrollHeight,
@@ -379,11 +406,11 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
           console.log('[Reload Sync] Recording active after reload, syncing transcript history...');
 
           // Fetch transcript history from backend
-          const history = await transcriptService.getTranscriptHistory();
+          const history = await transcriptService.getTranscriptHistory() as unknown as TranscriptHistorySegment[];
           console.log(`[Reload Sync] Retrieved ${history.length} transcript segments from backend`);
 
           // Convert backend format to frontend Transcript format
-          const formattedTranscripts: Transcript[] = history.map((segment: any) => ({
+          const formattedTranscripts: Transcript[] = history.map((segment) => ({
             id: segment.id,
             text: segment.text,
             timestamp: segment.display_time, // Use display_time for UI
@@ -413,7 +440,7 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
     };
 
     syncFromBackend();
-  }, [recordingState.isRecording]); // Run when recording state changes
+  }, [recordingState.isRecording, transcripts.length]); // Run when recording state changes
 
   // Manual transcript update handler (for RecordingControls component)
   const addTranscript = useCallback((update: TranscriptUpdate) => {
@@ -465,7 +492,7 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
   }, []);
 
   // Copy transcript to clipboard with recording-relative timestamps
-  const copyTranscript = useCallback(() => {
+  const copyTranscript = useCallback(async () => {
     // Format timestamps as recording-relative [MM:SS] instead of wall-clock time
     const formatTime = (seconds: number | undefined): string => {
       if (seconds === undefined) return '[--:--]';
@@ -478,9 +505,15 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
     const fullTranscript = transcripts
       .map(t => `${formatTime(t.audio_start_time)} ${t.text}`)
       .join('\n');
-    navigator.clipboard.writeText(fullTranscript);
 
-    toast.success("Transcript copied to clipboard");
+    try {
+      await navigator.clipboard.writeText(fullTranscript);
+      toast.success('Transcript copied to clipboard');
+    } catch (error) {
+      toast.error('Failed to copy transcript', {
+        description: error instanceof Error ? error.message : 'Clipboard access was denied.',
+      });
+    }
   }, [transcripts]);
 
   // Force flush buffer (for final transcript processing)
@@ -521,7 +554,7 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
     }
   }, [currentMeetingId]);
 
-  const value: TranscriptContextType = {
+  const value = useMemo<TranscriptContextType>(() => ({
     transcripts,
     transcriptsRef,
     addTranscript,
@@ -533,7 +566,17 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
     clearTranscripts,
     currentMeetingId,
     markMeetingAsSaved,
-  };
+  }), [
+    transcripts,
+    addTranscript,
+    copyTranscript,
+    flushBuffer,
+    transcriptContainerRef,
+    meetingTitle,
+    currentMeetingId,
+    markMeetingAsSaved,
+    clearTranscripts,
+  ]);
 
   return (
     <TranscriptContext.Provider value={value}>

@@ -115,7 +115,7 @@ pub async fn load_recording_preferences<R: Runtime>(
                 #[cfg(target_os = "macos")]
                 {
                     let backend = crate::audio::capture::get_current_backend();
-                    p.system_audio_backend = Some(backend.to_string());
+                    p.system_audio_backend = Some(backend.as_storage_key().to_string());
                 }
                 p
             }
@@ -249,11 +249,10 @@ pub async fn select_recording_folder<R: Runtime>(
     app: AppHandle<R>,
 ) -> Result<Option<String>, String> {
     let app_clone = app.clone();
-    let selected_folder = tokio::task::spawn_blocking(move || {
-        app_clone.dialog().file().blocking_pick_folder()
-    })
-    .await
-    .map_err(|e| format!("Folder selection task failed: {}", e))?;
+    let selected_folder =
+        tokio::task::spawn_blocking(move || app_clone.dialog().file().blocking_pick_folder())
+            .await
+            .map_err(|e| format!("Folder selection task failed: {}", e))?;
 
     Ok(selected_folder.map(|path| path.to_string()))
 }
@@ -282,7 +281,7 @@ pub async fn get_current_audio_backend() -> Result<String, String> {
     #[cfg(target_os = "macos")]
     {
         let backend = crate::audio::capture::get_current_backend();
-        Ok(backend.to_string())
+        Ok(backend.as_storage_key().to_string())
     }
 
     #[cfg(not(target_os = "macos"))]

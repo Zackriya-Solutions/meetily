@@ -154,15 +154,20 @@ impl VocabularyRepository {
 
         Ok(rows
             .into_iter()
-            .map(|(source_text, target_text, case_sensitive, _)| VocabularyRule {
-                source_text,
-                target_text,
-                case_sensitive,
-            })
+            .map(
+                |(source_text, target_text, case_sensitive, _)| VocabularyRule {
+                    source_text,
+                    target_text,
+                    case_sensitive,
+                },
+            )
             .collect())
     }
 
-    async fn get_by_id(pool: &SqlitePool, id: &str) -> Result<Option<VocabularyEntry>, sqlx::Error> {
+    async fn get_by_id(
+        pool: &SqlitePool,
+        id: &str,
+    ) -> Result<Option<VocabularyEntry>, sqlx::Error> {
         sqlx::query_as::<_, VocabularyEntry>(
             "SELECT id, scope_type, scope_id, source_text, target_text, case_sensitive, created_at, updated_at
              FROM vocabulary_entries WHERE id = ?",
@@ -337,9 +342,10 @@ mod tests {
                 .expect("upsert should succeed");
         }
 
-        let ordered = VocabularyRepository::get_effective_rules_for_meeting(&pool, Some("meeting-a"))
-            .await
-            .expect("rule lookup should succeed");
+        let ordered =
+            VocabularyRepository::get_effective_rules_for_meeting(&pool, Some("meeting-a"))
+                .await
+                .expect("rule lookup should succeed");
 
         assert_eq!(ordered.len(), 4);
         assert_eq!(ordered[0].source_text, "OpenAI");

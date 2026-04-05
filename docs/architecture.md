@@ -207,7 +207,7 @@ Important implications:
 - The stop/save path is frontend-orchestrated, which is fragile for the most important workflow.
 - The Tauri command surface is very broad and mostly centralized in one file.
 - The settings and provider surface is wider than the current product needs.
-- Secrets are stored locally in app settings rather than through OS credential storage.
+- Secrets are stored via the platform keyring where supported, while non-secret provider settings remain in local app storage.
 - The codebase already contains more optional capability than a first release should expose by default.
 
 ## Bottom Line

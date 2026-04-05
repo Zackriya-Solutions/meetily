@@ -212,14 +212,15 @@ pub async fn complete_onboarding<R: Runtime>(
     let parakeet_ready = crate::parakeet_engine::commands::parakeet_has_available_models()
         .await
         .unwrap_or(false);
-    let summary_ready = crate::summary::summary_engine::commands::builtin_ai_get_available_summary_model(
-        app.clone(),
-        app.state::<crate::summary::summary_engine::ModelManagerState>(),
-    )
-    .await
-    .ok()
-    .flatten()
-    .is_some();
+    let summary_ready =
+        crate::summary::summary_engine::commands::builtin_ai_get_available_summary_model(
+            app.clone(),
+            app.state::<crate::summary::summary_engine::ModelManagerState>(),
+        )
+        .await
+        .ok()
+        .flatten()
+        .is_some();
 
     status.completed = true;
     status.current_step = 4; // Max step (4 on macOS with permissions, 3 on other platforms)

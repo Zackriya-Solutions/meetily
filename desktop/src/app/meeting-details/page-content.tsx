@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
-import { Transcript, TranscriptSegmentData } from '@/types';
+import { TranscriptSegmentData } from '@/types';
 import Analytics from '@/lib/analytics';
 import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
@@ -9,6 +9,7 @@ import { TranscriptPanel } from '@/components/MeetingDetails/TranscriptPanel';
 import { SummaryPanel } from '@/components/MeetingDetails/SummaryPanel';
 import { ModelConfig } from '@/components/ModelSettingsModal';
 import { type SummaryPayload } from '@/contracts/summaryContract';
+import type { MeetingDetails } from '@/types/meeting';
 
 // Custom hooks
 import { useMeetingData } from '@/hooks/meeting-details/useMeetingData';
@@ -19,13 +20,7 @@ import { useMeetingOperations } from '@/hooks/meeting-details/useMeetingOperatio
 import { useConfig } from '@/contexts/ConfigContext';
 
 interface MeetingPageContentProps {
-  meeting: {
-    id: string;
-    title: string;
-    created_at: string;
-    transcripts: Transcript[];
-    folder_path?: string;
-  };
+  meeting: MeetingDetails;
   summaryData: SummaryPayload | null;
   shouldAutoGenerate?: boolean;
   onAutoGenerateComplete?: () => void;

@@ -51,6 +51,7 @@ next-env.d.ts
 # Large media files
 docs/demo.mov
 docs/demo.gif
+docs/audit/
 
 
 meeting_minutes.db
@@ -77,4 +78,3 @@ experiments/
 target/
 
 desktop/src-tauri/binaries/
-Cargo.lock

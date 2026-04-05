@@ -11,11 +11,12 @@ import {
   parseSummaryPayloadFromApiData,
   type SummaryPayload,
 } from '@/contracts/summaryContract';
+import type { MeetingDetails } from '@/types/meeting';
 
 type SummaryStatus = 'idle' | 'processing' | 'summarizing' | 'regenerating' | 'completed' | 'error';
 
 interface UseSummaryGenerationProps {
-  meeting: any;
+  meeting: MeetingDetails;
   transcripts: Transcript[];
   modelConfig: ModelConfig;
   isModelConfigLoading: boolean;
@@ -381,7 +382,7 @@ export function useSummaryGeneration({
     if (modelConfig.provider === 'ollama') {
       try {
         const endpoint = modelConfig.ollamaEndpoint || null;
-        const models = await invokeTauri('get_ollama_models', { endpoint }) as any[];
+        const models = await invokeTauri<Array<{ name: string }>>('get_ollama_models', { endpoint });
 
         if (!models || models.length === 0) {
           toast.error(

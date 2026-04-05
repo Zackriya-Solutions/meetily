@@ -1,4 +1,4 @@
-export interface Summary {
+export interface StructuredSummary {
     key_points: string[];
     action_items: string[];
     decisions: string[];
@@ -7,7 +7,7 @@ export interface Summary {
 }
 
 export interface SummaryResponse {
-    summary: Summary;
+    summary: StructuredSummary;
     raw_summary?: string;
 }
 

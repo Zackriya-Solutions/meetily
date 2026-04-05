@@ -183,6 +183,30 @@ export function DeviceSelection({ selectedDevices, onDeviceChange, disabled = fa
     }
   };
 
+  const startAudioLevelMonitoring = async () => {
+    try {
+      const deviceNames = inputDevices.map((device) => device.name);
+      if (deviceNames.length === 0) {
+        return;
+      }
+
+      await invoke('start_audio_level_monitoring', { deviceNames });
+      setIsMonitoring(true);
+    } catch (err) {
+      console.error('Failed to start audio level monitoring:', err);
+      setError('Failed to start microphone monitoring. Please try again.');
+    }
+  };
+
+  const toggleAudioLevelMonitoring = async () => {
+    if (isMonitoring) {
+      await stopAudioLevelMonitoring();
+      return;
+    }
+
+    await startAudioLevelMonitoring();
+  };
+
   if (loading) {
     return (
       <div className="p-4 space-y-4">
@@ -200,19 +224,18 @@ export function DeviceSelection({ selectedDevices, onDeviceChange, disabled = fa
       <div className="flex items-center justify-between">
         <h4 className="text-sm font-medium text-gray-900">Audio Devices</h4>
         <div className="flex items-center space-x-2">
-          {/* TODO: Monitoring */}
-          {/* <button */}
-          {/*   onClick={toggleAudioLevelMonitoring} */}
-          {/*   disabled={disabled || inputDevices.length === 0} */}
-          {/*   className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${ */}
-          {/*     isMonitoring */}
-          {/*       ? 'bg-red-100 text-red-700 hover:bg-red-200' */}
-          {/*       : 'bg-green-100 text-green-700 hover:bg-green-200' */}
-          {/*   } disabled:pointer-events-none disabled:opacity-50`} */}
-          {/*   title={inputDevices.length === 0 ? 'No microphones available to test' : ''} */}
-          {/* > */}
-          {/*   {isMonitoring ? 'Stop Test' : 'Test Mic'} */}
-          {/* </button> */}
+          <button
+            onClick={toggleAudioLevelMonitoring}
+            disabled={disabled || inputDevices.length === 0}
+            className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
+              isMonitoring
+                ? 'bg-red-100 text-red-700 hover:bg-red-200'
+                : 'bg-green-100 text-green-700 hover:bg-green-200'
+            } disabled:pointer-events-none disabled:opacity-50`}
+            title={inputDevices.length === 0 ? 'No microphones available to test' : ''}
+          >
+            {isMonitoring ? 'Stop Test' : 'Test Mic'}
+          </button>
           <button
             onClick={handleRefresh}
             disabled={refreshing || disabled}

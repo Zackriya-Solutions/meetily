@@ -1,8 +1,8 @@
 // Tauri commands for built-in AI model management
 // Exposes model download, status, and management functionality to frontend
 
-use std::sync::Arc;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 use tauri_plugin_dialog::DialogExt;
@@ -246,7 +246,9 @@ fn normalize_model_file_path(path: String) -> Option<PathBuf> {
     Some(PathBuf::from(trimmed))
 }
 
-async fn pick_model_file_with_dialog<R: Runtime>(app: &AppHandle<R>) -> Result<Option<PathBuf>, String> {
+async fn pick_model_file_with_dialog<R: Runtime>(
+    app: &AppHandle<R>,
+) -> Result<Option<PathBuf>, String> {
     let app_clone = app.clone();
     let selected_path = tokio::task::spawn_blocking(move || {
         app_clone
@@ -494,4 +496,3 @@ pub async fn builtin_ai_get_recommended_model() -> Result<String, String> {
     );
     Ok(recommended)
 }
-

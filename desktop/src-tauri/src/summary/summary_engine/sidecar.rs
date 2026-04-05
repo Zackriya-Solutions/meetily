@@ -618,7 +618,7 @@ fn allow_fuzzy_sidecar_lookup() -> bool {
     cfg!(debug_assertions)
         && std::env::var(brand::LLAMA_HELPER_ALLOW_FUZZY_ENV)
             .ok()
-        .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "True"))
+            .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "True"))
 }
 
 fn find_bundled_sidecar(

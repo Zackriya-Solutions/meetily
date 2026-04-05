@@ -31,6 +31,8 @@ export interface UpdateProgress {
 export class UpdateService {
   private updateCheckInProgress = false;
   private lastCheckTime: number | null = null;
+  private cachedUpdateInfo: UpdateInfo | null = null;
+  private pendingUpdate: Update | null = null;
   private readonly CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
   /**
@@ -45,38 +47,40 @@ export class UpdateService {
     }
 
     // Skip if checked recently (unless forced)
-    if (!force && this.lastCheckTime) {
+    if (!force && this.lastCheckTime && this.cachedUpdateInfo) {
       const timeSinceLastCheck = Date.now() - this.lastCheckTime;
       if (timeSinceLastCheck < this.CHECK_INTERVAL_MS) {
         console.log('Skipping update check - checked recently');
-        return {
-          available: false,
-          currentVersion: await getVersion(),
-        };
+        return this.cachedUpdateInfo;
       }
     }
 
     this.updateCheckInProgress = true;
-    this.lastCheckTime = Date.now();
 
     try {
       const currentVersion = await getVersion();
       const update = await check();
+      this.lastCheckTime = Date.now();
+      this.pendingUpdate = update?.available ? update : null;
 
       if (update?.available) {
-        return {
+        const info = {
           available: true,
           currentVersion,
           version: update.version,
           date: update.date,
           body: update.body,
         };
+        this.cachedUpdateInfo = info;
+        return info;
       }
 
-      return {
+      const info = {
         available: false,
         currentVersion,
       };
+      this.cachedUpdateInfo = info;
+      return info;
     } catch (error) {
       console.error('Failed to check for updates:', error);
       throw error;
@@ -92,20 +96,42 @@ export class UpdateService {
    * @returns Promise that resolves when download completes
    */
   async downloadAndInstall(
-    update: Update,
-    onProgress?: (progress: UpdateProgress) => void
+    onProgress?: (progress: UpdateProgress) => void,
+    update: Update | null = this.pendingUpdate,
   ): Promise<void> {
+    if (!update) {
+      throw new Error('No prepared update is available to download');
+    }
+
     try {
-      // Download the update
-      await update.download();
+      let downloaded = 0;
+      let total = 0;
 
-      // Notify progress if callback provided
-      if (onProgress) {
-        onProgress({ downloaded: 100, total: 100, percentage: 100 });
-      }
+      await update.downloadAndInstall((event) => {
+        if (!onProgress) {
+          return;
+        }
 
-      // Install and relaunch
-      await update.install();
+        switch (event.event) {
+          case 'Started':
+            total = event.data.contentLength ?? 0;
+            onProgress({ downloaded: 0, total, percentage: 0 });
+            break;
+          case 'Progress':
+            downloaded += event.data.chunkLength ?? 0;
+            onProgress({
+              downloaded,
+              total,
+              percentage: total > 0 ? Math.round((downloaded / total) * 100) : 0,
+            });
+            break;
+          case 'Finished':
+            onProgress({ downloaded: total, total, percentage: 100 });
+            break;
+        }
+      });
+
+      this.pendingUpdate = null;
       await relaunch();
     } catch (error) {
       console.error('Failed to download/install update:', error);
@@ -129,6 +155,10 @@ export class UpdateService {
     if (!this.lastCheckTime) return false;
     const timeSinceLastCheck = Date.now() - this.lastCheckTime;
     return timeSinceLastCheck < this.CHECK_INTERVAL_MS;
+  }
+
+  getPendingUpdate(): Update | null {
+    return this.pendingUpdate;
   }
 }
 

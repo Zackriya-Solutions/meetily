@@ -7,13 +7,9 @@ import { Label } from './ui/label';
 import { Eye, EyeOff, Lock, Unlock } from 'lucide-react';
 import { ModelManager } from './WhisperModelManager';
 import { ParakeetModelManager } from './ParakeetModelManager';
+import type { TranscriptModelProps } from '@/types/config';
 
-
-export interface TranscriptModelProps {
-    provider: 'localWhisper' | 'parakeet' | 'deepgram' | 'elevenLabs' | 'groq' | 'openai';
-    model: string;
-    apiKey?: string | null;
-}
+export type { TranscriptModelProps } from '@/types/config';
 
 export interface TranscriptSettingsProps {
     transcriptModelConfig: TranscriptModelProps;

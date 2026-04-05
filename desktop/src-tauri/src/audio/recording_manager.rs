@@ -31,9 +31,6 @@ pub struct RecordingManager {
     device_event_receiver: Option<mpsc::UnboundedReceiver<DeviceEvent>>,
 }
 
-// SAFETY: RecordingManager contains types that we've marked as Send
-unsafe impl Send for RecordingManager {}
-
 impl RecordingManager {
     /// Create a new recording manager
     pub fn new() -> Self {

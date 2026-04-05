@@ -7,7 +7,8 @@ use crate::{
     database::{
         models::MeetingModel,
         repositories::{
-            meeting::MeetingsRepository, setting::SettingsRepository,
+            meeting::MeetingsRepository,
+            setting::SettingsRepository,
             transcript::{
                 SaveTranscriptOptions, TranscriptSearchFilters as RepoTranscriptSearchFilters,
                 TranscriptsRepository,
@@ -250,7 +251,8 @@ pub async fn api_search_transcripts<R: Runtime>(
             for hit in hits {
                 let rules =
                     get_cached_vocabulary_rules_for_meeting(pool, &hit.id, &mut cache).await;
-                let match_context = crate::vocabulary::apply_vocabulary_rules(&hit.match_context, &rules);
+                let match_context =
+                    crate::vocabulary::apply_vocabulary_rules(&hit.match_context, &rules);
                 results.push(TranscriptSearchResult {
                     id: hit.id,
                     title: hit.title,
@@ -667,18 +669,20 @@ pub async fn api_get_meeting<R: Runtime>(
 
     match MeetingsRepository::get_meeting(pool, &meeting_id).await {
         Ok(Some(mut meeting)) => {
-            let rules = VocabularyRepository::get_effective_rules_for_meeting(pool, Some(&meeting_id))
-                .await
-                .unwrap_or_else(|error| {
-                    log_warn!(
-                        "Failed to load vocabulary rules for meeting {}: {}",
-                        meeting_id,
-                        error
-                    );
-                    Vec::new()
-                });
+            let rules =
+                VocabularyRepository::get_effective_rules_for_meeting(pool, Some(&meeting_id))
+                    .await
+                    .unwrap_or_else(|error| {
+                        log_warn!(
+                            "Failed to load vocabulary rules for meeting {}: {}",
+                            meeting_id,
+                            error
+                        );
+                        Vec::new()
+                    });
             for transcript in &mut meeting.transcripts {
-                transcript.text = crate::vocabulary::apply_vocabulary_rules(&transcript.text, &rules);
+                transcript.text =
+                    crate::vocabulary::apply_vocabulary_rules(&transcript.text, &rules);
             }
 
             log_info!("Successfully retrieved meeting {}", meeting_id);

@@ -1,7 +1,8 @@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ModelConfig, ModelSettingsModal } from "./ModelSettingsModal"
-import { TranscriptModelProps, TranscriptSettings } from "./TranscriptSettings"
+import { TranscriptSettings } from "./TranscriptSettings"
 import { RecordingSettings } from "./RecordingSettings"
+import type { TranscriptModelProps } from "@/types/config"
 
 interface SettingTabsProps {
     modelConfig: ModelConfig;

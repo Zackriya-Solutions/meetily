@@ -96,22 +96,31 @@ export default function RootLayout({
   }, []);
   useEffect(() => {
     // Listen for tray recording toggle request
-    const unlisten = listen('request-recording-toggle', () => {
-      console.log('[Layout] Received request-recording-toggle from tray');
+    let isActive = true;
+    let cleanup: UnlistenFn | undefined;
 
-      if (showOnboarding) {
-        toast.error("Please complete setup first", {
-          description: "You need to finish onboarding before you can start recording."
-        });
-      } else {
-        // If in main app, forward to useRecordingStart via window event
-        console.log('[Layout] Forwarding to start-recording-from-sidebar');
+    const register = async () => {
+      cleanup = await listen('request-recording-toggle', () => {
+        if (showOnboarding) {
+          toast.error("Please complete setup first", {
+            description: "You need to finish onboarding before you can start recording."
+          });
+          return;
+        }
+
         window.dispatchEvent(new CustomEvent('start-recording-from-sidebar'));
+      });
+
+      if (!isActive) {
+        cleanup();
       }
-    });
+    };
+
+    void register();
 
     return () => {
-      unlisten.then(fn => fn());
+      isActive = false;
+      cleanup?.();
     };
   }, [showOnboarding]);
 
@@ -209,19 +218,17 @@ export default function RootLayout({
     <html lang="en">
       <body className={`${sourceSans3.variable} font-sans antialiased`}>
         <RecordingStateProvider>
-          <TranscriptProvider>
-            <ConfigProvider>
-              <OllamaDownloadProvider>
-                <OnboardingProvider>
-                  <UpdateCheckProvider>
-                    <SidebarProvider>
-                      <TooltipProvider>
+          <ConfigProvider>
+            <OllamaDownloadProvider>
+              <OnboardingProvider>
+                <UpdateCheckProvider>
+                  <SidebarProvider>
+                    <TooltipProvider>
+                      <TranscriptProvider>
                         <RecordingPostProcessingProvider>
                           <ImportDialogProvider onOpen={handleOpenImportDialog}>
-                            {/* Download progress toast provider - listens for background downloads */}
                             <DownloadProgressToastProvider />
 
-                            {/* Show onboarding or main app */}
                             {showOnboarding ? (
                               <OnboardingFlow onComplete={handleOnboardingComplete} />
                             ) : (
@@ -230,7 +237,7 @@ export default function RootLayout({
                                 <MainContent>{children}</MainContent>
                               </div>
                             )}
-                            {/* Import audio overlay and dialog */}
+
                             <ImportDropOverlay visible={showDropOverlay} />
                             <ConditionalImportDialog
                               showImportDialog={showImportDialog}
@@ -239,14 +246,13 @@ export default function RootLayout({
                             />
                           </ImportDialogProvider>
                         </RecordingPostProcessingProvider>
-                      </TooltipProvider>
-                    </SidebarProvider>
-                  </UpdateCheckProvider>
-                </OnboardingProvider>
-
-              </OllamaDownloadProvider>
-            </ConfigProvider>
-          </TranscriptProvider>
+                      </TranscriptProvider>
+                    </TooltipProvider>
+                  </SidebarProvider>
+                </UpdateCheckProvider>
+              </OnboardingProvider>
+            </OllamaDownloadProvider>
+          </ConfigProvider>
         </RecordingStateProvider>
 
         <Toaster position="bottom-center" richColors closeButton />

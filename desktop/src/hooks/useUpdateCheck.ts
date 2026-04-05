@@ -19,11 +19,6 @@ export function useUpdateCheck(options: UseUpdateCheckOptions = {}) {
   const [isChecking, setIsChecking] = useState(false);
 
   const checkForUpdates = async (force = false) => {
-    // Skip if checked recently (unless forced)
-    if (!force && updateService.wasCheckedRecently()) {
-      return;
-    }
-
     setIsChecking(true);
     try {
       const info = await updateService.checkForUpdates(force);

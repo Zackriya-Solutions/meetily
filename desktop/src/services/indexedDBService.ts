@@ -26,7 +26,8 @@ export interface StoredTranscript {
   audio_start_time?: number;  // Recording-relative start time in seconds
   audio_end_time?: number;    // Recording-relative end time in seconds
   duration?: number;          // Duration in seconds
-  [key: string]: any;         // Allow additional fields from TranscriptUpdate
+  chunk_start_time?: number;
+  is_partial?: boolean;
 }
 
 interface TranscriptForStorage {
@@ -41,7 +42,7 @@ interface TranscriptForStorage {
   duration?: number;
 }
 
-class IndexedDBService {
+export class IndexedDBService {
   private db: IDBDatabase | null = null;
   private readonly DB_NAME = 'MeetFreeRecoveryDB';
   private readonly DB_VERSION = 1;
@@ -63,44 +64,48 @@ class IndexedDBService {
 
     this.initPromise = new Promise((resolve, reject) => {
       try {
-        this.resolveDbName()
-          .then((dbName) => {
-            const request = indexedDB.open(dbName, this.DB_VERSION);
+        const dbName = this.resolveDbName();
+        const request = indexedDB.open(dbName, this.DB_VERSION);
 
-            request.onerror = () => {
-              console.error('Failed to open IndexedDB:', request.error);
-              reject(request.error);
-            };
+        request.onerror = () => {
+          console.error('Failed to open IndexedDB:', request.error);
+          this.initPromise = null;
+          reject(request.error);
+        };
 
-            request.onsuccess = () => {
-              this.db = request.result;
-              resolve();
-            };
+        request.onsuccess = () => {
+          this.db = request.result;
+          this.db.onversionchange = () => {
+            this.db?.close();
+            this.db = null;
+            this.initPromise = null;
+          };
+          resolve();
+        };
 
-            request.onupgradeneeded = (event) => {
-              const db = (event.target as IDBOpenDBRequest).result;
+        request.onupgradeneeded = (event) => {
+          const db = (event.target as IDBOpenDBRequest).result;
 
-              // Create meetings store
-              if (!db.objectStoreNames.contains('meetings')) {
-                const meetingsStore = db.createObjectStore('meetings', { keyPath: 'meetingId' });
-                meetingsStore.createIndex('lastUpdated', 'lastUpdated', { unique: false });
-                meetingsStore.createIndex('savedToSQLite', 'savedToSQLite', { unique: false });
-              }
+          // Create meetings store
+          if (!db.objectStoreNames.contains('meetings')) {
+            const meetingsStore = db.createObjectStore('meetings', { keyPath: 'meetingId' });
+            meetingsStore.createIndex('lastUpdated', 'lastUpdated', { unique: false });
+            meetingsStore.createIndex('savedToSQLite', 'savedToSQLite', { unique: false });
+          }
 
-              // Create transcripts store
-              if (!db.objectStoreNames.contains('transcripts')) {
-                const transcriptsStore = db.createObjectStore('transcripts', {
-                  keyPath: 'id',
-                  autoIncrement: true
-                });
-                transcriptsStore.createIndex('meetingId', 'meetingId', { unique: false });
-                transcriptsStore.createIndex('storedAt', 'storedAt', { unique: false });
-              }
-            };
-          })
-          .catch(reject);
+          // Create transcripts store
+          if (!db.objectStoreNames.contains('transcripts')) {
+            const transcriptsStore = db.createObjectStore('transcripts', {
+              keyPath: 'id',
+              autoIncrement: true
+            });
+            transcriptsStore.createIndex('meetingId', 'meetingId', { unique: false });
+            transcriptsStore.createIndex('storedAt', 'storedAt', { unique: false });
+          }
+        };
       } catch (error) {
         console.error('Exception during IndexedDB initialization:', error);
+        this.initPromise = null;
         reject(error);
       }
     });
@@ -108,7 +113,7 @@ class IndexedDBService {
     return this.initPromise;
   }
 
-  private async resolveDbName(): Promise<string> {
+  private resolveDbName(): string {
     return this.DB_NAME;
   }
 

@@ -51,7 +51,7 @@ export interface Summary {
 export interface ApiResponse {
   message: string;
   num_chunks: number;
-  data: any[];
+  data: unknown[];
 }
 
 export interface SummaryResponse {
@@ -89,6 +89,8 @@ export interface PaginatedTranscriptsResponse {
   total_count: number;
   has_more: boolean;
 }
+
+export type { MeetingDetails } from '@/types/meeting';
 
 // Transcript segment data for virtualized display
 export interface TranscriptSegmentData {

@@ -1,7 +1,6 @@
 "use client"
 import { useSidebar } from "@/components/Sidebar/SidebarProvider";
 import { useState, useEffect, useCallback, Suspense } from "react";
-import { Transcript } from "@/types";
 import PageContent from "./page-content";
 import { useRouter, useSearchParams } from "next/navigation";
 import Analytics from "@/lib/analytics";
@@ -10,20 +9,12 @@ import { LoaderIcon } from "lucide-react";
 import { useConfig } from "@/contexts/ConfigContext";
 import { usePaginatedTranscripts } from "@/hooks/usePaginatedTranscripts";
 import type { ModelConfig } from "@/services/configService";
+import type { MeetingDetails } from "@/types/meeting";
 import {
   parseSummaryPayloadFromApiData,
   type SummaryPayload,
 } from "@/contracts/summaryContract";
 import { DEFAULT_BUILTIN_SUMMARY_MODEL } from "@/constants/modelDefaults";
-
-interface MeetingDetailsResponse {
-  id: string;
-  title: string;
-  created_at: string;
-  updated_at: string;
-  transcripts: Transcript[];
-  folder_path?: string;
-}
 
 interface SummaryApiResponse {
   status: string;
@@ -38,7 +29,7 @@ function MeetingDetailsContent() {
   const { setCurrentMeeting, refetchMeetings, stopSummaryPolling } = useSidebar();
   const { isAutoSummary } = useConfig(); // Get auto-summary toggle state
   const router = useRouter();
-  const [meetingDetails, setMeetingDetails] = useState<MeetingDetailsResponse | null>(null);
+  const [meetingDetails, setMeetingDetails] = useState<MeetingDetails | null>(null);
   const [meetingSummary, setMeetingSummary] = useState<SummaryPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
@@ -159,17 +150,6 @@ function MeetingDetailsContent() {
       setError(transcriptError);
     }
   }, [transcriptError]);
-
-  // Extract fetchMeetingDetails for use in child components (now refetches via hook)
-  const fetchMeetingDetails = useCallback(async () => {
-    if (!meetingId || meetingId === 'intro-call') {
-      return;
-    }
-
-    // The usePaginatedTranscripts hook automatically refetches when meetingId changes
-    // This function is kept for compatibility with onMeetingUpdated callback
-    console.log('fetchMeetingDetails called - pagination hook will handle refetch');
-  }, [meetingId]);
 
   // Reset states when meetingId changes (prevent race conditions)
   useEffect(() => {
@@ -305,9 +285,7 @@ function MeetingDetailsContent() {
     shouldAutoGenerate={shouldAutoGenerate}
     onAutoGenerateComplete={() => setShouldAutoGenerate(false)}
     onMeetingUpdated={async () => {
-      // Refetch meeting details to get updated title from backend
-      await fetchMeetingDetails();
-      // Refetch meetings list to update sidebar
+      await refetch();
       await refetchMeetings();
     }}
     onRefetchTranscripts={refetch}

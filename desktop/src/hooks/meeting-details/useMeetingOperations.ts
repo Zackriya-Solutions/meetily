@@ -1,9 +1,20 @@
 import { useCallback } from 'react';
 import { invoke as invokeTauri } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
+import type { MeetingDetails } from '@/types/meeting';
 
 interface UseMeetingOperationsProps {
-  meeting: any;
+  meeting: MeetingDetails;
+}
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (typeof error === 'string') {
+    return error;
+  }
+  return 'Unknown error';
 }
 
 export function useMeetingOperations({
@@ -16,7 +27,9 @@ export function useMeetingOperations({
       await invokeTauri('meeting_folder_open', { meetingId: meeting.id });
     } catch (error) {
       console.error('Failed to open meeting folder:', error);
-      toast.error(error as string || 'Failed to open recording folder');
+      toast.error('Failed to open recording folder', {
+        description: getErrorMessage(error),
+      });
     }
   }, [meeting.id]);
 
@@ -31,7 +44,7 @@ export function useMeetingOperations({
       });
 
       if (result.wrote_file) {
-        toast.success('Markdown exported', {
+        toast.success('Markdown exported successfully', {
           description: result.output_path || 'Export completed in meeting folder.',
         });
       } else {
@@ -39,7 +52,9 @@ export function useMeetingOperations({
       }
     } catch (error) {
       console.error('Failed to export meeting markdown:', error);
-      toast.error(error as string || 'Failed to export markdown');
+      toast.error('Failed to export markdown', {
+        description: getErrorMessage(error),
+      });
     }
   }, [meeting.id]);
 

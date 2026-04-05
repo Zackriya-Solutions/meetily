@@ -5,9 +5,10 @@ import { toast } from 'sonner';
 import Analytics from '@/lib/analytics';
 import { invoke as invokeTauri } from '@tauri-apps/api/core';
 import { type SummaryPayload } from '@/contracts/summaryContract';
+import type { MeetingDetails } from '@/types/meeting';
 
 interface UseCopyOperationsProps {
-  meeting: any;
+  meeting: MeetingDetails;
   transcripts: Transcript[];
   meetingTitle: string;
   aiSummary: SummaryPayload | null;

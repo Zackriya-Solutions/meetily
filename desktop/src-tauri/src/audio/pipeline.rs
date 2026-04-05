@@ -6,6 +6,7 @@ use rubato::{
     Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
 };
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -55,18 +56,16 @@ impl AudioMixerRingBuffer {
     }
 
     fn add_samples(&mut self, device_type: DeviceType, samples: Vec<f32>) {
-        // Log buffer health periodically for diagnostics
-        static mut SAMPLE_COUNTER: u64 = 0;
-        unsafe {
-            SAMPLE_COUNTER += 1;
-            if SAMPLE_COUNTER % 200 == 0 {
-                debug!(
-                    "📊 Ring buffer status: mic={} samples, sys={} samples (max={})",
-                    self.mic_buffer.len(),
-                    self.system_buffer.len(),
-                    self.max_buffer_size
-                );
-            }
+        // Log buffer health periodically for diagnostics without shared mutable state.
+        static SAMPLE_COUNTER: AtomicU64 = AtomicU64::new(0);
+        let sample_counter = SAMPLE_COUNTER.fetch_add(1, Ordering::Relaxed) + 1;
+        if sample_counter % 200 == 0 {
+            debug!(
+                "📊 Ring buffer status: mic={} samples, sys={} samples (max={})",
+                self.mic_buffer.len(),
+                self.system_buffer.len(),
+                self.max_buffer_size
+            );
         }
 
         match device_type {

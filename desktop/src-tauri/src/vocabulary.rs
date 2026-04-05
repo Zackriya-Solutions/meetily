@@ -3,7 +3,9 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Runtime};
 
 use crate::{
-    database::repositories::vocabulary::{VocabularyRepository, VocabularyRule, VocabularyUpsertInput},
+    database::repositories::vocabulary::{
+        VocabularyRepository, VocabularyRule, VocabularyUpsertInput,
+    },
     preferences::{self, AppPreferences},
     state::AppState,
     transcript_processing,
@@ -124,7 +126,8 @@ pub async fn transcript_postprocess_preview<R: Runtime>(
         .await
         .unwrap_or_default();
     let cleaned = transcript_processing::clean_for_storage(&text, &preferences.transcript_cleanup);
-    let rules = get_effective_rules_for_meeting(state.db_manager.pool(), meeting_id.as_deref()).await?;
+    let rules =
+        get_effective_rules_for_meeting(state.db_manager.pool(), meeting_id.as_deref()).await?;
     let corrected = apply_vocabulary_rules(&cleaned, &rules);
 
     Ok(TranscriptPostprocessPreviewResponse {

@@ -213,7 +213,7 @@ jobs:
           # Check environment variables
           Write-Host "Environment Variables:"
           Write-Host "  SM_HOST: $env:SM_HOST"
-          Write-Host "  SM_API_KEY: $($env:SM_API_KEY.Substring(0, [Math]::Min(20, $env:SM_API_KEY.Length)))..."
+          Write-Host "  SM_API_KEY: $(if ($env:SM_API_KEY) { '***SET***' } else { 'NOT SET' })"
           Write-Host "  SM_CLIENT_CERT_FILE: $env:SM_CLIENT_CERT_FILE"
           Write-Host "  SM_CLIENT_CERT_PASSWORD: $(if ($env:SM_CLIENT_CERT_PASSWORD) { '***SET***' } else { 'NOT SET' })"
           Write-Host ""
@@ -254,7 +254,7 @@ jobs:
           Write-Host ""
           Write-Host "Environment Configuration:"
           Write-Host "  SM_HOST: $($env:SM_HOST ?? 'NOT SET')"
-          Write-Host "  SM_API_KEY: $(if ($env:SM_API_KEY) { $env:SM_API_KEY.Substring(0, [Math]::Min(20, $env:SM_API_KEY.Length)) + '...' } else { 'NOT SET' })"
+          Write-Host "  SM_API_KEY: $(if ($env:SM_API_KEY) { '***SET***' } else { 'NOT SET' })"
           Write-Host "  SM_CLIENT_CERT_FILE: $($env:SM_CLIENT_CERT_FILE ?? 'NOT SET')"
           Write-Host "  SM_CODE_SIGNING_CERT_SHA1_HASH: $($env:SM_CODE_SIGNING_CERT_SHA1_HASH ?? 'NOT SET')"
 
