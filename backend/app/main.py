@@ -606,7 +606,7 @@ class MeetingSummaryUpdate(BaseModel):
     summary: dict
 
 async def send_to_discord(meeting_id: str, summary: dict):
-    webhook_url = "https://discord.com/api/webhooks/1491648580098850836/Y68yYcNocF0TuXobXtkn7j5utyzkLs0uKTOOniS-H-Lunv57tVPWlitjVCXxjZODmxdw"  # Replace with actual webhook URL
+    webhook_url = "WEBHOOK_URL"  # Replace with actual webhook URL
 
     try:
         # Build a clean message
