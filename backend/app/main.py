@@ -11,6 +11,7 @@ import json
 from threading import Lock
 from transcript_processor import TranscriptProcessor
 import time
+import requests
 
 # Load environment variables
 load_dotenv()
@@ -604,11 +605,53 @@ class MeetingSummaryUpdate(BaseModel):
     meeting_id: str
     summary: dict
 
+async def send_to_discord(meeting_id: str, summary: dict):
+    webhook_url = "https://discord.com/api/webhooks/1491648580098850836/Y68yYcNocF0TuXobXtkn7j5utyzkLs0uKTOOniS-H-Lunv57tVPWlitjVCXxjZODmxdw"  # Replace with actual webhook URL
+
+    try:
+        # Build a clean message
+        message = f"📝 **Meeting Summary (ID: {meeting_id})**\n\n"
+
+        # Main summary text
+        if "text" in summary:
+            message += f"**Summary:**\n{summary['text']}\n\n"
+
+        # Tasks / action items
+        if "tasks" in summary:
+            message += "**Tasks:**\n"
+            tasks = summary["tasks"]
+
+            if isinstance(tasks, dict):
+                for person, task in tasks.items():
+                    message += f"- {person}: {task}\n"
+            elif isinstance(tasks, list):
+                for task in tasks:
+                    message += f"- {task}\n"
+
+        # Send to Discord
+        response = requests.post(
+            webhook_url,
+            json={"content": message}
+        )
+
+        if response.status_code != 204:
+            print(f"Discord failed: {response.text}")
+
+    except Exception as e:
+        print(f"Error sending to Discord: {e}")
+
 @app.post("/save-meeting-summary")
 async def save_meeting_summary(data: MeetingSummaryUpdate):
     """Save a meeting summary"""
     try:
         await db.update_meeting_summary(data.meeting_id, data.summary)
+
+        # export to Discord here
+        try:
+            await send_to_discord(data.meeting_id, data.summary)
+        except Exception as discord_error:
+            logger.error(f"Discord export failed: {discord_error}")
+
         return {"message": "Meeting summary saved successfully"}
     except ValueError as ve:
         logger.error(f"Value error saving meeting summary: {str(ve)}")
