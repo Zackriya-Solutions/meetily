@@ -170,22 +170,25 @@ futures-channel = "0.3.31"
 
 # Apple Speech Recognition (SFSpeechRecognizer) for native macOS transcription
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSString", "NSLocale", "NSError", "block2"] }
+block2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSString", "NSLocale", "NSError", "NSArray", "alloc", "block2"] }
 objc2-speech = { version = "0.3", features = [
     "SFSpeechRecognizer",
     "SFSpeechRecognitionRequest",
     "SFSpeechRecognitionResult",
     "SFSpeechRecognitionTask",
-    "SFSpeechAudioBufferRecognitionRequest",
     "SFTranscription",
+    "SFTranscriptionSegment",
+    "alloc",
     "block2",
+    "objc2-avf-audio",
 ] }
 objc2-avf-audio = { version = "0.3", features = [
     "AVAudioBuffer",
-    "AVAudioPCMBuffer",
     "AVAudioFormat",
-    "AVAudioCommonFormat",
+    "AVAudioTypes",
     "AVAudioChannelLayout",
+    "alloc",
 ] }
 
 # PERFORMANCE: Enable Metal GPU + CoreML acceleration automatically on macOS

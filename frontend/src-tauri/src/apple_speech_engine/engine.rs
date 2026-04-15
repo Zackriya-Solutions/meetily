@@ -4,14 +4,17 @@
 //! used by WhisperEngine and ParakeetEngine.
 
 use anyhow::{anyhow, Result};
-use log::{info, warn, error};
+use log::{info, warn};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use block2::RcBlock;
+use objc2::AllocAnyThread;
 use objc2::rc::Retained;
-use objc2_foundation::{NSLocale, NSString};
+use objc2_foundation::NSString;
 use objc2_speech::{
     SFSpeechAudioBufferRecognitionRequest, SFSpeechRecognitionResult, SFSpeechRecognizer,
+    SFSpeechRecognizerAuthorizationStatus,
 };
 use objc2_avf_audio::{AVAudioFormat, AVAudioPCMBuffer};
 
@@ -26,15 +29,13 @@ pub struct AppleSpeechEngine {
 }
 
 impl AppleSpeechEngine {
-    /// Create a new AppleSpeechEngine. Checks availability but does not request authorization yet.
+    /// Create a new AppleSpeechEngine with the system default locale.
     pub fn new() -> Result<Self> {
         let recognizer = unsafe { SFSpeechRecognizer::new() };
-        let available = recognizer.isAvailable();
-        let locale_name = if available {
-            let locale = unsafe { recognizer.locale() };
-            unsafe { locale.localeIdentifier() }.to_string()
-        } else {
-            "unavailable".to_string()
+        let available = unsafe { recognizer.isAvailable() };
+        let locale_name = unsafe {
+            let locale = recognizer.locale();
+            locale.localeIdentifier().to_string()
         };
 
         info!(
@@ -52,10 +53,14 @@ impl AppleSpeechEngine {
     /// Create engine with a specific locale (e.g. "en-US", "es-ES").
     pub fn with_locale(locale_id: &str) -> Result<Self> {
         let ns_locale_id = NSString::from_str(locale_id);
-        let locale = unsafe { NSLocale::initWithLocaleIdentifier(NSLocale::alloc(), &ns_locale_id) };
-        let recognizer = unsafe { SFSpeechRecognizer::initWithLocale(SFSpeechRecognizer::alloc(), &locale) };
+        let locale = objc2_foundation::NSLocale::localeWithLocaleIdentifier(&ns_locale_id);
+        let recognizer = unsafe { SFSpeechRecognizer::initWithLocale(
+            SFSpeechRecognizer::alloc(),
+            &locale,
+        ) }
+        .ok_or_else(|| anyhow!("Failed to create SFSpeechRecognizer with locale '{}'", locale_id))?;
 
-        let available = recognizer.isAvailable();
+        let available = unsafe { recognizer.isAvailable() };
 
         info!(
             "🍎 Apple Speech engine created with locale '{}' — available: {}",
@@ -70,21 +75,18 @@ impl AppleSpeechEngine {
     }
 
     /// Request speech recognition authorization from the user.
-    /// Must be called before first transcription.
     pub async fn request_authorization() -> Result<()> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let tx = std::sync::Mutex::new(Some(tx));
 
-        unsafe {
-            SFSpeechRecognizer::requestAuthorization(&objc2::block2::RcBlock::new(
-                move |status| {
-                    let authorized = status == objc2_speech::SFSpeechRecognizerAuthorizationStatus::Authorized;
-                    if let Some(tx) = tx.lock().unwrap().take() {
-                        let _ = tx.send(authorized);
-                    }
-                },
-            ));
-        }
+        let block = RcBlock::new(move |status: SFSpeechRecognizerAuthorizationStatus| {
+            let authorized = status == SFSpeechRecognizerAuthorizationStatus::Authorized;
+            if let Some(tx) = tx.lock().unwrap().take() {
+                let _ = tx.send(authorized);
+            }
+        });
+
+        unsafe { SFSpeechRecognizer::requestAuthorization(&block) };
 
         match rx.await {
             Ok(true) => {
@@ -93,7 +95,7 @@ impl AppleSpeechEngine {
             }
             Ok(false) => {
                 warn!("🍎 Speech recognition not authorized by user");
-                Err(anyhow!("Speech recognition not authorized. Please enable it in System Settings > Privacy & Security > Speech Recognition."))
+                Err(anyhow!("Speech recognition not authorized. Please enable in System Settings > Privacy & Security > Speech Recognition."))
             }
             Err(_) => Err(anyhow!("Failed to receive authorization response")),
         }
@@ -102,39 +104,35 @@ impl AppleSpeechEngine {
     /// Transcribe audio samples to text.
     ///
     /// Audio must be 16kHz mono f32 samples (same format as other engines).
+    /// Returns (text, optional_confidence, is_partial).
     pub async fn transcribe_audio(&self, audio: Vec<f32>) -> Result<(String, Option<f32>, bool)> {
         let recognizer_guard = self.recognizer.read().await;
         let recognizer = recognizer_guard
             .as_ref()
             .ok_or_else(|| anyhow!("Apple Speech recognizer not initialized"))?;
 
-        if !recognizer.isAvailable() {
+        if !unsafe { recognizer.isAvailable() } {
             return Err(anyhow!("Apple Speech recognizer is not available"));
         }
 
         // Create recognition request
         let request = unsafe { SFSpeechAudioBufferRecognitionRequest::new() };
-        unsafe {
-            request.setShouldReportPartialResults(false);
-        }
+        unsafe { request.setShouldReportPartialResults(false) };
 
         // Enable on-device recognition if supported
         if unsafe { recognizer.supportsOnDeviceRecognition() } {
             unsafe { request.setRequiresOnDeviceRecognition(true) };
-            info!("🍎 Using on-device recognition");
         }
 
-        // Create audio format: 16kHz, 1 channel, float32
+        // Create audio format: 16kHz, 1 channel, float32 interleaved
         let format = unsafe {
             AVAudioFormat::initStandardFormatWithSampleRate_channels(
                 AVAudioFormat::alloc(),
                 16000.0,
                 1,
             )
-        };
-        let Some(format) = format else {
-            return Err(anyhow!("Failed to create AVAudioFormat (16kHz mono)"));
-        };
+        }
+        .ok_or_else(|| anyhow!("Failed to create AVAudioFormat (16kHz mono)"))?;
 
         // Create PCM buffer and copy audio data
         let frame_count = audio.len() as u32;
@@ -144,10 +142,8 @@ impl AppleSpeechEngine {
                 &format,
                 frame_count,
             )
-        };
-        let Some(buffer) = buffer else {
-            return Err(anyhow!("Failed to create AVAudioPCMBuffer"));
-        };
+        }
+        .ok_or_else(|| anyhow!("Failed to create AVAudioPCMBuffer"))?;
 
         // Copy f32 samples into the buffer
         unsafe {
@@ -155,7 +151,7 @@ impl AppleSpeechEngine {
             if float_data.is_null() {
                 return Err(anyhow!("AVAudioPCMBuffer floatChannelData is null"));
             }
-            let channel_ptr = *float_data;
+            let channel_ptr = (*float_data).as_ptr();
             std::ptr::copy_nonoverlapping(audio.as_ptr(), channel_ptr, audio.len());
             buffer.setFrameLength(frame_count);
         }
@@ -170,53 +166,52 @@ impl AppleSpeechEngine {
         let (tx, rx) = tokio::sync::oneshot::channel::<Result<(String, Option<f32>, bool)>>();
         let tx = std::sync::Mutex::new(Some(tx));
 
+        let block = RcBlock::new(
+            move |result: *mut SFSpeechRecognitionResult,
+                  error: *mut objc2_foundation::NSError| {
+                let Some(tx) = tx.lock().unwrap().take() else {
+                    return; // Already sent result
+                };
+
+                if !error.is_null() {
+                    let err = unsafe { &*error };
+                    let description = err.localizedDescription().to_string();
+                    let _ = tx.send(Err(anyhow!("Speech recognition error: {}", description)));
+                    return;
+                }
+
+                if result.is_null() {
+                    let _ = tx.send(Err(anyhow!("Speech recognition returned null result")));
+                    return;
+                }
+
+                let result = unsafe { &*result };
+                let is_final = unsafe { result.isFinal() };
+
+                if is_final {
+                    let transcription = unsafe { result.bestTranscription() };
+                    let text = unsafe { transcription.formattedString() }.to_string();
+
+                    // Average confidence across segments
+                    let segments = unsafe { transcription.segments() };
+                    let confidence = if segments.len() > 0 {
+                        let sum: f32 = segments
+                            .to_vec()
+                            .iter()
+                            .map(|s| unsafe { s.confidence() } as f32)
+                            .sum();
+                        Some(sum / segments.len() as f32)
+                    } else {
+                        None
+                    };
+
+                    let _ = tx.send(Ok((text, confidence, false)));
+                }
+            },
+        );
+
         let _task = unsafe {
-            recognizer.recognitionTaskWithRequest_resultHandler(
-                &request,
-                &objc2::block2::RcBlock::new(
-                    move |result: *mut SFSpeechRecognitionResult, error: *mut objc2_foundation::NSError| {
-                        let Some(tx) = tx.lock().unwrap().take() else {
-                            return; // Already sent result
-                        };
-
-                        if !error.is_null() {
-                            let err = unsafe { &*error };
-                            let description = unsafe { err.localizedDescription() }.to_string();
-                            let _ = tx.send(Err(anyhow!("Speech recognition error: {}", description)));
-                            return;
-                        }
-
-                        if result.is_null() {
-                            let _ = tx.send(Err(anyhow!("Speech recognition returned null result")));
-                            return;
-                        }
-
-                        let result = unsafe { &*result };
-                        let is_final = result.isFinal();
-
-                        if is_final {
-                            let transcription = unsafe { result.bestTranscription() };
-                            let text = unsafe { transcription.formattedString() }.to_string();
-                            let confidence = result.transcriptions()
-                                .first()
-                                .and_then(|t| {
-                                    let segments = unsafe { t.segments() };
-                                    if segments.is_empty() {
-                                        None
-                                    } else {
-                                        let sum: f32 = segments.iter()
-                                            .map(|s| s.confidence() as f32)
-                                            .sum();
-                                        Some(sum / segments.len() as f32)
-                                    }
-                                });
-
-                            let _ = tx.send(Ok((text, confidence, false)));
-                        }
-                        // Non-final results are ignored since we set shouldReportPartialResults=false
-                    },
-                ),
-            )
+            recognizer.recognitionTaskWithRequest_resultHandler(&request, &block)
         };
 
         // Wait for result with timeout
