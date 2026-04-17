@@ -168,10 +168,10 @@ export function LanguageSelection({
     }
   };
 
-  // Find the selected language name for display
+  // Find the selected language name for display. Default to Korean.
   const selectedLanguageName = LANGUAGES.find(
     lang => lang.code === selectedLanguage
-  )?.name || 'Auto Detect (Original Language)';
+  )?.name || 'Korean';
 
   return (
     <div className="space-y-4">

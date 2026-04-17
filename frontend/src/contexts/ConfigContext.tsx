@@ -136,13 +136,13 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     systemDevice: null
   });
 
-  // Language preference state
+  // Language preference state — defaults to Korean for the Cohere build
   const [selectedLanguage, setSelectedLanguage] = useState<string>(() => {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('primaryLanguage');
-      return saved || 'auto';
+      return saved || 'ko';
     }
-    return 'auto';
+    return 'ko';
   });
 
   // UI preferences state

@@ -3,12 +3,15 @@
 /// Centralized definitions for default models and settings.
 /// Used across database initialization, import, and retranscription.
 
-/// Default Whisper model for transcription when no preference is configured.
-/// This is the recommended balance of accuracy and speed.
+/// Default Cohere ONNX transcription model.
+pub const DEFAULT_COHERE_MODEL: &str = "cohere-transcribe-03-2026";
+
+/// Default transcription language (BCP-47 base code). Korean is the target.
+pub const DEFAULT_LANGUAGE: &str = "ko";
+
+// NOTE: Whisper/Parakeet constants removed — Cohere is the sole provider.
 pub const DEFAULT_WHISPER_MODEL: &str = "large-v3-turbo";
 
-/// Default Parakeet model for transcription when no preference is configured.
-/// This is the quantized version optimized for speed.
 pub const DEFAULT_PARAKEET_MODEL: &str = "parakeet-tdt-0.6b-v3-int8";
 
 /// Whisper model catalog with metadata for all supported models.
