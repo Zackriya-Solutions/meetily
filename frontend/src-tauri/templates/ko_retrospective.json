@@ -1,0 +1,27 @@
+{
+  "name": "회고",
+  "description": "스프린트/프로젝트 회고용. Keep-Problem-Try 구조.",
+  "sections": [
+    {
+      "title": "좋았던 점 (Keep)",
+      "instruction": "유지하고 싶은 관행·성과를 나열합니다.",
+      "format": "list"
+    },
+    {
+      "title": "아쉬운 점 (Problem)",
+      "instruction": "문제·개선이 필요한 영역을 나열합니다.",
+      "format": "list"
+    },
+    {
+      "title": "시도할 것 (Try)",
+      "instruction": "다음 주기에 시험해 볼 아이디어를 나열합니다.",
+      "format": "list"
+    },
+    {
+      "title": "액션 아이템",
+      "instruction": "담당자·액션·기한을 표로 정리합니다. 근거 발언을 반드시 포함합니다.",
+      "format": "list",
+      "item_format": "| 담당자 | 액션 | 기한 | 근거 발언 |\n| --- | --- | --- | --- |"
+    }
+  ]
+}
