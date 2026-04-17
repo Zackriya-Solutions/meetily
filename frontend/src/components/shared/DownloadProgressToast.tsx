@@ -216,7 +216,7 @@ export function useDownloadProgressToast() {
     });
   }, [downloads, dismissedModels, showDownloadToast]);
 
-  // Listen to Parakeet download events
+  // Listen to Cohere ONNX download events
   useEffect(() => {
     const unlistenProgress = listen<{
       modelName: string;
@@ -225,15 +225,15 @@ export function useDownloadProgressToast() {
       total_mb?: number;
       speed_mbps?: number;
       status?: string;
-    }>('parakeet-model-download-progress', (event) => {
+    }>('cohere-download-progress', (event) => {
       const { modelName, progress, downloaded_mb, total_mb, speed_mbps, status } = event.payload;
 
       const downloadData: DownloadProgress = {
         modelName,
-        displayName: 'Transcription Model (Parakeet)',
+        displayName: 'Transcription Model (Cohere)',
         progress,
         downloadedMb: downloaded_mb ?? 0,
-        totalMb: total_mb ?? 670,
+        totalMb: total_mb ?? 2048,
         speedMbps: speed_mbps ?? 0,
         status: status === 'cancelled'
           ? 'cancelled'
@@ -244,42 +244,39 @@ export function useDownloadProgressToast() {
 
       updateDownload(modelName, downloadData);
 
-      // Clean up cancelled downloads after delay to auto-dismiss toast
       if (downloadData.status === 'cancelled') {
-        cleanupDownload(modelName, 6000); // 5s toast + 1s buffer
+        cleanupDownload(modelName, 6000);
       }
-      // Removed direct showDownloadToast call here, handled by effect
     });
 
     const unlistenComplete = listen<{ modelName: string }>(
-      'parakeet-model-download-complete',
+      'cohere-download-complete',
       (event) => {
         const { modelName } = event.payload;
         const downloadData: DownloadProgress = {
           modelName,
-          displayName: 'Transcription Model (Parakeet)',
+          displayName: 'Transcription Model (Cohere)',
           progress: 100,
-          downloadedMb: 670,
-          totalMb: 670,
+          downloadedMb: 2048,
+          totalMb: 2048,
           speedMbps: 0,
           status: 'completed',
         };
         updateDownload(modelName, downloadData);
-        // Clean up after 4 seconds (completion toast duration is 3s + 1s buffer)
         cleanupDownload(modelName, 4000);
       }
     );
 
     const unlistenError = listen<{ modelName: string; error: string }>(
-      'parakeet-model-download-error',
+      'cohere-download-error',
       (event) => {
         const { modelName, error } = event.payload;
         const downloadData: DownloadProgress = {
           modelName,
-          displayName: 'Transcription Model (Parakeet)',
+          displayName: 'Transcription Model (Cohere)',
           progress: 0,
           downloadedMb: 0,
-          totalMb: 670,
+          totalMb: 2048,
           speedMbps: 0,
           status: 'error',
           error: categorizeError(error),

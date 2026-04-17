@@ -4,22 +4,15 @@
  */
 
 /**
- * Default Whisper model for transcription when no preference is configured.
- * This is the recommended balance of accuracy and speed.
+ * Default Cohere ONNX model for transcription when no preference is configured.
+ * This is the Cohere Transcribe 03-2026 local ONNX model.
  */
-export const DEFAULT_WHISPER_MODEL = 'large-v3-turbo';
+export const DEFAULT_COHERE_MODEL = 'cohere-transcribe-03-2026';
 
 /**
- * Default Parakeet model for transcription when no preference is configured.
- * This is the quantized version optimized for speed.
- */
-export const DEFAULT_PARAKEET_MODEL = 'parakeet-tdt-0.6b-v3-int8';
-
-/**
- * Model defaults by provider type
+ * Model defaults by provider type.
+ * Only Cohere is supported after the 2026 migration.
  */
 export const MODEL_DEFAULTS = {
-  whisper: DEFAULT_WHISPER_MODEL,
-  localWhisper: DEFAULT_WHISPER_MODEL,
-  parakeet: DEFAULT_PARAKEET_MODEL,
+  cohere: DEFAULT_COHERE_MODEL,
 } as const;

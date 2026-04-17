@@ -4,15 +4,16 @@ import React, { createContext, useContext, useState, useEffect, useRef, useCallb
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { PermissionStatus, OnboardingPermissions } from '@/types/onboarding';
+import { DEFAULT_COHERE_MODEL } from '@/lib/cohere';
 
-const PARAKEET_MODEL = 'parakeet-tdt-0.6b-v3-int8';
+const COHERE_MODEL = DEFAULT_COHERE_MODEL;
 
 interface OnboardingStatus {
   version: string;
   completed: boolean;
   current_step: number;
   model_status: {
-    parakeet: string;
+    cohere: string;
     summary: string;
   };
   last_updated: string;
@@ -25,7 +26,7 @@ interface SummaryModelProgressInfo {
   speedMbps: number;
 }
 
-interface ParakeetProgressInfo {
+interface CohereProgressInfo {
   percent: number;
   downloadedMb: number;
   totalMb: number;
@@ -34,9 +35,9 @@ interface ParakeetProgressInfo {
 
 interface OnboardingContextType {
   currentStep: number;
-  parakeetDownloaded: boolean;
-  parakeetProgress: number;
-  parakeetProgressInfo: ParakeetProgressInfo;
+  cohereDownloaded: boolean;
+  cohereProgress: number;
+  cohereProgressInfo: CohereProgressInfo;
   summaryModelDownloaded: boolean;
   summaryModelProgress: number;
   summaryModelProgressInfo: SummaryModelProgressInfo;
@@ -51,7 +52,7 @@ interface OnboardingContextType {
   goNext: () => void;
   goPrevious: () => void;
   // Setters
-  setParakeetDownloaded: (value: boolean) => void;
+  setCohereDownloaded: (value: boolean) => void;
   setSummaryModelDownloaded: (value: boolean) => void;
   setSelectedSummaryModel: (value: string) => void;
   setDatabaseExists: (value: boolean) => void;
@@ -59,7 +60,7 @@ interface OnboardingContextType {
   setPermissionsSkipped: (skipped: boolean) => void;
   completeOnboarding: () => Promise<void>;
   startBackgroundDownloads: (includeGemma: boolean) => Promise<void>;
-  retryParakeetDownload: () => Promise<void>;
+  retryCohereDownload: () => Promise<void>;
 }
 
 const OnboardingContext = createContext<OnboardingContextType | undefined>(undefined);
@@ -67,9 +68,9 @@ const OnboardingContext = createContext<OnboardingContextType | undefined>(undef
 export function OnboardingProvider({ children }: { children: React.ReactNode }) {
   const [currentStep, setCurrentStep] = useState(1);
   const [completed, setCompleted] = useState(false);
-  const [parakeetDownloaded, setParakeetDownloaded] = useState(false);
-  const [parakeetProgress, setParakeetProgress] = useState(0);
-  const [parakeetProgressInfo, setParakeetProgressInfo] = useState<ParakeetProgressInfo>({
+  const [cohereDownloaded, setCohereDownloaded] = useState(false);
+  const [cohereProgress, setCohereProgress] = useState(0);
+  const [cohereProgressInfo, setCohereProgressInfo] = useState<CohereProgressInfo>({
     percent: 0,
     downloadedMb: 0,
     totalMb: 0,
@@ -194,9 +195,9 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
     return () => {
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
     };
-  }, [currentStep, parakeetDownloaded, summaryModelDownloaded, completed]);
+  }, [currentStep, cohereDownloaded, summaryModelDownloaded, completed]);
 
-  // Listen to Parakeet download progress
+  // Listen to Cohere download progress
   useEffect(() => {
     const unlisten = listen<{
       modelName: string;
@@ -206,41 +207,41 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
       speed_mbps?: number;
       status?: string;
     }>(
-      'parakeet-model-download-progress',
+      'cohere-download-progress',
       (event) => {
         const { modelName, progress, downloaded_mb, total_mb, speed_mbps, status } = event.payload;
-        if (modelName === PARAKEET_MODEL) {
-          setParakeetProgress(progress);
-          setParakeetProgressInfo({
+        if (modelName === COHERE_MODEL) {
+          setCohereProgress(progress);
+          setCohereProgressInfo({
             percent: progress,
             downloadedMb: downloaded_mb ?? 0,
             totalMb: total_mb ?? 0,
             speedMbps: speed_mbps ?? 0,
           });
           if (status === 'completed' || progress >= 100) {
-            setParakeetDownloaded(true);
+            setCohereDownloaded(true);
           }
         }
       }
     );
 
     const unlistenComplete = listen<{ modelName: string }>(
-      'parakeet-model-download-complete',
+      'cohere-download-complete',
       (event) => {
         const { modelName } = event.payload;
-        if (modelName === PARAKEET_MODEL) {
-          setParakeetDownloaded(true);
-          setParakeetProgress(100);
+        if (modelName === COHERE_MODEL) {
+          setCohereDownloaded(true);
+          setCohereProgress(100);
         }
       }
     );
 
     const unlistenError = listen<{ modelName: string; error: string }>(
-      'parakeet-model-download-error',
+      'cohere-download-error',
       (event) => {
         const { modelName } = event.payload;
-        if (modelName === PARAKEET_MODEL) {
-          console.error('Parakeet download error:', event.payload.error);
+        if (modelName === COHERE_MODEL) {
+          console.error('Cohere download error:', event.payload.error);
         }
       }
     );
@@ -308,7 +309,7 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
 
         setCurrentStep(verifiedStatus.currentStep);
         setCompleted(verifiedStatus.completed);
-        setParakeetDownloaded(verifiedStatus.parakeetDownloaded);
+        setCohereDownloaded(verifiedStatus.cohereDownloaded);
         setSummaryModelDownloaded(verifiedStatus.summaryModelDownloaded);
 
         console.log('[OnboardingContext] Verified status:', verifiedStatus);
@@ -323,17 +324,17 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
 
   // Verify that models actually exist on disk, not just trust saved JSON
   const verifyModelStatus = async (savedStatus: OnboardingStatus) => {
-    let parakeetDownloaded = false;
+    let cohereDownloaded = false;
     let summaryModelDownloaded = false;
 
-    // Verify Parakeet model exists on disk
+    // Verify Cohere ONNX model is ready on disk
     try {
-      await invoke('parakeet_init');
-      parakeetDownloaded = await invoke<boolean>('parakeet_has_available_models');
-      console.log('[OnboardingContext] Parakeet verified on disk:', parakeetDownloaded);
+      await invoke('cohere_init');
+      cohereDownloaded = await invoke<boolean>('cohere_is_model_loaded');
+      console.log('[OnboardingContext] Cohere verified on disk:', cohereDownloaded);
     } catch (error) {
-      console.warn('[OnboardingContext] Failed to verify Parakeet:', error);
-      parakeetDownloaded = false;
+      console.warn('[OnboardingContext] Failed to verify Cohere:', error);
+      cohereDownloaded = false;
     }
 
     // Verify Summary model exists on disk - check if ANY model is available
@@ -362,7 +363,7 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
     return {
       currentStep,
       completed,
-      parakeetDownloaded,
+      cohereDownloaded,
       summaryModelDownloaded,
     };
   };
@@ -383,7 +384,7 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
           completed: completed,
           current_step: currentStep,
           model_status: {
-            parakeet: parakeetDownloaded ? 'downloaded' : 'not_downloaded',
+            cohere: cohereDownloaded ? 'downloaded' : 'not_downloaded',
             summary: summaryModelDownloaded ? 'downloaded' : 'not_downloaded',
           },
           last_updated: new Date().toISOString(),
@@ -421,26 +422,26 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
     }
   };
 
-  // Start background downloads for models (parallel - Parakeet first, then Gemma immediately)
+  // Start background downloads for models (parallel - Cohere first, then Gemma after short delay)
   const startBackgroundDownloads = async (includeGemma: boolean) => {
     console.log('[OnboardingContext] Starting background downloads, includeGemma:', includeGemma);
     setIsBackgroundDownloading(true);
 
     try {
-      // Start Parakeet download first (speech recognition - always required)
-      if (!parakeetDownloaded) {
-        console.log('[OnboardingContext] Starting Parakeet download');
-        invoke('parakeet_download_model', { modelName: PARAKEET_MODEL })
-          .catch(err => console.error('[OnboardingContext] Parakeet download failed:', err));
+      // Start Cohere download first (speech recognition - always required)
+      if (!cohereDownloaded) {
+        console.log('[OnboardingContext] Starting Cohere download');
+        invoke('cohere_download_model', { modelName: COHERE_MODEL })
+          .catch(err => console.error('[OnboardingContext] Cohere download failed:', err));
       }
 
-      // Start Gemma download after a delay to prioritize Parakeet bandwidth
+      // Start Gemma download after a delay to prioritize Cohere bandwidth
       if (includeGemma && !summaryModelDownloaded) {
         setTimeout(() => {
-          console.log('[OnboardingContext] Starting Gemma download (delayed to prioritize Parakeet)');
+          console.log('[OnboardingContext] Starting Gemma download (delayed to prioritize Cohere)');
           invoke('builtin_ai_download_model', { modelName: selectedSummaryModel || 'gemma3:1b' })
             .catch(err => console.error('[OnboardingContext] Gemma download failed:', err));
-        }, 3000); // 3 second delay to give Parakeet priority
+        }, 3000); // 3 second delay to give Cohere priority
       }
     } catch (error) {
       console.error('[OnboardingContext] Failed to start background downloads:', error);
@@ -452,25 +453,32 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
   // Check if any models are currently downloading (for re-entry)
   const checkActiveDownloads = async () => {
     try {
-      const models = await invoke<any[]>('parakeet_get_available_models');
+      const models = await invoke<any[]>('cohere_get_available_models');
       const isDownloading = models.some(m => m.status && (typeof m.status === 'object' ? 'Downloading' in m.status : m.status === 'Downloading'));
-      
+
       if (isDownloading) {
         console.log('[OnboardingContext] Detected active background downloads on mount');
         setIsBackgroundDownloading(true);
       }
-      
-      // Also check for Gemma/Built-in AI downloads if possible (though less critical as Parakeet is the main blocker)
-      
+
+      // Also check for Gemma/Built-in AI downloads if possible (though less critical as Cohere is the main blocker)
+
     } catch (error) {
       console.warn('[OnboardingContext] Failed to check active downloads:', error);
     }
   };
 
-  const retryParakeetDownload = async () => {
-    console.log('[OnboardingContext] Retrying Parakeet download');
+  const retryCohereDownload = async () => {
+    console.log('[OnboardingContext] Retrying Cohere download');
     try {
-      await invoke('parakeet_retry_download', { modelName: PARAKEET_MODEL });
+      // Cancel any in-flight download, then re-invoke the download command.
+      try {
+        await invoke('cohere_cancel_download');
+      } catch (cancelErr) {
+        // It's fine if there was no active download to cancel.
+        console.log('[OnboardingContext] No active Cohere download to cancel:', cancelErr);
+      }
+      await invoke('cohere_download_model', { modelName: COHERE_MODEL });
     } catch (error) {
       console.error('[OnboardingContext] Retry failed:', error);
       throw error;
@@ -508,9 +516,9 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
     <OnboardingContext.Provider
       value={{
         currentStep,
-        parakeetDownloaded,
-        parakeetProgress,
-        parakeetProgressInfo,
+        cohereDownloaded,
+        cohereProgress,
+        cohereProgressInfo,
         summaryModelDownloaded,
         summaryModelProgress,
         summaryModelProgressInfo,
@@ -522,7 +530,7 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
         goToStep,
         goNext,
         goPrevious,
-        setParakeetDownloaded,
+        setCohereDownloaded,
         setSummaryModelDownloaded,
         setSelectedSummaryModel,
         setDatabaseExists,
@@ -530,7 +538,7 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
         setPermissionsSkipped,
         completeOnboarding,
         startBackgroundDownloads,
-        retryParakeetDownload,
+        retryCohereDownload,
       }}
     >
       {children}
