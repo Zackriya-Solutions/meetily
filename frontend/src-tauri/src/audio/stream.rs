@@ -239,13 +239,34 @@ impl AudioStream {
         config: &SupportedStreamConfig,
         capture: AudioCapture,
     ) -> Result<Stream> {
-        let config_copy = config.clone();
+        let mut stream_config: cpal::StreamConfig = config.clone().into();
+
+        // On Linux (PipeWire / PulseAudio via pipewire-alsa), cpal's default
+        // buffer size tends to be very small, which forces PipeWire to shrink
+        // its global quantum. That causes xruns in other apps sharing the mic
+        // (Teams, Zoom, browser WebRTC), showing up as glitchy audio/video.
+        // 1024 frames ≈ 21 ms @ 48 kHz — comfortable for transcription and
+        // non-disruptive to concurrent PipeWire clients.
+        #[cfg(target_os = "linux")]
+        {
+            if let cpal::SupportedBufferSize::Range { min, max } = config.buffer_size() {
+                let desired: u32 = 1024;
+                let clamped = desired.clamp(*min, *max);
+                stream_config.buffer_size = cpal::BufferSize::Fixed(clamped);
+                info!(
+                    "🎚️ Stream: Linux buffer_size override → Fixed({}) (device range {}..={})",
+                    clamped, min, max
+                );
+            } else {
+                info!("🎚️ Stream: Linux buffer_size range unknown, leaving Default");
+            }
+        }
 
         let stream = match config.sample_format() {
             cpal::SampleFormat::F32 => {
                 let capture_clone = capture.clone();
                 device.build_input_stream(
-                    &config_copy.into(),
+                    &stream_config,
                     move |data: &[f32], _: &cpal::InputCallbackInfo| {
                         capture.process_audio_data(data);
                     },
@@ -258,7 +279,7 @@ impl AudioStream {
             cpal::SampleFormat::I16 => {
                 let capture_clone = capture.clone();
                 device.build_input_stream(
-                    &config_copy.into(),
+                    &stream_config,
                     move |data: &[i16], _: &cpal::InputCallbackInfo| {
                         let f32_data: Vec<f32> = data.iter()
                             .map(|&sample| sample as f32 / i16::MAX as f32)
@@ -274,7 +295,7 @@ impl AudioStream {
             cpal::SampleFormat::I32 => {
                 let capture_clone = capture.clone();
                 device.build_input_stream(
-                    &config_copy.into(),
+                    &stream_config,
                     move |data: &[i32], _: &cpal::InputCallbackInfo| {
                         let f32_data: Vec<f32> = data.iter()
                             .map(|&sample| sample as f32 / i32::MAX as f32)
@@ -290,7 +311,7 @@ impl AudioStream {
             cpal::SampleFormat::I8 => {
                 let capture_clone = capture.clone();
                 device.build_input_stream(
-                    &config_copy.into(),
+                    &stream_config,
                     move |data: &[i8], _: &cpal::InputCallbackInfo| {
                         let f32_data: Vec<f32> = data.iter()
                             .map(|&sample| sample as f32 / i8::MAX as f32)
