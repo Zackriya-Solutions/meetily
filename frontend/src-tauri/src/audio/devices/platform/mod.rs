@@ -17,4 +17,4 @@ pub use windows::{configure_windows_audio, get_windows_device};
 pub use macos::configure_macos_audio;
 
 #[cfg(target_os = "linux")]
-pub use linux::configure_linux_audio;
+pub use linux::{configure_linux_audio, is_user_facing_linux_device};
