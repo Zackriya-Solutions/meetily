@@ -38,6 +38,13 @@ pub fn set_models_directory<R: Runtime>(app: &AppHandle<R>) {
     *MODELS_DIR.lock().unwrap() = Some(dir);
 }
 
+/// Return a cloned `Arc` to the current engine if one has been constructed.
+/// Used by batch code paths (import, retranscription) that need to unload the
+/// model without re-resolving the app handle.
+pub fn current_engine() -> Option<Arc<CohereEngine>> {
+    COHERE_ENGINE.lock().unwrap().as_ref().cloned()
+}
+
 fn models_dir_or_err() -> Result<PathBuf, String> {
     MODELS_DIR
         .lock()

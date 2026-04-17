@@ -3,10 +3,9 @@
 use crate::api::TranscriptSegment;
 use crate::audio::decoder::{decode_audio_file, decode_audio_file_with_progress};
 use crate::audio::vad::get_speech_chunks_with_progress;
-use crate::config::{DEFAULT_WHISPER_MODEL, DEFAULT_PARAKEET_MODEL};
-use crate::parakeet_engine::ParakeetEngine;
+use crate::cohere_engine::CohereEngine;
+use crate::config::DEFAULT_COHERE_MODEL;
 use crate::state::AppState;
-use crate::whisper_engine::WhisperEngine;
 use anyhow::{anyhow, Result};
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
@@ -265,19 +264,21 @@ pub async fn start_import<R: Runtime>(
     // Reset cancellation flag
     IMPORT_CANCELLED.store(false, Ordering::SeqCst);
 
-    let use_parakeet = provider.as_deref() == Some("parakeet");
+    // Provider selection is no longer meaningful — Cohere ONNX is the single
+    // local transcription path. `provider` is still accepted for backward
+    // compatibility with clients that pass it.
+    let _ = provider;
     let result = run_import(
         app.clone(),
         source_path,
         title,
         language,
         model,
-        provider,
     )
     .await;
 
     // Unload the engine after the batch job (success, failure, or cancellation)
-    super::common::unload_engine_after_batch(use_parakeet).await;
+    super::common::unload_engine_after_batch().await;
 
     // Guard will automatically clear flag on drop
     // No need for manual: IMPORT_IN_PROGRESS.store(false, Ordering::SeqCst);
@@ -314,7 +315,6 @@ async fn run_import<R: Runtime>(
     title: String,
     language: Option<String>,
     model: Option<String>,
-    provider: Option<String>,
 ) -> Result<ImportResult> {
     let source = PathBuf::from(&source_path);
 
@@ -324,12 +324,10 @@ async fn run_import<R: Runtime>(
     }
 
     info!(
-        "Starting import for '{}' from {} with language {:?}, model {:?}, provider {:?}",
-        title, source_path, language, model, provider
+        "Starting import for '{}' from {} with language {:?}, model {:?}",
+        title, source_path, language, model
     );
 
-    // Determine which provider to use (default to whisper)
-    let use_parakeet = provider.as_deref() == Some("parakeet");
 
     emit_progress(&app, "copying", 5, "Creating meeting folder...");
 
@@ -507,14 +505,9 @@ async fn run_import<R: Runtime>(
 
     emit_progress(&app, "transcribing", 30, "Loading transcription engine...");
 
-    // Initialize the appropriate engine
-    let whisper_engine = if !use_parakeet && total_segments > 0 {
-        Some(get_or_init_whisper(&app, model.as_deref()).await?)
-    } else {
-        None
-    };
-    let parakeet_engine = if use_parakeet && total_segments > 0 {
-        Some(get_or_init_parakeet(&app, model.as_deref()).await?)
+    // Initialize the Cohere ONNX engine once if there is anything to transcribe.
+    let cohere_engine = if total_segments > 0 {
+        Some(get_or_init_cohere(&app, model.as_deref()).await?)
     } else {
         None
     };
@@ -578,22 +571,16 @@ async fn run_import<R: Runtime>(
             continue;
         }
 
-        // Transcribe
-        let (text, conf) = if use_parakeet {
-            let engine = parakeet_engine.as_ref().unwrap();
-            let text = engine
-                .transcribe_audio(segment.samples.clone())
-                .await
-                .map_err(|e| anyhow!("Parakeet transcription failed on segment {}: {}", i, e))?;
-            (text, 0.9f32)
-        } else {
-            let engine = whisper_engine.as_ref().unwrap();
-            let (text, conf, _) = engine
-                .transcribe_audio_with_confidence(segment.samples.clone(), language.clone())
-                .await
-                .map_err(|e| anyhow!("Whisper transcription failed on segment {}: {}", i, e))?;
-            (text, conf)
-        };
+        // Transcribe this segment through Cohere ONNX.
+        let engine = cohere_engine
+            .as_ref()
+            .ok_or_else(|| anyhow!("Cohere engine missing while processing segments"))?;
+        let text = engine
+            .transcribe_audio(segment.samples.clone(), 16_000, language.clone())
+            .await
+            .map_err(|e| anyhow!("Cohere transcription failed on segment {}: {}", i, e))?;
+        // Cohere does not expose a per-segment confidence score.
+        let conf = 0.9f32;
 
         let trimmed = text.trim();
         if !trimmed.is_empty() {
@@ -747,100 +734,42 @@ async fn create_meeting_with_transcripts(
     Ok(meeting_id)
 }
 
-/// Get or initialize the Whisper engine
-async fn get_or_init_whisper<R: Runtime>(
+/// Get or initialize the Cohere ONNX engine, loading the requested (or configured) model if needed.
+async fn get_or_init_cohere<R: Runtime>(
     app: &AppHandle<R>,
     requested_model: Option<&str>,
-) -> Result<Arc<WhisperEngine>> {
-    use crate::whisper_engine::commands::WHISPER_ENGINE;
+) -> Result<Arc<CohereEngine>> {
+    let engine = crate::cohere_engine::commands::get_or_init_engine(app)
+        .await
+        .map_err(|e| anyhow!("Failed to initialize Cohere engine: {}", e))?;
 
-    let engine = {
-        let guard = WHISPER_ENGINE.lock().unwrap_or_else(|e| e.into_inner());
-        guard.as_ref().cloned()
+    let target_model = match requested_model {
+        Some(model) => model.to_string(),
+        None => get_configured_cohere_model(app).await?,
     };
 
-    match engine {
-        Some(e) => {
-            let target_model = match requested_model {
-                Some(model) => model.to_string(),
-                None => get_configured_model(app, "whisper").await?,
-            };
-
-            let current_model = e.get_current_model().await;
-            let needs_load = match &current_model {
-                Some(loaded) => loaded != &target_model,
-                None => true,
-            };
-
-            if needs_load {
-                info!(
-                    "Loading Whisper model '{}' (current: {:?})",
-                    target_model, current_model
-                );
-
-                if let Err(e) = e.discover_models().await {
-                    warn!("Model discovery error (continuing): {}", e);
-                }
-
-                e.load_model(&target_model)
-                    .await
-                    .map_err(|e| anyhow!("Failed to load model '{}': {}", target_model, e))?;
-            }
-
-            Ok(e)
-        }
-        None => Err(anyhow!("Whisper engine not initialized")),
-    }
-}
-
-/// Get or initialize the Parakeet engine
-async fn get_or_init_parakeet<R: Runtime>(
-    app: &AppHandle<R>,
-    requested_model: Option<&str>,
-) -> Result<Arc<ParakeetEngine>> {
-    use crate::parakeet_engine::commands::PARAKEET_ENGINE;
-
-    let engine = {
-        let guard = PARAKEET_ENGINE.lock().unwrap_or_else(|e| e.into_inner());
-        guard.as_ref().cloned()
+    let current_model = engine.get_current_model().await;
+    let needs_load = match &current_model {
+        Some(loaded) => loaded != &target_model,
+        None => true,
     };
 
-    match engine {
-        Some(e) => {
-            let target_model = match requested_model {
-                Some(model) => model.to_string(),
-                None => get_configured_model(app, "parakeet").await?,
-            };
-
-            let current_model = e.get_current_model().await;
-            let needs_load = match &current_model {
-                Some(loaded) => loaded != &target_model,
-                None => true,
-            };
-
-            if needs_load {
-                info!(
-                    "Loading Parakeet model '{}' (current: {:?})",
-                    target_model, current_model
-                );
-
-                if let Err(e) = e.discover_models().await {
-                    warn!("Model discovery error (continuing): {}", e);
-                }
-
-                e.load_model(&target_model)
-                    .await
-                    .map_err(|e| anyhow!("Failed to load model '{}': {}", target_model, e))?;
-            }
-
-            Ok(e)
-        }
-        None => Err(anyhow!("Parakeet engine not initialized")),
+    if needs_load {
+        info!(
+            "Loading Cohere model '{}' (current: {:?})",
+            target_model, current_model
+        );
+        engine
+            .load_model(&target_model)
+            .await
+            .map_err(|e| anyhow!("Failed to load Cohere model '{}': {}", target_model, e))?;
     }
+
+    Ok(engine)
 }
 
-/// Get the configured model from database
-async fn get_configured_model<R: Runtime>(app: &AppHandle<R>, provider_type: &str) -> Result<String> {
+/// Resolve the configured Cohere model name from the database, falling back to DEFAULT_COHERE_MODEL.
+async fn get_configured_cohere_model<R: Runtime>(app: &AppHandle<R>) -> Result<String> {
     let app_state = app
         .try_state::<AppState>()
         .ok_or_else(|| anyhow!("App state not available"))?;
@@ -852,27 +781,10 @@ async fn get_configured_model<R: Runtime>(app: &AppHandle<R>, provider_type: &st
     .await
     .map_err(|e| anyhow!("Failed to query config: {}", e))?;
 
-    match result {
-        Some((provider, model)) => {
-            if (provider_type == "whisper" && (provider == "localWhisper" || provider == "whisper"))
-                || (provider_type == "parakeet" && provider == "parakeet")
-            {
-                Ok(model)
-            } else {
-                // Return default model for the requested type
-                Ok(if provider_type == "parakeet" {
-                    DEFAULT_PARAKEET_MODEL.to_string()
-                } else {
-                    DEFAULT_WHISPER_MODEL.to_string()
-                })
-            }
-        }
-        None => Ok(if provider_type == "parakeet" {
-            DEFAULT_PARAKEET_MODEL.to_string()
-        } else {
-            DEFAULT_WHISPER_MODEL.to_string()
-        }),
-    }
+    Ok(match result {
+        Some((provider, model)) if provider == "cohere" && !model.is_empty() => model,
+        _ => DEFAULT_COHERE_MODEL.to_string(),
+    })
 }
 
 /// Write metadata.json to a meeting folder (atomic write with temp file)
