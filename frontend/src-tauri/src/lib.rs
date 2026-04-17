@@ -38,6 +38,7 @@ pub(crate) use perf_trace;
 pub mod analytics;
 pub mod api;
 pub mod audio;
+pub mod cohere_engine;
 pub mod config;
 pub mod console_utils;
 pub mod database;
@@ -456,6 +457,17 @@ pub fn run() {
                 }
             });
 
+            // Set Cohere ONNX models directory
+            cohere_engine::commands::set_models_directory(&_app.handle());
+
+            // Initialize Cohere engine on startup (lazy — no model load, just singleton)
+            let app_for_cohere = _app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = cohere_engine::commands::cohere_init(app_for_cohere).await {
+                    log::error!("Failed to initialize Cohere engine on startup: {}", e);
+                }
+            });
+
             // Initialize ModelManager for summary engine (async, non-blocking)
             let app_handle_for_model_manager = _app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -555,6 +567,19 @@ pub fn run() {
             parakeet_engine::commands::parakeet_cancel_download,
             parakeet_engine::commands::parakeet_delete_corrupted_model,
             parakeet_engine::commands::open_parakeet_models_folder,
+            // Cohere ONNX engine commands
+            cohere_engine::commands::cohere_init,
+            cohere_engine::commands::cohere_get_available_models,
+            cohere_engine::commands::cohere_get_model_status,
+            cohere_engine::commands::cohere_is_model_loaded,
+            cohere_engine::commands::cohere_get_current_model,
+            cohere_engine::commands::cohere_load_model,
+            cohere_engine::commands::cohere_unload_model,
+            cohere_engine::commands::cohere_download_model,
+            cohere_engine::commands::cohere_cancel_download,
+            cohere_engine::commands::cohere_transcribe_audio,
+            cohere_engine::commands::cohere_validate_model_ready,
+            cohere_engine::commands::cohere_get_models_directory,
             // Parallel processing commands
             whisper_engine::parallel_commands::initialize_parallel_processor,
             whisper_engine::parallel_commands::start_parallel_processing,
