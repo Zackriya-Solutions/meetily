@@ -19,8 +19,11 @@ pub struct OnboardingStatus {
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct ModelStatus {
-    pub parakeet: String,  // "downloaded" | "not_downloaded" | "downloading"
-    pub summary: String,   // Generic field for summary model (gemma3:1b or gemma3:4b)
+    /// Cohere ONNX STT model readiness. Accepts the legacy `parakeet` key from
+    /// pre-migration stores so existing installs continue to deserialize.
+    #[serde(alias = "parakeet")]
+    pub cohere: String,
+    pub summary: String,
 }
 
 impl Default for OnboardingStatus {
@@ -30,8 +33,8 @@ impl Default for OnboardingStatus {
             completed: false,
             current_step: 1,
             model_status: ModelStatus {
-                parakeet: "not_downloaded".to_string(),
-                summary: "not_downloaded".to_string(),  // Changed from gemma
+                cohere: "not_downloaded".to_string(),
+                summary: "not_downloaded".to_string(),
             },
             last_updated: chrono::Utc::now().to_rfc3339(),
         }
@@ -188,16 +191,16 @@ pub async fn complete_onboarding<R: Runtime>(
     }
     info!("Saved builtin-ai model config: model={}", model);
 
-    // Save transcription model config (parakeet provider) - always parakeet
+    // Save transcription model config — Cohere ONNX is the sole provider.
     if let Err(e) = SettingsRepository::save_transcript_config(
         pool,
-        "parakeet",
-        crate::config::DEFAULT_PARAKEET_MODEL,
+        "cohere",
+        crate::config::DEFAULT_COHERE_MODEL,
     ).await {
         error!("Failed to save transcription model config: {}", e);
         return Err(format!("Failed to save transcription model config: {}", e));
     }
-    info!("Saved transcription model config: provider=parakeet, model={}", crate::config::DEFAULT_PARAKEET_MODEL);
+    info!("Saved transcription model config: provider=cohere, model={}", crate::config::DEFAULT_COHERE_MODEL);
 
     // Step 2: Only NOW mark onboarding as complete (after DB operations succeed)
     let mut status = load_onboarding_status(&app)
@@ -206,7 +209,7 @@ pub async fn complete_onboarding<R: Runtime>(
 
     status.completed = true;
     status.current_step = 4; // Max step (4 on macOS with permissions, 3 on other platforms)
-    status.model_status.parakeet = "downloaded".to_string();
+    status.model_status.cohere = "downloaded".to_string();
     status.model_status.summary = "downloaded".to_string();
 
     save_onboarding_status(&app, &status)

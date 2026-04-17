@@ -199,6 +199,26 @@ pub async fn cohere_get_models_directory() -> Result<String, String> {
     models_dir_or_err().map(|p| p.to_string_lossy().to_string())
 }
 
+/// Open the Cohere models directory in the platform file manager. Reuses the
+/// historical `open_models_folder` command name so the existing frontend
+/// bindings keep working.
+#[command]
+pub async fn open_models_folder() -> Result<(), String> {
+    let dir = models_dir_or_err()?;
+    #[cfg(target_os = "macos")]
+    let program = "open";
+    #[cfg(target_os = "windows")]
+    let program = "explorer";
+    #[cfg(target_os = "linux")]
+    let program = "xdg-open";
+
+    std::process::Command::new(program)
+        .arg(&dir)
+        .spawn()
+        .map_err(|e| format!("failed to open models folder: {e}"))?;
+    Ok(())
+}
+
 // Re-export anyhow so modules within cohere_engine can import it without adding
 // it to their own scope repeatedly.
 #[allow(dead_code)]

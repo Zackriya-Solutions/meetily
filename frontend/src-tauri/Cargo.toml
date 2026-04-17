@@ -15,42 +15,9 @@ name = "app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 
-# Hardware acceleration features for whisper-rs
-# Cross-platform GPU acceleration with smart defaults
-#
-# BUILD INSTRUCTIONS:
-# ===================
-# macOS:     cargo build --release              (Metal GPU auto-enabledon)
-#
-# Windows:   cargo build --release              (CPU with OpenBLAS)
-#            cargo build --release --features cuda    (NVIDIA GPU)
-#            cargo build --release --features vulkan  (AMD/Intel GPU)
-#
-# Linux:     cargo build --release              (CPU with OpenBLAS)
-#            cargo build --release --features cuda    (NVIDIA GPU)
-#            cargo build --release --features hipblas (AMD GPU with ROCm)
-#            cargo build --release --features vulkan  (Other GPUs)
-#
-# QUICK START: Use the helper scripts!
-#   ./build-gpu.sh (Unix/macOS)
-#   .\build-gpu.ps1 (Windows PowerShell)
-#
 [features]
-default = ["platform-default"]  # Automatically enables best backend per platform
-
-# Platform-appropriate defaults - see target-specific dependencies below
+default = ["platform-default"]
 platform-default = []
-
-# Manual GPU acceleration options (for power users to override defaults)
-metal = ["whisper-rs/metal"]       # macOS: Apple Metal GPU (Auto-enabled on macOS)
-coreml = ["whisper-rs/coreml"]     # macOS: Apple CoreML acceleration
-cuda = ["whisper-rs/cuda"]         # Windows/Linux: NVIDIA CUDA GPU
-vulkan = ["whisper-rs/vulkan"]     # Windows/Linux: AMD/Intel Vulkan GPU
-hipblas = ["whisper-rs/hipblas"]   # Linux: AMD ROCm HIP
-
-# CPU optimizations (fallback for systems without GPU)
-openblas = ["whisper-rs/openblas"] # Optimized BLAS (Auto-enabled on Windows/Linux)
-openmp = ["whisper-rs/openmp"]     # OpenMP parallel processing
 
 [build-dependencies]
 tauri-build = { version = "2.3.0", features = [] }
@@ -96,15 +63,13 @@ ebur128 = "0.1"
 # Noise suppression - RNNoise-based neural network noise reduction
 nnnoiseless = "0.5"
 
-# Speech recognition and async utilities
-# NOTE: whisper-rs is declared in platform-specific sections below (macOS/Windows/Linux)
-# to ensure correct GPU features are enabled per platform
+# VAD + async utilities
 futures-util = "0.3"
 silero_rs = { git = "https://github.com/emotechlab/silero-rs", rev = "26a6460", package = "silero" }
 
-# ONNX-based transcription (Cohere + legacy Parakeet) dependencies
-ort = { version = "2.0.0-rc.10" }  # ONNX Runtime
-thiserror = "2.0.16"                # Error handling
+# ONNX Runtime (Cohere Transcribe)
+ort = { version = "2.0.0-rc.10" }
+thiserror = "2.0.16"
 
 # Cohere Transcribe 03-2026 (local ONNX) dependencies
 tokenizers = { version = "0.19", default-features = false, features = ["onig"] }
@@ -172,29 +137,10 @@ cidre = { git = "https://github.com/yury/cidre", rev = "a9587fa", features = ["a
 dasp = "0.11.0"
 futures-channel = "0.3.31"
 
-# PERFORMANCE: Enable Metal GPU + CoreML acceleration automatically on macOS
-# CoreML provides additional acceleration for Apple Silicon chips
-whisper-rs = { version = "0.13.2", features = ["raw-api", "metal", "coreml"] }
-
-# Windows-specific dependencies
-# Default: CPU-only build (no BLAS)
-# Users can enable features manually:
-#   --features cuda     (NVIDIA GPUs)
-#   --features vulkan   (AMD/Intel GPUs)
-#   --features openblas (OpenBLAS optimization, requires BLAS_INCLUDE_DIRS)
 [target.'cfg(target_os = "windows")'.dependencies]
-whisper-rs = { version = "0.13.2", features = ["raw-api", "vulkan"] }
 futures-channel = "0.3.31"
 
-# Linux-specific dependencies
-# Default: CPU-only build (no BLAS)
-# Users can enable features manually:
-#   --features cuda     (NVIDIA GPUs)
-#   --features vulkan   (AMD/Intel GPUs)
-#   --features hipblas  (AMD ROCm)
-#   --features openblas (OpenBLAS optimization, requires BLAS_INCLUDE_DIRS)
 [target.'cfg(target_os = "linux")'.dependencies]
-whisper-rs = { version = "0.13.2", features = ["raw-api"] }
 futures-channel = "0.3.31"
 
 [dev-dependencies]

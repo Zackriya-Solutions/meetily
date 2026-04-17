@@ -178,8 +178,8 @@ impl SettingsRepository {
         api_key: &str,
     ) -> std::result::Result<(), sqlx::Error> {
         let api_key_column = match provider {
-            "localWhisper" => "whisperApiKey",
-            "parakeet" => return Ok(()), // Parakeet doesn't need an API key, return early
+            // Local engines (Cohere ONNX, legacy local Whisper) do not need keys.
+            "cohere" | "parakeet" | "localWhisper" => return Ok(()),
             "deepgram" => "deepgramApiKey",
             "elevenLabs" => "elevenLabsApiKey",
             "groq" => "groqApiKey",
@@ -194,11 +194,11 @@ impl SettingsRepository {
         let query = format!(
             r#"
             INSERT INTO transcript_settings (id, provider, model, "{}")
-            VALUES ('1', 'parakeet', '{}', $1)
+            VALUES ('1', 'cohere', '{}', $1)
             ON CONFLICT(id) DO UPDATE SET
                 "{}" = $1
             "#,
-            api_key_column, crate::config::DEFAULT_PARAKEET_MODEL, api_key_column
+            api_key_column, crate::config::DEFAULT_COHERE_MODEL, api_key_column
         );
         sqlx::query(&query).bind(api_key).execute(pool).await?;
 
@@ -210,8 +210,8 @@ impl SettingsRepository {
         provider: &str,
     ) -> std::result::Result<Option<String>, sqlx::Error> {
         let api_key_column = match provider {
-            "localWhisper" => "whisperApiKey",
-            "parakeet" => return Ok(None), // Parakeet doesn't need an API key
+            // Local engines carry no API key.
+            "cohere" | "parakeet" | "localWhisper" => return Ok(None),
             "deepgram" => "deepgramApiKey",
             "elevenLabs" => "elevenLabsApiKey",
             "groq" => "groqApiKey",

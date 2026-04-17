@@ -141,7 +141,7 @@ impl PostProcessor {
         Ok(final_text)
     }
 
-    /// Clean repetitive text patterns (same as whisper_engine but moved to background)
+    /// Clean repetitive text patterns emitted by the transcription engine.
     fn clean_repetitive_text(text: &str) -> String {
         let words: Vec<&str> = text.split_whitespace().collect();
         if words.len() < 4 {

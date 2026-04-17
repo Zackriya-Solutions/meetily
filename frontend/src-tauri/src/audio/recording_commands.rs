@@ -639,58 +639,18 @@ pub async fn stop_recording<R: Runtime>(
         }
     };
 
-    match config.as_deref() {
-        Some("parakeet") => {
-            info!("🦜 Unloading Parakeet model...");
-            let engine_clone = {
-                let engine_guard = crate::parakeet_engine::commands::PARAKEET_ENGINE
-                    .lock()
-                    .unwrap();
-                engine_guard.as_ref().cloned()
-            };
-
-            if let Some(engine) = engine_clone {
-                let current_model = engine
-                    .get_current_model()
-                    .await
-                    .unwrap_or_else(|| "unknown".to_string());
-                info!("Current Parakeet model before unload: '{}'", current_model);
-
-                if engine.unload_model().await {
-                    info!("✅ Parakeet model '{}' unloaded successfully", current_model);
-                } else {
-                    warn!("⚠️ Failed to unload Parakeet model '{}'", current_model);
-                }
-            } else {
-                warn!("⚠️ No Parakeet engine found to unload model");
-            }
-        }
-        _ => {
-            // Default to Whisper
-            info!("🎤 Unloading Whisper model...");
-            let engine_clone = {
-                let engine_guard = crate::whisper_engine::commands::WHISPER_ENGINE
-                    .lock()
-                    .unwrap();
-                engine_guard.as_ref().cloned()
-            };
-
-            if let Some(engine) = engine_clone {
-                let current_model = engine
-                    .get_current_model()
-                    .await
-                    .unwrap_or_else(|| "unknown".to_string());
-                info!("Current Whisper model before unload: '{}'", current_model);
-
-                if engine.unload_model().await {
-                    info!("✅ Whisper model '{}' unloaded successfully", current_model);
-                } else {
-                    warn!("⚠️ Failed to unload Whisper model '{}'", current_model);
-                }
-            } else {
-                warn!("⚠️ No Whisper engine found to unload model");
-            }
-        }
+    // Cohere is the only transcription engine; the `config` provider value is
+    // only used for telemetry. Unload whatever Cohere engine is resident.
+    let _ = config; // currently no per-provider branching needed
+    if let Some(engine) = crate::cohere_engine::commands::current_engine() {
+        let current_model = engine
+            .get_current_model()
+            .await
+            .unwrap_or_else(|| "unknown".to_string());
+        info!("Unloading Cohere model '{}'", current_model);
+        engine.unload_model().await;
+    } else {
+        warn!("No Cohere engine found to unload model");
     }
 
     // Step 3.5: Track meeting ended analytics with privacy-safe metadata

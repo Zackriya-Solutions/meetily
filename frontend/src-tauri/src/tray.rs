@@ -274,19 +274,17 @@ async fn check_can_record<R: Runtime>(app: &AppHandle<R>) -> bool {
         }
     };
 
-    // If onboarding is complete, always allow recording
-    // (user may prefer Whisper or have their own transcription setup)
+    // If onboarding is complete, always allow recording.
     if onboarding_complete {
         return true;
     }
 
-    // During onboarding, check if Parakeet transcription model is ready
-    match crate::parakeet_engine::commands::parakeet_has_available_models().await {
-        Ok(has_models) => has_models,
-        Err(e) => {
-            log::warn!("Tray: Failed to check Parakeet models: {}, assuming not ready", e);
-            false
-        }
+    // During onboarding, allow recording once the Cohere ONNX engine reports a
+    // loaded model. `current_engine()` returns `None` before the singleton is
+    // initialised, in which case we keep the menu disabled.
+    match crate::cohere_engine::commands::current_engine() {
+        Some(engine) => engine.is_model_loaded().await,
+        None => false,
     }
 }
 
