@@ -91,23 +91,13 @@ export class TranscriptService {
   }
 
   /**
-   * Listen for Whisper model download complete event
-   * @param callback - Function to call when Whisper model download completes
-   * @returns Promise that resolves to unlisten function
+   * Listen for Cohere ONNX model download complete event.
+   * Subscribers (e.g. legacy whisper-era call sites) keep the generic
+   * `onModelDownloadComplete` name while internally listening to the current
+   * Cohere event channel.
    */
   async onModelDownloadComplete(callback: (modelName: string) => void): Promise<UnlistenFn> {
-    return listen<ModelDownloadCompletePayload>('model-download-complete', (event) => {
-      callback(event.payload.modelName);
-    });
-  }
-
-  /**
-   * Listen for Parakeet model download complete event
-   * @param callback - Function to call when Parakeet model download completes
-   * @returns Promise that resolves to unlisten function
-   */
-  async onParakeetModelDownloadComplete(callback: (modelName: string) => void): Promise<UnlistenFn> {
-    return listen<ModelDownloadCompletePayload>('parakeet-model-download-complete', (event) => {
+    return listen<ModelDownloadCompletePayload>('cohere-download-complete', (event) => {
       callback(event.payload.modelName);
     });
   }
