@@ -3,40 +3,55 @@
 /// These templates are bundled into the binary and serve as fallbacks
 /// when custom templates are not available.
 
-/// Daily standup template for engineering/product teams
-pub const DAILY_STANDUP: &str = include_str!("../../../templates/daily_standup.json");
+/// 표준 회의록 (기본 한국어 템플릿)
+pub const KO_STANDARD_MEETING: &str = include_str!("../../../templates/ko_standard_meeting.json");
 
-/// Standard meeting notes template
-pub const STANDARD_MEETING: &str = include_str!("../../../templates/standard_meeting.json");
+/// 1:1 미팅 템플릿
+pub const KO_ONE_ON_ONE: &str = include_str!("../../../templates/ko_one_on_one.json");
+
+/// 고객 미팅 템플릿
+pub const KO_CLIENT_CALL: &str = include_str!("../../../templates/ko_client_call.json");
+
+/// 데일리 스탠드업 템플릿
+pub const KO_DAILY_STANDUP: &str = include_str!("../../../templates/ko_daily_standup.json");
+
+/// 회고 템플릿
+pub const KO_RETROSPECTIVE: &str = include_str!("../../../templates/ko_retrospective.json");
 
 /// Registry of all built-in templates
 ///
 /// Maps template identifiers to their embedded JSON content
 pub fn get_builtin_templates() -> Vec<(&'static str, &'static str)> {
     vec![
-        ("daily_standup", DAILY_STANDUP),
-        ("standard_meeting", STANDARD_MEETING),
+        ("ko_standard_meeting", KO_STANDARD_MEETING),
+        ("ko_one_on_one", KO_ONE_ON_ONE),
+        ("ko_client_call", KO_CLIENT_CALL),
+        ("ko_daily_standup", KO_DAILY_STANDUP),
+        ("ko_retrospective", KO_RETROSPECTIVE),
     ]
 }
 
 /// Get a built-in template by identifier
-///
-/// # Arguments
-/// * `id` - Template identifier (e.g., "daily_standup", "standard_meeting")
-///
-/// # Returns
-/// The template JSON content if found, None otherwise
 pub fn get_builtin_template(id: &str) -> Option<&'static str> {
     match id {
-        "daily_standup" => Some(DAILY_STANDUP),
-        "standard_meeting" => Some(STANDARD_MEETING),
+        "ko_standard_meeting" => Some(KO_STANDARD_MEETING),
+        "ko_one_on_one" => Some(KO_ONE_ON_ONE),
+        "ko_client_call" => Some(KO_CLIENT_CALL),
+        "ko_daily_standup" => Some(KO_DAILY_STANDUP),
+        "ko_retrospective" => Some(KO_RETROSPECTIVE),
         _ => None,
     }
 }
 
 /// List all built-in template identifiers
 pub fn list_builtin_template_ids() -> Vec<&'static str> {
-    vec!["daily_standup", "standard_meeting"]
+    vec![
+        "ko_standard_meeting",
+        "ko_one_on_one",
+        "ko_client_call",
+        "ko_daily_standup",
+        "ko_retrospective",
+    ]
 }
 
 #[cfg(test)]
@@ -58,8 +73,18 @@ mod tests {
 
     #[test]
     fn test_get_builtin_template() {
-        assert!(get_builtin_template("daily_standup").is_some());
-        assert!(get_builtin_template("standard_meeting").is_some());
+        assert!(get_builtin_template("ko_standard_meeting").is_some());
+        assert!(get_builtin_template("ko_one_on_one").is_some());
+        assert!(get_builtin_template("ko_client_call").is_some());
+        assert!(get_builtin_template("ko_daily_standup").is_some());
+        assert!(get_builtin_template("ko_retrospective").is_some());
         assert!(get_builtin_template("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_list_builtin_template_ids() {
+        let ids = list_builtin_template_ids();
+        assert_eq!(ids.len(), 5);
+        assert!(ids.contains(&"ko_standard_meeting"));
     }
 }

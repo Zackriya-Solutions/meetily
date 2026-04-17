@@ -88,7 +88,7 @@ fn load_custom_template(template_id: &str) -> Option<String> {
 /// 4. Return error if not found in any location
 ///
 /// # Arguments
-/// * `template_id` - Template identifier (e.g., "daily_standup", "standard_meeting")
+/// * `template_id` - Template identifier (e.g., "ko_standard_meeting", "ko_daily_standup")
 ///
 /// # Returns
 /// Parsed and validated Template struct
@@ -223,11 +223,11 @@ mod tests {
 
     #[test]
     fn test_get_builtin_template() {
-        let template = get_template("daily_standup");
+        let template = get_template("ko_standard_meeting");
         assert!(template.is_ok());
 
         let template = template.unwrap();
-        assert_eq!(template.name, "Daily Standup");
+        assert_eq!(template.name, "표준 회의록");
         assert!(!template.sections.is_empty());
     }
 
@@ -240,8 +240,11 @@ mod tests {
     #[test]
     fn test_list_template_ids() {
         let ids = list_template_ids();
-        assert!(ids.contains(&"daily_standup".to_string()));
-        assert!(ids.contains(&"standard_meeting".to_string()));
+        assert!(ids.contains(&"ko_standard_meeting".to_string()));
+        assert!(ids.contains(&"ko_daily_standup".to_string()));
+        assert!(ids.contains(&"ko_one_on_one".to_string()));
+        assert!(ids.contains(&"ko_client_call".to_string()));
+        assert!(ids.contains(&"ko_retrospective".to_string()));
     }
 
     #[test]

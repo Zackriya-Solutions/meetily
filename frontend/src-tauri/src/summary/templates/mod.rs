@@ -16,7 +16,7 @@
 //! use crate::summary::templates;
 //!
 //! // Load a specific template
-//! let template = templates::get_template("daily_standup")?;
+//! let template = templates::get_template("ko_standard_meeting")?;
 //!
 //! // Generate markdown structure
 //! let markdown = template.to_markdown_structure();
