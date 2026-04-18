@@ -11,8 +11,8 @@ interface UseModelConfigurationProps {
 export function useModelConfiguration({ serverAddress }: UseModelConfigurationProps) {
   // Note: No hardcoded defaults - DB is the source of truth
   const [modelConfig, setModelConfig] = useState<ModelConfig>({
-    provider: 'ollama',
-    model: '', // Empty until loaded from DB
+    provider: 'custom-openai',
+    model: '',
     whisperModel: 'large-v3'
   });
   const [isLoading, setIsLoading] = useState(true);
@@ -31,21 +31,8 @@ export function useModelConfiguration({ serverAddress }: UseModelConfigurationPr
             model: data.model,
             whisperModel: data.whisperModel,
             hasApiKey: !!data.apiKey,
-            ollamaEndpoint: data.ollamaEndpoint || 'default'
           });
-          // Fetch API key if not included and provider requires it
-          if (data.provider !== 'ollama' && data.provider !== 'custom-openai' && !data.apiKey) {
-            try {
-              const apiKeyData = await invokeTauri('api_get_api_key', {
-                provider: data.provider
-              }) as string;
-              data.apiKey = apiKeyData;
-            } catch (err) {
-              console.error('Failed to fetch API key:', err);
-            }
-          }
 
-          // Fetch custom OpenAI config if provider is custom-openai
           if (data.provider === 'custom-openai') {
             try {
               const customConfig = await invokeTauri('api_get_custom_openai_config') as any;
@@ -114,7 +101,6 @@ export function useModelConfiguration({ serverAddress }: UseModelConfigurationPr
         model: configToSave.model,
         whisperModel: configToSave.whisperModel,
         apiKey: configToSave.apiKey ?? null,
-        ollamaEndpoint: configToSave.ollamaEndpoint ?? null
       };
       console.log('Saving model config with payload:', payload);
 
@@ -136,7 +122,6 @@ export function useModelConfiguration({ serverAddress }: UseModelConfigurationPr
         model: payload.model,
         whisperModel: payload.whisperModel,
         apiKey: payload.apiKey,
-        ollamaEndpoint: payload.ollamaEndpoint,
       });
 
       console.log('Save model config success');

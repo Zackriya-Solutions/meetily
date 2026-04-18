@@ -65,11 +65,13 @@ const Sidebar: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [showModelSettings, setShowModelSettings] = useState(false);
   const [modelConfig, setModelConfig] = useState<ModelConfig>({
-    provider: 'ollama',
+    provider: 'custom-openai',
     model: '',
-    whisperModel: '',
+    whisperModel: 'large-v3',
     apiKey: null,
-    ollamaEndpoint: null
+    customOpenAIEndpoint: null,
+    customOpenAIModel: null,
+    customOpenAIApiKey: null,
   });
   const [transcriptModelConfig, setTranscriptModelConfig] = useState<TranscriptModelProps>({
     provider: 'parakeet',
@@ -117,17 +119,6 @@ const Sidebar: React.FC = () => {
       try {
         const data = await invoke('api_get_model_config') as any;
         if (data && data.provider !== null) {
-          // Fetch API key if not included and provider requires it
-          if (data.provider !== 'ollama' && !data.apiKey) {
-            try {
-              const apiKeyData = await invoke('api_get_api_key', {
-                provider: data.provider
-              }) as string;
-              data.apiKey = apiKeyData;
-            } catch (err) {
-              console.error('Failed to fetch API key:', err);
-            }
-          }
           setModelConfig(data);
         }
       } catch (error) {
@@ -190,7 +181,6 @@ const Sidebar: React.FC = () => {
         model: config.model,
         whisperModel: config.whisperModel,
         apiKey: config.apiKey,
-        ollamaEndpoint: config.ollamaEndpoint,
       });
 
       setModelConfig(config);

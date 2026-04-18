@@ -12,7 +12,6 @@ import { listen, UnlistenFn } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { RecordingStateProvider } from '@/contexts/RecordingStateContext'
-import { OllamaDownloadProvider } from '@/contexts/OllamaDownloadContext'
 import { TranscriptProvider } from '@/contexts/TranscriptContext'
 import { ConfigProvider, useConfig } from '@/contexts/ConfigContext'
 import { OnboardingProvider } from '@/contexts/OnboardingContext'
@@ -234,38 +233,35 @@ export default function RootLayout({
         <RecordingStateProvider>
           <TranscriptProvider>
             <ConfigProvider>
-              <OllamaDownloadProvider>
-                 <OnboardingProvider>
-                      <SidebarProvider>
-                      <TooltipProvider>
-                        <RecordingPostProcessingProvider>
-                          <ImportDialogProvider onOpen={handleOpenImportDialog}>
-                            {/* Download progress toast provider - listens for background downloads */}
-                            <DownloadProgressToastProvider />
+              <OnboardingProvider>
+                <SidebarProvider>
+                  <TooltipProvider>
+                    <RecordingPostProcessingProvider>
+                      <ImportDialogProvider onOpen={handleOpenImportDialog}>
+                        {/* Download progress toast provider - listens for background downloads */}
+                        <DownloadProgressToastProvider />
 
-                            {/* Show onboarding or main app */}
-                            {showOnboarding ? (
-                              <OnboardingFlow onComplete={handleOnboardingComplete} />
-                            ) : (
-                              <div className="flex">
-                                <Sidebar />
-                                <MainContent>{children}</MainContent>
-                              </div>
-                            )}
-                            {/* Import audio overlay and dialog */}
-                            <ImportDropOverlay visible={showDropOverlay} />
-                            <ConditionalImportDialog
-                              showImportDialog={showImportDialog}
-                              handleImportDialogClose={handleImportDialogClose}
-                              importFilePath={importFilePath}
-                            />
-                          </ImportDialogProvider>
-                        </RecordingPostProcessingProvider>
-                      </TooltipProvider>
-                    </SidebarProvider>
-                 </OnboardingProvider>
-
-              </OllamaDownloadProvider>
+                        {/* Show onboarding or main app */}
+                        {showOnboarding ? (
+                          <OnboardingFlow onComplete={handleOnboardingComplete} />
+                        ) : (
+                          <div className="flex">
+                            <Sidebar />
+                            <MainContent>{children}</MainContent>
+                          </div>
+                        )}
+                        {/* Import audio overlay and dialog */}
+                        <ImportDropOverlay visible={showDropOverlay} />
+                        <ConditionalImportDialog
+                          showImportDialog={showImportDialog}
+                          handleImportDialogClose={handleImportDialogClose}
+                          importFilePath={importFilePath}
+                        />
+                      </ImportDialogProvider>
+                    </RecordingPostProcessingProvider>
+                  </TooltipProvider>
+                </SidebarProvider>
+              </OnboardingProvider>
             </ConfigProvider>
           </TranscriptProvider>
         </RecordingStateProvider>

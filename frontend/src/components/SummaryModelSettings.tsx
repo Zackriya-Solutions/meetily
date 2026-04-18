@@ -13,11 +13,13 @@ interface SummaryModelSettingsProps {
 
 export function SummaryModelSettings({ refetchTrigger }: SummaryModelSettingsProps) {
   const [modelConfig, setModelConfig] = useState<ModelConfig>({
-    provider: 'ollama',
-    model: 'llama3.2:latest',
+    provider: 'custom-openai',
+    model: '',
     whisperModel: 'large-v3',
     apiKey: null,
-    ollamaEndpoint: null
+    customOpenAIEndpoint: null,
+    customOpenAIModel: null,
+    customOpenAIApiKey: null,
   });
 
   const { isAutoSummary, toggleIsAutoSummary } = useConfig();
@@ -27,17 +29,6 @@ export function SummaryModelSettings({ refetchTrigger }: SummaryModelSettingsPro
     try {
       const data = await invoke('api_get_model_config') as any;
       if (data && data.provider !== null) {
-        // Fetch API key if not included and provider requires it
-        if (data.provider !== 'ollama' && data.provider !== 'builtin-ai' && !data.apiKey) {
-          try {
-            const apiKeyData = await invoke('api_get_api_key', {
-              provider: data.provider
-            }) as string;
-            data.apiKey = apiKeyData;
-          } catch (err) {
-            console.error('Failed to fetch API key:', err);
-          }
-        }
         // Fetch Custom OpenAI config if that's the active provider
         if (data.provider === 'custom-openai') {
           try {
@@ -105,7 +96,6 @@ export function SummaryModelSettings({ refetchTrigger }: SummaryModelSettingsPro
         model: config.model,
         whisperModel: config.whisperModel,
         apiKey: config.apiKey,
-        ollamaEndpoint: config.ollamaEndpoint,
       });
 
       setModelConfig(config);

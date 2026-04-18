@@ -5,7 +5,7 @@ use regex::Regex;
 use reqwest::Client;
 use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
+use tracing::info;
 
 // Compile regex once and reuse (significant performance improvement for repeated calls)
 static THINKING_TAG_REGEX: Lazy<Regex> = Lazy::new(|| {
@@ -146,12 +146,11 @@ pub fn extract_meeting_name_from_markdown(markdown: &str) -> Option<String> {
 /// * `custom_prompt` - Optional user-provided context
 /// * `template_id` - Template identifier (e.g., "daily_standup", "standard_meeting")
 /// * `token_threshold` - Token limit for single-pass processing (default 4000)
-/// * `ollama_endpoint` - Optional custom Ollama endpoint
 /// * `custom_openai_endpoint` - Optional custom OpenAI-compatible endpoint
 /// * `max_tokens` - Optional max tokens for completion (CustomOpenAI provider)
 /// * `temperature` - Optional temperature (CustomOpenAI provider)
 /// * `top_p` - Optional top_p (CustomOpenAI provider)
-/// * `app_data_dir` - Optional app data directory (BuiltInAI provider)
+/// * `app_data_dir` - Optional app data directory
 /// * `cancellation_token` - Optional cancellation token to stop processing
 ///
 /// # Returns
@@ -165,7 +164,6 @@ pub async fn generate_meeting_summary(
     custom_prompt: &str,
     template_id: &str,
     token_threshold: usize,
-    ollama_endpoint: Option<&str>,
     custom_openai_endpoint: Option<&str>,
     max_tokens: Option<u32>,
     temperature: Option<f32>,
@@ -190,118 +188,12 @@ pub async fn generate_meeting_summary(
     let content_to_summarize: String;
     let successful_chunk_count: i64;
 
-    // Strategy: Use single-pass for cloud providers or short transcripts
-    // Use multi-level chunking for Ollama/BuiltInAI with long transcripts
-    // Note: CustomOpenAI is treated like cloud providers (unlimited context)
-    if (provider != &LLMProvider::Ollama && provider != &LLMProvider::BuiltInAI) || total_tokens < token_threshold {
-        info!(
-            "Using single-pass summarization (tokens: {}, threshold: {})",
-            total_tokens, token_threshold
-        );
-        content_to_summarize = text.to_string();
-        successful_chunk_count = 1;
-    } else {
-        info!(
-            "Using multi-level summarization (tokens: {} exceeds threshold: {})",
-            total_tokens, token_threshold
-        );
-
-        // Reserve 300 tokens for prompt overhead
-        let chunks = chunk_text(text, token_threshold - 300, 100);
-        let num_chunks = chunks.len();
-        info!("Split transcript into {} chunks", num_chunks);
-
-        let mut chunk_summaries = Vec::new();
-        let system_prompt_chunk = "You are an expert meeting summarizer.";
-        let user_prompt_template_chunk = "Provide a concise but comprehensive summary of the following transcript chunk. Capture all key points, decisions, action items, and mentioned individuals.\n\n<transcript_chunk>\n{}\n</transcript_chunk>";
-
-        for (i, chunk) in chunks.iter().enumerate() {
-            // Check for cancellation before processing each chunk
-            if let Some(token) = cancellation_token {
-                if token.is_cancelled() {
-                    info!("Summary generation cancelled during chunk {}/{}", i + 1, num_chunks);
-                    return Err("Summary generation was cancelled".to_string());
-                }
-            }
-
-            info!("Processing chunk {}/{}", i + 1, num_chunks);
-            let user_prompt_chunk = user_prompt_template_chunk.replace("{}", chunk.as_str());
-
-            match generate_summary(
-                client,
-                provider,
-                model_name,
-                api_key,
-                system_prompt_chunk,
-                &user_prompt_chunk,
-                ollama_endpoint,
-                custom_openai_endpoint,
-                max_tokens,
-                temperature,
-                top_p,
-                app_data_dir,
-                cancellation_token,
-            )
-            .await
-            {
-                Ok(summary) => {
-                    chunk_summaries.push(summary);
-                    info!("✓ Chunk {}/{} processed successfully", i + 1, num_chunks);
-                }
-                Err(e) => {
-                    // Check if error is due to cancellation
-                    if e.contains("cancelled") {
-                        return Err(e);
-                    }
-                    error!("Failed processing chunk {}/{}: {}", i + 1, num_chunks, e);
-                }
-            }
-        }
-
-        if chunk_summaries.is_empty() {
-            return Err(
-                "Multi-level summarization failed: No chunks were processed successfully."
-                    .to_string(),
-            );
-        }
-
-        successful_chunk_count = chunk_summaries.len() as i64;
-        info!(
-            "Successfully processed {} out of {} chunks",
-            successful_chunk_count, num_chunks
-        );
-
-        // Combine chunk summaries if multiple chunks
-        content_to_summarize = if chunk_summaries.len() > 1 {
-            info!(
-                "Combining {} chunk summaries into cohesive summary",
-                chunk_summaries.len()
-            );
-            let combined_text = chunk_summaries.join("\n---\n");
-            let system_prompt_combine = "You are an expert at synthesizing meeting summaries.";
-            let user_prompt_combine_template = "The following are consecutive summaries of a meeting. Combine them into a single, coherent, and detailed narrative summary that retains all important details, organized logically.\n\n<summaries>\n{}\n</summaries>";
-
-            let user_prompt_combine = user_prompt_combine_template.replace("{}", &combined_text);
-            generate_summary(
-                client,
-                provider,
-                model_name,
-                api_key,
-                system_prompt_combine,
-                &user_prompt_combine,
-                ollama_endpoint,
-                custom_openai_endpoint,
-                max_tokens,
-                temperature,
-                top_p,
-                app_data_dir,
-                cancellation_token,
-            )
-            .await?
-        } else {
-            chunk_summaries.remove(0)
-        };
-    }
+    info!(
+        "Using single-pass summarization (tokens: {}, threshold: {})",
+        total_tokens, token_threshold
+    );
+    content_to_summarize = text.to_string();
+    successful_chunk_count = 1;
 
     info!("Generating final markdown report with template: {}", template_id);
 
@@ -364,7 +256,6 @@ pub async fn generate_meeting_summary(
         api_key,
         &final_system_prompt,
         &final_user_prompt,
-        ollama_endpoint,
         custom_openai_endpoint,
         max_tokens,
         temperature,

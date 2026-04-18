@@ -1,7 +1,7 @@
 /// Summary module - handles all meeting summary generation functionality
 ///
 /// This module contains:
-/// - LLM client for communicating with various AI providers (OpenAI, Claude, Groq, Ollama, OpenRouter, CustomOpenAI)
+/// - LLM client for communicating with built-in and custom OpenAI-compatible providers
 /// - Processor for chunking transcripts and generating summaries
 /// - Service layer for orchestrating summary generation
 /// - Templates for structured meeting summary generation

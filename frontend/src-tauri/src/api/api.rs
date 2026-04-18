@@ -74,8 +74,6 @@ pub struct ModelConfig {
     pub whisper_model: String,
     #[serde(rename = "apiKey")]
     pub api_key: Option<String>,
-    #[serde(rename = "ollamaEndpoint")]
-    pub ollama_endpoint: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -86,8 +84,6 @@ pub struct SaveModelConfigRequest {
     pub whisper_model: String,
     #[serde(rename = "apiKey")]
     pub api_key: Option<String>,
-    #[serde(rename = "ollamaEndpoint")]
-    pub ollama_endpoint: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -475,11 +471,10 @@ pub async fn api_get_model_config<R: Runtime>(
     match SettingsRepository::get_model_config(pool).await {
         Ok(Some(config)) => {
             log_info!(
-                "✅ Found model config in database: provider={}, model={}, whisperModel={}, ollamaEndpoint={:?}",
+                "✅ Found model config in database: provider={}, model={}, whisperModel={}",
                 &config.provider,
                 &config.model,
-                &config.whisper_model,
-                &config.ollama_endpoint
+                &config.whisper_model
             );
             match SettingsRepository::get_api_key(pool, &config.provider).await {
                 Ok(api_key) => {
@@ -489,7 +484,6 @@ pub async fn api_get_model_config<R: Runtime>(
                         model: config.model,
                         whisper_model: config.whisper_model,
                         api_key,
-                        ollama_endpoint: config.ollama_endpoint,
                     }))
                 }
                 Err(e) => {
@@ -521,27 +515,17 @@ pub async fn api_save_model_config<R: Runtime>(
     model: String,
     whisper_model: String,
     api_key: Option<String>,
-    ollama_endpoint: Option<String>,
     _auth_token: Option<String>,
 ) -> Result<serde_json::Value, String> {
     log_info!(
-        "💾 api_save_model_config called (native): provider='{}', model='{}', whisperModel='{}', ollamaEndpoint={:?}",
+        "💾 api_save_model_config called (native): provider='{}', model='{}', whisperModel='{}'",
         &provider,
         &model,
-        &whisper_model,
-        &ollama_endpoint
+        &whisper_model
     );
     let pool = state.db_manager.pool();
 
-    if let Err(e) = SettingsRepository::save_model_config(
-        pool,
-        &provider,
-        &model,
-        &whisper_model,
-        ollama_endpoint.as_deref(),
-    )
-    .await
-    {
+    if let Err(e) = SettingsRepository::save_model_config(pool, &provider, &model, &whisper_model).await {
         log_error!("❌ Failed to save model config to database: {}", e);
         return Err(e.to_string());
     }

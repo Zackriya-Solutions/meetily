@@ -187,19 +187,9 @@ pub async fn initialize_fresh_database(app: AppHandle) -> Result<(), String> {
     // Update app state with the new manager
     app.manage(AppState { db_manager: db_manager.clone() });
 
-    // Set default model configuration for fresh installs
+    // Leave summary model configuration empty until the user configures
+    // a custom OpenAI-compatible endpoint.
     let pool = db_manager.pool();
-    
-    // Default Summary Model: Built-in AI (Gemma 3 1B)
-    if let Err(e) = crate::database::repositories::setting::SettingsRepository::save_model_config(
-        pool,
-        "builtin-ai",
-        "gemma3:1b",
-        "large-v3", // Default whisper model (unused for builtin but required)
-        None,
-    ).await {
-        error!("Failed to set default summary model config: {}", e);
-    }
 
     // Default Transcription Model: Parakeet
     if let Err(e) = crate::database::repositories::setting::SettingsRepository::save_transcript_config(
@@ -210,7 +200,7 @@ pub async fn initialize_fresh_database(app: AppHandle) -> Result<(), String> {
         error!("Failed to set default transcription model config: {}", e);
     }
 
-    info!("Fresh database initialized successfully with default models");
+    info!("Fresh database initialized successfully");
 
     // Emit event to notify frontend that database is ready
     app.emit("database-initialized", ())
