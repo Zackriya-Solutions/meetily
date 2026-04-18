@@ -1,6 +1,6 @@
 # Outbound Network Calls Audit
 
-This document summarizes the outbound network calls identified in the current Meetily repository after telemetry removal.
+This document summarizes the outbound network calls identified in the current Meetily repository after telemetry and auto-update removal.
 
 ## Scope
 
@@ -9,17 +9,16 @@ This audit covers:
 - Direct outbound HTTP(S) endpoints hardcoded in the repository
 - Localhost network calls between app components
 - Optional third-party calls triggered by configuration or user action
-- Update checks, downloads, and external-link opens
+- Model downloads, and external-link opens
 
 This audit does **not** claim to be a packet capture. It is a code-level inventory of observed egress paths.
 
 ## Executive Summary
 
-Meetily is **not network-silent**, but the active application code no longer includes built-in telemetry.
+Meetily is **not network-silent**, but the application code no longer includes built-in telemetry or auto-update checks.
 
 The repository currently contains:
 
-- **Automatic update checks** to GitHub release metadata
 - **Local service calls** to the bundled/local backend and local model servers
 - **Optional cloud AI provider calls** when those providers are configured
 - **Model and dependency downloads**
@@ -29,26 +28,7 @@ The repository currently contains:
 
 No built-in telemetry endpoints are present in the active frontend or Tauri runtime.
 
-## 2. Auto-update traffic
-
-### Tauri updater
-
-- **Endpoint**:
-  - `https://github.com/Zackriya-Solutions/meeting-minutes/releases/latest/download/latest.json`
-- **Purpose**: Check for application updates
-- **Source files**:
-  - `frontend/src-tauri/tauri.conf.json`
-  - `frontend/src/services/updateService.ts`
-  - `frontend/src/hooks/useUpdateCheck.ts`
-  - `frontend/src/components/UpdateCheckProvider.tsx`
-- **Trigger**:
-  - Automatically on app mount
-  - Manually from tray / update UI
-- **Important notes**:
-  - Update checks are enabled through the Tauri updater plugin.
-  - The configured update endpoint still points to the original upstream release feed, not a fork-specific release feed.
-
-## 3. Localhost / local service traffic
+## 2. Localhost / local service traffic
 
 These are network calls, but they stay on the local machine unless the configured local service is itself remote.
 
@@ -90,7 +70,7 @@ These are network calls, but they stay on the local machine unless the configure
   - `backend/app/transcript_processor.py`
   - `frontend/src-tauri/tauri.conf.json`
 
-## 4. Optional cloud AI provider calls
+## 3. Optional cloud AI provider calls
 
 These calls occur only when a cloud provider is selected/configured.
 
@@ -155,7 +135,7 @@ These calls occur only when a cloud provider is selected/configured.
   - `frontend/src-tauri/src/api/api.rs`
   - `frontend/src-tauri/src/summary/llm_client.rs`
 
-## 5. Model and binary downloads
+## 4. Model and binary downloads
 
 ### Whisper model downloads
 
@@ -190,7 +170,7 @@ These calls occur only when a cloud provider is selected/configured.
 - **Important note**:
   - The repository code calls `check_latest_version`, `ffmpeg_download_url`, and `download_ffmpeg_package`, but the exact remote download URL is supplied by the dependency rather than hardcoded in this repo.
 
-## 6. User-initiated external link opens
+## 5. User-initiated external link opens
 
 These are not background API calls, but they do open external destinations from the app.
 
@@ -209,7 +189,7 @@ Examples identified during the audit include:
 - `frontend/src/hooks/meeting-details/useSummaryGeneration.ts`
 - `frontend/src/components/onboarding/steps/SetupOverviewStep.tsx`
 
-## 7. CSP / allowlisted network destinations
+## 6. CSP / allowlisted network destinations
 
 The Tauri CSP in `frontend/src-tauri/tauri.conf.json` explicitly allows:
 
@@ -220,7 +200,7 @@ The Tauri CSP in `frontend/src-tauri/tauri.conf.json` explicitly allows:
 
 This is an allowlist, not proof that all of these are actively used in every runtime path. It does, however, show intended network destinations.
 
-## 8. Backend-specific note
+## 7. Backend-specific note
 
 The repository also contains a Python backend in `backend/app/` with outbound summary-provider calls:
 
@@ -231,14 +211,13 @@ The repository also contains a Python backend in `backend/app/` with outbound su
 
 No backend telemetry implementation was identified during this audit.
 
-## 9. Bottom line
+## 8. Bottom line
 
 The codebase currently supports or performs outbound calls in these categories:
 
-1. **Auto-update checks**: GitHub release metadata
-2. **Local app/service traffic**: localhost backend, localhost transcription server, local Ollama
-3. **Optional cloud AI providers**: OpenAI, Anthropic, Groq, OpenRouter, custom OpenAI-compatible endpoints
-4. **Downloads**: Whisper, Parakeet, built-in models, FFmpeg
-5. **User-initiated external links**
+1. **Local app/service traffic**: localhost backend, localhost transcription server, local Ollama
+2. **Optional cloud AI providers**: OpenAI, Anthropic, Groq, OpenRouter, custom OpenAI-compatible endpoints
+3. **Downloads**: Whisper, Parakeet, built-in models, FFmpeg
+4. **User-initiated external links**
 
 If the goal is a fully offline / zero-egress build, these areas would need to be disabled, removed, or made opt-in with safer defaults.
