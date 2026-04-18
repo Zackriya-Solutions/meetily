@@ -22,44 +22,19 @@ Meetily is built on the principle that your meeting data should remain private a
 
 ## Usage Analytics
 
-### What We Collect
-To improve Meetily and ensure optimal performance, we collect minimal, anonymized usage data:
+Meetily does **not** include built-in usage analytics or telemetry.
 
-**Application Usage:**
-- Feature usage patterns (which tools you use most)
-- Session duration and frequency
-- Performance metrics (transcription success rates, error frequencies)
-- UI interaction patterns (button clicks, navigation flows)
-
-**Technical Metrics:**
-- Application version and platform information
-- Error logs and crash reports (anonymized)
-- Performance benchmarks (processing times, resource usage)
+We do not send product-usage events, session metrics, or feature interaction data to a third-party analytics platform.
 
 ### What We DON'T Collect
-We never collect:
+We do not collect:
 - ❌ Meeting content, transcripts, or recordings
 - ❌ Personal information or identifiable data
-- ❌ File names, meeting titles, or metadata
+- ❌ File names, meeting titles, or metadata for analytics purposes
 - ❌ Audio data or voice patterns
 - ❌ Participant names or contact information
 - ❌ LLM conversations or AI-generated content
-
-### Why We Collect This Data
-This analytics collection is necessary for:
-- **Product Quality**: Identifying and fixing bugs that impact user experience
-- **Performance Optimization**: Understanding resource usage and system bottlenecks
-- **Security**: Detecting potential security issues and vulnerabilities
-- **Feature Development**: Making data-driven decisions about new features
-- **Open Source Sustainability**: Ensuring the project meets user needs effectively
-
-### Analytics Implementation
-- **Provider**: PostHog (privacy-focused analytics platform)
-- **Anonymization**: All data linked to generated user IDs only - no personal identification
-- **Data retention**: 12 months maximum, then automatically deleted
-- **Encryption**: All data encrypted in transit using industry-standard protocols
-- **Location**: Data processed in accordance with PostHog's privacy policy
-- **Access Control**: Strictly limited to core development team members
+- ❌ Product telemetry such as page views, button clicks, or usage sessions
 
 ## Third-Party Services
 
@@ -69,10 +44,9 @@ If you choose to use external LLM providers:
 - **Groq**: Subject to Groq's privacy policy
 - **Local Ollama**: Processed entirely on your device
 
-### Analytics Service (Optional)
-- **PostHog**: Used for usage analytics when enabled
-- **Data**: Only anonymized usage patterns, no meeting content
-- **Control**: Completely optional and user-controlled
+### Analytics Service
+
+No analytics service is bundled with the application.
 
 ## Your Privacy Rights
 
@@ -83,8 +57,8 @@ If you choose to use external LLM providers:
 
 
 ### Analytics Transparency
-- **Open source**: Full analytics implementation available for review in our source code
-- **Questions**: Contact us for any analytics-related concerns
+- **Open source**: The application source is available for review
+- **Questions**: Contact us for any privacy-related concerns
 
 ## Data Security
 
