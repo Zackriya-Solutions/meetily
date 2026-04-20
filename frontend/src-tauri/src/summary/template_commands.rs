@@ -1,6 +1,6 @@
 use crate::summary::templates;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tauri::Runtime;
 use tracing::{error, info, warn};
 
@@ -171,6 +171,7 @@ async fn sync_templates_from_mongodb() -> Result<SyncResult, String> {
 
     let mut synced_count = 0u32;
     let mut failed_count = 0u32;
+    let mut active_ids = HashSet::new();
 
     while let Some(doc) = cursor.try_next().await.map_err(|e| format!("MongoDB cursor error: {e}"))? {
         let template_id = match doc.get_str("template_id") {
@@ -182,25 +183,40 @@ async fn sync_templates_from_mongodb() -> Result<SyncResult, String> {
             }
         };
 
-        // Convert BSON sections array to serde_json::Value for local schema
-        let sections: Vec<serde_json::Value> = doc
-            .get_array("sections")
-            .unwrap_or(&vec![])
-            .iter()
-            .filter_map(|v| {
-                let json_str = serde_json::to_string(&v).ok()?;
-                serde_json::from_str(&json_str).ok()
-            })
-            .collect();
+        active_ids.insert(template_id.clone());
+
+        // Convert BSON arrays to serde_json::Value via full roundtrip to preserve nested fields
+        let bson_to_json_array = |key: &str| -> Vec<serde_json::Value> {
+            doc.get_array(key)
+                .unwrap_or(&vec![])
+                .iter()
+                .filter_map(|v| {
+                    let json_str = serde_json::to_string(&v).ok()?;
+                    serde_json::from_str(&json_str).ok()
+                })
+                .collect()
+        };
+
+        let sections = bson_to_json_array("sections");
+        let output_addenda = bson_to_json_array("output_addenda");
 
         let local_json = serde_json::json!({
             "name": doc.get_str("name").unwrap_or_default(),
             "description": doc.get_str("description").unwrap_or_default(),
             "sections": sections,
+            "output_addenda": if output_addenda.is_empty() { None } else { Some(output_addenda) },
             "global_instruction": doc.get_str("global_instruction").ok(),
-            "clinical_safety_rules": doc.get_array("clinical_safety_rules").ok().map(|arr| {
-                arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect::<Vec<_>>()
-            }),
+            "clinical_safety_rules": match doc.get("clinical_safety_rules") {
+                Some(mongodb::bson::Bson::Array(arr)) => {
+                    Some(arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect::<Vec<_>>())
+                }
+                Some(mongodb::bson::Bson::Document(obj)) => {
+                    obj.get_array("rules").ok().map(|rules| {
+                        rules.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect::<Vec<_>>()
+                    })
+                }
+                _ => None,
+            },
             "version": doc.get_i32("version").ok(),
         });
 
@@ -221,7 +237,8 @@ async fn sync_templates_from_mongodb() -> Result<SyncResult, String> {
         }
     }
 
-    info!("MongoDB template sync: {} synced, {} failed", synced_count, failed_count);
+    let removed = templates::remove_stale_synced_templates(&active_ids);
+    info!("MongoDB template sync: {} synced, {} failed, {} removed", synced_count, failed_count, removed);
     Ok(SyncResult {
         synced_count,
         failed_count,
@@ -271,8 +288,11 @@ async fn sync_templates_from_api() -> SyncResult {
 
     let mut synced_count = 0u32;
     let mut failed_count = 0u32;
+    let mut active_ids = HashSet::new();
 
     for tmpl in &body.templates {
+        active_ids.insert(tmpl.template_id.clone());
+
         let local_json = serde_json::json!({
             "name": tmpl.name,
             "description": tmpl.description,
@@ -302,7 +322,8 @@ async fn sync_templates_from_api() -> SyncResult {
         }
     }
 
-    info!("API template sync: {} synced, {} failed", synced_count, failed_count);
+    let removed = templates::remove_stale_synced_templates(&active_ids);
+    info!("API template sync: {} synced, {} failed, {} removed", synced_count, failed_count, removed);
     SyncResult { synced_count, failed_count, is_online: true }
 }
 

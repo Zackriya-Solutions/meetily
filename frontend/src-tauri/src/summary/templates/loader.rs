@@ -1,23 +1,11 @@
-use super::defaults;
 use super::types::Template;
 use std::path::PathBuf;
 use tracing::{debug, info, warn};
 use once_cell::sync::Lazy;
 use std::sync::RwLock;
 
-// Global storage for the bundled templates directory path
-static BUNDLED_TEMPLATES_DIR: Lazy<RwLock<Option<PathBuf>>> = Lazy::new(|| RwLock::new(None));
-
 // Global storage for the synced (MongoDB-cached) templates directory path
 static SYNCED_TEMPLATES_DIR: Lazy<RwLock<Option<PathBuf>>> = Lazy::new(|| RwLock::new(None));
-
-/// Set the bundled templates directory path (called once at app startup)
-pub fn set_bundled_templates_dir(path: PathBuf) {
-    info!("Bundled templates directory set to: {:?}", path);
-    if let Ok(mut dir) = BUNDLED_TEMPLATES_DIR.write() {
-        *dir = Some(path);
-    }
-}
 
 /// Set the synced templates directory path (called once at app startup)
 pub fn set_synced_templates_dir(path: PathBuf) {
@@ -40,38 +28,7 @@ fn get_custom_templates_dir() -> Option<PathBuf> {
     Some(path)
 }
 
-/// Load a template from the bundled resources directory
-///
-/// # Arguments
-/// * `template_id` - Template identifier (without .json extension)
-///
-/// # Returns
-/// The template JSON content if found, None otherwise
-fn load_bundled_template(template_id: &str) -> Option<String> {
-    let bundled_dir = BUNDLED_TEMPLATES_DIR.read().ok()?.clone()?;
-    let template_path = bundled_dir.join(format!("{}.json", template_id));
-
-    debug!("Checking for bundled template at: {:?}", template_path);
-
-    match std::fs::read_to_string(&template_path) {
-        Ok(content) => {
-            info!("Loaded bundled template '{}' from {:?}", template_id, template_path);
-            Some(content)
-        }
-        Err(e) => {
-            debug!("No bundled template '{}' found: {}", template_id, e);
-            None
-        }
-    }
-}
-
 /// Load a template from the user's custom templates directory
-///
-/// # Arguments
-/// * `template_id` - Template identifier (without .json extension)
-///
-/// # Returns
-/// The template JSON content if found, None otherwise
 fn load_custom_template(template_id: &str) -> Option<String> {
     let custom_dir = get_custom_templates_dir()?;
     let template_path = custom_dir.join(format!("{}.json", template_id));
@@ -117,7 +74,6 @@ pub fn save_synced_template(template_id: &str, json_content: &str) -> Result<(),
         .clone()
         .ok_or_else(|| "Synced templates directory not initialised".to_string())?;
 
-    // Create directory if it doesn't exist
     if !synced_dir.exists() {
         std::fs::create_dir_all(&synced_dir)
             .map_err(|e| format!("Failed to create synced templates directory: {}", e))?;
@@ -131,36 +87,51 @@ pub fn save_synced_template(template_id: &str, json_content: &str) -> Result<(),
     Ok(())
 }
 
+/// Remove synced templates that are no longer present in MongoDB.
+/// Called after a successful sync with the set of active template IDs.
+pub fn remove_stale_synced_templates(active_ids: &std::collections::HashSet<String>) -> u32 {
+    let synced_dir = match SYNCED_TEMPLATES_DIR.read().ok().and_then(|d| d.clone()) {
+        Some(dir) if dir.exists() => dir,
+        _ => return 0,
+    };
+
+    let mut removed = 0u32;
+    if let Ok(entries) = std::fs::read_dir(&synced_dir) {
+        for entry in entries.flatten() {
+            if let Some(filename) = entry.file_name().to_str() {
+                if filename.ends_with(".json") {
+                    let id = filename.trim_end_matches(".json");
+                    if !active_ids.contains(id) {
+                        if let Err(e) = std::fs::remove_file(entry.path()) {
+                            warn!("Failed to remove stale synced template '{}': {}", id, e);
+                        } else {
+                            info!("Removed stale synced template '{}'", id);
+                            removed += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    removed
+}
+
 /// Load and parse a template by identifier
 ///
-/// This function implements a 4-tier fallback strategy:
+/// Fallback strategy:
 /// 1. Check user's custom templates directory
 /// 2. Check synced templates directory (cached from MongoDB)
-/// 3. Check bundled resources directory (app templates)
-/// 4. Fall back to built-in embedded templates
-/// 5. Return error if not found in any location
-///
-/// # Arguments
-/// * `template_id` - Template identifier (e.g., "daily_standup", "standard_meeting")
-///
-/// # Returns
-/// Parsed and validated Template struct
+/// 3. Return error if not found
 pub fn get_template(template_id: &str) -> Result<Template, String> {
     info!("Loading template: {}", template_id);
 
-    // Try custom → synced → bundled → built-in
     let json_content = if let Some(custom_content) = load_custom_template(template_id) {
         debug!("Using custom template for '{}'", template_id);
         custom_content
     } else if let Some(synced_content) = load_synced_template(template_id) {
         debug!("Using synced template for '{}'", template_id);
         synced_content
-    } else if let Some(bundled_content) = load_bundled_template(template_id) {
-        debug!("Using bundled template for '{}'", template_id);
-        bundled_content
-    } else if let Some(builtin_content) = defaults::get_builtin_template(template_id) {
-        debug!("Using built-in template for '{}'", template_id);
-        builtin_content.to_string()
     } else {
         return Err(format!(
             "Template '{}' not found. Available templates: {}",
@@ -169,17 +140,10 @@ pub fn get_template(template_id: &str) -> Result<Template, String> {
         ));
     };
 
-    // Parse and validate
     validate_and_parse_template(&json_content)
 }
 
 /// Validate and parse template JSON
-///
-/// # Arguments
-/// * `json_content` - Raw JSON string
-///
-/// # Returns
-/// Parsed and validated Template struct
 pub fn validate_and_parse_template(json_content: &str) -> Result<Template, String> {
     let template: Template = serde_json::from_str(json_content)
         .map_err(|e| format!("Failed to parse template JSON: {}", e))?;
@@ -191,40 +155,9 @@ pub fn validate_and_parse_template(json_content: &str) -> Result<Template, Strin
 
 /// List all available template identifiers
 ///
-/// Returns a combined list of:
-/// - Built-in template IDs
-/// - Bundled template IDs (from app resources)
-/// - Custom template IDs (from user's data directory)
+/// Returns a combined list of synced and custom template IDs.
 pub fn list_template_ids() -> Vec<String> {
-    let mut ids: Vec<String> = defaults::list_builtin_template_ids()
-        .into_iter()
-        .map(|s| s.to_string())
-        .collect();
-
-    // Add bundled templates if directory is set
-    if let Ok(bundled_dir_lock) = BUNDLED_TEMPLATES_DIR.read() {
-        if let Some(bundled_dir) = bundled_dir_lock.as_ref() {
-            if bundled_dir.exists() {
-                match std::fs::read_dir(bundled_dir) {
-                    Ok(entries) => {
-                        for entry in entries.flatten() {
-                            if let Some(filename) = entry.file_name().to_str() {
-                                if filename.ends_with(".json") {
-                                    let id = filename.trim_end_matches(".json").to_string();
-                                    if !ids.contains(&id) {
-                                        ids.push(id);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        warn!("Failed to read bundled templates directory: {}", e);
-                    }
-                }
-            }
-        }
-    }
+    let mut ids: Vec<String> = Vec::new();
 
     // Add synced templates if directory is set
     if let Ok(synced_dir_lock) = SYNCED_TEMPLATES_DIR.read() {
@@ -279,8 +212,6 @@ pub fn list_template_ids() -> Vec<String> {
 }
 
 /// List all available templates with their metadata
-///
-/// Returns a list of (id, name, description) tuples
 pub fn list_templates() -> Vec<(String, String, String)> {
     let mut templates = Vec::new();
 
@@ -303,26 +234,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_get_builtin_template() {
-        let template = get_template("daily_standup");
-        assert!(template.is_ok());
-
-        let template = template.unwrap();
-        assert_eq!(template.name, "Daily Standup");
-        assert!(!template.sections.is_empty());
-    }
-
-    #[test]
     fn test_get_nonexistent_template() {
         let result = get_template("nonexistent_template");
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_list_template_ids() {
-        let ids = list_template_ids();
-        assert!(ids.contains(&"daily_standup".to_string()));
-        assert!(ids.contains(&"standard_meeting".to_string()));
     }
 
     #[test]

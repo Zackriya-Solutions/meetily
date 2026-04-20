@@ -499,16 +499,6 @@ pub fn run() {
             })
             .expect("Failed to initialize database");
 
-            // Initialize bundled templates directory for dynamic template discovery
-            log::info!("Initializing bundled templates directory...");
-            if let Ok(resource_path) = _app.handle().path().resource_dir() {
-                let templates_dir = resource_path.join("templates");
-                log::info!("Setting bundled templates directory to: {:?}", templates_dir);
-                summary::templates::set_bundled_templates_dir(templates_dir);
-            } else {
-                log::warn!("Failed to resolve resource directory for templates");
-            }
-
             // Initialize synced templates directory (MongoDB cache)
             if let Some(mut data_dir) = dirs::data_dir() {
                 data_dir.push("IQcapture");
