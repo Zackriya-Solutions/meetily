@@ -194,6 +194,22 @@ impl AudioDeviceMonitor {
                 }
             }
 
+            // While actively recording on Linux, skip the enumeration entirely.
+            // cpal's ALSA probe during `list_audio_devices()` perturbs the
+            // PipeWire graph and produces audible fuzz on the in-flight
+            // capture stream. Mid-recording disconnects are still caught
+            // immediately by the cpal stream's own error callback, so
+            // skipping the periodic poll doesn't lose the reconnection flow
+            // — it only delays detection of *new* devices becoming
+            // available, which doesn't matter until the user stops recording
+            // and re-opens the picker.
+            #[cfg(target_os = "linux")]
+            {
+                if crate::audio::recording_commands::is_recording().await {
+                    continue;
+                }
+            }
+
             // Get current device list
             let current_devices = match list_audio_devices().await {
                 Ok(devices) => devices,
