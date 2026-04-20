@@ -166,7 +166,21 @@ impl AudioDeviceMonitor {
         stop_signal: Arc<tokio::sync::Notify>,
     ) {
         let mut last_device_list = Vec::new();
-        let check_interval = Duration::from_secs(2); // Poll every 2 seconds
+
+        // On Linux, `list_audio_devices()` goes through cpal's ALSA backend and
+        // probes every ALSA PCM (dmix:*, dsnoop:*, route:*, iec958:*, hw:*,
+        // plughw:*). Each probe opens/closes a PipeWire node via pipewire-alsa
+        // and jitters the whole audio graph — which shows up as audible fuzz
+        // in the active recording and in any concurrent Teams/Zoom/WebRTC
+        // call. A 2 s poll is fine on CoreAudio/WASAPI but way too aggressive
+        // on pipewire-alsa. Fall back to a 30 s interval on Linux; the cpal
+        // stream's error callback still catches actual device disconnects
+        // immediately, so polling only matters for detecting newly-available
+        // devices in the picker, which doesn't need to be instant.
+        #[cfg(target_os = "linux")]
+        let check_interval = Duration::from_secs(30);
+        #[cfg(not(target_os = "linux"))]
+        let check_interval = Duration::from_secs(2);
 
         loop {
             // Check for stop signal with timeout
