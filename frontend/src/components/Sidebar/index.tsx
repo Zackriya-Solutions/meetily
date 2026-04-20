@@ -820,7 +820,7 @@ const Sidebar: React.FC = React.memo(() => {
             </div>
 
             <div className="w-full flex items-center justify-center px-3 py-1 text-xs text-gray-400">
-              v0.4.0
+              v0.4.1
             </div>
           </div>
         )}
