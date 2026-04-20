@@ -11,6 +11,38 @@ use serde::Serialize;
 
 use super::audio_processing::audio_to_mono;
 
+/// On Linux, try to bump the device's default input config up to 48 kHz to
+/// match PipeWire's graph rate. Returns `None` if the device doesn't expose a
+/// 48 kHz config that matches the default's channel count / sample format,
+/// in which case the caller keeps the default. See
+/// `audio::devices::configuration::preferred_input_config` for rationale.
+fn pick_linux_48k_input_config(device: &cpal::Device) -> Option<cpal::SupportedStreamConfig> {
+    #[cfg(target_os = "linux")]
+    {
+        const TARGET_RATE: u32 = 48_000;
+        let default_cfg = device.default_input_config().ok()?;
+        if default_cfg.sample_rate().0 == TARGET_RATE {
+            return None;
+        }
+        if let Ok(supported) = device.supported_input_configs() {
+            for cfg in supported {
+                if cfg.channels() == default_cfg.channels()
+                    && cfg.sample_format() == default_cfg.sample_format()
+                    && cfg.min_sample_rate().0 <= TARGET_RATE
+                    && cfg.max_sample_rate().0 >= TARGET_RATE
+                {
+                    return Some(cfg.with_sample_rate(cpal::SampleRate(TARGET_RATE)));
+                }
+            }
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = device;
+    }
+    None
+}
+
 #[derive(Debug, Serialize, Clone)]
 pub struct AudioLevelData {
     pub device_name: String,
@@ -172,13 +204,21 @@ impl AudioLevelMonitor {
     ) -> Result<cpal::Stream> {
         let device_name = device_name.to_string();
 
-        // Determine if this is an input or output device and get appropriate config
-        let (config, is_input) = if let Ok(input_config) = device.default_input_config() {
-            (input_config, true)
-        } else if let Ok(output_config) = device.default_output_config() {
-            (output_config, false)
-        } else {
-            return Err(anyhow::anyhow!("Failed to get any config for device: {}", device_name));
+        // Determine if this is an input or output device and get appropriate config.
+        // On Linux, prefer 48 kHz to match PipeWire's graph rate — otherwise
+        // pipewire-alsa inserts a resampler that runs at 256-frame quantum and
+        // drags every other audio client into that quantum (audible fuzz on
+        // concurrent Teams/Zoom/browser WebRTC calls).
+        let (config, is_input) = {
+            let input_cfg = pick_linux_48k_input_config(device)
+                .or_else(|| device.default_input_config().ok());
+            if let Some(c) = input_cfg {
+                (c, true)
+            } else if let Ok(output_config) = device.default_output_config() {
+                (output_config, false)
+            } else {
+                return Err(anyhow::anyhow!("Failed to get any config for device: {}", device_name));
+            }
         };
 
         let sample_rate = config.sample_rate().0;
