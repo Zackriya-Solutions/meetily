@@ -12,6 +12,67 @@ static THINKING_TAG_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?s)<think(?:ing)?>.*?</think(?:ing)?>").unwrap()
 });
 
+/// Maps a BCP-47 tag to the English language name used inside LLM prompts.
+///
+/// LLMs respond far more reliably to "in Spanish" than to "in es". Unknown
+/// codes return None so the caller silently falls back to default behaviour
+/// rather than injecting a literal ISO code into the prompt.
+fn language_name_from_code(code: &str) -> Option<&'static str> {
+    match code.to_ascii_lowercase().as_str() {
+        "en-gb" => Some("British English"),
+        "en-us" => Some("American English"),
+        "en" => Some("English"),
+        "zh" | "zh-cn" => Some("Chinese"),
+        "zh-tw" => Some("Traditional Chinese"),
+        "de" => Some("German"),
+        "es" => Some("Spanish"),
+        "ru" => Some("Russian"),
+        "ko" => Some("Korean"),
+        "fr" => Some("French"),
+        "ja" => Some("Japanese"),
+        "pt" => Some("Portuguese"),
+        "pt-br" => Some("Brazilian Portuguese"),
+        "it" => Some("Italian"),
+        "nl" => Some("Dutch"),
+        "pl" => Some("Polish"),
+        "ar" => Some("Arabic"),
+        "hi" => Some("Hindi"),
+        "ta" => Some("Tamil"),
+        "tr" => Some("Turkish"),
+        "vi" => Some("Vietnamese"),
+        "th" => Some("Thai"),
+        "id" => Some("Indonesian"),
+        "sv" => Some("Swedish"),
+        "nb" | "no" => Some("Norwegian"),
+        "da" => Some("Danish"),
+        "fi" => Some("Finnish"),
+        "cs" => Some("Czech"),
+        "el" => Some("Greek"),
+        "he" => Some("Hebrew"),
+        "uk" => Some("Ukrainian"),
+        "ro" => Some("Romanian"),
+        "hu" => Some("Hungarian"),
+        _ => None,
+    }
+}
+
+/// Builds the trailing language directive appended to summary system prompts.
+///
+/// Empty string when language is None or the code is unrecognised, which
+/// preserves the pre-existing behaviour for users with no preference set.
+fn language_directive(summary_language: Option<&str>) -> String {
+    let Some(code) = summary_language else {
+        return String::new();
+    };
+    let Some(name) = language_name_from_code(code) else {
+        return String::new();
+    };
+    format!(
+        "\n\n**Output language:** Produce the entire response in {}. Do not translate proper nouns, code, or quoted material.",
+        name
+    )
+}
+
 /// Rough token count estimation using character count
 pub fn rough_token_count(s: &str) -> usize {
     let char_count = s.chars().count();
@@ -153,6 +214,7 @@ pub fn extract_meeting_name_from_markdown(markdown: &str) -> Option<String> {
 /// * `top_p` - Optional top_p (CustomOpenAI provider)
 /// * `app_data_dir` - Optional app data directory (BuiltInAI provider)
 /// * `cancellation_token` - Optional cancellation token to stop processing
+/// * `summary_language` - Optional BCP-47 tag (e.g. "en-GB") to force summary output language
 ///
 /// # Returns
 /// Tuple of (final_summary_markdown, number_of_chunks_processed)
@@ -172,7 +234,10 @@ pub async fn generate_meeting_summary(
     top_p: Option<f32>,
     app_data_dir: Option<&PathBuf>,
     cancellation_token: Option<&CancellationToken>,
+    summary_language: Option<&str>,
 ) -> Result<(String, i64), String> {
+    // Resolve once - used at all three prompt sites below
+    let lang_suffix = language_directive(summary_language);
     // Check cancellation at the start
     if let Some(token) = cancellation_token {
         if token.is_cancelled() {
@@ -212,7 +277,8 @@ pub async fn generate_meeting_summary(
         info!("Split transcript into {} chunks", num_chunks);
 
         let mut chunk_summaries = Vec::new();
-        let system_prompt_chunk = "You are an expert meeting summarizer.";
+        let system_prompt_chunk_base = "You are an expert meeting summarizer.";
+        let system_prompt_chunk = format!("{}{}", system_prompt_chunk_base, lang_suffix);
         let user_prompt_template_chunk = "Provide a concise but comprehensive summary of the following transcript chunk. Capture all key points, decisions, action items, and mentioned individuals.\n\n<transcript_chunk>\n{}\n</transcript_chunk>";
 
         for (i, chunk) in chunks.iter().enumerate() {
@@ -232,7 +298,7 @@ pub async fn generate_meeting_summary(
                 provider,
                 model_name,
                 api_key,
-                system_prompt_chunk,
+                &system_prompt_chunk,
                 &user_prompt_chunk,
                 ollama_endpoint,
                 custom_openai_endpoint,
@@ -278,7 +344,8 @@ pub async fn generate_meeting_summary(
                 chunk_summaries.len()
             );
             let combined_text = chunk_summaries.join("\n---\n");
-            let system_prompt_combine = "You are an expert at synthesizing meeting summaries.";
+            let system_prompt_combine_base = "You are an expert at synthesizing meeting summaries.";
+            let system_prompt_combine = format!("{}{}", system_prompt_combine_base, lang_suffix);
             let user_prompt_combine_template = "The following are consecutive summaries of a meeting. Combine them into a single, coherent, and detailed narrative summary that retains all important details, organized logically.\n\n<summaries>\n{}\n</summaries>";
 
             let user_prompt_combine = user_prompt_combine_template.replace("{}", &combined_text);
@@ -287,7 +354,7 @@ pub async fn generate_meeting_summary(
                 provider,
                 model_name,
                 api_key,
-                system_prompt_combine,
+                &system_prompt_combine,
                 &user_prompt_combine,
                 ollama_endpoint,
                 custom_openai_endpoint,
@@ -330,8 +397,8 @@ pub async fn generate_meeting_summary(
 <template>
 {}
 </template>
-"#,
-        section_instructions, clean_template_markdown
+{}"#,
+        section_instructions, clean_template_markdown, lang_suffix
     );
 
     let mut final_user_prompt = format!(

@@ -219,6 +219,18 @@ impl SummaryService {
         // Get app data directory for BuiltInAI provider
         let app_data_dir = _app.path().app_data_dir().ok();
 
+        // Fetch user's preferred summary output language (None = model decides)
+        let summary_language = match SettingsRepository::get_summary_language(&pool).await {
+            Ok(lang) => lang,
+            Err(e) => {
+                warn!("Failed to read summary_language preference, continuing without it: {}", e);
+                None
+            }
+        };
+        if let Some(code) = &summary_language {
+            info!("📝 Summary language preference: {}", code);
+        }
+
         // Generate summary
         let client = reqwest::Client::new();
         let result = generate_meeting_summary(
@@ -237,6 +249,7 @@ impl SummaryService {
             custom_openai_top_p,
             app_data_dir.as_ref(),
             Some(&cancellation_token),
+            summary_language.as_deref(),
         )
         .await;
 
