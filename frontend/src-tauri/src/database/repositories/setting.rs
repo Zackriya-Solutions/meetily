@@ -266,6 +266,44 @@ impl SettingsRepository {
         Ok(())
     }
 
+    // ===== SUMMARY LANGUAGE METHODS =====
+
+    /// Gets the preferred summary output language (BCP-47 tag, e.g. "en-GB").
+    /// Returns `Ok(None)` when unset - callers should treat this as
+    /// "use existing behaviour" and skip language injection.
+    pub async fn get_summary_language(
+        pool: &SqlitePool,
+    ) -> std::result::Result<Option<String>, sqlx::Error> {
+        let value: Option<Option<String>> =
+            sqlx::query_scalar("SELECT summaryLanguage FROM settings WHERE id = '1' LIMIT 1")
+                .fetch_optional(pool)
+                .await?;
+        // Flatten: outer None = no settings row, inner None = column NULL
+        Ok(value.flatten().filter(|s| !s.is_empty()))
+    }
+
+    /// Saves the preferred summary output language.
+    ///
+    /// Pass `None` to clear the preference and restore default behaviour.
+    pub async fn save_summary_language(
+        pool: &SqlitePool,
+        language: Option<&str>,
+    ) -> std::result::Result<(), sqlx::Error> {
+        // Upsert: create settings row if absent (matches pattern in save_api_key)
+        sqlx::query(
+            r#"
+            INSERT INTO settings (id, provider, model, whisperModel, summaryLanguage)
+            VALUES ('1', 'openai', 'gpt-4o-2024-11-20', 'large-v3', $1)
+            ON CONFLICT(id) DO UPDATE SET
+                summaryLanguage = excluded.summaryLanguage
+            "#,
+        )
+        .bind(language)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
     // ===== CUSTOM OPENAI CONFIG METHODS =====
 
     /// Gets the custom OpenAI configuration from JSON

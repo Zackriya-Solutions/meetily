@@ -1,6 +1,6 @@
 use crate::database::repositories::{
-    meeting::MeetingsRepository, summary::SummaryProcessesRepository,
-    transcript_chunk::TranscriptChunksRepository,
+    meeting::MeetingsRepository, setting::SettingsRepository,
+    summary::SummaryProcessesRepository, transcript_chunk::TranscriptChunksRepository,
 };
 use crate::state::AppState;
 use crate::summary::service::SummaryService;
@@ -237,6 +237,43 @@ pub async fn api_process_transcript<R: Runtime>(
         message: "Summary generation started".to_string(),
         process_id: m_id,
     })
+}
+
+/// Returns the user's preferred summary output language as a BCP-47 tag.
+///
+/// Returns `null` when unset (model decides from transcript - default behaviour).
+#[tauri::command]
+pub async fn api_get_summary_language<R: Runtime>(
+    _app: AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    log_info!("api_get_summary_language called");
+    let pool = state.db_manager.pool();
+    SettingsRepository::get_summary_language(pool)
+        .await
+        .map_err(|e| format!("Failed to read summary language: {}", e))
+}
+
+/// Persists the user's preferred summary output language.
+///
+/// Pass `null` (frontend) / `None` (Rust) to clear the preference and
+/// restore default behaviour.
+#[tauri::command]
+pub async fn api_set_summary_language<R: Runtime>(
+    _app: AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+    language: Option<String>,
+) -> Result<(), String> {
+    log_info!("api_set_summary_language called with: {:?}", language);
+    let pool = state.db_manager.pool();
+    // Trim and normalise empty strings to None so "" and null behave identically
+    let normalised = language.and_then(|s| {
+        let t = s.trim();
+        if t.is_empty() { None } else { Some(t.to_string()) }
+    });
+    SettingsRepository::save_summary_language(pool, normalised.as_deref())
+        .await
+        .map_err(|e| format!("Failed to save summary language: {}", e))
 }
 
 /// Cancels an ongoing summary generation process
