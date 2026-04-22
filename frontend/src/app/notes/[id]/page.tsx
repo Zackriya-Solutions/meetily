@@ -33,7 +33,7 @@ const NotePage = ({ params }: PageProps) => {
       title: '팀 싱크 - 12월 26일',
       date: '2024-12-26',
       time: '오전 10:00 - 오전 11:00',
-      attendees: ['John Doe', 'Jane Smith', 'Mike Johnson'],
+      attendees: ['김민수', '이수진', '박지훈'],
       tags: ['팀 싱크', '주간', '제품'],
       content: `
 # 회의 요약
@@ -50,9 +50,9 @@ const NotePage = ({ params }: PageProps) => {
 - 로드맵에 새로운 기능 2개 추가
 
 ## 액션 아이템
-- [ ] John: 프로젝트 타임라인 작성
-- [ ] Jane: 디자인 리뷰 회의 일정 조율
-- [ ] Mike: 문서 업데이트
+- [ ] 김민수: 프로젝트 타임라인 작성
+- [ ] 이수진: 디자인 리뷰 회의 일정 조율
+- [ ] 박지훈: 문서 업데이트
 
 ## 노트
 - 현재 프로젝트 병목 현상 논의
@@ -64,7 +64,7 @@ const NotePage = ({ params }: PageProps) => {
       title: '제품 리뷰',
       date: '2024-12-26',
       time: '오후 2:00 - 오후 3:00',
-      attendees: ['Sarah Wilson', 'Tom Brown', 'Alex Chen'],
+      attendees: ['정현우', '최지연', '강도윤'],
       tags: ['제품', '리뷰', '분기'],
       content: `
 # 제품 리뷰 회의
