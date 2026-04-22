@@ -344,7 +344,7 @@ function MeetingDetailsContent() {
             onClick={() => router.push('/')}
             className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
           >
-            뒤로 가기
+            뒤로
           </button>
         </div>
       </div>
