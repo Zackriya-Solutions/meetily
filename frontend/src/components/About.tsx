@@ -37,11 +37,11 @@ export function About() {
             if (info.available) {
                 setShowUpdateDialog(true);
             } else {
-                toast.success('You are running the latest version');
+                toast.success('최신 버전을 사용 중입니다');
             }
         } catch (error: any) {
             console.error('Failed to check for updates:', error);
-            toast.error('Failed to check for updates: ' + (error.message || 'Unknown error'));
+            toast.error('업데이트 확인에 실패했습니다: ' + (error.message || 'Unknown error'));
         } finally {
             setIsChecking(false);
         }
@@ -54,7 +54,7 @@ export function About() {
                 <div className="mb-3">
                     <Image
                         src="icon_128x128.png"
-                        alt="Meetily Logo"
+                        alt="Meetily 로고"
                         width={64}
                         height={64}
                         className="mx-auto"
@@ -63,7 +63,7 @@ export function About() {
                 {/* <h1 className="text-xl font-bold text-gray-900">Meetily</h1> */}
                 <span className="text-sm text-gray-500"> v{currentVersion}</span>
                 <p className="text-medium text-gray-600 mt-1">
-                    Real-time notes and summaries that never leave your machine.
+                    기기를 벗어나지 않는 실시간 노트와 요약.
                 </p>
                 <div className="mt-3">
                     <Button
@@ -76,18 +76,18 @@ export function About() {
                         {isChecking ? (
                             <>
                                 <Loader2 className="h-3 w-3 mr-2 animate-spin" />
-                                Checking...
+                                확인 중...
                             </>
                         ) : (
                             <>
                                 <CheckCircle2 className="h-3 w-3 mr-2" />
-                                Check for Updates
+                                업데이트 확인
                             </>
                         )}
                     </Button>
                     {updateInfo?.available && (
                         <div className="mt-2 text-xs text-blue-600">
-                            Update available: v{updateInfo.version}
+                            업데이트 사용 가능: v{updateInfo.version}
                         </div>
                     )}
                 </div>
@@ -95,23 +95,23 @@ export function About() {
 
             {/* Features Grid - Compact */}
             <div className="space-y-3">
-                <h2 className="text-base font-semibold text-gray-800">What makes Meetily different</h2>
+                <h2 className="text-base font-semibold text-gray-800">Meetily만의 차별점</h2>
                 <div className="grid grid-cols-2 gap-2">
                     <div className="bg-gray-50 rounded p-3 hover:bg-gray-100 transition-colors">
-                        <h3 className="font-bold text-sm text-gray-900 mb-1">Privacy-first</h3>
-                        <p className="text-xs text-gray-600 leading-relaxed">Your data & AI processing workflow can now stay within your premise. No cloud, no leaks.</p>
+                        <h3 className="font-bold text-sm text-gray-900 mb-1">프라이버시 우선</h3>
+                        <p className="text-xs text-gray-600 leading-relaxed">데이터와 AI 처리 워크플로를 사내에 둘 수 있습니다. 클라우드 없이, 유출 걱정 없이.</p>
                     </div>
                     <div className="bg-gray-50 rounded p-3 hover:bg-gray-100 transition-colors">
-                        <h3 className="font-bold text-sm text-gray-900 mb-1">Use Any Model</h3>
-                        <p className="text-xs text-gray-600 leading-relaxed">Prefer local open-source model? Great. Want to plug in an external API? Also fine. No lock-in.</p>
+                        <h3 className="font-bold text-sm text-gray-900 mb-1">어떤 모델이든 사용</h3>
+                        <p className="text-xs text-gray-600 leading-relaxed">로컬 오픈소스 모델을 선호하시나요? 좋습니다. 외부 API를 연결하고 싶으신가요? 그것도 가능합니다. 종속되지 않습니다.</p>
                     </div>
                     <div className="bg-gray-50 rounded p-3 hover:bg-gray-100 transition-colors">
-                        <h3 className="font-bold text-sm text-gray-900 mb-1">Cost-Smart</h3>
-                        <p className="text-xs text-gray-600 leading-relaxed">Avoid pay-per-minute bills by running models locally (or pay only for the calls you choose).</p>
+                        <h3 className="font-bold text-sm text-gray-900 mb-1">비용 효율적</h3>
+                        <p className="text-xs text-gray-600 leading-relaxed">모델을 로컬에서 실행하여 분당 요금을 피하세요 (원하는 호출에만 비용을 지불할 수도 있습니다).</p>
                     </div>
                     <div className="bg-gray-50 rounded p-3 hover:bg-gray-100 transition-colors">
-                        <h3 className="font-bold text-sm text-gray-900 mb-1">Works everywhere</h3>
-                        <p className="text-xs text-gray-600 leading-relaxed">Google Meet, Zoom, Teams-online or offline.</p>
+                        <h3 className="font-bold text-sm text-gray-900 mb-1">어디서나 작동</h3>
+                        <p className="text-xs text-gray-600 leading-relaxed">Google Meet, Zoom, Teams — 온라인이든 오프라인이든.</p>
                     </div>
                 </div>
             </div>
@@ -119,28 +119,28 @@ export function About() {
             {/* Coming Soon - Compact */}
             <div className="bg-blue-50 rounded p-3">
                 <p className="text-s text-blue-800">
-                    <span className="font-bold">Coming soon:</span> A library of on-device AI agents-automating follow-ups, action tracking, and more.
+                    <span className="font-bold">출시 예정:</span> 온디바이스 AI 에이전트 라이브러리 — 후속 조치, 작업 추적 등을 자동화합니다.
                 </p>
             </div>
 
             {/* CTA Section - Compact */}
             <div className="text-center space-y-2">
-                <h3 className="text-medium font-semibold text-gray-800">Ready to push your business further?</h3>
+                <h3 className="text-medium font-semibold text-gray-800">비즈니스를 한 단계 성장시킬 준비가 되셨나요?</h3>
                 <p className="text-s text-gray-600">
-                    If you're planning to build privacy-first custom AI agents or a fully tailored product for your <span className="font-bold">business</span>, we can help you build it.
+                    프라이버시 우선의 맞춤형 AI 에이전트 또는 <span className="font-bold">비즈니스</span>에 완벽히 맞는 제품을 만들 계획이라면 저희가 도와드릴 수 있습니다.
                 </p>
                 <button
                     onClick={handleContactClick}
                     className="inline-flex items-center px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded transition-colors duration-200 shadow-sm hover:shadow-md"
                 >
-                    Chat with the Zackriya team
+                    Zackriya 팀과 상담하기
                 </button>
             </div>
 
             {/* Footer - Compact */}
             <div className="pt-2 border-t border-gray-200 text-center">
                 <p className="text-xs text-gray-400">
-                    Built by Zackriya Solutions
+                    Zackriya Solutions 제작
                 </p>
             </div>
             <AnalyticsConsentSwitch />
