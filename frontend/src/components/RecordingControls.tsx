@@ -77,7 +77,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
         console.log('Tauri is initialized and ready, is_recording result:', result);
       } catch (error) {
         console.error('Tauri initialization error:', error);
-        alert('Failed to initialize recording. Please check the console for details.');
+        alert('녹음을 초기화하지 못했습니다. 콘솔에서 자세한 내용을 확인해 주세요.');
       }
     };
     checkTauri();
@@ -115,23 +115,23 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
       // Check for device-related errors
       if (errorMsg.includes('microphone') || errorMsg.includes('mic') || errorMsg.includes('input')) {
         setDeviceError({
-          title: 'Microphone Not Available',
-          message: 'Unable to access your microphone. Please check that:\n• Your microphone is connected\n• The app has microphone permissions\n• No other app is using the microphone'
+          title: '마이크를 사용할 수 없습니다',
+          message: '마이크에 접근할 수 없습니다. 다음을 확인해 주세요.\n• 마이크가 연결되어 있는지\n• 앱에 마이크 권한이 부여되어 있는지\n• 다른 앱이 마이크를 독점 사용 중이지는 않은지'
         });
       } else if (errorMsg.includes('system audio') || errorMsg.includes('speaker') || errorMsg.includes('output')) {
         setDeviceError({
-          title: 'System Audio Not Available',
-          message: 'Unable to capture system audio. Please check that:\n• A virtual audio device (like BlackHole) is installed\n• The app has screen recording permissions (macOS)\n• System audio is properly configured'
+          title: '시스템 오디오를 사용할 수 없습니다',
+          message: '시스템 오디오를 캡처할 수 없습니다. 다음을 확인해 주세요.\n• 가상 오디오 장치(BlackHole 등)가 설치되어 있는지\n• 앱에 화면 녹화 권한이 부여되어 있는지 (macOS)\n• 시스템 오디오가 올바르게 구성되어 있는지'
         });
       } else if (errorMsg.includes('permission')) {
         setDeviceError({
-          title: 'Permission Required',
-          message: 'Recording permissions are required. Please:\n• Grant microphone access in System Settings\n• Grant screen recording access for system audio (macOS)\n• Restart the app after granting permissions'
+          title: '권한이 필요합니다',
+          message: '녹음을 하려면 권한이 필요합니다.\n• 시스템 설정에서 마이크 접근을 허용해 주세요\n• 시스템 오디오를 위해 화면 녹화 접근을 허용해 주세요 (macOS)\n• 권한을 부여한 뒤 앱을 다시 시작해 주세요'
         });
       } else {
         setDeviceError({
-          title: 'Recording Failed',
-          message: 'Unable to start recording. Please check your audio device settings and try again.'
+          title: '녹음에 실패했습니다',
+          message: '녹음을 시작할 수 없습니다. 오디오 장치 설정을 확인하고 다시 시도해 주세요.'
         });
       }
     }
@@ -213,7 +213,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
       console.log('Recording paused successfully');
     } catch (error) {
       console.error('Failed to pause recording:', error);
-      alert('Failed to pause recording. Please check the console for details.');
+      alert('녹음을 일시 정지하지 못했습니다. 콘솔에서 자세한 내용을 확인해 주세요.');
     } finally {
       setIsPausing(false);
     }
@@ -231,7 +231,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
       console.log('Recording resumed successfully');
     } catch (error) {
       console.error('Failed to resume recording:', error);
-      alert('Failed to resume recording. Please check the console for details.');
+      alert('녹음을 재개하지 못했습니다. 콘솔에서 자세한 내용을 확인해 주세요.');
     } finally {
       setIsResuming(false);
     }
@@ -346,7 +346,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
           {isProcessing && !isParentProcessing ? (
             <div className="flex items-center space-x-2">
               <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-gray-900"></div>
-              <span className="text-sm text-gray-600">Processing recording...</span>
+              <span className="text-sm text-gray-600">녹음 처리 중...</span>
             </div>
           ) : (
             <>
@@ -408,7 +408,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
                         </button>
                       </TooltipTrigger>
                       <TooltipContent>
-                        <p>Start recording</p>
+                        <p>녹음 시작</p>
                       </TooltipContent>
                     </Tooltip>
                   ) : (
@@ -435,13 +435,13 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
                             {isPaused ? <Play size={16} /> : <Pause size={16} />}
                             {(isPausing || isResuming) && (
                               <div className="absolute -top-8 text-gray-600 font-medium text-xs">
-                                {isPausing ? 'Pausing...' : 'Resuming...'}
+                                {isPausing ? '일시 정지 중...' : '재개 중...'}
                               </div>
                             )}
                           </button>
                         </TooltipTrigger>
                         <TooltipContent>
-                          <p>{isPaused ? 'Resume recording' : 'Pause recording'}</p>
+                          <p>{isPaused ? '녹음 재개' : '녹음 일시 정지'}</p>
                         </TooltipContent>
                       </Tooltip>
 
@@ -459,13 +459,13 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
                             <Square size={16} />
                             {isStopping && (
                               <div className="absolute -top-8 text-gray-600 font-medium text-xs">
-                                Stopping...
+                                중지 중...
                               </div>
                             )}
                           </button>
                         </TooltipTrigger>
                         <TooltipContent>
-                          <p>Stop recording</p>
+                          <p>녹음 중지</p>
                         </TooltipContent>
                       </Tooltip>
                     </>
@@ -493,7 +493,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
         {/* Show validation status only */}
         {isValidatingModel && (
           <div className="text-xs text-gray-600 text-center mt-2">
-            Validating speech recognition...
+            음성 인식 준비 중...
           </div>
         )}
 
@@ -504,7 +504,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
             <button
               onClick={() => setDeviceError(null)}
               className="absolute right-3 top-3 text-red-600 hover:text-red-800 transition-colors"
-              aria-label="Close alert"
+              aria-label="알림 닫기"
             >
               <X className="h-4 w-4" />
             </button>

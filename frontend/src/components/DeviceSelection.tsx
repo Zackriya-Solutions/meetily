@@ -59,7 +59,7 @@ export function DeviceSelection({ selectedDevices, onDeviceChange, disabled = fa
       console.log('Fetched audio devices:', result);
     } catch (err) {
       console.error('Failed to fetch audio devices:', err);
-      setError('Failed to load audio devices. Please check your system audio settings.');
+      setError('오디오 장치를 불러오지 못했습니다. 시스템 오디오 설정을 확인해 주세요.');
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -178,7 +178,7 @@ export function DeviceSelection({ selectedDevices, onDeviceChange, disabled = fa
       // Only monitor input devices for now (microphones)
       const deviceNames = inputDevices.map(device => device.name);
       if (deviceNames.length === 0) {
-        setError('No microphone devices found to monitor');
+        setError('모니터링할 마이크 장치를 찾을 수 없습니다');
         return;
       }
 
@@ -188,7 +188,7 @@ export function DeviceSelection({ selectedDevices, onDeviceChange, disabled = fa
       console.log('Started audio level monitoring for input devices:', deviceNames);
     } catch (err) {
       console.error('Failed to start audio level monitoring:', err);
-      setError('Failed to start audio level monitoring');
+      setError('오디오 레벨 모니터링을 시작하지 못했습니다');
     }
   };
 
@@ -228,7 +228,7 @@ export function DeviceSelection({ selectedDevices, onDeviceChange, disabled = fa
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h4 className="text-sm font-medium text-gray-900">Audio Devices</h4>
+        <h4 className="text-sm font-medium text-gray-900">오디오 장치</h4>
         <div className="flex items-center space-x-2">
           {/* TODO: Monitoring */}
           {/* <button */}
@@ -265,7 +265,7 @@ export function DeviceSelection({ selectedDevices, onDeviceChange, disabled = fa
           <div className="flex items-center gap-2">
             <Mic className="h-4 w-4 text-gray-600" />
             <Label htmlFor="mic-selection" className="text-sm font-medium text-gray-700">
-              Microphone
+              마이크
             </Label>
           </div>
           <Select
@@ -274,10 +274,10 @@ export function DeviceSelection({ selectedDevices, onDeviceChange, disabled = fa
             disabled={disabled}
           >
             <SelectTrigger id="mic-selection" className="w-full">
-              <SelectValue placeholder="Select Microphone" />
+              <SelectValue placeholder="마이크 선택" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="default">Default Microphone</SelectItem>
+              <SelectItem value="default">기본 마이크</SelectItem>
               {inputDevices.map((device) => (
                 <SelectItem
                   key={device.name}
@@ -289,13 +289,13 @@ export function DeviceSelection({ selectedDevices, onDeviceChange, disabled = fa
             </SelectContent>
           </Select>
           {inputDevices.length === 0 && (
-            <p className="text-xs text-gray-500">No microphone devices found</p>
+            <p className="text-xs text-gray-500">마이크 장치를 찾을 수 없습니다</p>
           )}
 
           {/* Audio Level Meters for Input Devices */}
           {showLevels && inputDevices.length > 0 && (
             <div className="space-y-2 pt-2 border-t border-gray-100">
-              <p className="text-xs text-gray-600 font-medium">Microphone Levels:</p>
+              <p className="text-xs text-gray-600 font-medium">마이크 레벨:</p>
               {inputDevices.map((device) => {
                 const levelData = audioLevels.get(device.name);
                 return (
@@ -333,7 +333,7 @@ export function DeviceSelection({ selectedDevices, onDeviceChange, disabled = fa
           <div className="flex items-center gap-2">
             <Speaker className="h-4 w-4 text-gray-600" />
             <Label htmlFor="system-selection" className="text-sm font-medium text-gray-700">
-              System Audio
+              시스템 오디오
             </Label>
           </div>
 
@@ -343,10 +343,10 @@ export function DeviceSelection({ selectedDevices, onDeviceChange, disabled = fa
             disabled={disabled}
           >
             <SelectTrigger id="system-selection" className="w-full">
-              <SelectValue placeholder="Select System Audio" />
+              <SelectValue placeholder="시스템 오디오 선택" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="default">Default System Audio</SelectItem>
+              <SelectItem value="default">기본 시스템 오디오</SelectItem>
               {outputDevices.map((device) => (
                 <SelectItem
                   key={device.name}
@@ -359,7 +359,7 @@ export function DeviceSelection({ selectedDevices, onDeviceChange, disabled = fa
           </Select>
 
           {outputDevices.length === 0 && (
-            <p className="text-xs text-gray-500">No system audio devices found</p>
+            <p className="text-xs text-gray-500">시스템 오디오 장치를 찾을 수 없습니다</p>
           )}
 
           {/* Backend Selection - available on all platforms */}
@@ -373,13 +373,13 @@ export function DeviceSelection({ selectedDevices, onDeviceChange, disabled = fa
 
       {/* Info text */}
       <div className="text-xs text-gray-500 space-y-1">
-        <p>• <strong>Microphone:</strong> Records your voice and ambient sound</p>
-        <p>• <strong>System Audio:</strong> Records computer audio (music, calls, etc.)</p>
+        <p>• <strong>마이크:</strong> 목소리와 주변 소리를 녹음합니다</p>
+        <p>• <strong>시스템 오디오:</strong> 컴퓨터 오디오(음악, 통화 등)를 녹음합니다</p>
         {isMonitoring && (
-          <p>• <strong>Mic Levels:</strong> Green = good, Yellow = loud, Red = too loud</p>
+          <p>• <strong>마이크 레벨:</strong> 초록색 = 양호, 노란색 = 큼, 빨간색 = 너무 큼</p>
         )}
         {!isMonitoring && inputDevices.length > 0 && (
-          <p>• <strong>Tip:</strong> Click "Test Mic" to check if your microphone is working</p>
+          <p>• <strong>팁:</strong> "마이크 테스트"를 눌러 마이크가 정상 작동하는지 확인하세요</p>
         )}
       </div>
     </div>
