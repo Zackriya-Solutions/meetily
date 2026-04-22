@@ -135,12 +135,12 @@ export function PreferenceSettings() {
 
   // Show loading only if we're actually loading and don't have cached data
   if (isLoadingPreferences && !notificationSettings && !storageLocations) {
-    return <div className="max-w-2xl mx-auto p-6">Loading Preferences...</div>
+    return <div className="max-w-2xl mx-auto p-6">환경 설정 불러오는 중...</div>
   }
 
   // Show loading if notificationsEnabled hasn't been determined yet
   if (notificationsEnabled === null && !isLoadingPreferences) {
-    return <div className="max-w-2xl mx-auto p-6">Loading Preferences...</div>
+    return <div className="max-w-2xl mx-auto p-6">환경 설정 불러오는 중...</div>
   }
 
   // Ensure we have a boolean value for the Switch component
@@ -152,8 +152,8 @@ export function PreferenceSettings() {
       <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm">
         <div className="flex items-center justify-between">
           <div>
-            <h3 className="text-lg font-semibold text-gray-900 mb-2">Notifications</h3>
-            <p className="text-sm text-gray-600">Enable or disable notifications of start and end of meeting</p>
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">알림</h3>
+            <p className="text-sm text-gray-600">회의 시작과 종료 알림을 켜거나 끕니다</p>
           </div>
           <Switch checked={notificationsEnabledValue} onCheckedChange={setNotificationsEnabled} />
         </div>
@@ -161,9 +161,9 @@ export function PreferenceSettings() {
 
       {/* Data Storage Locations Section */}
       <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm">
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">Data Storage Locations</h3>
+        <h3 className="text-lg font-semibold text-gray-900 mb-4">데이터 저장 위치</h3>
         <p className="text-sm text-gray-600 mb-6">
-          View and access where Meetily stores your data
+          Meetily가 데이터를 저장하는 위치를 확인하고 접근할 수 있습니다
         </p>
 
         <div className="space-y-4">
@@ -199,23 +199,23 @@ export function PreferenceSettings() {
 
           {/* Recordings Location */}
           <div className="p-4 border rounded-lg bg-gray-50">
-            <div className="font-medium mb-2">Meeting Recordings</div>
+            <div className="font-medium mb-2">회의 녹음 파일</div>
             <div className="text-sm text-gray-600 mb-3 break-all font-mono text-xs">
-              {storageLocations?.recordings || 'Loading...'}
+              {storageLocations?.recordings || '불러오는 중...'}
             </div>
             <button
               onClick={() => handleOpenFolder('recordings')}
               className="flex items-center gap-2 px-3 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-100 transition-colors"
             >
               <FolderOpen className="w-4 h-4" />
-              Open Folder
+              폴더 열기
             </button>
           </div>
         </div>
 
         <div className="mt-4 p-3 bg-blue-50 rounded-md">
           <p className="text-xs text-blue-800">
-            <strong>Note:</strong> Database and models are stored together in your application data directory for unified management.
+            <strong>참고:</strong> 데이터베이스와 모델은 통합 관리를 위해 애플리케이션 데이터 디렉터리에 함께 저장됩니다.
           </p>
         </div>
       </div>

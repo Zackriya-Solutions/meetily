@@ -33,14 +33,14 @@ export const DEFAULT_BETA_FEATURES: BetaFeatures = {
  * Human-readable feature names for UI display
  */
 export const BETA_FEATURE_NAMES: Record<keyof BetaFeatures, string> = {
-  importAndRetranscribe: 'Import Audio & Retranscribe',
+  importAndRetranscribe: '오디오 가져오기 및 재전사',
 };
 
 /**
  * Feature descriptions for UI tooltips/help text
  */
 export const BETA_FEATURE_DESCRIPTIONS: Record<keyof BetaFeatures, string> = {
-  importAndRetranscribe: 'Import audio files to transcribe or retranscribe existing meetings with different language settings.',
+  importAndRetranscribe: '오디오 파일을 가져와 전사하거나, 기존 회의를 다른 언어 설정으로 다시 전사합니다.',
 };
 
 /**

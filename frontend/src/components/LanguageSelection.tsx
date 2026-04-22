@@ -11,107 +11,107 @@ export interface Language {
 
 // ISO 639-1 language codes supported by Whisper
 const LANGUAGES: Language[] = [
-  { code: 'auto', name: 'Auto Detect (Original Language)' },
-  { code: 'auto-translate', name: 'Auto Detect (Translate to English)' },
-  { code: 'en', name: 'English' },
-  { code: 'zh', name: 'Chinese' },
-  { code: 'de', name: 'German' },
-  { code: 'es', name: 'Spanish' },
-  { code: 'ru', name: 'Russian' },
-  { code: 'ko', name: 'Korean' },
-  { code: 'fr', name: 'French' },
-  { code: 'ja', name: 'Japanese' },
-  { code: 'pt', name: 'Portuguese' },
-  { code: 'tr', name: 'Turkish' },
-  { code: 'pl', name: 'Polish' },
-  { code: 'ca', name: 'Catalan' },
-  { code: 'nl', name: 'Dutch' },
-  { code: 'ar', name: 'Arabic' },
-  { code: 'sv', name: 'Swedish' },
-  { code: 'it', name: 'Italian' },
-  { code: 'id', name: 'Indonesian' },
-  { code: 'hi', name: 'Hindi' },
-  { code: 'fi', name: 'Finnish' },
-  { code: 'vi', name: 'Vietnamese' },
-  { code: 'he', name: 'Hebrew' },
-  { code: 'uk', name: 'Ukrainian' },
-  { code: 'el', name: 'Greek' },
-  { code: 'ms', name: 'Malay' },
-  { code: 'cs', name: 'Czech' },
-  { code: 'ro', name: 'Romanian' },
-  { code: 'da', name: 'Danish' },
-  { code: 'hu', name: 'Hungarian' },
-  { code: 'ta', name: 'Tamil' },
-  { code: 'no', name: 'Norwegian' },
-  { code: 'th', name: 'Thai' },
-  { code: 'ur', name: 'Urdu' },
-  { code: 'hr', name: 'Croatian' },
-  { code: 'bg', name: 'Bulgarian' },
-  { code: 'lt', name: 'Lithuanian' },
-  { code: 'la', name: 'Latin' },
-  { code: 'mi', name: 'Maori' },
-  { code: 'ml', name: 'Malayalam' },
-  { code: 'cy', name: 'Welsh' },
-  { code: 'sk', name: 'Slovak' },
-  { code: 'te', name: 'Telugu' },
-  { code: 'fa', name: 'Persian' },
-  { code: 'lv', name: 'Latvian' },
-  { code: 'bn', name: 'Bengali' },
-  { code: 'sr', name: 'Serbian' },
-  { code: 'az', name: 'Azerbaijani' },
-  { code: 'sl', name: 'Slovenian' },
-  { code: 'kn', name: 'Kannada' },
-  { code: 'et', name: 'Estonian' },
-  { code: 'mk', name: 'Macedonian' },
-  { code: 'br', name: 'Breton' },
-  { code: 'eu', name: 'Basque' },
-  { code: 'is', name: 'Icelandic' },
-  { code: 'hy', name: 'Armenian' },
-  { code: 'ne', name: 'Nepali' },
-  { code: 'mn', name: 'Mongolian' },
-  { code: 'bs', name: 'Bosnian' },
-  { code: 'kk', name: 'Kazakh' },
-  { code: 'sq', name: 'Albanian' },
-  { code: 'sw', name: 'Swahili' },
-  { code: 'gl', name: 'Galician' },
-  { code: 'mr', name: 'Marathi' },
-  { code: 'pa', name: 'Punjabi' },
-  { code: 'si', name: 'Sinhala' },
-  { code: 'km', name: 'Khmer' },
-  { code: 'sn', name: 'Shona' },
-  { code: 'yo', name: 'Yoruba' },
-  { code: 'so', name: 'Somali' },
-  { code: 'af', name: 'Afrikaans' },
-  { code: 'oc', name: 'Occitan' },
-  { code: 'ka', name: 'Georgian' },
-  { code: 'be', name: 'Belarusian' },
-  { code: 'tg', name: 'Tajik' },
-  { code: 'sd', name: 'Sindhi' },
-  { code: 'gu', name: 'Gujarati' },
-  { code: 'am', name: 'Amharic' },
-  { code: 'yi', name: 'Yiddish' },
-  { code: 'lo', name: 'Lao' },
-  { code: 'uz', name: 'Uzbek' },
-  { code: 'fo', name: 'Faroese' },
-  { code: 'ht', name: 'Haitian Creole' },
-  { code: 'ps', name: 'Pashto' },
-  { code: 'tk', name: 'Turkmen' },
-  { code: 'nn', name: 'Norwegian Nynorsk' },
-  { code: 'mt', name: 'Maltese' },
-  { code: 'sa', name: 'Sanskrit' },
-  { code: 'lb', name: 'Luxembourgish' },
-  { code: 'my', name: 'Myanmar' },
-  { code: 'bo', name: 'Tibetan' },
-  { code: 'tl', name: 'Tagalog' },
-  { code: 'mg', name: 'Malagasy' },
-  { code: 'as', name: 'Assamese' },
-  { code: 'tt', name: 'Tatar' },
-  { code: 'haw', name: 'Hawaiian' },
-  { code: 'ln', name: 'Lingala' },
-  { code: 'ha', name: 'Hausa' },
-  { code: 'ba', name: 'Bashkir' },
-  { code: 'jw', name: 'Javanese' },
-  { code: 'su', name: 'Sundanese' },
+  { code: 'auto', name: '자동 감지 (원본 언어)' },
+  { code: 'auto-translate', name: '자동 감지 (영어로 번역)' },
+  { code: 'en', name: '영어' },
+  { code: 'zh', name: '중국어' },
+  { code: 'de', name: '독일어' },
+  { code: 'es', name: '스페인어' },
+  { code: 'ru', name: '러시아어' },
+  { code: 'ko', name: '한국어' },
+  { code: 'fr', name: '프랑스어' },
+  { code: 'ja', name: '일본어' },
+  { code: 'pt', name: '포르투갈어' },
+  { code: 'tr', name: '터키어' },
+  { code: 'pl', name: '폴란드어' },
+  { code: 'ca', name: '카탈루냐어' },
+  { code: 'nl', name: '네덜란드어' },
+  { code: 'ar', name: '아랍어' },
+  { code: 'sv', name: '스웨덴어' },
+  { code: 'it', name: '이탈리아어' },
+  { code: 'id', name: '인도네시아어' },
+  { code: 'hi', name: '힌디어' },
+  { code: 'fi', name: '핀란드어' },
+  { code: 'vi', name: '베트남어' },
+  { code: 'he', name: '히브리어' },
+  { code: 'uk', name: '우크라이나어' },
+  { code: 'el', name: '그리스어' },
+  { code: 'ms', name: '말레이어' },
+  { code: 'cs', name: '체코어' },
+  { code: 'ro', name: '루마니아어' },
+  { code: 'da', name: '덴마크어' },
+  { code: 'hu', name: '헝가리어' },
+  { code: 'ta', name: '타밀어' },
+  { code: 'no', name: '노르웨이어' },
+  { code: 'th', name: '태국어' },
+  { code: 'ur', name: '우르두어' },
+  { code: 'hr', name: '크로아티아어' },
+  { code: 'bg', name: '불가리아어' },
+  { code: 'lt', name: '리투아니아어' },
+  { code: 'la', name: '라틴어' },
+  { code: 'mi', name: '마오리어' },
+  { code: 'ml', name: '말라얄람어' },
+  { code: 'cy', name: '웨일스어' },
+  { code: 'sk', name: '슬로바키아어' },
+  { code: 'te', name: '텔루구어' },
+  { code: 'fa', name: '페르시아어' },
+  { code: 'lv', name: '라트비아어' },
+  { code: 'bn', name: '벵골어' },
+  { code: 'sr', name: '세르비아어' },
+  { code: 'az', name: '아제르바이잔어' },
+  { code: 'sl', name: '슬로베니아어' },
+  { code: 'kn', name: '칸나다어' },
+  { code: 'et', name: '에스토니아어' },
+  { code: 'mk', name: '마케도니아어' },
+  { code: 'br', name: '브르타뉴어' },
+  { code: 'eu', name: '바스크어' },
+  { code: 'is', name: '아이슬란드어' },
+  { code: 'hy', name: '아르메니아어' },
+  { code: 'ne', name: '네팔어' },
+  { code: 'mn', name: '몽골어' },
+  { code: 'bs', name: '보스니아어' },
+  { code: 'kk', name: '카자흐어' },
+  { code: 'sq', name: '알바니아어' },
+  { code: 'sw', name: '스와힐리어' },
+  { code: 'gl', name: '갈리시아어' },
+  { code: 'mr', name: '마라티어' },
+  { code: 'pa', name: '펀자브어' },
+  { code: 'si', name: '싱할라어' },
+  { code: 'km', name: '크메르어' },
+  { code: 'sn', name: '쇼나어' },
+  { code: 'yo', name: '요루바어' },
+  { code: 'so', name: '소말리어' },
+  { code: 'af', name: '아프리칸스어' },
+  { code: 'oc', name: '오크어' },
+  { code: 'ka', name: '조지아어' },
+  { code: 'be', name: '벨라루스어' },
+  { code: 'tg', name: '타지크어' },
+  { code: 'sd', name: '신드어' },
+  { code: 'gu', name: '구자라트어' },
+  { code: 'am', name: '암하라어' },
+  { code: 'yi', name: '이디시어' },
+  { code: 'lo', name: '라오어' },
+  { code: 'uz', name: '우즈베크어' },
+  { code: 'fo', name: '페로어' },
+  { code: 'ht', name: '아이티 크리올어' },
+  { code: 'ps', name: '파슈토어' },
+  { code: 'tk', name: '투르크멘어' },
+  { code: 'nn', name: '노르웨이어 (뉘노르스크)' },
+  { code: 'mt', name: '몰타어' },
+  { code: 'sa', name: '산스크리트어' },
+  { code: 'lb', name: '룩셈부르크어' },
+  { code: 'my', name: '미얀마어' },
+  { code: 'bo', name: '티베트어' },
+  { code: 'tl', name: '타갈로그어' },
+  { code: 'mg', name: '말라가시어' },
+  { code: 'as', name: '아삼어' },
+  { code: 'tt', name: '타타르어' },
+  { code: 'haw', name: '하와이어' },
+  { code: 'ln', name: '링갈라어' },
+  { code: 'ha', name: '하우사어' },
+  { code: 'ba', name: '바시키르어' },
+  { code: 'jw', name: '자바어' },
+  { code: 'su', name: '순다어' },
 ];
 
 interface LanguageSelectionProps {
@@ -151,12 +151,12 @@ export function LanguageSelection({
 
       // Show success toast
       const languageName = selectedLang?.name || languageCode;
-      toast.success("Language preference saved", {
-        description: `Transcription language set to ${languageName}`
+      toast.success("언어 환경 설정이 저장되었습니다", {
+        description: `전사 언어가 ${languageName}(으)로 설정되었습니다`
       });
     } catch (error) {
       console.error('Failed to save language preference:', error);
-      toast.error("Failed to save language preference", {
+      toast.error("언어 환경 설정을 저장하지 못했습니다", {
         description: error instanceof Error ? error.message : String(error)
       });
     } finally {
@@ -167,14 +167,14 @@ export function LanguageSelection({
   // Find the selected language name for display. Default to Korean.
   const selectedLanguageName = LANGUAGES.find(
     lang => lang.code === selectedLanguage
-  )?.name || 'Korean';
+  )?.name || '한국어';
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Globe className="h-4 w-4 text-gray-600" />
-          <h4 className="text-sm font-medium text-gray-900">Transcription Language</h4>
+          <h4 className="text-sm font-medium text-gray-900">전사 언어</h4>
         </div>
       </div>
 
@@ -196,23 +196,23 @@ export function LanguageSelection({
         {/* Info text */}
         <div className="text-xs space-y-2 pt-2">
           <p className="text-gray-600">
-            <strong>Current:</strong> {selectedLanguageName}
+            <strong>현재 언어:</strong> {selectedLanguageName}
           </p>
           {selectedLanguage === 'auto' && (
             <div className="p-2 bg-yellow-50 border border-yellow-200 rounded text-yellow-800">
-              <p className="font-medium">⚠️ Auto Detect may produce incorrect results</p>
-              <p className="mt-1">For best accuracy, select your specific language (e.g., English, Spanish, etc.)</p>
+              <p className="font-medium">⚠️ 자동 감지는 부정확한 결과가 나올 수 있습니다</p>
+              <p className="mt-1">정확도를 높이려면 사용할 언어를 직접 선택하세요 (예: 한국어, 영어 등).</p>
             </div>
           )}
           {selectedLanguage === 'auto-translate' && (
             <div className="p-2 bg-blue-50 border border-blue-200 rounded text-blue-800">
-              <p className="font-medium">🌐 Translation Mode Active</p>
-              <p className="mt-1">All audio will be automatically translated to English. Best for multilingual meetings where you need English output.</p>
+              <p className="font-medium">🌐 번역 모드 활성화</p>
+              <p className="mt-1">모든 오디오가 자동으로 영어로 번역됩니다. 다국어 회의에서 영어 결과물이 필요할 때 적합합니다.</p>
             </div>
           )}
           {selectedLanguage !== 'auto' && selectedLanguage !== 'auto-translate' && (
             <p className="text-gray-600">
-              Transcription will be optimized for <strong>{selectedLanguageName}</strong>
+              <strong>{selectedLanguageName}</strong>에 맞춰 전사가 최적화됩니다
             </p>
           )}
         </div>

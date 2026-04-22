@@ -21,9 +21,9 @@ export function BetaSettings() {
       <div className="flex items-start gap-3 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
         <AlertCircle className="h-5 w-5 text-yellow-600 flex-shrink-0 mt-0.5" />
         <div className="text-sm text-yellow-800">
-          <p className="font-medium">Beta Features</p>
+          <p className="font-medium">베타 기능</p>
           <p className="mt-1">
-            These features are still being tested. You may encounter issues, and we appreciate your feedback.
+            이 기능들은 아직 테스트 중입니다. 문제가 발생할 수 있으며, 피드백을 주시면 감사하겠습니다.
           </p>
         </div>
       </div>
@@ -63,7 +63,7 @@ export function BetaSettings() {
       {/* Info Box */}
       <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
         <p className="text-sm text-blue-800">
-          <strong>Note:</strong> When disabled, beta features will be hidden. Your existing meetings remain unaffected.
+          <strong>참고:</strong> 베타 기능을 끄면 해당 기능이 숨겨집니다. 기존 회의에는 영향을 주지 않습니다.
         </p>
       </div>
     </div>
