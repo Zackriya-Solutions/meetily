@@ -30,98 +30,98 @@ const NotePage = ({ params }: PageProps) => {
   // This would normally come from your database
   const sampleData: Record<string, Note> = {
     'team-sync-dec-26': {
-      title: 'Team Sync - Dec 26',
+      title: '팀 싱크 - 12월 26일',
       date: '2024-12-26',
-      time: '10:00 AM - 11:00 AM',
+      time: '오전 10:00 - 오전 11:00',
       attendees: ['John Doe', 'Jane Smith', 'Mike Johnson'],
-      tags: ['Team Sync', 'Weekly', 'Product'],
+      tags: ['팀 싱크', '주간', '제품'],
       content: `
-# Meeting Summary
-Team sync discussion about Q1 2024 goals and current project status.
+# 회의 요약
+2024년 1분기 목표 및 현재 프로젝트 현황에 관한 팀 싱크 논의.
 
-## Agenda Items
-1. Project Status Updates
-2. Q1 2024 Planning
-3. Team Concerns & Feedback
+## 안건
+1. 프로젝트 현황 업데이트
+2. 2024년 1분기 계획
+3. 팀 우려 사항 및 피드백
 
-## Key Decisions
-- Prioritized mobile app development for Q1
-- Scheduled weekly design reviews
-- Added two new features to the roadmap
+## 주요 결정 사항
+- 1분기 모바일 앱 개발 우선 추진
+- 주간 디자인 리뷰 일정 수립
+- 로드맵에 새로운 기능 2개 추가
 
-## Action Items
-- [ ] John: Create project timeline
-- [ ] Jane: Schedule design review meetings
-- [ ] Mike: Update documentation
+## 액션 아이템
+- [ ] John: 프로젝트 타임라인 작성
+- [ ] Jane: 디자인 리뷰 회의 일정 조율
+- [ ] Mike: 문서 업데이트
 
-## Notes
-- Discussed current project bottlenecks
-- Reviewed customer feedback from last release
-- Planned resource allocation for upcoming sprint
+## 노트
+- 현재 프로젝트 병목 현상 논의
+- 지난 릴리즈에 대한 고객 피드백 검토
+- 다가오는 스프린트를 위한 자원 배분 계획
       `
     },
     'product-review': {
-      title: 'Product Review',
+      title: '제품 리뷰',
       date: '2024-12-26',
-      time: '2:00 PM - 3:00 PM',
+      time: '오후 2:00 - 오후 3:00',
       attendees: ['Sarah Wilson', 'Tom Brown', 'Alex Chen'],
-      tags: ['Product', 'Review', 'Quarterly'],
+      tags: ['제품', '리뷰', '분기'],
       content: `
-# Product Review Meeting
+# 제품 리뷰 회의
 
-## Overview
-Quarterly product review session with stakeholders.
+## 개요
+이해관계자와의 분기별 제품 리뷰 세션.
 
-## Discussion Points
-1. Q4 Performance Review
-2. Feature Prioritization
-3. Customer Feedback Analysis
+## 논의 사항
+1. 4분기 실적 리뷰
+2. 기능 우선순위 결정
+3. 고객 피드백 분석
 
-## Action Items
-- [ ] Update product roadmap
-- [ ] Schedule user research sessions
-- [ ] Review competitor analysis
+## 액션 아이템
+- [ ] 제품 로드맵 업데이트
+- [ ] 사용자 리서치 세션 일정 수립
+- [ ] 경쟁사 분석 검토
       `
     },
     'project-ideas': {
-      title: 'Project Ideas',
+      title: '프로젝트 아이디어',
       date: '2024-12-26',
-      tags: ['Ideas', 'Planning'],
+      tags: ['아이디어', '기획'],
       content: `
-# Project Ideas
+# 프로젝트 아이디어
 
-## New Features
-1. AI-powered meeting summaries
-2. Calendar integration
-3. Team collaboration tools
+## 새로운 기능
+1. AI 기반 회의 요약
+2. 캘린더 연동
+3. 팀 협업 도구
 
-## Improvements
-- Enhanced search functionality
-- Better note organization
-- Real-time collaboration
+## 개선 사항
+- 검색 기능 강화
+- 노트 정리 방식 개선
+- 실시간 협업
       `
     },
     'action-items': {
-      title: 'Action Items',
+      title: '액션 아이템',
       date: '2024-12-26',
-      tags: ['Tasks', 'Todo', 'Planning'],
+      tags: ['작업', '할 일', '기획'],
       content: `
-# Action Items
+# 액션 아이템
 
-## High Priority
-- [ ] Deploy v2.0 to production
-- [ ] Fix critical security issues
-- [ ] Complete user documentation
+## 높은 우선순위
+- [ ] v2.0 프로덕션 배포
+- [ ] 심각한 보안 문제 수정
+- [ ] 사용자 문서 완성
 
-## Medium Priority
-- [ ] Update dependencies
-- [ ] Implement error tracking
-- [ ] Add unit tests
+## 중간 우선순위
+- [ ] 의존성 업데이트
+- [ ] 오류 추적 구현
+- [ ] 단위 테스트 추가
 
-## Low Priority
-- [ ] Refactor legacy code
-- [ ] Improve code documentation
-- [ ] Setup development guidelines
+## 낮은 우선순위
+- [ ] 레거시 코드 리팩터링
+- [ ] 코드 문서 개선
+- [ ] 개발 가이드라인 설정
       `
     }
   };
@@ -129,7 +129,7 @@ Quarterly product review session with stakeholders.
   const note = sampleData[params.id as keyof typeof sampleData];
 
   if (!note) {
-    return <div className="p-8">Note not found</div>;
+    return <div className="p-8">노트를 찾을 수 없습니다</div>;
   }
 
   return (

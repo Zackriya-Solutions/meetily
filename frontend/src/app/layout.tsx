@@ -112,8 +112,8 @@ export default function RootLayout({
       console.log('[Layout] Received request-recording-toggle from tray');
 
       if (showOnboarding) {
-        toast.error("Please complete setup first", {
-          description: "You need to finish onboarding before you can start recording."
+        toast.error("먼저 설정을 완료해 주세요", {
+          description: "녹음을 시작하려면 초기 설정을 완료해야 합니다."
         });
       } else {
         // If in main app, forward to useRecordingStart via window event
@@ -133,8 +133,8 @@ export default function RootLayout({
     const betaFeatures = loadBetaFeatures();
 
     if (!betaFeatures.importAndRetranscribe) {
-      toast.error('Beta feature disabled', {
-        description: 'Enable "Import Audio & Retranscribe" in Settings > Beta to use this feature.'
+      toast.error('베타 기능이 비활성화되어 있습니다', {
+        description: '이 기능을 사용하려면 설정 > 베타에서 "오디오 가져오기 및 재전사"를 활성화하세요.'
       });
       return;
     }
@@ -150,8 +150,8 @@ export default function RootLayout({
       setImportFilePath(audioFile);
       setShowImportDialog(true);
     } else if (paths.length > 0) {
-      toast.error('Please drop an audio file', {
-        description: `Supported formats: ${getAudioFormatsDisplayList()}`
+      toast.error('오디오 파일을 드롭해 주세요', {
+        description: `지원 형식: ${getAudioFormatsDisplayList()}`
       });
     }
   }, []);
@@ -231,7 +231,7 @@ export default function RootLayout({
   }
 
   return (
-    <html lang="en">
+    <html lang="ko">
       <body className={`${sourceSans3.variable} font-sans antialiased`}>
         <AnalyticsProvider>
           <RecordingStateProvider>

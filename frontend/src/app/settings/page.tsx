@@ -15,11 +15,11 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 
 // Tabs configuration (constant)
 const TABS = [
-  { value: 'general', label: 'General', icon: Settings2 },
-  { value: 'recording', label: 'Recordings', icon: Mic },
-  { value: 'Transcriptionmodels', label: 'Transcription', icon: DatabaseIcon },
-  { value: 'summaryModels', label: 'Summary', icon: SparkleIcon },
-  { value: 'beta', label: 'Beta', icon: FlaskConical }
+  { value: 'general', label: '일반', icon: Settings2 },
+  { value: 'recording', label: '녹음', icon: Mic },
+  { value: 'Transcriptionmodels', label: '전사', icon: DatabaseIcon },
+  { value: 'summaryModels', label: '요약', icon: SparkleIcon },
+  { value: 'beta', label: '베타', icon: FlaskConical }
 ] as const;
 
 export default function SettingsPage() {
@@ -73,9 +73,9 @@ export default function SettingsPage() {
               className="flex items-center gap-2 text-gray-600 hover:text-gray-900 transition-colors"
             >
               <ArrowLeft className="w-5 h-5" />
-              <span>Back</span>
+              <span>뒤로</span>
             </button>
-            <h1 className="text-3xl font-bold">Settings</h1>
+            <h1 className="text-3xl font-bold">설정</h1>
           </div>
         </div>
       </div>

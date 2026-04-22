@@ -124,12 +124,12 @@ export default function Home() {
       const result = await recoverMeeting(meetingId);
 
       if (result.success) {
-        toast.success('Meeting recovered successfully!', {
+        toast.success('회의가 복구되었습니다!', {
           description: result.audioRecoveryStatus?.status === 'success'
-            ? 'Transcripts and audio recovered'
-            : 'Transcripts recovered (no audio available)',
+            ? '전사본과 오디오가 복구되었습니다'
+            : '전사본이 복구되었습니다 (오디오 없음)',
           action: result.meetingId ? {
-            label: 'View Meeting',
+            label: '회의 보기',
             onClick: () => {
               router.push(`/meeting-details?id=${result.meetingId}`);
             }
@@ -153,8 +153,8 @@ export default function Home() {
         }
       }
     } catch (error) {
-      toast.error('Failed to recover meeting', {
-        description: error instanceof Error ? error.message : 'Unknown error occurred',
+      toast.error('회의 복구에 실패했습니다', {
+        description: error instanceof Error ? error.message : '알 수 없는 오류가 발생했습니다',
       });
       throw error;
     }
