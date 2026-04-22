@@ -24,21 +24,21 @@ function categorizeError(error: string): string {
     lowerError.includes('connection') ||
     lowerError.includes('timeout') ||
     lowerError.includes('failed to start download')) {
-    return 'Network error - Check your internet connection';
+    return '네트워크 오류 — 인터넷 연결을 확인하세요';
   }
 
   if (lowerError.includes('status:') || lowerError.includes('http')) {
-    return 'Server error - Download temporarily unavailable';
+    return '서버 오류 — 다운로드를 일시적으로 사용할 수 없습니다';
   }
 
   if (lowerError.includes('disk') ||
     lowerError.includes('write') ||
     lowerError.includes('file')) {
-    return 'Storage error - Check available disk space';
+    return '저장 공간 오류 — 사용 가능한 디스크 공간을 확인하세요';
   }
 
   if (lowerError.includes('invalid') || lowerError.includes('validation')) {
-    return 'File validation failed - Please retry download';
+    return '파일 검증에 실패했습니다 — 다운로드를 다시 시도해 주세요';
   }
 
   // Fallback to original error
@@ -83,11 +83,11 @@ function DownloadToastContent({
         </div>
 
         {hasError ? (
-          <p className="text-xs text-red-600">{download.error || 'Download failed'}</p>
+          <p className="text-xs text-red-600">{download.error || '다운로드에 실패했습니다'}</p>
         ) : isComplete ? (
-          <p className="text-xs text-green-600">Download complete</p>
+          <p className="text-xs text-green-600">다운로드 완료</p>
         ) : isCancelled ? (
-          <p className="text-xs text-gray-600">Download cancelled</p>
+          <p className="text-xs text-gray-600">다운로드가 취소되었습니다</p>
         ) : (
           <>
             {/* Progress bar */}
@@ -230,7 +230,7 @@ export function useDownloadProgressToast() {
 
       const downloadData: DownloadProgress = {
         modelName,
-        displayName: 'Transcription Model (Cohere)',
+        displayName: '전사 모델 (Cohere)',
         progress,
         downloadedMb: downloaded_mb ?? 0,
         totalMb: total_mb ?? 2048,
@@ -255,7 +255,7 @@ export function useDownloadProgressToast() {
         const { modelName } = event.payload;
         const downloadData: DownloadProgress = {
           modelName,
-          displayName: 'Transcription Model (Cohere)',
+          displayName: '전사 모델 (Cohere)',
           progress: 100,
           downloadedMb: 2048,
           totalMb: 2048,
@@ -273,7 +273,7 @@ export function useDownloadProgressToast() {
         const { modelName, error } = event.payload;
         const downloadData: DownloadProgress = {
           modelName,
-          displayName: 'Transcription Model (Cohere)',
+          displayName: '전사 모델 (Cohere)',
           progress: 0,
           downloadedMb: 0,
           totalMb: 2048,
@@ -309,7 +309,7 @@ export function useDownloadProgressToast() {
 
       const downloadData: DownloadProgress = {
         modelName: model,
-        displayName: `Summary Model (${model})`,
+        displayName: `요약 모델 (${model})`,
         progress: progress ?? 0,
         downloadedMb: downloaded_mb ?? 0,
         totalMb: total_mb ?? (model.includes('4b') ? 2500 : 806),
@@ -321,7 +321,7 @@ export function useDownloadProgressToast() {
             : status === 'error'
               ? 'error'
               : 'downloading',
-        error: status === 'error' ? categorizeError(error || 'Download failed') : undefined,
+        error: status === 'error' ? categorizeError(error || '다운로드에 실패했습니다') : undefined,
       };
 
       updateDownload(model, downloadData);

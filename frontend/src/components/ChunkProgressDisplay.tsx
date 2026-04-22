@@ -46,16 +46,16 @@ export function ChunkProgressDisplay({
     const hours = Math.floor(minutes / 60);
 
     if (hours > 0) {
-      return `${hours}h ${minutes % 60}m ${seconds % 60}s`;
+      return `${hours}시간 ${minutes % 60}분 ${seconds % 60}초`;
     } else if (minutes > 0) {
-      return `${minutes}m ${seconds % 60}s`;
+      return `${minutes}분 ${seconds % 60}초`;
     } else {
-      return `${seconds}s`;
+      return `${seconds}초`;
     }
   };
 
   const formatTimeRemaining = (ms?: number) => {
-    if (!ms || ms <= 0) return 'Calculating...';
+    if (!ms || ms <= 0) return '계산 중...';
     return formatDuration(ms);
   };
 
@@ -93,11 +93,11 @@ export function ChunkProgressDisplay({
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center space-x-3">
           <h3 className="text-lg font-semibold text-gray-900">
-            Processing Progress
+            처리 진행률
           </h3>
           {isPaused && (
             <span className="bg-yellow-100 text-yellow-800 px-2 py-1 rounded-full text-xs font-medium">
-              Paused
+              일시 정지됨
             </span>
           )}
         </div>
@@ -109,14 +109,14 @@ export function ChunkProgressDisplay({
               className="bg-yellow-500 hover:bg-yellow-600 text-white px-3 py-1 rounded text-sm transition-colors"
               disabled={progress.processing_chunks === 0 && progress.completed_chunks === progress.total_chunks}
             >
-              Pause
+              일시 정지
             </button>
           ) : (
             <button
               onClick={onResume}
               className="bg-green-500 hover:bg-green-600 text-white px-3 py-1 rounded text-sm transition-colors"
             >
-              Resume
+              재개
             </button>
           )}
 
@@ -124,7 +124,7 @@ export function ChunkProgressDisplay({
             onClick={onCancel}
             className="bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded text-sm transition-colors"
           >
-            Cancel
+            취소
           </button>
         </div>
       </div>
@@ -133,7 +133,7 @@ export function ChunkProgressDisplay({
       <div className="mb-4">
         <div className="flex items-center justify-between mb-2">
           <span className="text-sm font-medium text-gray-700">
-            {progress.completed_chunks} of {progress.total_chunks} chunks completed
+            {progress.total_chunks}개 청크 중 {progress.completed_chunks}개 완료
           </span>
           <span className="text-sm font-medium text-gray-700">
             {completionPercentage}%
@@ -154,28 +154,28 @@ export function ChunkProgressDisplay({
           <div className="text-lg font-semibold text-green-600">
             {progress.completed_chunks}
           </div>
-          <div className="text-gray-600">Completed</div>
+          <div className="text-gray-600">완료</div>
         </div>
 
         <div className="text-center">
           <div className="text-lg font-semibold text-blue-600">
             {progress.processing_chunks}
           </div>
-          <div className="text-gray-600">Processing</div>
+          <div className="text-gray-600">처리 중</div>
         </div>
 
         <div className="text-center">
           <div className="text-lg font-semibold text-gray-600">
             {progress.total_chunks - progress.completed_chunks - progress.processing_chunks - progress.failed_chunks}
           </div>
-          <div className="text-gray-600">Pending</div>
+          <div className="text-gray-600">대기 중</div>
         </div>
 
         <div className="text-center">
           <div className="text-lg font-semibold text-red-600">
             {progress.failed_chunks}
           </div>
-          <div className="text-gray-600">Failed</div>
+          <div className="text-gray-600">실패</div>
         </div>
       </div>
 
@@ -185,7 +185,7 @@ export function ChunkProgressDisplay({
           <div className="flex items-center space-x-2">
             <span className="text-blue-600">⏱️</span>
             <span className="text-sm text-blue-800">
-              Estimated time remaining: {formatTimeRemaining(progress.estimated_remaining_ms)}
+              예상 남은 시간: {formatTimeRemaining(progress.estimated_remaining_ms)}
             </span>
           </div>
         </div>
@@ -194,7 +194,7 @@ export function ChunkProgressDisplay({
       {/* Recent Chunks Grid */}
       <div className="space-y-2">
         <h4 className="text-sm font-medium text-gray-700 mb-2">
-          Recent Chunks ({Math.min(progress.chunks.length, 10)} of {progress.total_chunks})
+          최근 청크 (전체 {progress.total_chunks}개 중 {Math.min(progress.chunks.length, 10)}개)
         </h4>
 
         <div className="max-h-48 overflow-y-auto space-y-1">
@@ -210,7 +210,7 @@ export function ChunkProgressDisplay({
                   <div className="flex items-center space-x-2">
                     <span>{getChunkStatusIcon(chunk.status)}</span>
                     <span className="font-medium">
-                      Chunk {chunk.chunk_id}
+                      청크 {chunk.chunk_id}
                     </span>
                     {chunk.duration_ms && (
                       <span className="text-gray-500">
@@ -234,7 +234,7 @@ export function ChunkProgressDisplay({
 
                 {chunk.error_message && (
                   <div className="mt-1 text-red-700 text-xs">
-                    Error: {chunk.error_message}
+                    오류: {chunk.error_message}
                   </div>
                 )}
               </div>
@@ -248,7 +248,7 @@ export function ChunkProgressDisplay({
           <div className="flex items-center space-x-2">
             <span className="text-green-600">🎉</span>
             <span className="text-sm font-medium text-green-800">
-              Processing completed! All {progress.total_chunks} chunks have been transcribed.
+              처리가 완료되었습니다! 전체 {progress.total_chunks}개 청크가 모두 전사되었습니다.
             </span>
           </div>
         </div>
@@ -267,7 +267,7 @@ export function ChunkProgressMini({ progress, className = '' }: { progress: Proc
     <div className={`bg-gray-50 border border-gray-200 rounded-lg p-3 ${className}`}>
       <div className="flex items-center justify-between mb-2">
         <span className="text-sm font-medium text-gray-700">
-          Processing
+          처리 중
         </span>
         <span className="text-sm font-medium text-gray-700">
           {completionPercentage}%
@@ -282,10 +282,10 @@ export function ChunkProgressMini({ progress, className = '' }: { progress: Proc
       </div>
 
       <div className="text-xs text-gray-600">
-        {progress.completed_chunks} / {progress.total_chunks} chunks
+        {progress.completed_chunks} / {progress.total_chunks} 청크
         {progress.processing_chunks > 0 && (
           <span className="ml-2 text-blue-600">
-            ({progress.processing_chunks} processing)
+            ({progress.processing_chunks}개 처리 중)
           </span>
         )}
       </div>

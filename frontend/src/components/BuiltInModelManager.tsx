@@ -56,7 +56,7 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
       }
     } catch (error) {
       console.error('Failed to fetch built-in AI models:', error);
-      toast.error('Failed to load models');
+      toast.error('모델을 불러오지 못했습니다');
     } finally {
       setIsLoading(false);
       setHasFetched(true);
@@ -121,7 +121,7 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
           });
           // Refresh models list
           fetchModels();
-          toast.success(`Model ${model} downloaded successfully`);
+          toast.success(`${model} 모델 다운로드가 완료되었습니다`);
         }
 
         // Handle cancelled status
@@ -210,7 +210,7 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
       }
 
       // For real errors, show toast and remove from downloading
-      toast.error(`Failed to download ${modelName}`);
+      toast.error(`${modelName} 다운로드에 실패했습니다`);
 
       setDownloadingModels((prev) => {
         const newSet = new Set(prev);
@@ -226,7 +226,7 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
   const cancelDownload = async (modelName: string) => {
     try {
       await invoke('builtin_ai_cancel_download', { modelName });
-      toast.info(`Download of ${modelName} cancelled`);
+      toast.info(`${modelName} 다운로드를 취소했습니다`);
       setDownloadingModels((prev) => {
         const newSet = new Set(prev);
         newSet.delete(modelName);
@@ -240,11 +240,11 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
   const deleteModel = async (modelName: string) => {
     try {
       await invoke('builtin_ai_delete_model', { modelName });
-      toast.success(`Model ${modelName} deleted`);
+      toast.success(`${modelName} 모델을 삭제했습니다`);
       fetchModels();
     } catch (error) {
       console.error('Failed to delete model:', error);
-      toast.error(`Failed to delete ${modelName}`);
+      toast.error(`${modelName} 삭제에 실패했습니다`);
     }
   };
 
@@ -253,7 +253,7 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
     return (
       <div className="text-center py-8 text-muted-foreground">
         <RefreshCw className="mx-auto h-8 w-8 animate-spin mb-2" />
-        Loading models...
+        모델 불러오는 중...
       </div>
     );
   }
@@ -263,7 +263,7 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
     return (
       <Alert>
         <AlertDescription>
-          No models found. Download a model to get started with Built-in AI.
+          모델을 찾을 수 없습니다. 내장 AI를 사용하려면 모델을 먼저 다운로드하세요.
         </AlertDescription>
       </Alert>
     );
@@ -272,7 +272,7 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
-        <h4 className="text-sm font-bold">Built-in AI Models</h4>
+        <h4 className="text-sm font-bold">내장 AI 모델</h4>
       </div>
 
       <div className="grid gap-4">
@@ -312,11 +312,11 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
                       <>
                         <span className="text-xs text-green-600 font-medium flex items-center gap-1">
                           <span className="w-2 h-2 rounded-full bg-green-600"></span>
-                          Ready
+                          준비됨
                         </span>
                         {selectedModel === model.name && (
                           <span className="px-2 py-0.5 text-xs font-medium bg-blue-100 text-blue-700 rounded">
-                            Selected
+                            선택됨
                           </span>
                         )}
                       </>
@@ -324,17 +324,17 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
                     {isCorrupted && (
                       <span className="px-2 py-0.5 text-xs font-medium bg-red-100 text-red-700 rounded flex items-center gap-1">
                         <BadgeAlert className="w-3 h-3" />
-                        Corrupted
+                        손상됨
                       </span>
                     )}
                     {isError && (
                       <span className="px-2 py-0.5 text-xs font-medium bg-red-100 text-red-700 rounded">
-                        Error
+                        오류
                       </span>
                     )}
                     {isNotDownloaded && !modelIsDownloading && (
                       <span className="text-xs text-gray-600 font-medium">
-                        Not Downloaded
+                        다운로드되지 않음
                       </span>
                     )}
                   </div>
@@ -347,12 +347,12 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
                         {isError && typeof model.status === 'object' && 'Error' in model.status
                           ? (model.status as any).Error
                           : isCorrupted
-                          ? 'File is corrupted. Retry download or delete.'
-                          : 'An error occurred'}
+                          ? '파일이 손상되었습니다. 다시 다운로드하거나 삭제하세요.'
+                          : '오류가 발생했습니다'}
                       </p>
                     )}
                     <div className="text-xs text-gray-500">
-                      <span>{model.size_mb}MB • {model.context_size} tokens</span>
+                      <span>{model.size_mb}MB • {model.context_size} 토큰</span>
                     </div>
                   </div>
                 </div>
@@ -370,7 +370,7 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
                       }}
                     >
                       <Download className="mr-2 h-4 w-4" />
-                      Download
+                      다운로드
                     </Button>
                   )}
 
@@ -385,7 +385,7 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
                         cancelDownload(model.name);
                       }}
                     >
-                      Cancel
+                      취소
                     </Button>
                   )}
 
@@ -401,7 +401,7 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
                       }}
                     >
                       <RefreshCw className="mr-2 h-4 w-4" />
-                      Retry
+                      다시 시도
                     </Button>
                   )}
 
@@ -417,7 +417,7 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
                         }}
                       >
                         <RefreshCw className="mr-2 h-4 w-4" />
-                        Retry
+                        다시 시도
                       </Button>
                       <Button
                         variant="outline"
@@ -428,7 +428,7 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
                         }}
                       >
                         <Trash2 className="mr-2 h-4 w-4" />
-                        Delete
+                        삭제
                       </Button>
                     </>
                   )}
@@ -441,7 +441,7 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
                         e.stopPropagation();
                         deleteModel(model.name);
                       }}
-                      title="Delete model"
+                      title="모델 삭제"
                     >
                       <Trash2 className="h-4 w-4" />
                     </button>
@@ -453,7 +453,7 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
               {modelIsDownloading && progress !== undefined && (
                 <div className="mt-3 pt-3 border-t border-gray-200">
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-sm font-medium text-gray-900">Downloading...</span>
+                    <span className="text-sm font-medium text-gray-900">다운로드 중...</span>
                     <span className="text-sm font-semibold text-gray-900">
                       {Math.round(progress)}%
                     </span>
