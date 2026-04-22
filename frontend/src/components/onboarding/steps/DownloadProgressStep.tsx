@@ -94,11 +94,11 @@ export function DownloadProgressStep() {
       setCohereState((prev) => ({
         ...prev,
         status: 'error',
-        error: error instanceof Error ? error.message : 'Retry failed',
+        error: error instanceof Error ? error.message : '재시도에 실패했습니다',
       }));
 
-      toast.error('Download retry failed', {
-        description: 'Please check your connection and try again.',
+      toast.error('다운로드 재시도에 실패했습니다', {
+        description: '연결 상태를 확인한 후 다시 시도해 주세요.',
       });
     } finally {
       // Allow retry again after 2 seconds
@@ -137,11 +137,11 @@ export function DownloadProgressStep() {
       setGemmaState((prev) => ({
         ...prev,
         status: 'error',
-        error: error instanceof Error ? error.message : 'Retry failed',
+        error: error instanceof Error ? error.message : '재시도에 실패했습니다',
       }));
 
-      toast.error('Summary model download retry failed', {
-        description: 'Please check your connection and try again.',
+      toast.error('요약 모델 다운로드 재시도에 실패했습니다', {
+        description: '연결 상태를 확인한 후 다시 시도해 주세요.',
       });
     } finally {
       // Allow retry again after 2 seconds
@@ -315,8 +315,8 @@ export function DownloadProgressStep() {
           progress: 100,
         }));
       } else if (!actuallyAvailable && cohereState.status === 'error') {
-        toast.error('Transcription engine required', {
-          description: 'Please retry the download before continuing.',
+        toast.error('전사 엔진이 필요합니다', {
+          description: '계속 진행하기 전에 다운로드를 다시 시도해 주세요.',
         });
         return;
       }
@@ -330,8 +330,8 @@ export function DownloadProgressStep() {
 
     // Show toast if downloads still in progress
     if (!downloadsComplete) {
-      toast.info('Downloads will continue in the background', {
-        description: 'You can start using the app. Recording will be available once speech recognition is ready.',
+      toast.info('백그라운드에서 다운로드를 계속 진행합니다', {
+        description: '앱을 바로 사용할 수 있습니다. 음성 인식 준비가 완료되면 녹음이 가능해집니다.',
         duration: 5000,
       });
     }
@@ -351,8 +351,8 @@ export function DownloadProgressStep() {
         window.location.reload();
       } catch (error) {
         console.error('Failed to complete onboarding:', error);
-        toast.error('Failed to complete setup', {
-          description: 'Please try again.',
+        toast.error('설정을 완료하지 못했습니다', {
+          description: '다시 시도해 주세요.',
         });
         setIsCompleting(false);
       }
@@ -378,7 +378,7 @@ export function DownloadProgressStep() {
         </div>
         <div>
           {state.status === 'waiting' && (
-            <span className="text-sm text-gray-500">Waiting...</span>
+            <span className="text-sm text-gray-500">대기 중...</span>
           )}
           {state.status === 'downloading' && (
             <Loader2 className="w-5 h-5 text-gray-700 animate-spin" />
@@ -389,7 +389,7 @@ export function DownloadProgressStep() {
             </div>
           )}
           {state.status === 'error' && (
-            <span className="text-sm text-red-500">Failed</span>
+            <span className="text-sm text-red-500">실패</span>
           )}
         </div>
       </div>
@@ -423,18 +423,18 @@ export function DownloadProgressStep() {
 
       {state.status === 'error' && state.error && (
         <div className="mt-2 p-3 bg-red-50 border border-red-200 rounded-md">
-          <p className="text-sm text-red-600 font-medium">Download Error</p>
+          <p className="text-sm text-red-600 font-medium">다운로드 오류</p>
           <p className="text-xs text-red-500 mt-1">{state.error}</p>
-          {(title === 'Transcription Engine' || title === 'Summary Engine') && (
+          {(title === '전사 엔진' || title === '요약 엔진') && (
             <button
-              onClick={title === 'Transcription Engine' ? handleRetryDownload : handleRetrySummaryDownload}
+              onClick={title === '전사 엔진' ? handleRetryDownload : handleRetrySummaryDownload}
               className="mt-3 w-full h-9 px-4 bg-gray-900 hover:bg-gray-800 text-white text-sm font-medium rounded-md transition-colors flex items-center justify-center gap-2"
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                       d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
               </svg>
-              Try Again
+              다시 시도
             </button>
           )}
         </div>
@@ -444,8 +444,8 @@ export function DownloadProgressStep() {
 
   return (
     <OnboardingContainer
-      title="Getting things ready"
-      description="You can start using Meetily after downloading the Transcription Engine."
+      title="준비 중"
+      description="전사 엔진 다운로드가 끝나면 Meetily를 사용할 수 있습니다."
       step={3}
       totalSteps={isMac ? 4 : 3}
     >
@@ -453,14 +453,14 @@ export function DownloadProgressStep() {
         {/* Download Cards */}
         <div className="w-full max-w-lg space-y-4">
           {renderDownloadCard(
-            'Transcription Engine',
+            '전사 엔진',
             <Mic className="w-5 h-5 text-gray-600" />,
             cohereState,
             '~1.5–2.5 GB'
           )}
 
           {renderDownloadCard(
-            'Summary Engine',
+            '요약 엔진',
             <Sparkles className="w-5 h-5 text-gray-600" />,
             gemmaState,
             recommendedModel === 'gemma3:4b' ? '~2.5 GB' : '~806 MB'
@@ -480,9 +480,9 @@ export function DownloadProgressStep() {
               <div className="flex items-start gap-3">
                 <Download className="w-5 h-5 text-gray-600 flex-shrink-0 mt-0.5" />
                 <div>
-                  <p className="font-medium">You can continue while this finishes</p>
+                  <p className="font-medium">다운로드가 끝날 때까지 기다리지 않고 계속 진행할 수 있습니다</p>
                   <p className="text-gray-700 mt-1">
-                    Download will continue in the background.
+                    백그라운드에서 다운로드가 계속됩니다.
                   </p>
                 </div>
               </div>
@@ -500,7 +500,7 @@ export function DownloadProgressStep() {
             {(isCompleting || !cohereDownloaded) ? (
               <Loader2 className="w-4 h-4 mr-2 animate-spin" />
             ) : (
-              'Continue'
+              '계속'
             )}
           </Button>
         </div>

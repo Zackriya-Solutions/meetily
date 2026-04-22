@@ -47,12 +47,12 @@ export function SetupOverviewStep() {
     {
       number: 1,
       type: 'transcription',
-      title: 'Download Transcription Engine',
+      title: '전사 엔진 다운로드',
     },
     {
       number: 2,
       type: 'summarization',
-      title: 'Download Summarization Engine',
+      title: '요약 엔진 다운로드',
     },
   ];
 
@@ -62,8 +62,8 @@ export function SetupOverviewStep() {
 
   return (
     <OnboardingContainer
-      title="Setup Overview"
-      description="Meetily requires that you download the Transcription & Summarization AI models for the software to work."
+      title="설치 개요"
+      description="Meetily가 동작하려면 전사와 요약에 사용할 AI 모델을 내려받아야 합니다."
       step={2}
       totalSteps={isMac ? 4 : 3}
     >
@@ -79,7 +79,7 @@ export function SetupOverviewStep() {
                 >
                   <div className="flex-1 ml-1">
                     <h3 className="font-medium text-gray-900 flex items-center gap-2">
-                        Step {step.number} :  {step.title}
+                        {step.number}단계 :  {step.title}
 
                         {step.type === "summarization" && (
                             <TooltipProvider>
@@ -90,8 +90,7 @@ export function SetupOverviewStep() {
                                 </button>
                                 </TooltipTrigger>
                                 <TooltipContent className="max-w-xs text-sm">
-                                You can also select external AI providers like OpenAI, Claude, or
-                                Ollama for summary generation in settings.
+                                설정에서 OpenAI, Claude, Ollama 등 외부 AI 제공자를 요약 생성용으로 선택할 수도 있습니다.
                                 </TooltipContent>
                             </Tooltip>
                             </TooltipProvider>
@@ -111,7 +110,7 @@ export function SetupOverviewStep() {
             onClick={handleContinue}
             className="w-full h-11 bg-gray-900 hover:bg-gray-800 text-white"
           >
-            Let's Go
+            시작하기
           </Button>
           <div className="text-center">
             <a
@@ -120,7 +119,7 @@ export function SetupOverviewStep() {
               rel="noopener noreferrer"
               className="text-xs text-gray-600 hover:underline"
             >
-              Report issues on GitHub
+              GitHub에 문제 제보하기
             </a>
           </div>
         </div>
