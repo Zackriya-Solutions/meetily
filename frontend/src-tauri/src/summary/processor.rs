@@ -14,14 +14,20 @@ static THINKING_TAG_REGEX: Lazy<Regex> = Lazy::new(|| {
 
 /// Maps a BCP-47 tag to the English language name used inside LLM prompts.
 ///
-/// LLMs respond far more reliably to "in Spanish" than to "in es". Unknown
-/// codes return None so the caller silently falls back to default behaviour
-/// rather than injecting a literal ISO code into the prompt.
+/// LLMs respond far more reliably to "in Spanish" than to "in es". Regional
+/// tags (`pt-BR`, `en_GB`) are normalised to their base language; Chinese
+/// variants are disambiguated. Unknown codes return None so the caller falls
+/// back to English rather than injecting a literal ISO code into the prompt.
 fn language_name_from_code(code: &str) -> Option<&'static str> {
-    match code.to_ascii_lowercase().as_str() {
+    let normalised = code.to_ascii_lowercase().replace('_', "-");
+    let lookup: &str = match normalised.as_str() {
+        "zh-cn" => "zh",
+        "zh-tw" => return Some("Traditional Chinese"),
+        other => other.split('-').next().unwrap_or(other),
+    };
+    match lookup {
         "en" => Some("English"),
-        "zh" | "zh-cn" => Some("Chinese"),
-        "zh-tw" => Some("Traditional Chinese"),
+        "zh" => Some("Chinese"),
         "de" => Some("German"),
         "es" => Some("Spanish"),
         "ru" => Some("Russian"),

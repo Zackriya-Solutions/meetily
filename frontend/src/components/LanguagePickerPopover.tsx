@@ -66,8 +66,10 @@ export function LanguagePickerPopover({
     [recents, filter],
   );
 
-  const showAuto = mode === "meeting";
+  const showAuto = mode === "meeting" && (!filter || "auto".includes(filter));
   const showRecents = mode === "meeting" && recentsResolved.length > 0;
+  const hasNoResults =
+    filteredAll.length === 0 && recentsResolved.length === 0 && !showAuto;
 
   return (
     <div
@@ -99,10 +101,15 @@ export function LanguagePickerPopover({
                 key={`recent-${opt.code}`}
                 type="button"
                 onClick={() => onChange(opt.code)}
-                className="flex w-full items-center justify-between px-3 py-1.5 text-sm text-gray-800 hover:bg-gray-50 text-left"
+                className={`flex w-full items-center justify-between px-3 py-1.5 text-sm hover:bg-gray-50 text-left ${
+                  value === opt.code ? "text-blue-600 font-medium" : "text-gray-800"
+                }`}
               >
-                <span>{opt.label}</span>
-                <span className="text-xs text-gray-400">({opt.code})</span>
+                <span>
+                  {opt.label}{" "}
+                  <span className="text-xs text-gray-400">({opt.code})</span>
+                </span>
+                {value === opt.code && <span className="text-blue-600">✓</span>}
               </button>
             ))}
             <div className="my-1 h-px bg-gray-100" />
@@ -113,7 +120,7 @@ export function LanguagePickerPopover({
           All Languages
         </div>
 
-        {showAuto && (!filter || "auto".includes(filter)) && (
+        {showAuto && (
           <button
             type="button"
             onClick={() => onChange(null)}
@@ -143,7 +150,7 @@ export function LanguagePickerPopover({
           </button>
         ))}
 
-        {filteredAll.length === 0 && !showAuto && (
+        {hasNoResults && (
           <div className="px-3 py-2 text-sm text-gray-400">No matches</div>
         )}
       </div>
