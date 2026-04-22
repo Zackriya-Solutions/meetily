@@ -338,7 +338,7 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
         console.log('✅ MAIN transcript listener setup complete');
       } catch (error) {
         console.error('❌ Failed to setup MAIN transcript listener:', error);
-        alert('Failed to setup transcript listener. Check console for details.');
+        alert('전사 리스너 설정에 실패했습니다. 자세한 내용은 콘솔을 확인해 주세요.');
       }
     };
 
@@ -469,7 +469,7 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
       .join('\n');
     navigator.clipboard.writeText(fullTranscript);
 
-    toast.success("Transcript copied to clipboard");
+    toast.success("전사본을 클립보드에 복사했습니다");
   }, [transcripts]);
 
   // Force flush buffer (for final transcript processing)
