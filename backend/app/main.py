@@ -105,7 +105,7 @@ class TranscriptRequest(BaseModel):
     meeting_id: str
     chunk_size: Optional[int] = 5000
     overlap: Optional[int] = 1000
-    custom_prompt: Optional[str] = "Generate a summary of the meeting transcript."
+    custom_prompt: Optional[str] = "회의 전사본의 요약을 생성해주세요."
 
 class SummaryProcessor:
     """Handles the processing of summaries in a thread-safe way"""
@@ -120,7 +120,7 @@ class SummaryProcessor:
             logger.error(f"Failed to initialize SummaryProcessor: {str(e)}", exc_info=True)
             raise
 
-    async def process_transcript(self, text: str, model: str, model_name: str, chunk_size: int = 5000, overlap: int = 1000, custom_prompt: str = "Generate a summary of the meeting transcript.") -> tuple:
+    async def process_transcript(self, text: str, model: str, model_name: str, chunk_size: int = 5000, overlap: int = 1000, custom_prompt: str = "회의 전사본의 요약을 생성해주세요.") -> tuple:
         """Process a transcript text"""
         try:
             if not text:

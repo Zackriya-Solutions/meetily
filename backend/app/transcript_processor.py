@@ -171,28 +171,28 @@ class TranscriptProcessor:
                     # Run the agent to get the structured summary for the chunk
                     if model != "ollama":
                         summary_result = await agent.run(
-                            f"""Given the following meeting transcript chunk, extract the relevant information according to the required JSON structure. If a specific section (like Critical Deadlines) has no relevant information in this chunk, return an empty list for its 'blocks'. Ensure the output is only the JSON data.
+                            f"""다음 회의 전사본 청크를 바탕으로, 요구되는 JSON 구조에 맞게 관련 정보를 추출하십시오. 특정 섹션(예: Critical Deadlines)에 해당하는 내용이 없을 경우, 해당 섹션의 'blocks'를 빈 목록으로 반환하십시오. 출력은 반드시 JSON 데이터만 포함해야 합니다.
 
-                            IMPORTANT: Block types must be one of: 'text', 'bullet', 'heading1', 'heading2'
-                            - Use 'text' for regular paragraphs
-                            - Use 'bullet' for list items
-                            - Use 'heading1' for major headings
-                            - Use 'heading2' for subheadings
-                            
-                            For the color field, use 'gray' for less important content or '' (empty string) for default.
+                            중요: 블록 유형(Block types)은 반드시 다음 중 하나이어야 합니다: 'text', 'bullet', 'heading1', 'heading2'
+                            - 'text': 일반 단락(regular paragraphs)에 사용
+                            - 'bullet': 목록 항목(list items)에 사용
+                            - 'heading1': 주요 제목(major headings)에 사용
+                            - 'heading2': 소제목(subheadings)에 사용
 
-                            Transcript Chunk:
+                            color 필드에는 중요도가 낮은 내용에 'gray'를, 기본값에는 '' (빈 문자열)을 사용하십시오.
+
+                            전사본 청크:
                             ---
                         {chunk}
                         ---
 
-                        Please capture all relevant action items. Transcription can have spelling mistakes. correct it if required. context is important.
-                        
-                        While generating the summary, please add the following context:
+                        모든 관련 실행 항목(action items)을 빠짐없이 포함하십시오. 전사본에는 철자 오류가 있을 수 있으므로, 문맥을 고려하여 필요한 경우 수정하십시오.
+
+                        요약을 생성할 때 다음 추가 맥락을 반영하십시오:
                         ---
                         {custom_prompt}
                         ---
-                        Make sure the output is only the JSON data.
+                        출력은 반드시 JSON 데이터만 포함해야 합니다.
                         """,
                     )
                     else:
@@ -236,21 +236,21 @@ class TranscriptProcessor:
         message = {
         'role': 'system',
         'content': f'''
-        Given the following meeting transcript chunk, extract the relevant information according to the required JSON structure. If a specific section (like Critical Deadlines) has no relevant information in this chunk, return an empty list for its 'blocks'. Ensure the output is only the JSON data.
+        다음 회의 전사본 청크를 바탕으로, 요구되는 JSON 구조에 맞게 관련 정보를 추출하십시오. 특정 섹션(예: Critical Deadlines)에 해당하는 내용이 없을 경우, 해당 섹션의 'blocks'를 빈 목록으로 반환하십시오. 출력은 반드시 JSON 데이터만 포함해야 합니다.
 
-        Transcript Chunk:
+        전사본 청크:
             ---
             {transcript}
             ---
-        Please capture all relevant action items. Transcription can have spelling mistakes. correct it if required. context is important.
-        
-        While generating the summary, please add the following context:
+        모든 관련 실행 항목(action items)을 빠짐없이 포함하십시오. 전사본에는 철자 오류가 있을 수 있으므로, 문맥을 고려하여 필요한 경우 수정하십시오.
+
+        요약을 생성할 때 다음 추가 맥락을 반영하십시오:
         ---
         {custom_prompt}
         ---
 
-        Make sure the output is only the JSON data.
-    
+        출력은 반드시 JSON 데이터만 포함해야 합니다.
+
         ''',
         }
 
