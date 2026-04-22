@@ -1,5 +1,5 @@
 use crate::database::repositories::{
-    meeting::MeetingsRepository, setting::SettingsRepository,
+    meeting::MeetingsRepository,
     summary::SummaryProcessesRepository, transcript_chunk::TranscriptChunksRepository,
 };
 use crate::state::AppState;
@@ -175,6 +175,7 @@ pub async fn api_process_transcript<R: Runtime>(
     _overlap: Option<i32>,
     custom_prompt: Option<String>,
     template_id: Option<String>,
+    summary_language: Option<String>,
     _auth_token: Option<String>,
 ) -> Result<ProcessTranscriptResponse, String> {
     use uuid::Uuid;
@@ -189,6 +190,12 @@ pub async fn api_process_transcript<R: Runtime>(
     let pool = state.db_manager.pool().clone();
     let final_prompt = custom_prompt.unwrap_or_else(|| "".to_string());
     let final_template_id = template_id.unwrap_or_else(|| "daily_standup".to_string());
+
+    // Normalise empty / whitespace-only to None so "" and null behave identically
+    let summary_language = summary_language.and_then(|s| {
+        let t = s.trim();
+        if t.is_empty() { None } else { Some(t.to_string()) }
+    });
 
     // Create or reset the process entry in the database
     SummaryProcessesRepository::create_or_reset_process(&pool, &m_id)
@@ -227,6 +234,7 @@ pub async fn api_process_transcript<R: Runtime>(
             model_name,
             final_prompt,
             final_template_id,
+            summary_language,
         )
         .await;
     });
@@ -237,43 +245,6 @@ pub async fn api_process_transcript<R: Runtime>(
         message: "Summary generation started".to_string(),
         process_id: m_id,
     })
-}
-
-/// Returns the user's preferred summary output language as a BCP-47 tag.
-///
-/// Returns `null` when unset (model decides from transcript - default behaviour).
-#[tauri::command]
-pub async fn api_get_summary_language<R: Runtime>(
-    _app: AppHandle<R>,
-    state: tauri::State<'_, AppState>,
-) -> Result<Option<String>, String> {
-    log_info!("api_get_summary_language called");
-    let pool = state.db_manager.pool();
-    SettingsRepository::get_summary_language(pool)
-        .await
-        .map_err(|e| format!("Failed to read summary language: {}", e))
-}
-
-/// Persists the user's preferred summary output language.
-///
-/// Pass `null` (frontend) / `None` (Rust) to clear the preference and
-/// restore default behaviour.
-#[tauri::command]
-pub async fn api_set_summary_language<R: Runtime>(
-    _app: AppHandle<R>,
-    state: tauri::State<'_, AppState>,
-    language: Option<String>,
-) -> Result<(), String> {
-    log_info!("api_set_summary_language called with: {:?}", language);
-    let pool = state.db_manager.pool();
-    // Trim and normalise empty strings to None so "" and null behave identically
-    let normalised = language.and_then(|s| {
-        let t = s.trim();
-        if t.is_empty() { None } else { Some(t.to_string()) }
-    });
-    SettingsRepository::save_summary_language(pool, normalised.as_deref())
-        .await
-        .map_err(|e| format!("Failed to save summary language: {}", e))
 }
 
 /// Cancels an ongoing summary generation process

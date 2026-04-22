@@ -8,7 +8,14 @@ import { ModelConfig } from '@/components/ModelSettingsModal';
 import { SummaryGeneratorButtonGroup } from './SummaryGeneratorButtonGroup';
 import { SummaryUpdaterButtonGroup } from './SummaryUpdaterButtonGroup';
 import Analytics from '@/lib/analytics';
-import { RefObject } from 'react';
+import { useEffect, useState, RefObject } from 'react';
+import { toast } from 'sonner';
+import { Languages, ChevronDown } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
+import { LanguagePickerPopover } from '@/components/LanguagePickerPopover';
+import { useRecentLanguages } from '@/hooks/useRecentLanguages';
+import { AUTO_VALUE, labelForCode } from '@/lib/summary-languages';
 
 interface SummaryPanelProps {
   meeting: {
@@ -85,7 +92,80 @@ export function SummaryPanel({
   isModelConfigLoading = false,
   onOpenModelSettings
 }: SummaryPanelProps) {
+  const storageKey = `summaryLanguage:${meeting.id}`;
+  const [summaryLang, setSummaryLang] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null;
+    try {
+      return window.localStorage.getItem(storageKey);
+    } catch {
+      return null;
+    }
+  });
+  const [langPickerOpen, setLangPickerOpen] = useState(false);
+  const { addRecent, pinned } = useRecentLanguages();
+
+  // AUTO_VALUE sentinel lets per-meeting Auto override a global pin; null means "no choice, fall back to pin".
+  const explicitAuto = summaryLang === AUTO_VALUE;
+  const effectiveLangCode = explicitAuto ? null : (summaryLang ?? pinned);
+  const effectiveLangLabel = effectiveLangCode ? labelForCode(effectiveLangCode) : 'Auto';
+  const labelFromPin = !summaryLang && pinned != null;
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      setSummaryLang(window.localStorage.getItem(storageKey));
+    } catch {
+      setSummaryLang(null);
+    }
+  }, [storageKey]);
+
+  const handleLangChange = (code: string | null) => {
+    const previous = summaryLang;
+    const nextStored = code === null ? (pinned ? AUTO_VALUE : null) : code;
+    setSummaryLang(nextStored);
+    setLangPickerOpen(false);
+    try {
+      if (nextStored) {
+        window.localStorage.setItem(storageKey, nextStored);
+        if (code) addRecent(code);
+      } else {
+        window.localStorage.removeItem(storageKey);
+      }
+    } catch (err) {
+      console.error('Failed to persist summary language:', err);
+      toast.error('Failed to save summary language');
+      setSummaryLang(previous);
+    }
+  };
+
   const isSummaryLoading = summaryStatus === 'processing' || summaryStatus === 'summarizing' || summaryStatus === 'regenerating';
+
+  const languageSlot = (
+    <Popover open={langPickerOpen} onOpenChange={setLangPickerOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          size="sm"
+          title={`Summary language: ${effectiveLangLabel}${labelFromPin ? ' (default)' : ''}`}
+          aria-label="Set summary language"
+        >
+          <Languages size={18} />
+          <span className="hidden lg:inline">{effectiveLangLabel}</span>
+          <ChevronDown size={14} className="text-gray-400" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="end"
+        className="w-auto p-0 border-0 shadow-none bg-transparent"
+      >
+        <LanguagePickerPopover
+          value={explicitAuto ? null : effectiveLangCode}
+          onChange={handleLangChange}
+          onClose={() => setLangPickerOpen(false)}
+        />
+      </PopoverContent>
+    </Popover>
+  );
 
   return (
     <div className="flex-1 min-w-0 flex flex-col bg-white overflow-hidden">
@@ -116,8 +196,10 @@ export function SummaryPanel({
                 selectedTemplate={selectedTemplate}
                 onTemplateSelect={onTemplateSelect}
                 hasTranscripts={transcripts.length > 0}
+                hasSummary={!!aiSummary}
                 isModelConfigLoading={isModelConfigLoading}
                 onOpenModelSettings={onOpenModelSettings}
+                languageSlot={languageSlot}
               />
             </div>
 
@@ -171,7 +253,7 @@ export function SummaryPanel({
       ) : !aiSummary ? (
         <div className="flex flex-col h-full">
           {/* Centered Summary Generator Button Group when no summary */}
-          <div className="flex items-center justify-center pt-8 pb-4">
+          <div className="flex items-center justify-center gap-2 pt-8 pb-4">
             <SummaryGeneratorButtonGroup
               modelConfig={modelConfig}
               setModelConfig={setModelConfig}
@@ -184,8 +266,10 @@ export function SummaryPanel({
               selectedTemplate={selectedTemplate}
               onTemplateSelect={onTemplateSelect}
               hasTranscripts={transcripts.length > 0}
+              hasSummary={false}
               isModelConfigLoading={isModelConfigLoading}
               onOpenModelSettings={onOpenModelSettings}
+              languageSlot={transcripts.length > 0 ? languageSlot : undefined}
             />
           </div>
           {/* Empty state message */}

@@ -19,8 +19,6 @@ static THINKING_TAG_REGEX: Lazy<Regex> = Lazy::new(|| {
 /// rather than injecting a literal ISO code into the prompt.
 fn language_name_from_code(code: &str) -> Option<&'static str> {
     match code.to_ascii_lowercase().as_str() {
-        "en-gb" => Some("British English"),
-        "en-us" => Some("American English"),
         "en" => Some("English"),
         "zh" | "zh-cn" => Some("Chinese"),
         "zh-tw" => Some("Traditional Chinese"),
@@ -31,7 +29,6 @@ fn language_name_from_code(code: &str) -> Option<&'static str> {
         "fr" => Some("French"),
         "ja" => Some("Japanese"),
         "pt" => Some("Portuguese"),
-        "pt-br" => Some("Brazilian Portuguese"),
         "it" => Some("Italian"),
         "nl" => Some("Dutch"),
         "pl" => Some("Polish"),
@@ -43,33 +40,20 @@ fn language_name_from_code(code: &str) -> Option<&'static str> {
         "th" => Some("Thai"),
         "id" => Some("Indonesian"),
         "sv" => Some("Swedish"),
-        "nb" | "no" => Some("Norwegian"),
-        "da" => Some("Danish"),
-        "fi" => Some("Finnish"),
-        "cs" => Some("Czech"),
-        "el" => Some("Greek"),
-        "he" => Some("Hebrew"),
-        "uk" => Some("Ukrainian"),
-        "ro" => Some("Romanian"),
-        "hu" => Some("Hungarian"),
         _ => None,
     }
 }
 
-/// Builds the trailing language directive appended to summary system prompts.
-///
-/// Empty string when language is None or the code is unrecognised, which
-/// preserves the pre-existing behaviour for users with no preference set.
-fn language_directive(summary_language: Option<&str>) -> String {
-    let Some(code) = summary_language else {
-        return String::new();
-    };
-    let Some(name) = language_name_from_code(code) else {
-        return String::new();
-    };
+fn translation_system_prompt(target_language: &str) -> String {
     format!(
-        "\n\n**Output language:** Produce the entire response in {}. Do not translate proper nouns, code, or quoted material.",
-        name
+        r#"You are a precise translator. Translate the provided Markdown document into {target_language} while preserving structure exactly.
+
+**CRITICAL RULES:**
+1. Translate every sentence, heading, list item, and table cell into {target_language}.
+2. Preserve the Markdown structure EXACTLY: keep every `#`, `**`, `-`, `|`, code fence marker, and table pipe in the same position.
+3. Do NOT translate: proper nouns (names of people, products, companies), code identifiers, file paths, URLs, numeric values, or text inside backticks.
+4. Do not add commentary or explanation. Output ONLY the translated Markdown.
+5. If a technical term has no standard translation, keep the original English word."#
     )
 }
 
@@ -236,9 +220,6 @@ pub async fn generate_meeting_summary(
     cancellation_token: Option<&CancellationToken>,
     summary_language: Option<&str>,
 ) -> Result<(String, i64), String> {
-    // Resolve once - used at all three prompt sites below
-    let lang_suffix = language_directive(summary_language);
-    // Check cancellation at the start
     if let Some(token) = cancellation_token {
         if token.is_cancelled() {
             return Err("Summary generation was cancelled".to_string());
@@ -277,8 +258,7 @@ pub async fn generate_meeting_summary(
         info!("Split transcript into {} chunks", num_chunks);
 
         let mut chunk_summaries = Vec::new();
-        let system_prompt_chunk_base = "You are an expert meeting summarizer.";
-        let system_prompt_chunk = format!("{}{}", system_prompt_chunk_base, lang_suffix);
+        let system_prompt_chunk = "You are an expert meeting summarizer.";
         let user_prompt_template_chunk = "Provide a concise but comprehensive summary of the following transcript chunk. Capture all key points, decisions, action items, and mentioned individuals.\n\n<transcript_chunk>\n{}\n</transcript_chunk>";
 
         for (i, chunk) in chunks.iter().enumerate() {
@@ -298,7 +278,7 @@ pub async fn generate_meeting_summary(
                 provider,
                 model_name,
                 api_key,
-                &system_prompt_chunk,
+                system_prompt_chunk,
                 &user_prompt_chunk,
                 ollama_endpoint,
                 custom_openai_endpoint,
@@ -344,8 +324,7 @@ pub async fn generate_meeting_summary(
                 chunk_summaries.len()
             );
             let combined_text = chunk_summaries.join("\n---\n");
-            let system_prompt_combine_base = "You are an expert at synthesizing meeting summaries.";
-            let system_prompt_combine = format!("{}{}", system_prompt_combine_base, lang_suffix);
+            let system_prompt_combine = "You are an expert at synthesizing meeting summaries.";
             let user_prompt_combine_template = "The following are consecutive summaries of a meeting. Combine them into a single, coherent, and detailed narrative summary that retains all important details, organized logically.\n\n<summaries>\n{}\n</summaries>";
 
             let user_prompt_combine = user_prompt_combine_template.replace("{}", &combined_text);
@@ -354,7 +333,7 @@ pub async fn generate_meeting_summary(
                 provider,
                 model_name,
                 api_key,
-                &system_prompt_combine,
+                system_prompt_combine,
                 &user_prompt_combine,
                 ollama_endpoint,
                 custom_openai_endpoint,
@@ -392,22 +371,15 @@ pub async fn generate_meeting_summary(
 6. If unsure about something, omit it.
 
 **SECTION-SPECIFIC INSTRUCTIONS:**
-{}
+{section_instructions}
 
 <template>
-{}
-</template>
-{}"#,
-        section_instructions, clean_template_markdown, lang_suffix
+{clean_template_markdown}
+</template>"#
     );
 
     let mut final_user_prompt = format!(
-        r#"
-<transcript_chunks>
-{}
-</transcript_chunks>
-"#,
-        content_to_summarize
+        "<transcript_chunks>\n{content_to_summarize}\n</transcript_chunks>\n"
     );
 
     if !custom_prompt.is_empty() {
@@ -441,9 +413,81 @@ pub async fn generate_meeting_summary(
     )
     .await?;
 
-    // Clean the output
-    let final_markdown = clean_llm_markdown_output(&raw_markdown);
+    let english_markdown = clean_llm_markdown_output(&raw_markdown);
+    info!("Summary pass completed ({} chars)", english_markdown.len());
+
+    let final_markdown = match summary_language.and_then(language_name_from_code) {
+        Some(name) if name != "English" => {
+            translate_markdown(
+                client,
+                provider,
+                model_name,
+                api_key,
+                &english_markdown,
+                name,
+                ollama_endpoint,
+                custom_openai_endpoint,
+                max_tokens,
+                temperature,
+                top_p,
+                app_data_dir,
+                cancellation_token,
+            )
+            .await?
+        }
+        _ => english_markdown,
+    };
 
     info!("Summary generation completed successfully");
     Ok((final_markdown, successful_chunk_count))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn translate_markdown(
+    client: &Client,
+    provider: &LLMProvider,
+    model_name: &str,
+    api_key: &str,
+    english_markdown: &str,
+    target_language: &str,
+    ollama_endpoint: Option<&str>,
+    custom_openai_endpoint: Option<&str>,
+    max_tokens: Option<u32>,
+    temperature: Option<f32>,
+    top_p: Option<f32>,
+    app_data_dir: Option<&PathBuf>,
+    cancellation_token: Option<&CancellationToken>,
+) -> Result<String, String> {
+    if let Some(token) = cancellation_token {
+        if token.is_cancelled() {
+            return Err("Summary generation was cancelled".to_string());
+        }
+    }
+
+    info!("Translation pass: target language = {}", target_language);
+
+    let system_prompt = translation_system_prompt(target_language);
+    let user_prompt = format!(
+        "Translate the following Markdown document into {target_language}. Return ONLY the translated Markdown, nothing else.\n\n<document>\n{english_markdown}\n</document>"
+    );
+
+    let raw = generate_summary(
+        client,
+        provider,
+        model_name,
+        api_key,
+        &system_prompt,
+        &user_prompt,
+        ollama_endpoint,
+        custom_openai_endpoint,
+        max_tokens,
+        temperature,
+        top_p,
+        app_data_dir,
+        cancellation_token,
+    )
+    .await
+    .map_err(|e| format!("Translation pass failed: {e}"))?;
+
+    Ok(clean_llm_markdown_output(&raw))
 }

@@ -8,6 +8,30 @@ import Analytics from '@/lib/analytics';
 import { isOllamaNotInstalledError } from '@/lib/utils';
 import { BuiltInModelInfo } from '@/lib/builtin-ai';
 
+const AUTO_SENTINEL = '__auto__';
+
+function resolveSummaryLanguage(meetingId: string): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const perMeeting = window.localStorage.getItem(`summaryLanguage:${meetingId}`);
+    // Explicit Auto picked on this meeting: skip the pinned default; honour transcription if set, else None.
+    if (perMeeting && perMeeting !== AUTO_SENTINEL) return perMeeting;
+
+    if (perMeeting !== AUTO_SENTINEL) {
+      const defaultLang = window.localStorage.getItem('summaryLanguageDefault');
+      if (defaultLang) return defaultLang;
+    }
+
+    const transcription = window.localStorage.getItem('primaryLanguage');
+    if (transcription && transcription !== 'auto' && transcription !== 'auto-translate') {
+      return transcription;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 type SummaryStatus = 'idle' | 'processing' | 'summarizing' | 'regenerating' | 'completed' | 'error';
 
 interface UseSummaryGenerationProps {
@@ -103,6 +127,9 @@ export function useSummaryGeneration({
         duration: 3000,
       });
 
+      // Resolve summary output language from localStorage (per-meeting -> default -> transcription -> null)
+      const summaryLanguage = resolveSummaryLanguage(meeting.id);
+
       // Process transcript and get process_id
       const result = await invokeTauri('api_process_transcript', {
         text: transcriptText,
@@ -113,6 +140,7 @@ export function useSummaryGeneration({
         overlap: 1000,
         customPrompt: customPrompt,
         templateId: selectedTemplate,
+        summaryLanguage,
       }) as any;
 
       const process_id = result.process_id;

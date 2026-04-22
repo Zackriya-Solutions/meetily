@@ -96,10 +96,6 @@ pub struct Setting {
     #[sqlx(rename = "customOpenAIConfig")]
     #[serde(rename = "customOpenAIConfig")]
     pub custom_openai_config: Option<String>,
-    /// BCP-47 language tag requesting summary output language (e.g. "en-GB", "es").
-    #[sqlx(rename = "summaryLanguage")]
-    #[serde(rename = "summaryLanguage")]
-    pub summary_language: Option<String>,
 }
 
 impl Setting {

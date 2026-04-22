@@ -134,6 +134,8 @@ export function SummaryModelSettings({ refetchTrigger }: SummaryModelSettingsPro
         </div>
       </div>
 
+      <SummaryLanguageSettings />
+
       <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm">
         <h3 className="text-lg font-semibold mb-4">Summary Model Configuration</h3>
         <p className="text-sm text-gray-600 mb-6">
@@ -147,8 +149,6 @@ export function SummaryModelSettings({ refetchTrigger }: SummaryModelSettingsPro
           skipInitialFetch={true}
         />
       </div>
-
-      <SummaryLanguageSettings />
     </div>
   );
 }
