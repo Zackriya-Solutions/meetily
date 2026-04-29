@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { Globe, Pin } from 'lucide-react';
+import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 import { LanguagePickerPopover } from '@/components/LanguagePickerPopover';
 import { useRecentLanguages } from '@/hooks/useRecentLanguages';
 import { labelForCode } from '@/lib/summary-languages';
@@ -31,7 +32,7 @@ export function SummaryLanguageSettings() {
           return (
             <span
               key={code}
-              className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-sm ${
+              className={`inline-flex items-center rounded-full border text-sm overflow-hidden ${
                 isPinned
                   ? 'bg-blue-50 border-blue-200 text-blue-800'
                   : 'bg-gray-100 border-gray-200 text-gray-800'
@@ -41,18 +42,24 @@ export function SummaryLanguageSettings() {
                 type="button"
                 aria-label={isPinned ? `Unpin ${labelForCode(code)} as default` : `Pin ${labelForCode(code)} as default`}
                 aria-pressed={isPinned}
-                title={isPinned ? 'Default language for new meetings' : 'Set as default for new meetings'}
+                title={isPinned ? 'Click to unset as default' : 'Click to set as default'}
                 onClick={() => togglePin(code)}
-                className={`leading-none ${isPinned ? 'text-blue-600' : 'text-gray-400 hover:text-gray-700'}`}
+                className={`flex items-center gap-1.5 pl-3 pr-2 py-1 hover:brightness-95 active:brightness-90 ${
+                  isPinned ? 'text-blue-800' : 'text-gray-800'
+                }`}
               >
-                <Pin size={12} fill={isPinned ? 'currentColor' : 'none'} />
+                <Pin
+                  size={14}
+                  className={isPinned ? 'text-blue-600' : 'text-gray-400'}
+                  fill={isPinned ? 'currentColor' : 'none'}
+                />
+                {labelForCode(code)}
               </button>
-              <span>{labelForCode(code)}</span>
               <button
                 type="button"
                 aria-label={`Remove ${labelForCode(code)}`}
                 onClick={() => removeRecent(code)}
-                className={`leading-none ${isPinned ? 'text-blue-400 hover:text-blue-700' : 'text-gray-400 hover:text-gray-700'}`}
+                className={`pr-2.5 pl-0.5 py-1 leading-none ${isPinned ? 'text-blue-400 hover:text-blue-700' : 'text-gray-400 hover:text-gray-700'}`}
               >
                 ×
               </button>
@@ -60,35 +67,35 @@ export function SummaryLanguageSettings() {
           );
         })}
 
-        <button
-          type="button"
-          onClick={() => setPickerOpen((prev) => !prev)}
-          disabled={recents.length >= 5}
-          className="inline-flex items-center gap-1 rounded-full border border-dashed border-gray-300 px-3 py-1 text-sm text-gray-600 hover:border-gray-400 hover:text-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          ＋ Add language
-        </button>
+        <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              disabled={recents.length >= 5}
+              className="inline-flex items-center gap-1 rounded-full border border-dashed border-gray-300 px-3 py-1 text-sm text-gray-600 hover:border-gray-400 hover:text-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              ＋ Add language
+            </button>
+          </PopoverTrigger>
+          <PopoverContent align="start" className="w-auto p-0 border-0 shadow-none bg-transparent">
+            <LanguagePickerPopover
+              mode="settings"
+              value={null}
+              onChange={(code) => {
+                if (code) addRecent(code);
+                setPickerOpen(false);
+              }}
+              onClose={() => setPickerOpen(false)}
+            />
+          </PopoverContent>
+        </Popover>
       </div>
 
       <p className="text-xs text-gray-400 mt-3">
         {pinned
-          ? `Default: ${labelForCode(pinned)}. Max 5 quick-switch options.`
-          : 'No default pinned - new meetings use Auto. Max 5 quick-switch options.'}
+          ? `Default: ${labelForCode(pinned)} - click it again to unset. Max 5 quick-switch options.`
+          : 'Click any language to set it as your default. Max 5 quick-switch options.'}
       </p>
-
-      {pickerOpen && (
-        <div className="absolute z-10 mt-2">
-          <LanguagePickerPopover
-            mode="settings"
-            value={null}
-            onChange={(code) => {
-              if (code) addRecent(code);
-              setPickerOpen(false);
-            }}
-            onClose={() => setPickerOpen(false)}
-          />
-        </div>
-      )}
     </div>
   );
 }

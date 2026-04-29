@@ -129,6 +129,22 @@ export function useSummaryGeneration({
       // Resolve summary output language from localStorage (per-meeting -> default -> transcription -> null)
       const summaryLanguage = resolveSummaryLanguage(meeting.id);
 
+      // Warn when transcription language is set but not in the supported translation list
+      if (!summaryLanguage && typeof window !== 'undefined') {
+        const transcription = window.localStorage.getItem('primaryLanguage');
+        if (
+          transcription &&
+          transcription !== 'auto' &&
+          transcription !== 'auto-translate' &&
+          normaliseLanguageCode(transcription) === null
+        ) {
+          toast.warning(
+            `Transcription language "${transcription}" is not supported for summary translation — summary will be in English.`,
+            { duration: 6000 }
+          );
+        }
+      }
+
       // Process transcript and get process_id
       const result = await invokeTauri('api_process_transcript', {
         text: transcriptText,

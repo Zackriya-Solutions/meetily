@@ -46,6 +46,15 @@ fn language_name_from_code(code: &str) -> Option<&'static str> {
         "th" => Some("Thai"),
         "id" => Some("Indonesian"),
         "sv" => Some("Swedish"),
+        "cs" => Some("Czech"),
+        "da" => Some("Danish"),
+        "fi" => Some("Finnish"),
+        "el" => Some("Greek"),
+        "he" => Some("Hebrew"),
+        "hu" => Some("Hungarian"),
+        "no" => Some("Norwegian"),
+        "ro" => Some("Romanian"),
+        "uk" => Some("Ukrainian"),
         _ => None,
     }
 }
@@ -424,7 +433,7 @@ pub async fn generate_meeting_summary(
 
     let final_markdown = match summary_language.and_then(language_name_from_code) {
         Some(name) if name != "English" => {
-            translate_markdown(
+            match translate_markdown(
                 client,
                 provider,
                 model_name,
@@ -439,7 +448,17 @@ pub async fn generate_meeting_summary(
                 app_data_dir,
                 cancellation_token,
             )
-            .await?
+            .await
+            {
+                Ok(translated) => translated,
+                Err(e) => {
+                    error!(
+                        "Translation to {} failed, returning English summary: {}",
+                        name, e
+                    );
+                    english_markdown
+                }
+            }
         }
         _ => english_markdown,
     };

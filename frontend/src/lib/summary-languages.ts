@@ -29,6 +29,15 @@ export const LANGUAGE_OPTIONS: LanguageOption[] = [
   { code: 'th', label: 'Thai' },
   { code: 'id', label: 'Indonesian' },
   { code: 'sv', label: 'Swedish' },
+  { code: 'cs', label: 'Czech' },
+  { code: 'da', label: 'Danish' },
+  { code: 'fi', label: 'Finnish' },
+  { code: 'el', label: 'Greek' },
+  { code: 'he', label: 'Hebrew' },
+  { code: 'hu', label: 'Hungarian' },
+  { code: 'no', label: 'Norwegian' },
+  { code: 'ro', label: 'Romanian' },
+  { code: 'uk', label: 'Ukrainian' },
 ];
 
 export const AUTO_VALUE = '__auto__' as const;

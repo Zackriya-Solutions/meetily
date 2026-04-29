@@ -267,7 +267,7 @@ impl SummaryService {
                     "✓ Successfully processed {} chunks for meeting_id: {}. Duration: {:.2}s",
                     num_chunks, meeting_id, duration
                 );
-                info!("final markdown is {}", &final_markdown);
+                info!("Final markdown generated ({} chars)", final_markdown.len());
 
                 // Extract and update meeting name if present
                 if let Some(name) = extract_meeting_name_from_markdown(&final_markdown) {

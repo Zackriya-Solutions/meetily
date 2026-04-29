@@ -9,6 +9,7 @@ interface LanguagePickerPopoverProps {
   onChange: (code: string | null) => void;
   onClose: () => void;
   mode?: "meeting" | "settings";
+  autoSubtitle?: string;
 }
 
 export function LanguagePickerPopover({
@@ -16,6 +17,7 @@ export function LanguagePickerPopover({
   onChange,
   onClose,
   mode = "meeting",
+  autoSubtitle,
 }: LanguagePickerPopoverProps) {
   const { recents } = useRecentLanguages();
   const [query, setQuery] = useState("");
@@ -128,7 +130,12 @@ export function LanguagePickerPopover({
               value === null ? "text-blue-600 font-medium" : "text-gray-800"
             }`}
           >
-            <span>Auto</span>
+            <span className="flex flex-col">
+              <span>Auto</span>
+              {autoSubtitle && (
+                <span className="text-xs font-normal text-gray-400">{autoSubtitle}</span>
+              )}
+            </span>
             {value === null && <span className="text-blue-600">✓</span>}
           </button>
         )}

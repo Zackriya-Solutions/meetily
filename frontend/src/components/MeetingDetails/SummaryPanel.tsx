@@ -15,7 +15,7 @@ import { Button } from '@/components/ui/button';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 import { LanguagePickerPopover } from '@/components/LanguagePickerPopover';
 import { useRecentLanguages } from '@/hooks/useRecentLanguages';
-import { AUTO_VALUE, labelForCode } from '@/lib/summary-languages';
+import { AUTO_VALUE, labelForCode, normaliseLanguageCode } from '@/lib/summary-languages';
 
 interface SummaryPanelProps {
   meeting: {
@@ -110,6 +110,16 @@ export function SummaryPanel({
   const effectiveLangLabel = effectiveLangCode ? labelForCode(effectiveLangCode) : 'Auto';
   const labelFromPin = !summaryLang && pinned != null;
 
+  const autoSubtitle = (() => {
+    if (!explicitAuto && pinned) return `Uses default (${labelForCode(pinned)})`;
+    if (typeof window !== 'undefined') {
+      const raw = window.localStorage.getItem('primaryLanguage');
+      const normalised = normaliseLanguageCode(raw);
+      if (normalised) return `Matches transcription (${labelForCode(normalised)})`;
+    }
+    return 'Falls back to English';
+  })();
+
   useEffect(() => {
     if (typeof window === 'undefined') return;
     try {
@@ -162,6 +172,7 @@ export function SummaryPanel({
           value={explicitAuto ? null : effectiveLangCode}
           onChange={handleLangChange}
           onClose={() => setLangPickerOpen(false)}
+          autoSubtitle={autoSubtitle}
         />
       </PopoverContent>
     </Popover>
