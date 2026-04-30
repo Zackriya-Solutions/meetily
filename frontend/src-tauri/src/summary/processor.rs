@@ -12,6 +12,20 @@ static THINKING_TAG_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?s)<think(?:ing)?>.*?</think(?:ing)?>").unwrap()
 });
 
+/// Returns the cached English summary to reuse iff a cache hit applies AND
+/// the target language is a non-English translation.
+/// Empty/whitespace cache values and English/unknown target languages return None.
+fn resolve_cached_english<'a>(
+    cached: Option<&'a str>,
+    summary_language: Option<&str>,
+) -> Option<&'a str> {
+    let cached_clean = cached.filter(|s| !s.trim().is_empty())?;
+    let target_is_translation = summary_language
+        .and_then(language_name_from_code)
+        .is_some_and(|n| n != "English");
+    if target_is_translation { Some(cached_clean) } else { None }
+}
+
 /// Maps a BCP-47 tag to the English language name used inside LLM prompts.
 ///
 /// LLMs respond far more reliably to "in Spanish" than to "in es". Regional
@@ -252,16 +266,11 @@ pub async fn generate_meeting_summary(
     let total_tokens = rough_token_count(text);
     info!("Transcript length: {} tokens", total_tokens);
 
-    let cached_english_clean = cached_english.filter(|s| !s.is_empty());
-    let target_is_translation = summary_language
-        .and_then(language_name_from_code)
-        .map_or(false, |n| n != "English");
-
-    let (english_markdown, successful_chunk_count) = if let (Some(cached), true) =
-        (cached_english_clean, target_is_translation)
+    let (english_markdown, successful_chunk_count) = if let Some(cached) =
+        resolve_cached_english(cached_english, summary_language)
     {
         info!("✓ Using cached English summary ({} chars), skipping pass 1", cached.len());
-        (cached.to_string(), 0_i64)
+        (cached.to_string(), 1_i64)
     } else {
         let content_to_summarize: String;
         let successful_chunk_count: i64;
@@ -449,7 +458,6 @@ pub async fn generate_meeting_summary(
         (english_markdown, successful_chunk_count)
     };
 
-    let english_markdown_clone = english_markdown.clone();
     let final_markdown = match summary_language.and_then(language_name_from_code) {
         Some(name) if name != "English" => {
             match translate_markdown(
@@ -470,20 +478,14 @@ pub async fn generate_meeting_summary(
             .await
             {
                 Ok(translated) => translated,
-                Err(e) => {
-                    error!(
-                        "Translation to {} failed, returning English summary: {}",
-                        name, e
-                    );
-                    english_markdown
-                }
+                Err(e) => return Err(format!("Translation to {} failed: {}", name, e)),
             }
         }
-        _ => english_markdown,
+        _ => english_markdown.clone(),
     };
 
     info!("Summary generation completed successfully");
-    Ok((final_markdown, english_markdown_clone, successful_chunk_count))
+    Ok((final_markdown, english_markdown, successful_chunk_count))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -534,4 +536,53 @@ async fn translate_markdown(
     .map_err(|e| format!("Translation pass failed: {e}"))?;
 
     Ok(clean_llm_markdown_output(&raw))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // resolve_cached_english matrix -------------------------------------------
+
+    #[test]
+    fn no_cache_no_language_returns_none() {
+        assert_eq!(resolve_cached_english(None, None), None);
+    }
+
+    #[test]
+    fn empty_cache_with_translation_target_returns_none() {
+        assert_eq!(resolve_cached_english(Some(""), Some("fr")), None);
+    }
+
+    #[test]
+    fn whitespace_only_cache_returns_none() {
+        assert_eq!(resolve_cached_english(Some("   \n"), Some("fr")), None);
+    }
+
+    #[test]
+    fn valid_cache_no_language_returns_none() {
+        assert_eq!(resolve_cached_english(Some("body"), None), None);
+    }
+
+    #[test]
+    fn valid_cache_english_target_returns_none() {
+        assert_eq!(resolve_cached_english(Some("body"), Some("en")), None);
+    }
+
+    #[test]
+    fn valid_cache_english_variant_returns_none() {
+        // "en-GB" normalises to English — cache should not be used (re-run pass 1)
+        assert_eq!(resolve_cached_english(Some("body"), Some("en-GB")), None);
+    }
+
+    #[test]
+    fn valid_cache_french_target_returns_cache() {
+        assert_eq!(resolve_cached_english(Some("body"), Some("fr")), Some("body"));
+    }
+
+    #[test]
+    fn valid_cache_unknown_language_returns_none() {
+        // Unknown code -> language_name_from_code returns None -> not a translation
+        assert_eq!(resolve_cached_english(Some("body"), Some("zz-unknown")), None);
+    }
 }
