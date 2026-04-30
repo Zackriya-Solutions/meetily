@@ -22,6 +22,18 @@ static METADATA_CACHE: Lazy<ModelMetadataCache> = Lazy::new(|| {
 static CANCELLATION_REGISTRY: Lazy<Arc<Mutex<HashMap<String, CancellationToken>>>> =
     Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
 
+/// Strips the first `#` heading line; returns "" if no `#` is found.
+fn strip_leading_title(markdown: &str) -> String {
+    if let Some(hash_pos) = markdown.find('#') {
+        let body_start = markdown[hash_pos..]
+            .find('\n')
+            .map_or(markdown.len(), |line_end| hash_pos + line_end);
+        markdown[body_start..].trim_start().to_string()
+    } else {
+        String::new()
+    }
+}
+
 /// Summary service - handles all summary generation logic
 pub struct SummaryService;
 
@@ -224,7 +236,19 @@ impl SummaryService {
             info!("📝 Summary language preference: {}", code);
         }
 
-        // Generate summary
+        let cached_english = SummaryProcessesRepository::get_summary_data(&pool, &meeting_id)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|p| p.result)
+            .and_then(|r| serde_json::from_str::<serde_json::Value>(&r).ok())
+            .and_then(|v| v.get("english_markdown").and_then(|m| m.as_str()).map(String::from))
+            .filter(|s| !s.is_empty());
+
+        if cached_english.is_some() {
+            info!("✓ Found cached English markdown, will skip pass 1 if target language is non-English");
+        }
+
         let client = reqwest::Client::new();
         let result = generate_meeting_summary(
             &client,
@@ -243,6 +267,7 @@ impl SummaryService {
             app_data_dir.as_ref(),
             Some(&cancellation_token),
             summary_language.as_deref(),
+            cached_english.as_deref(),
         )
         .await;
 
@@ -252,7 +277,7 @@ impl SummaryService {
         Self::cleanup_cancellation_token(&meeting_id);
 
         match result {
-            Ok((mut final_markdown, num_chunks)) => {
+            Ok((mut final_markdown, english_markdown, num_chunks)) => {
                 if num_chunks == 0 && final_markdown.is_empty() {
                     Self::update_process_failed(
                         &pool,
@@ -284,26 +309,21 @@ impl SummaryService {
 
                         // Strip the title line from markdown
                         info!("Stripping title from final_markdown");
-                        if let Some(hash_pos) = final_markdown.find('#') {
-                            // Find end of first line after '#'
-                            let body_start =
-                                if let Some(line_end) = final_markdown[hash_pos..].find('\n') {
-                                    hash_pos + line_end
-                                } else {
-                                    final_markdown.len() // No newline, whole string is title
-                                };
-
-                            final_markdown = final_markdown[body_start..].trim_start().to_string();
-                        } else {
-                            // No '#' found, clear the string
-                            final_markdown.clear();
-                        }
+                        final_markdown = strip_leading_title(&final_markdown);
                     }
                 }
 
-                // Create result JSON with markdown only (summary_json will be added on first edit)
+                // Gate on leading `# `: avoids re-stripping cached values whose body starts
+                // with `## Subheading`, and avoids blanking summaries from models that omit a title.
+                let english_markdown_stripped = if english_markdown.trim_start().starts_with("# ") {
+                    strip_leading_title(&english_markdown)
+                } else {
+                    english_markdown.clone()
+                };
+
                 let result_json = serde_json::json!({
                     "markdown": final_markdown,
+                    "english_markdown": english_markdown_stripped,
                 });
 
                 // Update database with completed status
@@ -360,5 +380,116 @@ impl SummaryService {
                 meeting_id, e
             );
         }
+    }
+}
+
+// Tests
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_strip_leading_title_with_body() {
+        let input = "# Meeting Title\nThis is the body.\nMore content.";
+        let result = strip_leading_title(input);
+        assert_eq!(result, "This is the body.\nMore content.");
+    }
+
+    #[test]
+    fn test_strip_leading_title_only() {
+        let input = "# Meeting Title";
+        let result = strip_leading_title(input);
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_strip_leading_title_no_heading() {
+        let input = "No heading here.\nJust body.";
+        let result = strip_leading_title(input);
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_strip_leading_title_multiline_body() {
+        let input = "# Title\n## Subheading\nParagraph 1\n\nParagraph 2";
+        let result = strip_leading_title(input);
+        assert_eq!(result, "## Subheading\nParagraph 1\n\nParagraph 2");
+    }
+
+    #[test]
+    fn test_strip_leading_title_empty_after_heading() {
+        let input = "# Title\n";
+        let result = strip_leading_title(input);
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_strip_leading_title_whitespace_after_heading() {
+        let input = "# Title\n   \n Body with leading spaces";
+        let result = strip_leading_title(input);
+        assert_eq!(result, "Body with leading spaces");
+    }
+
+    #[test]
+    fn test_strip_gate_preserves_already_stripped_cache() {
+        let cached = "## Action Items\nfoo";
+        let stripped = if cached.trim_start().starts_with("# ") {
+            strip_leading_title(cached)
+        } else {
+            cached.to_string()
+        };
+        assert_eq!(stripped, "## Action Items\nfoo");
+    }
+
+    #[test]
+    fn test_strip_gate_strips_leading_h1() {
+        let fresh = "# Meeting Title\n## Action Items\nfoo";
+        let stripped = if fresh.trim_start().starts_with("# ") {
+            strip_leading_title(fresh)
+        } else {
+            fresh.to_string()
+        };
+        assert_eq!(stripped, "## Action Items\nfoo");
+    }
+
+    #[test]
+    fn test_extract_cached_english_from_result_json() {
+        let result_json_str = r#"{"markdown": "translated", "english_markdown": "English content here"}"#;
+        let parsed: serde_json::Value = serde_json::from_str(result_json_str).unwrap();
+        let extracted = parsed
+            .get("english_markdown")
+            .and_then(|m| m.as_str())
+            .map(String::from);
+        assert_eq!(extracted, Some("English content here".to_string()));
+    }
+
+    #[test]
+    fn test_extract_cached_english_missing_field() {
+        let result_json_str = r#"{"markdown": "translated"}"#;
+        let parsed: serde_json::Value = serde_json::from_str(result_json_str).unwrap();
+        let extracted: Option<String> = parsed
+            .get("english_markdown")
+            .and_then(|m| m.as_str())
+            .map(String::from);
+        assert_eq!(extracted, None);
+    }
+
+    #[test]
+    fn test_extract_cached_english_empty_string_filtered() {
+        let result_json_str = r#"{"markdown": "translated", "english_markdown": ""}"#;
+        let parsed: serde_json::Value = serde_json::from_str(result_json_str).unwrap();
+        let extracted: Option<String> = parsed
+            .get("english_markdown")
+            .and_then(|m| m.as_str())
+            .map(String::from)
+            .filter(|s| !s.is_empty());
+        assert_eq!(extracted, None);
+    }
+
+    #[test]
+    fn test_extract_cached_english_malformed_json() {
+        let result_json_str = r#"{ not valid json"#;
+        let parsed: Result<serde_json::Value, _> = serde_json::from_str(result_json_str);
+        assert!(parsed.is_err());
     }
 }
