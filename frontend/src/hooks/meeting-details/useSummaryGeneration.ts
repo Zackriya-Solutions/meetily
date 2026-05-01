@@ -13,13 +13,11 @@ function resolveSummaryLanguage(meetingId: string): string | null {
   if (typeof window === 'undefined') return null;
   try {
     const perMeeting = window.localStorage.getItem(`summaryLanguage:${meetingId}`);
-    // Explicit Auto picked on this meeting: skip the pinned default; honour transcription if set, else None.
+    // Legacy AUTO_VALUE rows are treated as untouched.
     if (perMeeting && perMeeting !== AUTO_VALUE) return normaliseLanguageCode(perMeeting);
 
-    if (perMeeting !== AUTO_VALUE) {
-      const defaultLang = window.localStorage.getItem('summaryLanguageDefault');
-      if (defaultLang) return normaliseLanguageCode(defaultLang);
-    }
+    const defaultLang = window.localStorage.getItem('summaryLanguageDefault');
+    if (defaultLang) return normaliseLanguageCode(defaultLang);
 
     const transcription = window.localStorage.getItem('primaryLanguage');
     if (transcription && transcription !== 'auto' && transcription !== 'auto-translate') {

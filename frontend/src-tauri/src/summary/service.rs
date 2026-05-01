@@ -36,14 +36,27 @@ fn strip_leading_title(markdown: &str) -> String {
 
 /// Strips the leading H1 (`# Title\n...`) only when the markdown starts with one.
 /// No-op on already-stripped values, values starting with `## Subheading`, or values
-/// without any heading. Avoids the data-loss case where `strip_leading_title` would
-/// return "" for input lacking a leading `#`.
+/// without any heading. Avoids the silent-empty-return case where `strip_leading_title`
+/// returns "" for input lacking a leading `#`.
 fn strip_title_if_present(markdown: &str) -> String {
     if markdown.trim_start().starts_with("# ") {
         strip_leading_title(markdown)
     } else {
         markdown.to_string()
     }
+}
+
+const ENGLISH_MARKDOWN_FIELD: &str = "english_markdown";
+
+/// Parses a `summary_processes.result` JSON blob and extracts the cached
+/// `english_markdown` field. Returns Err on malformed JSON so the caller can
+/// log loudly; Ok(None) when the field is missing or non-string.
+fn extract_english_from_result_json(raw: &str) -> Result<Option<String>, serde_json::Error> {
+    let value: serde_json::Value = serde_json::from_str(raw)?;
+    Ok(value
+        .get(ENGLISH_MARKDOWN_FIELD)
+        .and_then(|m| m.as_str())
+        .map(String::from))
 }
 
 /// Summary service - handles all summary generation logic
@@ -250,7 +263,7 @@ impl SummaryService {
 
         let cached_english = match SummaryProcessesRepository::get_summary_data(&pool, &meeting_id).await {
             Err(e) => {
-                log::warn!(
+                warn!(
                     "Failed to load prior summary row for cache lookup (meeting_id={}): {}. Falling back to full pass-1 generation.",
                     meeting_id, e
                 );
@@ -258,13 +271,10 @@ impl SummaryService {
             }
             Ok(None) => None,
             Ok(Some(process)) => process.result.and_then(|raw| {
-                match serde_json::from_str::<serde_json::Value>(&raw) {
-                    Ok(value) => value
-                        .get("english_markdown")
-                        .and_then(|m| m.as_str())
-                        .map(String::from),
+                match extract_english_from_result_json(&raw) {
+                    Ok(opt) => opt,
                     Err(e) => {
-                        log::warn!(
+                        warn!(
                             "Cached summary result for meeting_id={} is not valid JSON ({}); ignoring cache.",
                             meeting_id, e
                         );
@@ -272,12 +282,7 @@ impl SummaryService {
                     }
                 }
             }),
-        }
-        .filter(|s| !s.trim().is_empty());
-
-        if cached_english.is_some() {
-            info!("✓ Found cached English markdown, will skip pass 1 if target language is non-English");
-        }
+        };
 
         let client = reqwest::Client::new();
         let result = generate_meeting_summary(
@@ -308,33 +313,22 @@ impl SummaryService {
 
         match result {
             Ok((final_markdown, english_markdown, num_chunks)) => {
-                if num_chunks == 0 && final_markdown.is_empty() {
-                    Self::update_process_failed(
-                        &pool,
-                        &meeting_id,
-                        "Summary generation failed: No content was processed.",
-                    )
-                    .await;
-                    return;
-                }
-
                 info!(
                     "✓ Successfully processed {} chunks for meeting_id: {}. Duration: {:.2}s",
                     num_chunks, meeting_id, duration
                 );
                 info!("Final markdown generated ({} chars)", final_markdown.len());
 
-                // Extract and update meeting name if present (independent of stripping)
-                if let Some(name) = extract_meeting_name_from_markdown(&final_markdown) {
-                    if !name.is_empty() {
-                        info!("Extracted meeting name from summary: '{}'", name);
-                        if let Err(e) =
-                            MeetingsRepository::update_meeting_name(&pool, &meeting_id, &name).await
-                        {
-                            error!("Failed to update meeting name for {}: {}", meeting_id, e);
-                        } else {
-                            info!("Successfully updated meeting name for {}", meeting_id);
-                        }
+                if let Some(name) = extract_meeting_name_from_markdown(&final_markdown)
+                    .filter(|n| !n.is_empty())
+                {
+                    info!("Extracted meeting name from summary: '{}'", name);
+                    if let Err(e) =
+                        MeetingsRepository::update_meeting_name(&pool, &meeting_id, &name).await
+                    {
+                        error!("Failed to update meeting name for {}: {}", meeting_id, e);
+                    } else {
+                        info!("Successfully updated meeting name for {}", meeting_id);
                     }
                 }
 
@@ -343,7 +337,7 @@ impl SummaryService {
 
                 let result_json = serde_json::json!({
                     "markdown": final_markdown_stripped,
-                    "english_markdown": english_markdown_stripped,
+                    (ENGLISH_MARKDOWN_FIELD): english_markdown_stripped,
                 });
 
                 // Update database with completed status
@@ -472,43 +466,55 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_cached_english_from_result_json() {
-        let result_json_str = r#"{"markdown": "translated", "english_markdown": "English content here"}"#;
-        let parsed: serde_json::Value = serde_json::from_str(result_json_str).unwrap();
-        let extracted = parsed
-            .get("english_markdown")
-            .and_then(|m| m.as_str())
-            .map(String::from);
-        assert_eq!(extracted, Some("English content here".to_string()));
+    fn test_strip_title_if_present_mid_document_h1_preserved() {
+        // H1 after body content must NOT be stripped — guards the asymmetry where
+        // extract_meeting_name_from_markdown scans every line for "# ".
+        let input = "Some paragraph\n\n# H1 on line 3\n## Section\nbody";
+        assert_eq!(strip_title_if_present(input), input);
     }
 
     #[test]
-    fn test_extract_cached_english_missing_field() {
-        let result_json_str = r#"{"markdown": "translated"}"#;
-        let parsed: serde_json::Value = serde_json::from_str(result_json_str).unwrap();
-        let extracted: Option<String> = parsed
-            .get("english_markdown")
-            .and_then(|m| m.as_str())
-            .map(String::from);
-        assert_eq!(extracted, None);
+    fn test_strip_title_if_present_leading_whitespace_h1_stripped() {
+        assert_eq!(
+            strip_title_if_present("  # Title\n## Section\nbody"),
+            "## Section\nbody"
+        );
     }
 
     #[test]
-    fn test_extract_cached_english_empty_string_filtered() {
-        let result_json_str = r#"{"markdown": "translated", "english_markdown": ""}"#;
-        let parsed: serde_json::Value = serde_json::from_str(result_json_str).unwrap();
-        let extracted: Option<String> = parsed
-            .get("english_markdown")
-            .and_then(|m| m.as_str())
-            .map(String::from)
-            .filter(|s| !s.is_empty());
-        assert_eq!(extracted, None);
+    fn test_extract_english_from_result_json_happy_path() {
+        let raw = r#"{"markdown": "translated", "english_markdown": "English content"}"#;
+        assert_eq!(
+            extract_english_from_result_json(raw).unwrap(),
+            Some("English content".to_string())
+        );
     }
 
     #[test]
-    fn test_extract_cached_english_malformed_json() {
-        let result_json_str = r#"{ not valid json"#;
-        let parsed: Result<serde_json::Value, _> = serde_json::from_str(result_json_str);
-        assert!(parsed.is_err());
+    fn test_extract_english_from_result_json_missing_field() {
+        let raw = r#"{"markdown": "translated"}"#;
+        assert_eq!(extract_english_from_result_json(raw).unwrap(), None);
+    }
+
+    #[test]
+    fn test_extract_english_from_result_json_empty_field() {
+        // Whitespace filtering is the caller's responsibility (resolve_cached_english).
+        let raw = r#"{"english_markdown": ""}"#;
+        assert_eq!(
+            extract_english_from_result_json(raw).unwrap(),
+            Some(String::new())
+        );
+    }
+
+    #[test]
+    fn test_extract_english_from_result_json_non_string_field() {
+        let raw = r#"{"english_markdown": 123}"#;
+        assert_eq!(extract_english_from_result_json(raw).unwrap(), None);
+    }
+
+    #[test]
+    fn test_extract_english_from_result_json_malformed() {
+        let raw = r#"{ not valid json"#;
+        assert!(extract_english_from_result_json(raw).is_err());
     }
 }

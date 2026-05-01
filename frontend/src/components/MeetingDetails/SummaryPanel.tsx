@@ -96,7 +96,8 @@ export function SummaryPanel({
   const [summaryLang, setSummaryLang] = useState<string | null>(() => {
     if (typeof window === 'undefined') return null;
     try {
-      return window.localStorage.getItem(storageKey);
+      const stored = window.localStorage.getItem(storageKey);
+      return stored === AUTO_VALUE ? null : stored;
     } catch {
       return null;
     }
@@ -104,14 +105,12 @@ export function SummaryPanel({
   const [langPickerOpen, setLangPickerOpen] = useState(false);
   const { addRecent, pinned } = useRecentLanguages();
 
-  // AUTO_VALUE sentinel lets per-meeting Auto override a global pin; null means "no choice, fall back to pin".
-  const explicitAuto = summaryLang === AUTO_VALUE;
-  const effectiveLangCode = explicitAuto ? null : (summaryLang ?? pinned);
+  const effectiveLangCode = summaryLang ?? pinned;
   const effectiveLangLabel = effectiveLangCode ? labelForCode(effectiveLangCode) : 'Auto';
   const labelFromPin = !summaryLang && pinned != null;
 
   const autoSubtitle = (() => {
-    if (!explicitAuto && pinned) return `Uses default (${labelForCode(pinned)})`;
+    if (pinned) return `Uses default (${labelForCode(pinned)})`;
     if (typeof window !== 'undefined') {
       const raw = window.localStorage.getItem('primaryLanguage');
       const normalised = normaliseLanguageCode(raw);
@@ -123,7 +122,8 @@ export function SummaryPanel({
   useEffect(() => {
     if (typeof window === 'undefined') return;
     try {
-      setSummaryLang(window.localStorage.getItem(storageKey));
+      const stored = window.localStorage.getItem(storageKey);
+      setSummaryLang(stored === AUTO_VALUE ? null : stored);
     } catch {
       setSummaryLang(null);
     }
@@ -131,13 +131,13 @@ export function SummaryPanel({
 
   const handleLangChange = (code: string | null) => {
     const previous = summaryLang;
-    const nextStored = code === null ? (pinned ? AUTO_VALUE : null) : code;
+    const nextStored = code;
     setSummaryLang(nextStored);
     setLangPickerOpen(false);
     try {
       if (nextStored) {
         window.localStorage.setItem(storageKey, nextStored);
-        if (code) addRecent(code);
+        addRecent(nextStored);
       } else {
         window.localStorage.removeItem(storageKey);
       }
@@ -169,7 +169,7 @@ export function SummaryPanel({
         className="w-auto p-0 border-0 shadow-none bg-transparent"
       >
         <LanguagePickerPopover
-          value={explicitAuto ? null : effectiveLangCode}
+          value={effectiveLangCode}
           onChange={handleLangChange}
           onClose={() => setLangPickerOpen(false)}
           autoSubtitle={autoSubtitle}

@@ -12,9 +12,6 @@ static THINKING_TAG_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?s)<think(?:ing)?>.*?</think(?:ing)?>").unwrap()
 });
 
-/// Returns the cached English summary to reuse iff a cache hit applies AND
-/// the target language is a non-English translation.
-/// Empty/whitespace cache values and English/unknown target languages return None.
 fn resolve_cached_english<'a>(
     cached: Option<&'a str>,
     summary_language: Option<&str>,
@@ -584,5 +581,21 @@ mod tests {
     fn valid_cache_unknown_language_returns_none() {
         // Unknown code -> language_name_from_code returns None -> not a translation
         assert_eq!(resolve_cached_english(Some("body"), Some("zz-unknown")), None);
+    }
+
+    #[test]
+    fn uppercase_translation_code_returns_cache() {
+        assert_eq!(resolve_cached_english(Some("body"), Some("FR")), Some("body"));
+    }
+
+    #[test]
+    fn uppercase_english_code_returns_none() {
+        assert_eq!(resolve_cached_english(Some("body"), Some("EN")), None);
+    }
+
+    #[test]
+    fn underscore_locale_variant_returns_none() {
+        // OS locale APIs (notably macOS) may emit "en_GB" with underscore.
+        assert_eq!(resolve_cached_english(Some("body"), Some("en_GB")), None);
     }
 }
