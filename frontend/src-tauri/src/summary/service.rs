@@ -22,6 +22,43 @@ static METADATA_CACHE: Lazy<ModelMetadataCache> = Lazy::new(|| {
 static CANCELLATION_REGISTRY: Lazy<Arc<Mutex<HashMap<String, CancellationToken>>>> =
     Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
 
+/// Strips the first `#` heading line; returns "" if no `#` is found.
+fn strip_leading_title(markdown: &str) -> String {
+    if let Some(hash_pos) = markdown.find('#') {
+        let body_start = markdown[hash_pos..]
+            .find('\n')
+            .map_or(markdown.len(), |line_end| hash_pos + line_end);
+        markdown[body_start..].trim_start().to_string()
+    } else {
+        String::new()
+    }
+}
+
+/// Strips the leading H1 (`# Title\n...`) only when the markdown starts with one.
+/// No-op on already-stripped values, values starting with `## Subheading`, or values
+/// without any heading. Avoids the silent-empty-return case where `strip_leading_title`
+/// returns "" for input lacking a leading `#`.
+fn strip_title_if_present(markdown: &str) -> String {
+    if markdown.trim_start().starts_with("# ") {
+        strip_leading_title(markdown)
+    } else {
+        markdown.to_string()
+    }
+}
+
+const ENGLISH_MARKDOWN_FIELD: &str = "english_markdown";
+
+/// Parses a `summary_processes.result` JSON blob and extracts the cached
+/// `english_markdown` field. Returns Err on malformed JSON so the caller can
+/// log loudly; Ok(None) when the field is missing or non-string.
+fn extract_english_from_result_json(raw: &str) -> Result<Option<String>, serde_json::Error> {
+    let value: serde_json::Value = serde_json::from_str(raw)?;
+    Ok(value
+        .get(ENGLISH_MARKDOWN_FIELD)
+        .and_then(|m| m.as_str())
+        .map(String::from))
+}
+
 /// Summary service - handles all summary generation logic
 pub struct SummaryService;
 
@@ -81,6 +118,7 @@ impl SummaryService {
         model_name: String,
         custom_prompt: String,
         template_id: String,
+        summary_language: Option<String>,
     ) {
         let start_time = Instant::now();
         info!(
@@ -219,7 +257,33 @@ impl SummaryService {
         // Get app data directory for BuiltInAI provider
         let app_data_dir = _app.path().app_data_dir().ok();
 
-        // Generate summary
+        if let Some(code) = &summary_language {
+            info!("📝 Summary language preference: {}", code);
+        }
+
+        let cached_english = match SummaryProcessesRepository::get_summary_data(&pool, &meeting_id).await {
+            Err(e) => {
+                warn!(
+                    "Failed to load prior summary row for cache lookup (meeting_id={}): {}. Falling back to full pass-1 generation.",
+                    meeting_id, e
+                );
+                None
+            }
+            Ok(None) => None,
+            Ok(Some(process)) => process.result.and_then(|raw| {
+                match extract_english_from_result_json(&raw) {
+                    Ok(opt) => opt,
+                    Err(e) => {
+                        warn!(
+                            "Cached summary result for meeting_id={} is not valid JSON ({}); ignoring cache.",
+                            meeting_id, e
+                        );
+                        None
+                    }
+                }
+            }),
+        };
+
         let client = reqwest::Client::new();
         let result = generate_meeting_summary(
             &client,
@@ -237,6 +301,8 @@ impl SummaryService {
             custom_openai_top_p,
             app_data_dir.as_ref(),
             Some(&cancellation_token),
+            summary_language.as_deref(),
+            cached_english.as_deref(),
         )
         .await;
 
@@ -246,58 +312,32 @@ impl SummaryService {
         Self::cleanup_cancellation_token(&meeting_id);
 
         match result {
-            Ok((mut final_markdown, num_chunks)) => {
-                if num_chunks == 0 && final_markdown.is_empty() {
-                    Self::update_process_failed(
-                        &pool,
-                        &meeting_id,
-                        "Summary generation failed: No content was processed.",
-                    )
-                    .await;
-                    return;
-                }
-
+            Ok((final_markdown, english_markdown, num_chunks)) => {
                 info!(
                     "✓ Successfully processed {} chunks for meeting_id: {}. Duration: {:.2}s",
                     num_chunks, meeting_id, duration
                 );
-                info!("final markdown is {}", &final_markdown);
+                info!("Final markdown generated ({} chars)", final_markdown.len());
 
-                // Extract and update meeting name if present
-                if let Some(name) = extract_meeting_name_from_markdown(&final_markdown) {
-                    if !name.is_empty() {
-                        info!(
-                            "Updating meeting name to '{}' for meeting_id: {}",
-                            name, meeting_id
-                        );
-                        if let Err(e) =
-                            MeetingsRepository::update_meeting_title(&pool, &meeting_id, &name).await
-                        {
-                            error!("Failed to update meeting name for {}: {}", meeting_id, e);
-                        }
-
-                        // Strip the title line from markdown
-                        info!("Stripping title from final_markdown");
-                        if let Some(hash_pos) = final_markdown.find('#') {
-                            // Find end of first line after '#'
-                            let body_start =
-                                if let Some(line_end) = final_markdown[hash_pos..].find('\n') {
-                                    hash_pos + line_end
-                                } else {
-                                    final_markdown.len() // No newline, whole string is title
-                                };
-
-                            final_markdown = final_markdown[body_start..].trim_start().to_string();
-                        } else {
-                            // No '#' found, clear the string
-                            final_markdown.clear();
-                        }
+                if let Some(name) = extract_meeting_name_from_markdown(&final_markdown)
+                    .filter(|n| !n.is_empty())
+                {
+                    info!("Extracted meeting name from summary: '{}'", name);
+                    if let Err(e) =
+                        MeetingsRepository::update_meeting_name(&pool, &meeting_id, &name).await
+                    {
+                        error!("Failed to update meeting name for {}: {}", meeting_id, e);
+                    } else {
+                        info!("Successfully updated meeting name for {}", meeting_id);
                     }
                 }
 
-                // Create result JSON with markdown only (summary_json will be added on first edit)
+                let final_markdown_stripped = strip_title_if_present(&final_markdown);
+                let english_markdown_stripped = strip_title_if_present(&english_markdown);
+
                 let result_json = serde_json::json!({
-                    "markdown": final_markdown,
+                    "markdown": final_markdown_stripped,
+                    (ENGLISH_MARKDOWN_FIELD): english_markdown_stripped,
                 });
 
                 // Update database with completed status
@@ -354,5 +394,127 @@ impl SummaryService {
                 meeting_id, e
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_strip_leading_title_with_body() {
+        let input = "# Meeting Title\nThis is the body.\nMore content.";
+        let result = strip_leading_title(input);
+        assert_eq!(result, "This is the body.\nMore content.");
+    }
+
+    #[test]
+    fn test_strip_leading_title_only() {
+        let input = "# Meeting Title";
+        let result = strip_leading_title(input);
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_strip_leading_title_no_heading() {
+        let input = "No heading here.\nJust body.";
+        let result = strip_leading_title(input);
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_strip_leading_title_multiline_body() {
+        let input = "# Title\n## Subheading\nParagraph 1\n\nParagraph 2";
+        let result = strip_leading_title(input);
+        assert_eq!(result, "## Subheading\nParagraph 1\n\nParagraph 2");
+    }
+
+    #[test]
+    fn test_strip_leading_title_empty_after_heading() {
+        let input = "# Title\n";
+        let result = strip_leading_title(input);
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_strip_leading_title_whitespace_after_heading() {
+        let input = "# Title\n   \n Body with leading spaces";
+        let result = strip_leading_title(input);
+        assert_eq!(result, "Body with leading spaces");
+    }
+
+    #[test]
+    fn test_strip_title_if_present_preserves_already_stripped() {
+        assert_eq!(strip_title_if_present("## Action Items\nfoo"), "## Action Items\nfoo");
+    }
+
+    #[test]
+    fn test_strip_title_if_present_strips_leading_h1() {
+        assert_eq!(strip_title_if_present("# Meeting Title\n## Action Items\nfoo"), "## Action Items\nfoo");
+    }
+
+    #[test]
+    fn test_strip_title_if_present_no_heading_preserved() {
+        // Distinct from strip_leading_title which returns "" — this preserves input.
+        assert_eq!(strip_title_if_present("Just body text"), "Just body text");
+    }
+
+    #[test]
+    fn test_strip_title_if_present_hash_no_space_preserved() {
+        // `#NoSpace` is not a markdown H1 — preserve.
+        assert_eq!(strip_title_if_present("#NoSpace\nbody"), "#NoSpace\nbody");
+    }
+
+    #[test]
+    fn test_strip_title_if_present_mid_document_h1_preserved() {
+        // H1 after body content must NOT be stripped — guards the asymmetry where
+        // extract_meeting_name_from_markdown scans every line for "# ".
+        let input = "Some paragraph\n\n# H1 on line 3\n## Section\nbody";
+        assert_eq!(strip_title_if_present(input), input);
+    }
+
+    #[test]
+    fn test_strip_title_if_present_leading_whitespace_h1_stripped() {
+        assert_eq!(
+            strip_title_if_present("  # Title\n## Section\nbody"),
+            "## Section\nbody"
+        );
+    }
+
+    #[test]
+    fn test_extract_english_from_result_json_happy_path() {
+        let raw = r#"{"markdown": "translated", "english_markdown": "English content"}"#;
+        assert_eq!(
+            extract_english_from_result_json(raw).unwrap(),
+            Some("English content".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_english_from_result_json_missing_field() {
+        let raw = r#"{"markdown": "translated"}"#;
+        assert_eq!(extract_english_from_result_json(raw).unwrap(), None);
+    }
+
+    #[test]
+    fn test_extract_english_from_result_json_empty_field() {
+        // Whitespace filtering is the caller's responsibility (resolve_cached_english).
+        let raw = r#"{"english_markdown": ""}"#;
+        assert_eq!(
+            extract_english_from_result_json(raw).unwrap(),
+            Some(String::new())
+        );
+    }
+
+    #[test]
+    fn test_extract_english_from_result_json_non_string_field() {
+        let raw = r#"{"english_markdown": 123}"#;
+        assert_eq!(extract_english_from_result_json(raw).unwrap(), None);
+    }
+
+    #[test]
+    fn test_extract_english_from_result_json_malformed() {
+        let raw = r#"{ not valid json"#;
+        assert!(extract_english_from_result_json(raw).is_err());
     }
 }
