@@ -15,7 +15,8 @@ import { Button } from '@/components/ui/button';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 import { LanguagePickerPopover } from '@/components/LanguagePickerPopover';
 import { useRecentLanguages } from '@/hooks/useRecentLanguages';
-import { AUTO_VALUE, labelForCode, normaliseLanguageCode } from '@/lib/summary-languages';
+import { labelForCode, normaliseLanguageCode } from '@/lib/summary-languages';
+import { invoke as invokeTauri } from '@tauri-apps/api/core';
 
 interface SummaryPanelProps {
   meeting: {
@@ -92,16 +93,7 @@ export function SummaryPanel({
   isModelConfigLoading = false,
   onOpenModelSettings
 }: SummaryPanelProps) {
-  const storageKey = `summaryLanguage:${meeting.id}`;
-  const [summaryLang, setSummaryLang] = useState<string | null>(() => {
-    if (typeof window === 'undefined') return null;
-    try {
-      const stored = window.localStorage.getItem(storageKey);
-      return stored === AUTO_VALUE ? null : normaliseLanguageCode(stored);
-    } catch {
-      return null;
-    }
-  });
+  const [summaryLang, setSummaryLang] = useState<string | null>(null);
   const [langPickerOpen, setLangPickerOpen] = useState(false);
   const { addRecent, pinned } = useRecentLanguages();
 
@@ -120,26 +112,41 @@ export function SummaryPanel({
   })();
 
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    try {
-      const stored = window.localStorage.getItem(storageKey);
-      setSummaryLang(stored === AUTO_VALUE ? null : normaliseLanguageCode(stored));
-    } catch {
-      setSummaryLang(null);
-    }
-  }, [storageKey]);
+    let cancelled = false;
 
-  const handleLangChange = (code: string | null) => {
+    const loadSummaryLanguage = async () => {
+      try {
+        const stored = await invokeTauri<string | null>('api_get_meeting_summary_language', {
+          meetingId: meeting.id,
+        });
+        if (!cancelled) {
+          setSummaryLang(normaliseLanguageCode(stored));
+        }
+      } catch (err) {
+        console.error('Failed to load summary language:', err);
+        if (!cancelled) setSummaryLang(null);
+      }
+    };
+
+    loadSummaryLanguage();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [meeting.id]);
+
+  const handleLangChange = async (code: string | null) => {
     const previous = summaryLang;
     const nextStored = code;
     setSummaryLang(nextStored);
     setLangPickerOpen(false);
     try {
+      await invokeTauri('api_save_meeting_summary_language', {
+        meetingId: meeting.id,
+        summaryLanguage: nextStored,
+      });
       if (nextStored) {
-        window.localStorage.setItem(storageKey, nextStored);
         addRecent(nextStored);
-      } else {
-        window.localStorage.removeItem(storageKey);
       }
     } catch (err) {
       console.error('Failed to persist summary language:', err);
