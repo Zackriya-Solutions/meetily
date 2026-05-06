@@ -97,7 +97,7 @@ export function SummaryPanel({
     if (typeof window === 'undefined') return null;
     try {
       const stored = window.localStorage.getItem(storageKey);
-      return stored === AUTO_VALUE ? null : stored;
+      return stored === AUTO_VALUE ? null : normaliseLanguageCode(stored);
     } catch {
       return null;
     }
@@ -123,7 +123,7 @@ export function SummaryPanel({
     if (typeof window === 'undefined') return;
     try {
       const stored = window.localStorage.getItem(storageKey);
-      setSummaryLang(stored === AUTO_VALUE ? null : stored);
+      setSummaryLang(stored === AUTO_VALUE ? null : normaliseLanguageCode(stored));
     } catch {
       setSummaryLang(null);
     }

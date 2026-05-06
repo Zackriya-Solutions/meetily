@@ -14,14 +14,21 @@ function resolveSummaryLanguage(meetingId: string): string | null {
   try {
     const perMeeting = window.localStorage.getItem(`summaryLanguage:${meetingId}`);
     // Legacy AUTO_VALUE rows are treated as untouched.
-    if (perMeeting && perMeeting !== AUTO_VALUE) return normaliseLanguageCode(perMeeting);
+    if (perMeeting && perMeeting !== AUTO_VALUE) {
+      const normalised = normaliseLanguageCode(perMeeting);
+      if (normalised) return normalised;
+    }
 
     const defaultLang = window.localStorage.getItem('summaryLanguageDefault');
-    if (defaultLang) return normaliseLanguageCode(defaultLang);
+    if (defaultLang) {
+      const normalised = normaliseLanguageCode(defaultLang);
+      if (normalised) return normalised;
+    }
 
     const transcription = window.localStorage.getItem('primaryLanguage');
     if (transcription && transcription !== 'auto' && transcription !== 'auto-translate') {
-      return normaliseLanguageCode(transcription);
+      const normalised = normaliseLanguageCode(transcription);
+      if (normalised) return normalised;
     }
     return null;
   } catch {

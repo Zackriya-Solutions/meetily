@@ -1,13 +1,25 @@
 use crate::api::TranscriptSegment;
 use anyhow::Result;
 use log::{debug, info};
+use once_cell::sync::Lazy;
 use std::path::Path;
+use std::sync::Arc;
+use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 use uuid::Uuid;
+
+static ENGINE_LIFECYCLE_LOCK: Lazy<Arc<AsyncMutex<()>>> =
+    Lazy::new(|| Arc::new(AsyncMutex::new(())));
+
+pub(crate) async fn acquire_engine_lifecycle_lock() -> OwnedMutexGuard<()> {
+    ENGINE_LIFECYCLE_LOCK.clone().lock_owned().await
+}
 
 /// Unload the transcription engine after a batch job (import or retranscription).
 /// Skips unloading if a live recording is currently in progress, since recording
 /// uses the same global engine instances.
 pub(crate) async fn unload_engine_after_batch(use_parakeet: bool) {
+    let _engine_lifecycle_guard = acquire_engine_lifecycle_lock().await;
+
     if crate::audio::recording_commands::is_recording().await {
         log::info!("Skipping model unload after batch: recording in progress");
         return;
@@ -197,4 +209,25 @@ pub(crate) fn split_segment_at_silence(
     }
 
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn test_engine_lifecycle_lock_serializes_acquirers() {
+        let guard = acquire_engine_lifecycle_lock().await;
+        let waiter = tokio::spawn(async {
+            let _guard = acquire_engine_lifecycle_lock().await;
+            true
+        });
+
+        assert!(tokio::time::timeout(Duration::from_millis(25), waiter).await.is_err());
+        drop(guard);
+
+        let guard = acquire_engine_lifecycle_lock().await;
+        drop(guard);
+    }
 }
