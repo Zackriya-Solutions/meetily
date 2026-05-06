@@ -3,9 +3,13 @@ use crate::database::repositories::{
     summary::SummaryProcessesRepository, transcript_chunk::TranscriptChunksRepository,
 };
 use crate::state::AppState;
+use crate::summary::metadata::{
+    read_summary_language_from_metadata, write_summary_language_to_metadata,
+};
 use crate::summary::service::SummaryService;
 use log::{error as log_error, info as log_info, warn as log_warn};
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use tauri::{AppHandle, Runtime};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -62,6 +66,57 @@ pub async fn api_save_meeting_summary<R: Runtime>(
             Err(e.to_string())
         }
     }
+}
+
+/// Gets the per-meeting summary language override from metadata.json.
+#[tauri::command]
+pub async fn api_get_meeting_summary_language<R: Runtime>(
+    _app: AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+    meeting_id: String,
+) -> Result<Option<String>, String> {
+    log_info!(
+        "api_get_meeting_summary_language called for meeting_id: {}",
+        meeting_id
+    );
+
+    let folder = resolve_meeting_folder(state.db_manager.pool(), &meeting_id).await?;
+    read_summary_language_from_metadata(&folder).map_err(|e| e.to_string())
+}
+
+/// Saves or clears the per-meeting summary language override in metadata.json.
+#[tauri::command]
+pub async fn api_save_meeting_summary_language<R: Runtime>(
+    _app: AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+    meeting_id: String,
+    summary_language: Option<String>,
+) -> Result<(), String> {
+    log_info!(
+        "api_save_meeting_summary_language called for meeting_id: {}, language: {:?}",
+        meeting_id,
+        summary_language
+    );
+
+    let folder = resolve_meeting_folder(state.db_manager.pool(), &meeting_id).await?;
+    write_summary_language_to_metadata(&folder, summary_language.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+async fn resolve_meeting_folder(
+    pool: &sqlx::SqlitePool,
+    meeting_id: &str,
+) -> Result<PathBuf, String> {
+    let meeting = MeetingsRepository::get_meeting_metadata(pool, meeting_id)
+        .await
+        .map_err(|e| format!("Failed to load meeting metadata: {}", e))?
+        .ok_or_else(|| format!("Meeting not found: {}", meeting_id))?;
+
+    let folder_path = meeting
+        .folder_path
+        .ok_or_else(|| format!("Meeting {} has no recording folder", meeting_id))?;
+
+    Ok(PathBuf::from(folder_path))
 }
 
 /// Gets summary status and data (Native SQLx implementation)

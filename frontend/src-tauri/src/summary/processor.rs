@@ -29,7 +29,7 @@ fn resolve_cached_english<'a>(
 /// tags (`pt-BR`, `en_GB`) are normalised to their base language; Chinese
 /// variants are disambiguated. Unknown codes return None so the caller falls
 /// back to English rather than injecting a literal ISO code into the prompt.
-fn language_name_from_code(code: &str) -> Option<&'static str> {
+pub(crate) fn language_name_from_code(code: &str) -> Option<&'static str> {
     let normalised = code.to_ascii_lowercase().replace('_', "-");
     let lookup: &str = match normalised.as_str() {
         "zh-cn" => "zh",

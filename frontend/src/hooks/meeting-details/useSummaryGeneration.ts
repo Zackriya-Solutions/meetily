@@ -7,26 +7,40 @@ import { toast } from 'sonner';
 import Analytics from '@/lib/analytics';
 import { isOllamaNotInstalledError } from '@/lib/utils';
 import { BuiltInModelInfo } from '@/lib/builtin-ai';
-import { AUTO_VALUE, normaliseLanguageCode } from '@/lib/summary-languages';
+import { normaliseLanguageCode } from '@/lib/summary-languages';
 
-function resolveSummaryLanguage(meetingId: string): string | null {
+function resolveStoredLanguageFallback(): string | null {
   if (typeof window === 'undefined') return null;
   try {
-    const perMeeting = window.localStorage.getItem(`summaryLanguage:${meetingId}`);
-    // Legacy AUTO_VALUE rows are treated as untouched.
-    if (perMeeting && perMeeting !== AUTO_VALUE) return normaliseLanguageCode(perMeeting);
-
     const defaultLang = window.localStorage.getItem('summaryLanguageDefault');
-    if (defaultLang) return normaliseLanguageCode(defaultLang);
+    if (defaultLang) {
+      const normalised = normaliseLanguageCode(defaultLang);
+      if (normalised) return normalised;
+    }
 
     const transcription = window.localStorage.getItem('primaryLanguage');
     if (transcription && transcription !== 'auto' && transcription !== 'auto-translate') {
-      return normaliseLanguageCode(transcription);
+      const normalised = normaliseLanguageCode(transcription);
+      if (normalised) return normalised;
     }
     return null;
   } catch {
     return null;
   }
+}
+
+async function resolveSummaryLanguage(meetingId: string): Promise<string | null> {
+  try {
+    const perMeeting = await invokeTauri<string | null>('api_get_meeting_summary_language', {
+      meetingId,
+    });
+    const normalised = normaliseLanguageCode(perMeeting);
+    if (normalised) return normalised;
+  } catch (err) {
+    console.warn('Failed to load meeting summary language:', err);
+  }
+
+  return resolveStoredLanguageFallback();
 }
 
 type SummaryStatus = 'idle' | 'processing' | 'summarizing' | 'regenerating' | 'completed' | 'error';
@@ -124,8 +138,8 @@ export function useSummaryGeneration({
         duration: 3000,
       });
 
-      // Resolve summary output language from localStorage (per-meeting -> default -> transcription -> null)
-      const summaryLanguage = resolveSummaryLanguage(meeting.id);
+      // Resolve summary output language from metadata.json, then UI defaults.
+      const summaryLanguage = await resolveSummaryLanguage(meeting.id);
 
       // Warn when transcription language is set but not in the supported translation list
       if (!summaryLanguage && typeof window !== 'undefined') {
