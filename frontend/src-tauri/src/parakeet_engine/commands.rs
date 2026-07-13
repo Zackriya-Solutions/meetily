@@ -1,8 +1,8 @@
-use crate::parakeet_engine::parakeet_engine::{is_download_cancelled, CancelDownloadOutcome};
-use crate::parakeet_engine::{DownloadProgress, ModelInfo, ParakeetEngine};
+use crate::parakeet_engine::{ModelInfo, ModelStatus, ParakeetEngine, DownloadProgress};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
-use tauri::{command, AppHandle, Emitter, Manager, Runtime};
+use std::sync::Mutex;
+use std::sync::Arc;
+use tauri::{command, Emitter, AppHandle, Manager, Runtime};
 
 // Global parakeet engine
 pub static PARAKEET_ENGINE: Mutex<Option<Arc<ParakeetEngine>>> = Mutex::new(None);
@@ -236,15 +236,7 @@ pub async fn parakeet_validate_model_ready_with_config<R: tauri::Runtime>(
     };
 
     if let Some(engine) = engine {
-        // Check if a model is currently loaded
-        if engine.is_model_loaded().await {
-            if let Some(current_model) = engine.get_current_model().await {
-                log::info!("Parakeet model already loaded: {}", current_model);
-                return Ok(current_model);
-            }
-        }
-
-        // No model loaded - try to load user's configured model from transcript config
+        // Resolve the configured model before deciding whether an existing model can be reused.
         let model_to_load = match crate::api::api::api_get_transcript_config(
             app.clone(),
             app.state(),
@@ -282,6 +274,33 @@ pub async fn parakeet_validate_model_ready_with_config<R: tauri::Runtime>(
             }
         };
 
+        if let Some(current_model) = engine.get_current_model().await {
+            match model_to_load.as_ref() {
+                Some(configured_model) if configured_model == &current_model => {
+                    log::info!(
+                        "Configured Parakeet model already loaded: {}",
+                        current_model
+                    );
+                    return Ok(current_model);
+                }
+                Some(configured_model) => {
+                    log::info!(
+                        "Reloading Parakeet model: configured={}, loaded={}",
+                        configured_model,
+                        current_model
+                    );
+                    engine.unload_model().await;
+                }
+                None => {
+                    log::info!(
+                        "No model configured; reusing loaded Parakeet model: {}",
+                        current_model
+                    );
+                    return Ok(current_model);
+                }
+            }
+        }
+
         // Check available models
         let models = engine
             .discover_models()
@@ -307,18 +326,10 @@ pub async fn parakeet_validate_model_ready_with_config<R: tauri::Runtime>(
                 log::info!("Loading user's configured Parakeet model: {}", configured_model);
                 configured_model
             } else {
-                log::warn!(
-                    "Configured Parakeet model '{}' not found, falling back to first available int8 model",
+                return Err(format!(
+                    "Configured Parakeet model '{}' is not downloaded. Download it from Transcript Settings before recording.",
                     configured_model
-                );
-                // Prefer int8 quantization for best speed/quality tradeoff
-                available_models
-                    .iter()
-                    .find(|m| m.quantization == crate::parakeet_engine::QuantizationType::Int8)
-                    .or_else(|| available_models.first())
-                    .unwrap()
-                    .name
-                    .clone()
+                ));
             }
         } else {
             // No configured model, prefer int8 for best speed/quality balance
@@ -444,34 +455,31 @@ pub async fn parakeet_download_model<R: Runtime>(
 
                 Ok(())
             }
-            Err(error) if is_download_cancelled(&error) => {
-                if let Err(emit_error) = app_handle.emit(
-                    "parakeet-model-download-progress",
-                    serde_json::json!({
-                        "modelName": model_name,
-                        "progress": 0,
-                        "status": "cancelled"
-                    }),
-                ) {
-                    log::error!(
-                        "Failed to emit Parakeet cancellation event: {}",
-                        emit_error
-                    );
+            Err(e) => {
+                // Reset transient state for every failure path so the normal Download
+                // button can retry without requiring the separate retry command.
+                {
+                    let mut active = engine.active_downloads.write().await;
+                    active.remove(&model_name);
                 }
-                log::info!("Parakeet download cancelled: {}", model_name);
-                Ok(())
-            }
-            Err(error) => {
-                if let Err(emit_error) = app_handle.emit(
+                {
+                    let mut models = engine.available_models.write().await;
+                    if let Some(model) = models.get_mut(&model_name) {
+                        model.status = ModelStatus::Missing;
+                    }
+                }
+
+                // Emit error event
+                if let Err(emit_e) = app_handle.emit(
                     "parakeet-model-download-error",
                     serde_json::json!({
                         "modelName": model_name,
-                        "error": error.to_string()
+                        "error": e.to_string()
                     }),
                 ) {
-                    log::error!("Failed to emit parakeet download error event: {}", emit_error);
+                    log::error!("Failed to emit parakeet download error event: {}", emit_e);
                 }
-                Err(format!("Failed to download Parakeet model: {}", error))
+                Err(format!("Failed to download Parakeet model: {}", e))
             }
         }
     } else {
@@ -480,19 +488,36 @@ pub async fn parakeet_download_model<R: Runtime>(
 }
 
 #[command]
-pub async fn parakeet_cancel_download(
+pub async fn parakeet_cancel_download<R: Runtime>(
+    app_handle: AppHandle<R>,
     model_name: String,
-) -> Result<CancelDownloadOutcome, String> {
+) -> Result<(), String> {
     let engine = {
         let guard = PARAKEET_ENGINE.lock().unwrap();
         guard.as_ref().cloned()
     };
 
-    let engine = engine.ok_or_else(|| "Parakeet engine not initialized".to_string())?;
-    engine
-        .cancel_download(&model_name)
-        .await
-        .map_err(|error| format!("Failed to cancel Parakeet download: {}", error))
+    if let Some(engine) = engine {
+        engine
+            .cancel_download(&model_name)
+            .await
+            .map_err(|e| format!("Failed to cancel Parakeet download: {}", e))?;
+
+        // Emit cancellation event to update UI (global toast and component state)
+        let _ = app_handle.emit(
+            "parakeet-model-download-progress",
+            serde_json::json!({
+                "modelName": model_name,
+                "progress": 0,
+                "status": "cancelled"
+            }),
+        );
+
+        log::info!("Parakeet download cancelled: {}", model_name);
+        Ok(())
+    } else {
+        Err("Parakeet engine not initialized".to_string())
+    }
 }
 
 #[command]
@@ -507,9 +532,30 @@ pub async fn parakeet_retry_download<R: Runtime>(
         guard.as_ref().cloned()
     };
 
-    if engine.is_some() {
-        // Retry uses the normal download entrypoint, whose owner reservation rejects
-        // a second writer until cancellation cleanup has completed.
+    if let Some(engine) = engine {
+        // DEFENSIVE: Ensure clean state before retry
+        // This handles any edge cases where error handler didn't complete
+        {
+            let mut active = engine.active_downloads.write().await;
+            if active.contains(&model_name) {
+                log::warn!("Retry: Model {} was still in active downloads, removing", model_name);
+                active.remove(&model_name);
+            }
+        }
+
+        // DEFENSIVE: Force model status to Missing to allow fresh download
+        {
+            let mut models = engine.available_models.write().await;
+            if let Some(model) = models.get_mut(&model_name) {
+                log::info!("Retry: Resetting model {} status from {:?} to Missing", model_name, model.status);
+                model.status = ModelStatus::Missing;
+            }
+        }
+
+        // Rediscover models to refresh state based on disk files
+        let _ = engine.discover_models().await;
+
+        // Call regular download (emits events)
         parakeet_download_model(app_handle, model_name).await
     } else {
         Err("Parakeet engine not initialized".to_string())

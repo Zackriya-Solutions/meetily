@@ -8,6 +8,7 @@ export interface ParakeetModelInfo {
   status: ModelStatus;
   description?: string;
   quantization: QuantizationType;
+  architecture?: 'Tdt' | 'Ctc';
 }
 
 export type QuantizationType = 'FP32' | 'Int8';
@@ -17,23 +18,9 @@ export type ProcessingSpeed = 'Slow' | 'Medium' | 'Fast' | 'Very Fast' | 'Ultra 
 export type ModelStatus =
   | 'Available'
   | 'Missing'
-  | { Downloading: { progress: number } }
+  | { Downloading: number | { progress: number } }
   | { Error: string }
   | { Corrupted: { file_size: number; expected_min_size: number } };
-
-export type CancelDownloadOutcome = 'cancelled' | 'pending';
-export type ParakeetDownloadEventStatus = 'downloading' | 'completed' | 'cancelled';
-
-export interface ParakeetDownloadProgressEvent {
-  modelName: string;
-  progress: number;
-  downloaded_bytes?: number;
-  total_bytes?: number;
-  downloaded_mb?: number;
-  total_mb?: number;
-  speed_mbps?: number;
-  status: ParakeetDownloadEventStatus;
-}
 
 export interface ParakeetEngineState {
   currentModel: string | null;
@@ -49,6 +36,15 @@ export interface ModelDisplayInfo {
   tagline: string;
   recommended?: boolean;
   tier: 'fastest' | 'balanced' | 'precise';
+}
+
+export const PARAKEET_CTC_ZH_CN_MODEL = 'parakeet-ctc-0.6b-zh-cn-int8';
+
+export interface TranscriptionLanguageCapability {
+  allowsLanguageSelection: boolean;
+  displayName: string;
+  description: string;
+  analyticsLanguage: string;
 }
 
 export const MODEL_DISPLAY_CONFIG: Record<string, ModelDisplayInfo> = {
@@ -70,6 +66,12 @@ export const MODEL_DISPLAY_CONFIG: Record<string, ModelDisplayInfo> = {
     icon: '🎯',
     tagline: '20x real-time • Higher accuracy',
     tier: 'precise'
+  },
+  [PARAKEET_CTC_ZH_CN_MODEL]: {
+    friendlyName: 'Mandarin CoreML',
+    icon: '中',
+    tagline: 'Experimental • Mandarin + English • Apple Silicon',
+    tier: 'balanced'
   }
 };
 
@@ -97,6 +99,13 @@ export const PARAKEET_MODEL_CONFIGS: Record<string, Partial<ParakeetModelInfo>> 
     accuracy: 'High',
     speed: 'Fast',
     quantization: 'FP32'
+  },
+  [PARAKEET_CTC_ZH_CN_MODEL]: {
+    description: 'CoreML model for Mandarin, English, and mixed Chinese-English speech',
+    size_mb: 582,
+    accuracy: 'High',
+    speed: 'Ultra Fast',
+    quantization: 'Int8'
   }
 };
 
@@ -119,6 +128,47 @@ export function getModelDisplayName(modelName: string): string {
 // Get model display info (icon, tagline, etc.)
 export function getModelDisplayInfo(modelName: string): ModelDisplayInfo | null {
   return MODEL_DISPLAY_CONFIG[modelName] || null;
+}
+
+export function getModelDownloadProgress(status: ModelStatus): number | null {
+  if (typeof status !== 'object' || !('Downloading' in status)) return null;
+  return typeof status.Downloading === 'number'
+    ? status.Downloading
+    : status.Downloading.progress;
+}
+
+export function getParakeetModelSizeMb(modelName: string): number {
+  return PARAKEET_MODEL_CONFIGS[modelName]?.size_mb ?? 0;
+}
+
+export function getTranscriptionLanguageCapability(
+  provider?: string,
+  modelName?: string
+): TranscriptionLanguageCapability {
+  if (provider !== 'parakeet') {
+    return {
+      allowsLanguageSelection: true,
+      displayName: '',
+      description: '',
+      analyticsLanguage: 'selected',
+    };
+  }
+
+  if (modelName === PARAKEET_CTC_ZH_CN_MODEL) {
+    return {
+      allowsLanguageSelection: false,
+      displayName: 'Mandarin Chinese + English',
+      description: 'Supports Mandarin Chinese, English, and mixed Chinese-English speech. Translation is not available.',
+      analyticsLanguage: 'zh-en',
+    };
+  }
+
+  return {
+    allowsLanguageSelection: false,
+    displayName: 'English',
+    description: 'This Parakeet model transcribes English. Language selection and translation are not available.',
+    analyticsLanguage: 'en',
+  };
 }
 
 export function getStatusColor(status: ModelStatus): string {
@@ -198,8 +248,8 @@ export class ParakeetAPI {
     await invoke('parakeet_download_model', { modelName });
   }
 
-  static async cancelDownload(modelName: string): Promise<CancelDownloadOutcome> {
-    return await invoke('parakeet_cancel_download', { modelName });
+  static async cancelDownload(modelName: string): Promise<void> {
+    await invoke('parakeet_cancel_download', { modelName });
   }
 
   static async deleteCorruptedModel(modelName: string): Promise<string> {
