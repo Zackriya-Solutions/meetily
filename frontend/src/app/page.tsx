@@ -56,6 +56,11 @@ export default function Home() {
   // Callback to prompt for speaker count (T010)
   const promptSpeakerCount = async (): Promise<number | null> => {
     return new Promise((resolve, reject) => {
+      // Guard: resolve previous ref with null if click-cancel-click race occurs (Fix #2)
+      if (speakerCountPromiseRef.current) {
+        speakerCountPromiseRef.current.resolve(null);
+      }
+
       speakerCountPromiseRef.current = { resolve, reject };
 
       // Fetch current expected speakers from DB for prefilling
@@ -73,15 +78,26 @@ export default function Home() {
   };
 
   const handleSpeakerCountConfirm = (count: number) => {
+    // Guard: double-click or stale handler call (Fix #3)
+    if (!speakerCountPromiseRef.current) return;
+
     setShowSpeakerPrompt(false);
-    speakerCountPromiseRef.current?.resolve(count);
+    speakerCountPromiseRef.current.resolve(count);
     speakerCountPromiseRef.current = null;
   };
 
   const handleSpeakerCountCancel = () => {
+    // Guard: double-click or stale handler call (Fix #3)
+    if (!speakerCountPromiseRef.current) return;
+
     setShowSpeakerPrompt(false);
-    speakerCountPromiseRef.current?.resolve(null);
+    speakerCountPromiseRef.current.resolve(null);
     speakerCountPromiseRef.current = null;
+
+    // UX: show toast on cancel (Fix #4)
+    toast.info('Recording cancelled', {
+      duration: 2000,
+    });
   };
 
   const { handleRecordingStart } = useRecordingStart(isRecording, setIsRecordingState, showModal, promptSpeakerCount);
