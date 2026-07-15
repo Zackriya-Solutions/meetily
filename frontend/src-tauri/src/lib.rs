@@ -654,6 +654,7 @@ pub fn run() {
             // Speaker identification (diarization) commands
             diarization::commands::diarization_get_status,
             diarization::commands::diarization_set_enabled,
+            diarization::commands::diarization_set_expected_speakers,
             diarization::commands::diarization_download_model,
             diarization::commands::diarization_rename_speaker,
             diarization::commands::diarization_list_profiles,

@@ -19,6 +19,16 @@ pub async fn is_enabled(pool: &SqlitePool) -> bool {
         .unwrap_or(false)
 }
 
+pub async fn expected_speakers(pool: &SqlitePool) -> usize {
+    sqlx::query_scalar::<_, i64>("SELECT expected_speakers FROM diarization_settings WHERE id = '1'")
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+        .map(|v| (v as usize).clamp(1, 20))
+        .unwrap_or(2)
+}
+
 #[command]
 pub async fn diarization_get_status<R: Runtime>(
     app: AppHandle<R>,
@@ -26,10 +36,12 @@ pub async fn diarization_get_status<R: Runtime>(
 ) -> Result<serde_json::Value, String> {
     let enabled = is_enabled(state.db_manager.pool()).await;
     let model_present = super::models::is_embedding_model_present(&app);
+    let expected_speakers = expected_speakers(state.db_manager.pool()).await;
     Ok(serde_json::json!({
         "enabled": enabled,
         "model_present": model_present,
         "model_filename": super::models::EMBEDDING_MODEL_FILENAME,
+        "expected_speakers": expected_speakers,
     }))
 }
 
@@ -49,6 +61,27 @@ pub async fn diarization_set_enabled(
     .await
     .map_err(|e| format!("Failed to save diarization setting: {}", e))?;
     log::info!("Speaker identification {}", if enabled { "enabled" } else { "disabled" });
+    Ok(())
+}
+
+#[command]
+pub async fn diarization_set_expected_speakers(
+    state: tauri::State<'_, AppState>,
+    count: i64,
+) -> Result<(), String> {
+    let count = (count as usize).clamp(1, 20);
+    sqlx::query(
+        r#"
+        INSERT INTO diarization_settings (id, enabled, expected_speakers)
+        VALUES ('1', COALESCE((SELECT enabled FROM diarization_settings WHERE id='1'), 0), $1)
+        ON CONFLICT(id) DO UPDATE SET expected_speakers = excluded.expected_speakers
+        "#,
+    )
+    .bind(count as i64)
+    .execute(state.db_manager.pool())
+    .await
+    .map_err(|e| format!("Failed to save expected speaker count: {}", e))?;
+    log::info!("Expected speaker count set to {}", count);
     Ok(())
 }
 

@@ -4,7 +4,7 @@
 // Created when a recording starts (if the feature is enabled and the model
 // is present) and dropped when it ends.
 
-use super::clustering::SpeakerClusterer;
+use super::clustering::{SpeakerClusterer, DEFAULT_MAX_SPEAKERS};
 use super::embedding::{EmbeddingError, EmbeddingExtractor};
 use super::timeline::{RollingDiarizationBuffer, SpeakerTimeline, SpeakerTimelineSegment};
 use std::path::Path;
@@ -41,16 +41,18 @@ pub struct DiarizationSession {
 
 impl DiarizationSession {
     pub fn new(embedding_model_path: &Path) -> Result<Self, EmbeddingError> {
-        Self::with_profiles(embedding_model_path, Vec::new())
+        Self::with_profiles(embedding_model_path, Vec::new(), DEFAULT_MAX_SPEAKERS)
     }
 
     /// Create a session pre-seeded with saved voice profiles (name, centroid)
     /// so returning speakers are labeled by name instead of "Speaker N".
+    /// max_speakers: maximum total number of active speaker clusters for this recording.
     pub fn with_profiles(
         embedding_model_path: &Path,
         profiles: Vec<(String, Vec<f32>)>,
+        max_speakers: usize,
     ) -> Result<Self, EmbeddingError> {
-        let mut clusterer = SpeakerClusterer::new();
+        let mut clusterer = SpeakerClusterer::with_max_speakers(max_speakers);
         for (name, centroid) in profiles {
             clusterer.seed_profile(&name, centroid);
         }

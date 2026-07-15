@@ -93,9 +93,9 @@ async fn init_diarization_session<R: Runtime>(
     };
 
     // Seed saved voice profiles so returning speakers are labeled by name
-    let profiles = match app.try_state::<crate::state::AppState>() {
+    let (profiles, expected_speakers) = match app.try_state::<crate::state::AppState>() {
         Some(state) => {
-            match crate::database::repositories::speaker_profile::SpeakerProfilesRepository::list(
+            let profiles = match crate::database::repositories::speaker_profile::SpeakerProfilesRepository::list(
                 state.db_manager.pool(),
             )
             .await
@@ -111,18 +111,22 @@ async fn init_diarization_session<R: Runtime>(
                     );
                     Vec::new()
                 }
-            }
+            };
+            let expected_speakers = crate::diarization::commands::expected_speakers(state.db_manager.pool()).await;
+            (profiles, expected_speakers)
         }
-        None => Vec::new(),
+        None => (Vec::new(), 2),
     };
     let profile_count = profiles.len();
 
-    match crate::diarization::DiarizationSession::with_profiles(&model_path, profiles) {
+    match crate::diarization::DiarizationSession::with_profiles(&model_path, profiles, expected_speakers) {
         Ok(session) => {
             info!(
-                "🎙️ ✅ Speaker identification active for this recording ({} saved profile{})",
+                "🎙️ ✅ Speaker identification active for this recording ({} saved profile{}, expected {} speaker{})",
                 profile_count,
-                if profile_count == 1 { "" } else { "s" }
+                if profile_count == 1 { "" } else { "s" },
+                expected_speakers,
+                if expected_speakers == 1 { "" } else { "s" }
             );
             Some(session)
         }
