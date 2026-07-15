@@ -69,7 +69,7 @@ pub struct TranscriptUpdate {
 /// Create the per-recording diarization session when the feature is enabled
 /// and the embedding model has been downloaded. Any failure returns None so
 /// speaker labels are simply absent — transcription is never affected.
-async fn init_diarization_session<R: Runtime>(
+pub(crate) async fn init_diarization_session<R: Runtime>(
     app: &AppHandle<R>,
 ) -> Option<crate::diarization::DiarizationSession> {
     let enabled = match app.try_state::<crate::state::AppState>() {
@@ -141,7 +141,7 @@ async fn init_diarization_session<R: Runtime>(
 /// folder (next to transcripts.json) so a later rename can save the voice as
 /// a profile. The folder must be captured while the recording manager is
 /// still alive — stop_recording tears it down before this task finishes.
-async fn persist_speaker_centroids(
+pub(crate) async fn persist_speaker_centroids(
     session: &crate::diarization::DiarizationSession,
     folder: Option<std::path::PathBuf>,
 ) {

@@ -151,9 +151,12 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
         console.log('Triggering recording from sidebar (already on home page)');
         window.dispatchEvent(new CustomEvent('start-recording-from-sidebar'));
       } else {
-        // Not on home - navigate and use auto-start mechanism
+        // Not on home - navigate and use auto-start mechanism.
+        // manualRecordingStart marks this as a user click (not the local API),
+        // so the speaker-count prompt still applies after navigation.
         console.log('Navigating to home page with auto-start flag');
         sessionStorage.setItem('autoStartRecording', 'true');
+        sessionStorage.setItem('manualRecordingStart', 'true');
         router.push('/');
       }
 

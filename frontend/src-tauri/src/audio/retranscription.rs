@@ -310,6 +310,11 @@ async fn run_retranscription<R: Runtime>(
         None
     };
 
+    // Speaker identification: same per-recording session as live transcription.
+    // None when disabled/model absent — segments then keep speaker = None.
+    let mut diarization_session =
+        crate::audio::transcription::worker::init_diarization_session(&app).await;
+
     // Split very long segments at silence boundaries for better transcription quality.
     // Hard cuts at arbitrary sample positions lose words at boundaries. Instead, scan
     // for the lowest-energy window near the target split point and cut there.
@@ -337,6 +342,7 @@ async fn run_retranscription<R: Runtime>(
 
     // Process each speech segment with progress updates
     let mut all_transcripts: Vec<(String, f64, f64)> = Vec::new(); // (text, start_ms, end_ms)
+    let mut segment_speakers: Vec<Option<String>> = Vec::new(); // parallel to all_transcripts
     let mut total_confidence = 0.0f32;
 
     for (i, segment) in processable_segments.iter().enumerate() {
@@ -392,7 +398,11 @@ async fn run_retranscription<R: Runtime>(
                 i + 1, processable_count, segment_duration_sec, conf,
                 if trimmed.len() > 80 { let mut end = 80; while !trimmed.is_char_boundary(end) { end -= 1; } &trimmed[..end] } else { trimmed }
             );
+            let speaker = diarization_session.as_mut().and_then(|session| {
+                session.label_segment_at(segment.start_timestamp_ms / 1000.0, &segment.samples)
+            });
             all_transcripts.push((text, segment.start_timestamp_ms, segment.end_timestamp_ms));
+            segment_speakers.push(speaker);
             total_confidence += conf;
         } else {
             debug!("Segment {}/{}: {:.1}s — empty transcription", i + 1, processable_count, segment_duration_sec);
@@ -419,7 +429,10 @@ async fn run_retranscription<R: Runtime>(
     emit_progress(&app, &meeting_id, "saving", 80, "Saving transcripts...");
 
     // Create transcript segments with proper timestamps from VAD
-    let segments = create_transcript_segments(&all_transcripts);
+    let mut segments = create_transcript_segments(&all_transcripts);
+    for (seg, speaker) in segments.iter_mut().zip(segment_speakers.iter()) {
+        seg.speaker = speaker.clone();
+    }
 
     // Save to database
     let app_state = app
@@ -441,8 +454,8 @@ async fn run_retranscription<R: Runtime>(
 
     for segment in &segments {
         sqlx::query(
-            "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration)
-             VALUES (?, ?, ?, ?, ?, ?, ?)"
+            "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration, speaker)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
         )
         .bind(&segment.id)
         .bind(&meeting_id)
@@ -451,6 +464,7 @@ async fn run_retranscription<R: Runtime>(
         .bind(segment.audio_start_time)
         .bind(segment.audio_end_time)
         .bind(segment.duration)
+        .bind(&segment.speaker)
         .execute(&mut *tx)
         .await
         .map_err(|e| anyhow!("Failed to insert transcript: {}", e))?;
@@ -470,6 +484,15 @@ async fn run_retranscription<R: Runtime>(
 
     if let Err(e) = write_transcripts_json(&folder_path, &segments) {
         warn!("Failed to write transcripts.json: {}", e);
+    }
+
+    // Persist speaker centroids so later renames can save voice profiles
+    if let Some(session) = diarization_session.as_ref() {
+        crate::audio::transcription::worker::persist_speaker_centroids(
+            session,
+            Some(folder_path.clone()),
+        )
+        .await;
     }
 
     // Find audio filename for metadata

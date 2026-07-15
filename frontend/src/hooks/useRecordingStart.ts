@@ -300,11 +300,23 @@ export function useRecordingStart(
             sessionStorage.removeItem('activeMeetingMetadata');
           }
 
+          // Manual sidebar click that navigated here still gets the speaker
+          // prompt; only truly external starts (local API) stay silent (RNF01)
+          const wasManualStart = sessionStorage.getItem('manualRecordingStart') === 'true';
+          sessionStorage.removeItem('manualRecordingStart');
+
           // Check if transcription provider is ready before starting
           const tr = await checkTranscriptProviderReady();
           if (await guardTranscriptionModel(tr, showModal)) {
             setIsAutoStarting(false);
             return;
+          }
+
+          if (wasManualStart && !externalTitle && !externalMetadata) {
+            if (!await maybePromptSpeakers()) {
+              setIsAutoStarting(false);
+              return;
+            }
           }
 
           // Start the actual backend recording
@@ -379,6 +391,7 @@ export function useRecordingStart(
     setIsMeetingActive,
     checkTranscriptProviderReady,
     guardTranscriptionModel,
+    maybePromptSpeakers,
     showModal,
     setStatus,
   ]);

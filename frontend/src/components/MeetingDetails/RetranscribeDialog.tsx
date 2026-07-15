@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { RefreshCw, Globe, Loader2, AlertCircle, CheckCircle2, X, Cpu } from 'lucide-react';
+import { RefreshCw, Globe, Loader2, AlertCircle, CheckCircle2, X, Cpu, Users } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -63,6 +63,8 @@ export function RetranscribeDialog({
   const [progress, setProgress] = useState<RetranscriptionProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedLang, setSelectedLang] = useState(selectedLanguage || 'auto');
+  const [diarizationActive, setDiarizationActive] = useState(false);
+  const [speakerCount, setSpeakerCount] = useState('2');
 
   // Use centralized model fetching hook
   const {
@@ -115,6 +117,14 @@ export function RetranscribeDialog({
 
       // Fetch available models using centralized hook
       fetchModels();
+
+      // Speaker identification: prefill count when active
+      invoke<{ enabled: boolean; model_present: boolean; expected_speakers?: number }>('diarization_get_status')
+        .then((status) => {
+          setDiarizationActive(Boolean(status?.enabled && status?.model_present));
+          setSpeakerCount(String(status?.expected_speakers ?? 2));
+        })
+        .catch(() => setDiarizationActive(false));
     }
   }, [open, selectedLanguage, transcriptModelConfig, fetchModels]);
 
@@ -207,6 +217,16 @@ export function RetranscribeDialog({
     setProgress(null);
 
     try {
+      if (diarizationActive) {
+        const parsed = parseInt(speakerCount, 10);
+        const count = Number.isNaN(parsed) || parsed < 1 ? 2 : Math.min(parsed, 20);
+        try {
+          await invoke('diarization_set_expected_speakers', { count });
+        } catch (e) {
+          console.error('Failed to save expected speakers, continuing:', e);
+        }
+      }
+
       const languageToSend = isParakeetModel ? null : selectedLang === 'auto' ? null : selectedLang;
       await Analytics.track('enhance_transcript_started', {
         language: isParakeetModel ? 'auto' : (selectedLang === 'auto' ? 'auto' : selectedLang),
@@ -356,6 +376,26 @@ export function RetranscribeDialog({
               </Select>
               <p className="text-xs text-muted-foreground">
                 Choose a transcription model
+              </p>
+            </div>
+          )}
+
+          {!isProcessing && !error && diarizationActive && (
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <Users className="h-4 w-4 text-muted-foreground" />
+                <span className="text-sm font-medium">Speakers</span>
+              </div>
+              <input
+                type="number"
+                min={1}
+                max={20}
+                value={speakerCount}
+                onChange={(e) => setSpeakerCount(e.target.value)}
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <p className="text-xs text-muted-foreground">
+                Maximum number of speakers to identify in this meeting
               </p>
             </div>
           )}
