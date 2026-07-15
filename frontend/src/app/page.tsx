@@ -1,7 +1,8 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { invoke } from '@tauri-apps/api/core';
 import { RecordingControls } from '@/components/RecordingControls';
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
 import { usePermissionCheck } from '@/hooks/usePermissionCheck';
@@ -18,6 +19,7 @@ import { useRecordingStart } from '@/hooks/useRecordingStart';
 import { useRecordingStop } from '@/hooks/useRecordingStop';
 import { useTranscriptRecovery } from '@/hooks/useTranscriptRecovery';
 import { TranscriptRecovery } from '@/components/TranscriptRecovery';
+import { SpeakerCountPrompt } from '@/components/SpeakerCountPrompt';
 import { indexedDBService } from '@/services/indexedDBService';
 import { toast } from 'sonner';
 import { useRouter } from 'next/navigation';
@@ -28,6 +30,14 @@ export default function Home() {
   const [isRecording, setIsRecordingState] = useState(false);
   const [barHeights, setBarHeights] = useState(['58%', '76%', '58%']);
   const [showRecoveryDialog, setShowRecoveryDialog] = useState(false);
+
+  // Speaker count prompt state (T010)
+  const [showSpeakerPrompt, setShowSpeakerPrompt] = useState(false);
+  const [defaultSpeakerCount, setDefaultSpeakerCount] = useState(2);
+  const speakerCountPromiseRef = useRef<{
+    resolve: (value: number | null) => void;
+    reject: (error: Error) => void;
+  } | null>(null);
 
   // Use contexts for state management
   const { meetingTitle } = useTranscripts();
@@ -42,7 +52,39 @@ export default function Home() {
   const { setIsMeetingActive, isCollapsed: sidebarCollapsed, refetchMeetings } = useSidebar();
   const { modals, messages, showModal, hideModal } = useModalState(transcriptModelConfig);
   const { isRecordingDisabled, setIsRecordingDisabled } = useRecordingStateSync(isRecording, setIsRecordingState, setIsMeetingActive);
-  const { handleRecordingStart } = useRecordingStart(isRecording, setIsRecordingState, showModal);
+
+  // Callback to prompt for speaker count (T010)
+  const promptSpeakerCount = async (): Promise<number | null> => {
+    return new Promise((resolve, reject) => {
+      speakerCountPromiseRef.current = { resolve, reject };
+
+      // Fetch current expected speakers from DB for prefilling
+      invoke<{ expected_speakers?: number }>('diarization_get_status')
+        .then((status) => {
+          setDefaultSpeakerCount(status?.expected_speakers ?? 2);
+          setShowSpeakerPrompt(true);
+        })
+        .catch((error) => {
+          console.warn('Failed to fetch speaker count default:', error);
+          setDefaultSpeakerCount(2);
+          setShowSpeakerPrompt(true);
+        });
+    });
+  };
+
+  const handleSpeakerCountConfirm = (count: number) => {
+    setShowSpeakerPrompt(false);
+    speakerCountPromiseRef.current?.resolve(count);
+    speakerCountPromiseRef.current = null;
+  };
+
+  const handleSpeakerCountCancel = () => {
+    setShowSpeakerPrompt(false);
+    speakerCountPromiseRef.current?.resolve(null);
+    speakerCountPromiseRef.current = null;
+  };
+
+  const { handleRecordingStart } = useRecordingStart(isRecording, setIsRecordingState, showModal, promptSpeakerCount);
 
   // Get handleRecordingStop function and setIsStopping (state comes from global context)
   const { handleRecordingStop, setIsStopping } = useRecordingStop(
@@ -218,6 +260,14 @@ export default function Home() {
       transition={{ duration: 0.3, ease: 'easeOut' }}
       className="flex flex-col h-screen bg-gray-50"
     >
+      {/* Speaker Count Prompt (T010) */}
+      <SpeakerCountPrompt
+        open={showSpeakerPrompt}
+        defaultValue={defaultSpeakerCount}
+        onConfirm={handleSpeakerCountConfirm}
+        onCancel={handleSpeakerCountCancel}
+      />
+
       {/* All Modals supported*/}
       <SettingsModals
         modals={modals}

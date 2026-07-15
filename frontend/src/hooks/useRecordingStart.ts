@@ -24,11 +24,13 @@ interface UseRecordingStartReturn {
  * - Analytics tracking
  * - Recording notification display
  * - Auto-start from sidebar via sessionStorage flag
+ * - Speaker count prompt for diarization (optional)
  */
 export function useRecordingStart(
   isRecording: boolean,
   setIsRecording: (value: boolean) => void,
-  showModal?: (name: 'modelSelector', message?: string) => void
+  showModal?: (name: 'modelSelector', message?: string) => void,
+  promptSpeakerCount?: () => Promise<number | null>
 ): UseRecordingStartReturn {
   const [isAutoStarting, setIsAutoStarting] = useState(false);
 
@@ -36,6 +38,50 @@ export function useRecordingStart(
   const { setIsMeetingActive } = useSidebar();
   const { selectedDevices } = useConfig();
   const { setStatus } = useRecordingState();
+
+  // Helper to prompt for speaker count if diarization is enabled
+  // Returns true if should proceed with recording, false if cancelled
+  const maybePromptSpeakers = useCallback(async (): Promise<boolean> => {
+    if (!promptSpeakerCount) {
+      return true; // No prompt provided, proceed normally
+    }
+
+    try {
+      const status = await invoke<{
+        enabled: boolean;
+        model_present: boolean;
+        expected_speakers?: number;
+      }>('diarization_get_status');
+
+      // Skip prompt if diarization not enabled or model not present (RF07)
+      if (!status.enabled || !status.model_present) {
+        return true;
+      }
+
+      // Open prompt and wait for user response
+      const count = await promptSpeakerCount();
+
+      if (count === null) {
+        // User cancelled the prompt (DT10)
+        setStatus(RecordingStatus.IDLE);
+        return false;
+      }
+
+      // Set the expected speaker count via Tauri command
+      try {
+        await invoke('diarization_set_expected_speakers', { count });
+      } catch (error) {
+        // Silently degrade on set error (RNF02)
+        console.warn('Failed to set expected speaker count:', error);
+      }
+
+      return true;
+    } catch (error) {
+      // Silently degrade on status check error (RNF02)
+      console.warn('Failed to check diarization status:', error);
+      return true; // Proceed with recording anyway
+    }
+  }, [promptSpeakerCount, setStatus]);
 
   // Generate meeting title with timestamp
   const generateMeetingTitle = useCallback(() => {
@@ -185,7 +231,13 @@ export function useRecordingStart(
       const tr = await checkTranscriptProviderReady();
       if (await guardTranscriptionModel(tr, showModal)) return;
 
-      console.log('Provider ready - setting up meeting title and state');
+      console.log('Provider ready - checking speaker count');
+
+      // Prompt for speaker count if diarization is enabled (T009)
+      if (!await maybePromptSpeakers()) {
+        console.log('Speaker count prompt cancelled, aborting start');
+        return;
+      }
 
       // Manual start: clear any stale external metadata from a failed API start
       sessionStorage.removeItem('activeMeetingMetadata');
@@ -223,7 +275,7 @@ export function useRecordingStart(
       // Re-throw so RecordingControls can handle device-specific errors
       throw error;
     }
-  }, [generateMeetingTitle, setMeetingTitle, setIsRecording, clearTranscripts, setIsMeetingActive, checkTranscriptProviderReady, guardTranscriptionModel, selectedDevices, showModal, setStatus]);
+  }, [generateMeetingTitle, setMeetingTitle, setIsRecording, clearTranscripts, setIsMeetingActive, checkTranscriptProviderReady, guardTranscriptionModel, maybePromptSpeakers, selectedDevices, showModal, setStatus]);
 
   // Check for autoStartRecording flag and start recording automatically
   useEffect(() => {
@@ -349,6 +401,15 @@ export function useRecordingStart(
         return;
       }
 
+      console.log('Provider ready - checking speaker count');
+
+      // Prompt for speaker count if diarization is enabled (T009)
+      if (!await maybePromptSpeakers()) {
+        console.log('Speaker count prompt cancelled, aborting sidebar start');
+        setIsAutoStarting(false);
+        return;
+      }
+
       try {
         // Sidebar start: clear any stale external metadata from a failed API start
         sessionStorage.removeItem('activeMeetingMetadata');
@@ -403,6 +464,7 @@ export function useRecordingStart(
     setIsMeetingActive,
     checkTranscriptProviderReady,
     guardTranscriptionModel,
+    maybePromptSpeakers,
     showModal,
     setStatus,
   ]);

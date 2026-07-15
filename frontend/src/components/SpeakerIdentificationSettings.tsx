@@ -11,6 +11,7 @@ import { Button } from './ui/button';
 import { Label } from './ui/label';
 import { Switch } from './ui/switch';
 import { Progress } from './ui/progress';
+import { Input } from './ui/input';
 import { Download, Mic2, Pencil, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -18,6 +19,7 @@ interface DiarizationStatus {
   enabled: boolean;
   model_present: boolean;
   model_filename: string;
+  expected_speakers?: number;
 }
 
 interface VoiceProfile {
@@ -133,6 +135,23 @@ export function SpeakerIdentificationSettings() {
     }
   };
 
+  const handleExpectedSpeakersChange = async (value: string) => {
+    try {
+      let count = parseInt(value, 10);
+      if (isNaN(count) || count < 1) {
+        count = 2;
+      } else if (count > 20) {
+        count = 20;
+      }
+      await invoke('diarization_set_expected_speakers', { count });
+      setStatus((prev) => (prev ? { ...prev, expected_speakers: count } : prev));
+      toast.success(`Default speaker count set to ${count}`);
+    } catch (err) {
+      console.error('Failed to set expected speakers:', err);
+      toast.error('Failed to update default speaker count');
+    }
+  };
+
   if (!status) return null;
 
   return (
@@ -167,6 +186,22 @@ export function SpeakerIdentificationSettings() {
               Download speaker model (~28 MB)
             </Button>
           )}
+        </div>
+      )}
+
+      {status.enabled && status.model_present && (
+        <div className="mt-3 flex items-center gap-2">
+          <Label className="text-xs font-medium text-gray-500">
+            Default speakers per recording:
+          </Label>
+          <Input
+            type="number"
+            min="1"
+            max="20"
+            value={status.expected_speakers ?? 2}
+            onChange={(e) => handleExpectedSpeakersChange(e.target.value)}
+            className="w-16 h-8 text-sm px-2"
+          />
         </div>
       )}
 
