@@ -151,4 +151,10 @@ pub struct TranscriptSetting {
     #[sqlx(rename = "openaiApiKey")]
     #[serde(rename = "openaiApiKey")]
     pub openai_api_key: Option<String>,
+    #[sqlx(rename = "meeting_language")]
+    #[serde(rename = "meetingLanguage")]
+    pub meeting_language: Option<String>,
+    #[sqlx(rename = "whisper_initial_prompt")]
+    #[serde(rename = "whisperInitialPrompt")]
+    pub whisper_initial_prompt: Option<String>,
 }

@@ -102,6 +102,10 @@ pub struct TranscriptConfig {
     pub model: String,
     #[serde(rename = "apiKey")]
     pub api_key: Option<String>,
+    #[serde(rename = "meetingLanguage", default)]
+    pub meeting_language: Option<String>,
+    #[serde(rename = "whisperInitialPrompt", default)]
+    pub whisper_initial_prompt: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -110,6 +114,10 @@ pub struct SaveTranscriptConfigRequest {
     pub model: String,
     #[serde(rename = "apiKey")]
     pub api_key: Option<String>,
+    #[serde(rename = "meetingLanguage", default)]
+    pub meeting_language: Option<String>,
+    #[serde(rename = "whisperInitialPrompt", default)]
+    pub whisper_initial_prompt: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -770,6 +778,10 @@ pub async fn api_get_transcript_config<R: Runtime>(
                         provider: config.provider,
                         model: config.model,
                         api_key,
+                        meeting_language: config.meeting_language.or_else(|| Some("pt".to_string())),
+                        whisper_initial_prompt: config.whisper_initial_prompt.or_else(|| Some(
+                            "A seguir, a transcrição de uma reunião. A transcrição deve ser precisa, com pontuação e capitalização corretas. Nomes próprios e siglas técnicas devem ser mantidos em maiúsculas quando apropriado.".to_string()
+                        )),
                     }))
                 }
                 Err(e) => {
@@ -788,6 +800,10 @@ pub async fn api_get_transcript_config<R: Runtime>(
                 provider: "parakeet".to_string(),
                 model: crate::config::DEFAULT_PARAKEET_MODEL.to_string(),
                 api_key: None,
+                meeting_language: Some("pt".to_string()),
+                whisper_initial_prompt: Some(
+                    "A seguir, a transcrição de uma reunião. A transcrição deve ser precisa, com pontuação e capitalização corretas. Nomes próprios e siglas técnicas devem ser mantidos em maiúsculas quando apropriado.".to_string()
+                ),
             }))
         }
         Err(e) => {
@@ -815,6 +831,8 @@ pub async fn api_save_transcript_config<R: Runtime>(
     // immediately surfaced "API key missing" from
     // useRecordingStart.ts#checkTranscriptProviderReady.
     api_key_val: Option<String>,
+    meeting_language: Option<String>,
+    whisper_initial_prompt: Option<String>,
     _auth_token: Option<String>,
 ) -> Result<serde_json::Value, String> {
     log_info!(
@@ -823,7 +841,15 @@ pub async fn api_save_transcript_config<R: Runtime>(
     );
     let pool = state.db_manager.pool();
 
-    if let Err(e) = SettingsRepository::save_transcript_config(pool, &provider, &model).await {
+    if let Err(e) = SettingsRepository::save_transcript_config_with_language_prompt(
+        pool,
+        &provider,
+        &model,
+        meeting_language.as_deref(),
+        whisper_initial_prompt.as_deref(),
+    )
+    .await
+    {
         log_error!("Failed to save transcript config: {}", e);
         return Err(e.to_string());
     }

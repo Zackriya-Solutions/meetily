@@ -33,7 +33,7 @@ impl TranscriptionProvider for ParakeetProvider {
             );
         }
 
-        match self.engine.transcribe_audio(audio).await {
+        match self.engine.transcribe_audio(audio, None, None, false).await {
             Ok(text) => Ok(TranscriptResult {
                 text: text.trim().to_string(),
                 confidence: None, // Parakeet doesn't provide confidence scores

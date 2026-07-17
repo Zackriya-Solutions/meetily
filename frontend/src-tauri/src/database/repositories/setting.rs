@@ -197,6 +197,34 @@ impl SettingsRepository {
         Ok(())
     }
 
+    pub async fn save_transcript_config_with_language_prompt(
+        pool: &SqlitePool,
+        provider: &str,
+        model: &str,
+        meeting_language: Option<&str>,
+        whisper_initial_prompt: Option<&str>,
+    ) -> std::result::Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"
+            INSERT INTO transcript_settings (id, provider, model, meeting_language, whisper_initial_prompt)
+            VALUES ('1', $1, $2, $3, $4)
+            ON CONFLICT(id) DO UPDATE SET
+                provider = excluded.provider,
+                model = excluded.model,
+                meeting_language = excluded.meeting_language,
+                whisper_initial_prompt = excluded.whisper_initial_prompt
+            "#,
+        )
+        .bind(provider)
+        .bind(model)
+        .bind(meeting_language.unwrap_or("pt"))
+        .bind(whisper_initial_prompt.unwrap_or("A seguir, a transcrição de uma reunião. A transcrição deve ser precisa, com pontuação e capitalização corretas. Nomes próprios e siglas técnicas devem ser mantidos em maiúsculas quando apropriado."))
+        .execute(pool)
+        .await?;
+
+        Ok(())
+    }
+
     pub async fn save_transcript_api_key(
         pool: &SqlitePool,
         provider: &str,

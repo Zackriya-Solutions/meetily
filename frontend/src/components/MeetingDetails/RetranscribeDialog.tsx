@@ -352,6 +352,9 @@ export function RetranscribeDialog({
                 <p className="text-xs text-muted-foreground">
                   Language selection isn't supported for Parakeet. It always uses automatic detection.
                 </p>
+                <div className="p-2 bg-amber-50 border border-amber-200 rounded text-xs text-amber-800">
+                  ⚠️ Parakeet doesn't respect a fixed language — use Whisper for language-forced transcription
+                </div>
               </div>
             )
           )}

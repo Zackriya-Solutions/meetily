@@ -20,6 +20,8 @@ interface DiarizationStatus {
   model_present: boolean;
   model_filename: string;
   expected_speakers?: number;
+  segmentation_model_present?: boolean;
+  embedding_model_present?: boolean;
 }
 
 interface VoiceProfile {
@@ -173,35 +175,67 @@ export function SpeakerIdentificationSettings() {
         <Switch checked={status.enabled} onCheckedChange={handleToggle} />
       </div>
 
-      {status.enabled && !status.model_present && (
+      {status.enabled && (!status.model_present || !status.segmentation_model_present || !status.embedding_model_present) && (
         <div className="mt-3">
           {isDownloading ? (
             <div className="space-y-1">
               <Progress value={downloadPercent} />
-              <p className="text-xs text-gray-500">Downloading speaker model… {downloadPercent}%</p>
+              <p className="text-xs text-gray-500">Downloading models… {downloadPercent}%</p>
             </div>
           ) : (
-            <Button variant="outline" size="sm" onClick={handleDownload}>
-              <Download className="h-4 w-4 mr-2" />
-              Download speaker model (~28 MB)
-            </Button>
+            <div className="space-y-2">
+              {!status.segmentation_model_present && (
+                <div className="flex items-center justify-between p-2 bg-gray-50 rounded border border-gray-200">
+                  <span className="text-xs text-gray-700">Voice segmentation model</span>
+                  <Button variant="ghost" size="sm" onClick={handleDownload} className="h-8">
+                    <Download className="h-4 w-4 mr-1" />
+                    Download
+                  </Button>
+                </div>
+              )}
+              {!status.embedding_model_present && (
+                <div className="flex items-center justify-between p-2 bg-gray-50 rounded border border-gray-200">
+                  <span className="text-xs text-gray-700">Speaker embedding model</span>
+                  <Button variant="ghost" size="sm" onClick={handleDownload} className="h-8">
+                    <Download className="h-4 w-4 mr-1" />
+                    Download
+                  </Button>
+                </div>
+              )}
+            </div>
           )}
         </div>
       )}
 
-      {status.enabled && status.model_present && (
-        <div className="mt-3 flex items-center gap-2">
-          <Label className="text-xs font-medium text-gray-500">
-            Default speakers per recording:
-          </Label>
-          <Input
-            type="number"
-            min="1"
-            max="20"
-            value={status.expected_speakers ?? 2}
-            onChange={(e) => handleExpectedSpeakersChange(e.target.value)}
-            className="w-16 h-8 text-sm px-2"
-          />
+      {status.enabled && (status.model_present || (status.segmentation_model_present && status.embedding_model_present)) && (
+        <div className="mt-3">
+          <div className="space-y-2 mb-4">
+            {status.segmentation_model_present && (
+              <div className="flex items-center gap-2">
+                <div className="h-2 w-2 rounded-full bg-green-500" />
+                <span className="text-xs text-gray-600">Voice segmentation model installed</span>
+              </div>
+            )}
+            {status.embedding_model_present && (
+              <div className="flex items-center gap-2">
+                <div className="h-2 w-2 rounded-full bg-green-500" />
+                <span className="text-xs text-gray-600">Speaker embedding model installed</span>
+              </div>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <Label className="text-xs font-medium text-gray-500">
+              Default speakers per recording:
+            </Label>
+            <Input
+              type="number"
+              min="1"
+              max="20"
+              value={status.expected_speakers ?? 2}
+              onChange={(e) => handleExpectedSpeakersChange(e.target.value)}
+              className="w-16 h-8 text-sm px-2"
+            />
+          </div>
         </div>
       )}
 

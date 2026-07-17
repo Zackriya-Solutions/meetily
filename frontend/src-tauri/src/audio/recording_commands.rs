@@ -4,7 +4,7 @@
 // Delegates to transcription and recording modules for actual implementation.
 
 use anyhow::Result;
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -905,6 +905,27 @@ pub async fn stop_recording<R: Runtime>(
         (None, None)
     };
 
+    // T008: Spawn background task for offline diarization refinement (non-blocking)
+    // This runs after audio is saved but doesn't block the UI
+    if let (Some(folder_path), Some(meeting_id_str)) = (&meeting_folder, &meeting_name) {
+        let app_for_diarization = app.clone();
+        let folder_path_for_dia = folder_path.clone();
+        let meeting_id_for_dia = meeting_id_str.clone();
+
+        tokio::spawn(async move {
+            if let Err(e) = run_offline_diarization_refinement(
+                app_for_diarization,
+                meeting_id_for_dia,
+                folder_path_for_dia,
+            )
+            .await
+            {
+                warn!("Offline diarization refinement failed (background task): {}", e);
+                // Non-blocking failure: don't affect recording stop UX
+            }
+        });
+    }
+
     // Set recording flag to false
     info!("🔍 Setting IS_RECORDING to false");
     IS_RECORDING.store(false, Ordering::SeqCst);
@@ -1307,4 +1328,246 @@ pub async fn attempt_device_reconnect(
             Err(e.to_string())
         }
     }
+}
+
+// ============================================================================
+// T008: OFFLINE DIARIZATION REFINEMENT (Post-Recording Background Task)
+// ============================================================================
+
+/// Background task to refine speaker identification using offline diarization
+/// Runs AFTER recording is saved, does not block UI (RNF03: background + non-blocking)
+async fn run_offline_diarization_refinement<R: Runtime>(
+    app: AppHandle<R>,
+    meeting_id: String,
+    folder_path: std::path::PathBuf,
+) -> Result<()> {
+    use std::path::Path;
+
+    info!(
+        "🎙️ [T008] Starting offline diarization refinement for meeting {}",
+        meeting_id
+    );
+
+    // Get app state
+    let app_state = app
+        .try_state::<crate::state::AppState>()
+        .ok_or_else(|| anyhow::anyhow!("App state not available"))?;
+    let pool = app_state.db_manager.pool();
+
+    // Check if offline diarization is enabled and models present
+    if !crate::diarization::models::is_offline_diarization_present(&app) {
+        info!(
+            "⏭️ [T008] Offline diarization models not present, skipping refinement (RNF02)"
+        );
+        return Ok(());
+    }
+
+    // Check if diarization is disabled via settings
+    let expected_speakers = crate::diarization::commands::expected_speakers(pool).await;
+    if expected_speakers == 0 {
+        info!("⏭️ [T008] Diarization disabled (speaker count = 0), skipping");
+        return Ok(());
+    }
+
+    // Find and decode audio file
+    let audio_file = crate::audio::retranscription::find_audio_file(&folder_path)
+        .map_err(|e| anyhow::anyhow!("Failed to find audio file: {}", e))?;
+
+    info!("📂 [T008] Decoding audio file: {}", audio_file.display());
+
+    let decoded = tokio::task::spawn_blocking(move || {
+        crate::audio::decoder::decode_audio_file(&audio_file)
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("Decode task panicked: {}", e))??;
+
+    let audio_samples = tokio::task::spawn_blocking(move || decoded.to_whisper_format())
+        .await
+        .map_err(|e| anyhow::anyhow!("Resample task panicked: {}", e))?;
+
+    info!(
+        "✅ [T008] Audio decoded: {} samples at 16kHz",
+        audio_samples.len()
+    );
+
+    // Load speaker profiles for matching
+    let profiles = match crate::database::repositories::speaker_profile::SpeakerProfilesRepository::list(pool).await {
+        Ok(profiles) => {
+            info!("[T008] Loaded {} speaker profiles", profiles.len());
+            profiles
+                .into_iter()
+                .map(|p| (p.name, p.embedding))
+                .collect::<Vec<_>>()
+        }
+        Err(e) => {
+            warn!(
+                "[T008] Failed to load speaker profiles: {}. Proceeding without profile matching.",
+                e
+            );
+            Vec::new()
+        }
+    };
+
+    // Run offline diarization on complete audio
+    let segmentation_path = crate::diarization::models::segmentation_model_path(&app)
+        .map_err(|e| anyhow::anyhow!("Failed to get segmentation model path: {}", e))?;
+    let embedding_path = crate::diarization::models::embedding_model_v2_path(&app)
+        .map_err(|e| anyhow::anyhow!("Failed to get embedding model path: {}", e))?;
+
+    let dia_segments = match crate::diarization::offline::diarize_offline(
+        &segmentation_path,
+        &embedding_path,
+        &audio_samples,
+        expected_speakers,
+        &profiles,
+    )
+    .await
+    {
+        Ok(segments) => {
+            info!(
+                "✅ [T008] Offline diarization complete: {} speaker segments",
+                segments.len()
+            );
+            segments
+        }
+        Err(e) => {
+            warn!(
+                "⚠️ [T008] Offline diarization failed: {}. Continuing without update (RNF02).",
+                e
+            );
+            return Ok(());
+        }
+    };
+
+    // Fetch existing transcripts from DB
+    let transcripts = sqlx::query_as::<_, crate::database::models::Transcript>(
+        "SELECT * FROM transcripts WHERE meeting_id = ? ORDER BY audio_start_time ASC",
+    )
+    .bind(&meeting_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| anyhow::anyhow!("Failed to fetch transcripts: {}", e))?;
+
+    if transcripts.is_empty() {
+        info!("[T008] No transcripts found for meeting, skipping speaker assignment");
+        return Ok(());
+    }
+
+    // Assign speakers to transcripts by max-overlap (same algorithm as T007)
+    let mut updated_count = 0;
+    for transcript in &transcripts {
+        if let (Some(start_s), Some(end_s)) = (transcript.audio_start_time, transcript.audio_end_time) {
+            let mut max_overlap_duration = 0.0;
+            let mut assigned_speaker: Option<String> = None;
+
+            for dia_seg in &dia_segments {
+                let overlap_start = start_s.max(dia_seg.start_time_s);
+                let overlap_end = end_s.min(dia_seg.end_time_s);
+                let overlap_duration = (overlap_end - overlap_start).max(0.0);
+
+                if overlap_duration > max_overlap_duration {
+                    max_overlap_duration = overlap_duration;
+                    assigned_speaker = Some(dia_seg.label.clone());
+                }
+            }
+
+            // UPDATE transcript with new speaker label
+            // GUARD: Only overwrite if speaker is auto-generated (matches "Speaker N" pattern)
+            // or is None/empty. Don't clobber manual renames or saved profile names (RNF05: preserve user edits).
+            let should_update = match &transcript.speaker {
+                None => true,
+                Some(s) if s.is_empty() => true,
+                Some(s) if is_auto_generated_speaker_label(s) => true,
+                Some(s) => {
+                    debug!("[T008] Skipping update for transcript {} — speaker '{}' is custom/renamed",
+                           transcript.id, s);
+                    false
+                }
+            };
+
+            if should_update {
+                if let Some(speaker) = &assigned_speaker {
+                    sqlx::query("UPDATE transcripts SET speaker = ? WHERE id = ?")
+                        .bind(speaker)
+                        .bind(&transcript.id)
+                        .execute(pool)
+                        .await
+                        .map_err(|e| anyhow::anyhow!("Failed to update transcript speaker: {}", e))?;
+                    updated_count += 1;
+                    debug!("[T008] Updated transcript {} -> speaker '{}'", transcript.id, speaker);
+                }
+            }
+        }
+    }
+
+    info!(
+        "✅ [T008] Updated {} transcripts with refined speaker labels",
+        updated_count
+    );
+
+    // Re-write transcripts.json with updated data
+    // Convert Transcript model to TranscriptSegment for JSON export
+    let segments_for_json: Vec<crate::api::TranscriptSegment> = transcripts
+        .iter()
+        .map(|t| crate::api::TranscriptSegment {
+            id: t.id.clone(),
+            text: t.transcript.clone(),
+            timestamp: t.timestamp.clone(),
+            audio_start_time: t.audio_start_time,
+            audio_end_time: t.audio_end_time,
+            duration: t.duration,
+            speaker: t.speaker.clone(),
+            attribution_source: t.attribution_source
+                .as_ref()
+                .and_then(|source_str| {
+                    use crate::diarization::overlap_detector::AttributionSource;
+                    match source_str.as_str() {
+                        "NormalDiarization" => Some(AttributionSource::NormalDiarization),
+                        _ => None,
+                    }
+                }),
+            overlap_region_id: t.overlap_region_id.clone(),
+            overlap_speaker_ids: t
+                .overlap_speaker_ids
+                .as_ref()
+                .and_then(|ids| serde_json::from_str(ids).ok()),
+            overlap_start_time: t.overlap_start_time,
+            overlap_end_time: t.overlap_end_time,
+            overlap_confidence: t.overlap_confidence.map(|v| v as f32),
+            overlap_status: None,
+        })
+        .collect();
+
+    if let Err(e) = crate::audio::common::write_transcripts_json(&folder_path, &segments_for_json) {
+        warn!("[T008] Failed to write updated transcripts.json: {}", e);
+    }
+
+    // Emit event to notify frontend that diarization refinement is complete
+    if let Err(e) = app.emit(
+        "diarization-refined",
+        serde_json::json!({
+            "meeting_id": meeting_id,
+            "segments_updated": updated_count
+        }),
+    ) {
+        warn!("[T008] Failed to emit diarization-refined event: {}", e);
+    }
+
+    info!(
+        "🎉 [T008] Offline diarization refinement complete for meeting {}",
+        meeting_id
+    );
+
+    Ok(())
+}
+
+/// Check if a speaker label is auto-generated (matches "Speaker N" pattern)
+/// Returns true if label is "Speaker" followed by digits only.
+/// Used to guard T008 UPDATE against clobbering user-renamed speakers or saved profile names.
+fn is_auto_generated_speaker_label(label: &str) -> bool {
+    if !label.starts_with("Speaker ") {
+        return false;
+    }
+    let rest = &label[8..]; // Skip "Speaker " prefix
+    rest.chars().all(|c| c.is_ascii_digit())
 }

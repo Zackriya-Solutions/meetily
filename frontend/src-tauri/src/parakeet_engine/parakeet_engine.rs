@@ -454,7 +454,18 @@ impl ParakeetEngine {
     }
 
     /// Transcribe audio samples using the loaded Parakeet model
-    pub async fn transcribe_audio(&self, audio_data: Vec<f32>) -> Result<String> {
+    /// Parameters:
+    /// - audio_data: audio samples at 16kHz
+    /// - language: language hint (ignored by Parakeet, for API compatibility)
+    /// - initial_prompt: domain context prompt (ignored by Parakeet, for API compatibility)
+    /// - conservative: conservative decoding flag (ignored by Parakeet, for API compatibility)
+    pub async fn transcribe_audio(
+        &self,
+        audio_data: Vec<f32>,
+        _language: Option<String>,
+        _initial_prompt: Option<&str>,
+        _conservative: bool,
+    ) -> Result<String> {
         let mut model_guard = self.current_model.write().await;
         let model = model_guard
             .as_mut()

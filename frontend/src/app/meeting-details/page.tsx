@@ -6,6 +6,7 @@ import PageContent from "./page-content";
 import { useRouter, useSearchParams } from "next/navigation";
 import Analytics from "@/lib/analytics";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { LoaderIcon } from "lucide-react";
 import { useConfig } from "@/contexts/ConfigContext";
 import { usePaginatedTranscripts } from "@/hooks/usePaginatedTranscripts";
@@ -140,6 +141,36 @@ function MeetingDetailsContent() {
       setCurrentMeeting({ id: metadata.id, title: metadata.title });
     }
   }, [metadata, transcripts, meetingId, setCurrentMeeting]);
+
+  // Listen for diarization-refined event to refetch transcripts when offline diarization completes
+  useEffect(() => {
+    if (!meetingId || meetingId === 'intro-call') return;
+
+    let unlisten: (() => void) | undefined;
+
+    const setupDiarizationListener = async () => {
+      try {
+        unlisten = await listen<{ meeting_id: string }>('diarization-refined', (event) => {
+          console.log('📢 Diarization refined event received:', event.payload);
+          // Refetch transcripts if the event matches current meeting ID
+          if (event.payload.meeting_id === meetingId && refetch) {
+            console.log('🔄 Refetching transcripts after diarization refinement');
+            refetch();
+          }
+        });
+      } catch (error) {
+        console.error('Failed to setup diarization-refined listener:', error);
+      }
+    };
+
+    setupDiarizationListener();
+
+    return () => {
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, [meetingId, refetch]);
 
   // Handle transcript loading errors
   useEffect(() => {

@@ -5,6 +5,8 @@ import { Input } from './ui/input';
 import { Button } from './ui/button';
 import { Label } from './ui/label';
 import { Eye, EyeOff, Lock, Unlock } from 'lucide-react';
+import { toast } from 'sonner';
+import { LANGUAGES } from '@/constants/languages';
 import { ModelManager } from './WhisperModelManager';
 import { ParakeetModelManager } from './ParakeetModelManager';
 import { SpeakerIdentificationSettings } from './SpeakerIdentificationSettings';
@@ -28,6 +30,28 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
     const [isApiKeyLocked, setIsApiKeyLocked] = useState<boolean>(true);
     const [isLockButtonVibrating, setIsLockButtonVibrating] = useState<boolean>(false);
     const [uiProvider, setUiProvider] = useState<TranscriptModelProps['provider']>(transcriptModelConfig.provider);
+    const [meetingLanguage, setMeetingLanguage] = useState<string>('pt');
+    const [whisperInitialPrompt, setWhisperInitialPrompt] = useState<string>('PROTHEUS, PIMS, ADVPL, TOTVS, PROTEUS');
+
+    // Load transcript config on mount
+    useEffect(() => {
+        const loadTranscriptConfig = async () => {
+            try {
+                const config = await invoke<any>('api_get_transcript_config');
+                if (config) {
+                    if (config.meeting_language) {
+                        setMeetingLanguage(config.meeting_language);
+                    }
+                    if (config.whisper_initial_prompt) {
+                        setWhisperInitialPrompt(config.whisper_initial_prompt);
+                    }
+                }
+            } catch (err) {
+                console.error('Failed to load transcript config:', err);
+            }
+        };
+        loadTranscriptConfig();
+    }, []);
 
     // Sync uiProvider when backend config changes (e.g., after model selection or initial load)
     useEffect(() => {
@@ -95,6 +119,42 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
         // Close modal after selection
         if (onModelSelect) {
             onModelSelect();
+        }
+    };
+
+    const handleSaveLanguageConfig = async (language: string) => {
+        try {
+            const currentConfig = await invoke<any>('api_get_transcript_config');
+            await invoke('api_save_transcript_config', {
+                provider: currentConfig?.provider || 'localWhisper',
+                model: currentConfig?.model || 'large-v3',
+                apiKey: currentConfig?.apiKey || null,
+                meeting_language: language,
+                whisper_initial_prompt: currentConfig?.whisper_initial_prompt || null,
+            });
+            setMeetingLanguage(language);
+            toast.success('Meeting language saved');
+        } catch (err) {
+            console.error('Failed to save language config:', err);
+            toast.error('Failed to save meeting language');
+        }
+    };
+
+    const handleSaveInitialPromptConfig = async (prompt: string) => {
+        try {
+            const currentConfig = await invoke<any>('api_get_transcript_config');
+            await invoke('api_save_transcript_config', {
+                provider: currentConfig?.provider || 'localWhisper',
+                model: currentConfig?.model || 'large-v3',
+                apiKey: currentConfig?.apiKey || null,
+                meeting_language: currentConfig?.meeting_language || 'pt',
+                whisper_initial_prompt: prompt,
+            });
+            setWhisperInitialPrompt(prompt);
+            toast.success('Initial prompt saved');
+        } catch (err) {
+            console.error('Failed to save initial prompt config:', err);
+            toast.error('Failed to save initial prompt');
         }
     };
 
@@ -176,6 +236,45 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
                         </div>
                     )}
 
+                    {/* Meeting Language Section */}
+                    <div className="mt-6 pt-6 border-t border-gray-200">
+                        <Label className="block text-sm font-medium text-gray-700 mb-2">
+                            Meeting Language
+                        </Label>
+                        <Select value={meetingLanguage} onValueChange={handleSaveLanguageConfig}>
+                            <SelectTrigger className="w-full focus:ring-1 focus:ring-blue-500 focus:border-blue-500">
+                                <SelectValue placeholder="Select language" />
+                            </SelectTrigger>
+                            <SelectContent className="max-h-60">
+                                {LANGUAGES.map((lang) => (
+                                    <SelectItem key={lang.code} value={lang.code}>
+                                        {lang.name}
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                        <p className="text-xs text-gray-500 mt-1">
+                            Default language for transcription (auto-detect if not specified)
+                        </p>
+                    </div>
+
+                    {/* Whisper Initial Prompt Section */}
+                    <div className="mt-4">
+                        <Label className="block text-sm font-medium text-gray-700 mb-2">
+                            Vocabulary / Context Prompt
+                        </Label>
+                        <textarea
+                            value={whisperInitialPrompt}
+                            onChange={(e) => setWhisperInitialPrompt(e.target.value)}
+                            onBlur={() => handleSaveInitialPromptConfig(whisperInitialPrompt)}
+                            placeholder="Add domain-specific terms to improve accuracy (e.g., PROTHEUS, TOTVS, ADVPL)"
+                            className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 resize-none"
+                            rows={4}
+                        />
+                        <p className="text-xs text-gray-500 mt-1">
+                            Comma-separated keywords help Whisper recognize domain-specific vocabulary
+                        </p>
+                    </div>
 
                     {requiresApiKey && (
                         <div>

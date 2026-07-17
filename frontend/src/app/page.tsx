@@ -282,6 +282,7 @@ export default function Home() {
         defaultValue={defaultSpeakerCount}
         onConfirm={handleSpeakerCountConfirm}
         onCancel={handleSpeakerCountCancel}
+        selectedProvider={transcriptModelConfig.provider}
       />
 
       {/* All Modals supported*/}

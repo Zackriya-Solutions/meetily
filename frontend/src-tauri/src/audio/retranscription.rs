@@ -138,7 +138,7 @@ pub async fn start_retranscription<R: Runtime>(
 
 /// Find audio file in meeting folder
 /// Tries common names first, then scans for any file with an audio extension
-fn find_audio_file(folder: &Path) -> Result<PathBuf> {
+pub fn find_audio_file(folder: &Path) -> Result<PathBuf> {
     let candidates = [
         "audio.mp4", "audio.m4a", "audio.wav", "audio.mp3",
         "audio.flac", "audio.ogg", "recording.mp4",
@@ -237,10 +237,11 @@ async fn run_retranscription<R: Runtime>(
     // For large files (35+ minutes), VAD processing can take several minutes
     let app_for_vad = app.clone();
     let meeting_id_for_vad = meeting_id.clone();
+    let audio_samples_for_vad = audio_samples.clone(); // Clone for VAD task
 
     let speech_segments = tokio::task::spawn_blocking(move || {
         get_speech_chunks_with_progress(
-            &audio_samples,
+            &audio_samples_for_vad,
             VAD_REDEMPTION_TIME_MS,
             |vad_progress, segments_found| {
                 // Map VAD progress (0-100) to overall progress (20-25)
@@ -310,10 +311,8 @@ async fn run_retranscription<R: Runtime>(
         None
     };
 
-    // Speaker identification: same per-recording session as live transcription.
-    // None when disabled/model absent — segments then keep speaker = None.
-    let mut diarization_session =
-        crate::audio::transcription::worker::init_diarization_session(&app).await;
+    // Offline diarization: will be applied AFTER all segments are transcribed
+    // (not per-segment like live). None when disabled/model absent — segments keep speaker = None.
 
     // Split very long segments at silence boundaries for better transcription quality.
     // Hard cuts at arbitrary sample positions lose words at boundaries. Instead, scan
@@ -377,14 +376,15 @@ async fn run_retranscription<R: Runtime>(
         let (text, conf) = if use_parakeet {
             let engine = parakeet_engine.as_ref().unwrap();
             let text = engine
-                .transcribe_audio(segment.samples.clone())
+                .transcribe_audio(segment.samples.clone(), None, None, false)
                 .await
                 .map_err(|e| anyhow!("Parakeet transcription failed on segment {}: {}", i, e))?;
             (text, 0.9f32)
         } else {
             let engine = whisper_engine.as_ref().unwrap();
+            // TODO: Load meeting_language and whisper_initial_prompt from DB (via api_get_transcript_config)
             let (text, conf, _) = engine
-                .transcribe_audio_with_confidence(segment.samples.clone(), language.clone())
+                .transcribe_audio_with_confidence(segment.samples.clone(), language.clone(), None, true)
                 .await
                 .map_err(|e| anyhow!("Whisper transcription failed on segment {}: {}", i, e))?;
             (text, conf)
@@ -398,11 +398,8 @@ async fn run_retranscription<R: Runtime>(
                 i + 1, processable_count, segment_duration_sec, conf,
                 if trimmed.len() > 80 { let mut end = 80; while !trimmed.is_char_boundary(end) { end -= 1; } &trimmed[..end] } else { trimmed }
             );
-            let speaker = diarization_session.as_mut().and_then(|session| {
-                session.label_segment_at(segment.start_timestamp_ms / 1000.0, &segment.samples)
-            });
             all_transcripts.push((text, segment.start_timestamp_ms, segment.end_timestamp_ms));
-            segment_speakers.push(speaker);
+            segment_speakers.push(None); // Will be filled by offline diarization later
             total_confidence += conf;
         } else {
             debug!("Segment {}/{}: {:.1}s — empty transcription", i + 1, processable_count, segment_duration_sec);
@@ -424,6 +421,111 @@ async fn run_retranscription<R: Runtime>(
     // Check for cancellation
     if RETRANSCRIPTION_CANCELLED.load(Ordering::SeqCst) {
         return Err(anyhow!("Retranscription cancelled"));
+    }
+
+    // Offline diarization pass: applies segmentation, embedding, clustering on entire audio
+    emit_progress(&app, &meeting_id, "diarization", 75, "Running offline speaker identification...");
+
+    // Load speaker profiles for matching
+    let app_state = app
+        .try_state::<AppState>()
+        .ok_or_else(|| anyhow!("App state not available"))?;
+    let pool = app_state.db_manager.pool();
+    let profiles = match crate::database::repositories::speaker_profile::SpeakerProfilesRepository::list(pool).await {
+        Ok(profiles) => {
+            info!("Loaded {} speaker profiles for diarization matching", profiles.len());
+            profiles
+                .into_iter()
+                .map(|p| (p.name, p.embedding))
+                .collect::<Vec<_>>()
+        }
+        Err(e) => {
+            warn!("Failed to load speaker profiles: {}. Proceeding without profile matching.", e);
+            Vec::new()
+        }
+    };
+
+    // Get expected speaker count (persisted from feature 001)
+    let expected_speakers = crate::diarization::commands::expected_speakers(pool).await as usize;
+    if expected_speakers > 0 {
+        info!("Using expected speaker count: {}", expected_speakers);
+    } else {
+        info!("Expected speaker count is 0 (diarization disabled)");
+    }
+
+    // Check if offline diarization models are present
+    let offline_diarization_available = crate::diarization::models::is_offline_diarization_present(&app);
+
+    // Apply offline diarization if models are present
+    if offline_diarization_available {
+        let segmentation_path = crate::diarization::models::segmentation_model_path(&app)
+            .map_err(|e| anyhow!("Failed to get segmentation model path: {}", e))?;
+        let embedding_path = crate::diarization::models::embedding_model_v2_path(&app)
+            .map_err(|e| anyhow!("Failed to get embedding model path: {}", e))?;
+
+        match crate::diarization::offline::diarize_offline(
+            &segmentation_path,
+            &embedding_path,
+            &audio_samples,
+            expected_speakers,
+            &profiles,
+        )
+        .await
+        {
+            Ok(diarization_segments) => {
+                info!(
+                    "Offline diarization produced {} speaker segments",
+                    diarization_segments.len()
+                );
+
+                // Assign speakers to transcript segments by max-overlap of duration
+                // Port of PyCharmMiscProject/transcribe_videos.py:963-999
+                for (transcript_seg_idx, (_, start_ms, end_ms)) in all_transcripts.iter().enumerate() {
+                    let start_s = start_ms / 1000.0;
+                    let end_s = end_ms / 1000.0;
+
+                    let mut max_overlap_duration = 0.0;
+                    let mut assigned_speaker: Option<String> = None;
+
+                    for dia_seg in &diarization_segments {
+                        // Calculate overlap between transcript segment and diarization segment
+                        let overlap_start = start_s.max(dia_seg.start_time_s);
+                        let overlap_end = end_s.min(dia_seg.end_time_s);
+                        let overlap_duration = (overlap_end - overlap_start).max(0.0);
+
+                        if overlap_duration > max_overlap_duration {
+                            max_overlap_duration = overlap_duration;
+                            assigned_speaker = Some(dia_seg.label.clone());
+                        }
+                    }
+
+                    if let Some(speaker) = assigned_speaker {
+                        debug!(
+                            "Transcript segment {}: assigned speaker '{}' (overlap: {:.3}s)",
+                            transcript_seg_idx + 1,
+                            speaker,
+                            max_overlap_duration
+                        );
+                        segment_speakers[transcript_seg_idx] = Some(speaker);
+                    } else {
+                        debug!(
+                            "Transcript segment {}: no speaker assigned (no overlap with diarization)",
+                            transcript_seg_idx + 1
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                warn!(
+                    "Offline diarization failed: {}. Continuing without speaker labels (RNF02: fail gracefully).",
+                    e
+                );
+            }
+        }
+    } else {
+        info!(
+            "Offline diarization models not present. Skipping speaker identification (RNF02: graceful degradation)."
+        );
     }
 
     emit_progress(&app, &meeting_id, "saving", 80, "Saving transcripts...");
@@ -486,14 +588,9 @@ async fn run_retranscription<R: Runtime>(
         warn!("Failed to write transcripts.json: {}", e);
     }
 
-    // Persist speaker centroids so later renames can save voice profiles
-    if let Some(session) = diarization_session.as_ref() {
-        crate::audio::transcription::worker::persist_speaker_centroids(
-            session,
-            Some(folder_path.clone()),
-        )
-        .await;
-    }
+    // NOTE: Offline diarization (T007) does not directly expose speaker centroids for persistence.
+    // Profile matching happens within diarize_offline based on loaded profiles.
+    // Speaker renames still persist via existing UI mechanisms.
 
     // Find audio filename for metadata
     let audio_filename = audio_path

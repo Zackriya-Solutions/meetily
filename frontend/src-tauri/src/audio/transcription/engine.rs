@@ -74,6 +74,10 @@ pub async fn validate_transcription_model_ready<R: Runtime>(app: &AppHandle<R>) 
                 provider: "parakeet".to_string(),
                 model: crate::config::DEFAULT_PARAKEET_MODEL.to_string(),
                 api_key: None,
+                meeting_language: Some("pt".to_string()),
+                whisper_initial_prompt: Some(
+                    "A seguir, a transcrição de uma reunião. A transcrição deve ser precisa, com pontuação e capitalização corretas. Nomes próprios e siglas técnicas devem ser mantidos em maiúsculas quando apropriado.".to_string()
+                ),
             }
         }
         Err(e) => {
@@ -82,6 +86,10 @@ pub async fn validate_transcription_model_ready<R: Runtime>(app: &AppHandle<R>) 
                 provider: "parakeet".to_string(),
                 model: crate::config::DEFAULT_PARAKEET_MODEL.to_string(),
                 api_key: None,
+                meeting_language: Some("pt".to_string()),
+                whisper_initial_prompt: Some(
+                    "A seguir, a transcrição de uma reunião. A transcrição deve ser precisa, com pontuação e capitalização corretas. Nomes próprios e siglas técnicas devem ser mantidos em maiúsculas quando apropriado.".to_string()
+                ),
             }
         }
     };
@@ -185,6 +193,10 @@ pub async fn get_or_init_transcription_engine<R: Runtime>(
                 provider: "parakeet".to_string(),
                 model: crate::config::DEFAULT_PARAKEET_MODEL.to_string(),
                 api_key: None,
+                meeting_language: Some("pt".to_string()),
+                whisper_initial_prompt: Some(
+                    "A seguir, a transcrição de uma reunião. A transcrição deve ser precisa, com pontuação e capitalização corretas. Nomes próprios e siglas técnicas devem ser mantidos em maiúsculas quando apropriado.".to_string()
+                ),
             }
         }
         Err(e) => {
@@ -193,6 +205,10 @@ pub async fn get_or_init_transcription_engine<R: Runtime>(
                 provider: "parakeet".to_string(),
                 model: crate::config::DEFAULT_PARAKEET_MODEL.to_string(),
                 api_key: None,
+                meeting_language: Some("pt".to_string()),
+                whisper_initial_prompt: Some(
+                    "A seguir, a transcrição de uma reunião. A transcrição deve ser precisa, com pontuação e capitalização corretas. Nomes próprios e siglas técnicas devem ser mantidos em maiúsculas quando apropriado.".to_string()
+                ),
             }
         }
     };
