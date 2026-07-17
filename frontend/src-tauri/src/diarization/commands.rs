@@ -35,13 +35,17 @@ pub async fn diarization_get_status<R: Runtime>(
     state: tauri::State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
     let enabled = is_enabled(state.db_manager.pool()).await;
-    let model_present = super::models::is_offline_diarization_present(&app);
+    let segmentation_model_present = super::models::is_segmentation_model_present(&app);
+    let embedding_model_present = super::models::is_embedding_model_v2_present(&app);
+    let model_present = segmentation_model_present && embedding_model_present;
     let expected_speakers = expected_speakers(state.db_manager.pool()).await;
     Ok(serde_json::json!({
         "enabled": enabled,
         "model_present": model_present,
         "model_filename": super::models::EMBEDDING_MODEL_V2_FILENAME,
         "expected_speakers": expected_speakers,
+        "segmentation_model_present": segmentation_model_present,
+        "embedding_model_present": embedding_model_present,
     }))
 }
 
