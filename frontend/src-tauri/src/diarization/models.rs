@@ -230,8 +230,7 @@ pub async fn download_segmentation_model<R: Runtime>(app: &AppHandle<R>) -> Resu
                 .read_to_end(&mut onnx_data)
                 .map_err(|e| format!("Failed to read model.onnx from tar: {}", e))?;
 
-            tokio::fs::write(&tmp_path, onnx_data)
-                .await
+            std::fs::write(&tmp_path, onnx_data)
                 .map_err(|e| format!("Failed to write model.onnx: {}", e))?;
 
             model_found = true;
