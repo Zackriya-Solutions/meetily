@@ -6,7 +6,6 @@ mod onnxruntime;
 fn main() {
     // GPU Acceleration Detection and Build Guidance
     detect_and_report_gpu_capabilities();
-
     #[cfg(target_os = "macos")]
     {
         println!("cargo:rustc-link-lib=framework=AVFoundation");
