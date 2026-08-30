@@ -1,0 +1,37 @@
+# Debian/Ubuntu build dependencies for Meetily.
+#
+# THIS IS THE SINGLE SOURCE OF TRUTH. Both scripts/review-env-setup.sh and
+# .github/workflows/pr-checks.yml read this file, so CI and a reviewer's
+# machine cannot drift apart. Add a package here, not in either consumer.
+#
+# Blank lines and #-comments are ignored.
+
+# --- Toolchain basics ---
+build-essential
+pkg-config
+curl
+wget
+file
+git
+
+# --- Tauri v2 (WebKitGTK webview + GTK shell) ---
+libwebkit2gtk-4.1-dev
+libjavascriptcoregtk-4.1-dev
+libsoup-3.0-dev
+libgtk-3-dev
+librsvg2-dev
+libssl-dev
+
+# --- Tauri tray icon + global shortcuts ---
+libayatana-appindicator3-dev
+libxdo-dev
+
+# --- Audio capture (cpal -> ALSA) ---
+libasound2-dev
+
+# --- whisper.cpp / whisper-rs build ---
+cmake
+clang
+libclang-dev
+libomp-dev
+libopenblas-dev

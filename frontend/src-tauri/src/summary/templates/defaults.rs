@@ -2,6 +2,19 @@
 ///
 /// These templates are bundled into the binary and serve as fallbacks
 /// when custom templates are not available.
+///
+/// # Only TWO of the six shipped templates are embedded here
+///
+/// `daily_standup` and `standard_meeting` are embedded *and* shipped as Tauri
+/// resources (the same `templates/*.json` bytes, reached two different ways).
+/// The other four — `project_sync`, `psychatric_session`, `retrospective` and
+/// `sales_marketing_client_call` — exist **only** via `BUNDLED_TEMPLATES_DIR`,
+/// which `lib.rs` populates from `resource_dir()` at startup.
+///
+/// Consequence: if `resource_dir()` fails, that path is a bare `log::warn!`
+/// and the app silently drops to two templates with no user-visible error.
+/// Anything that reports on template availability should account for this
+/// rather than assuming six are always present.
 
 /// Daily standup template for engineering/product teams
 pub const DAILY_STANDUP: &str = include_str!("../../../templates/daily_standup.json");

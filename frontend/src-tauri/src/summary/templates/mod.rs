@@ -33,7 +33,7 @@
 //! Users can add custom templates to:
 //! - macOS: `~/Library/Application Support/Meetily/templates/`
 //! - Windows: `%APPDATA%\Meetily\templates\`
-//! - Linux: `~/.config/Meetily/templates/`
+//! - Linux: `~/.local/share/Meetily/templates/` (`$XDG_DATA_HOME`, per `dirs::data_dir()`)
 //!
 //! Custom templates must follow the JSON schema defined in `types::Template`.
 

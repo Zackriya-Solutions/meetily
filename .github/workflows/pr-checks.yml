@@ -1,0 +1,129 @@
+name: PR Checks
+
+# The repository previously had no automatic PR validation — every other
+# workflow here is workflow_dispatch or workflow_call, so nothing ran on a pull
+# request. This is the gate.
+#
+# System dependencies come from scripts/linux-deps.txt, the same file
+# scripts/review-env-setup.sh reads, so CI and a contributor's machine cannot
+# drift apart. Add a package there, not here.
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # The ort crate downloads a prebuilt ONNX Runtime; keep it out of the source tree.
+  ORT_PREFER_DYNAMIC_LINK: "0"
+
+jobs:
+  frontend:
+    name: Frontend (lint, types, build)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        working-directory: frontend
+        run: pnpm run lint
+
+      - name: Typecheck
+        working-directory: frontend
+        run: pnpm exec tsc --noEmit
+
+      - name: Build
+        # next build is the authoritative type gate: tsconfig has strict: true
+        # and next.config.js does not set typescript.ignoreBuildErrors.
+        working-directory: frontend
+        run: pnpm run build
+
+  rust:
+    name: Rust (fmt, clippy, test)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Needed so the changed-file format check can diff against the base.
+          fetch-depth: 0
+
+      - name: Install system dependencies
+        run: |
+          # Single source of truth — see scripts/linux-deps.txt
+          PACKAGES="$(grep -vE '^\s*(#|$)' scripts/linux-deps.txt | tr '\n' ' ')"
+          echo "Installing: $PACKAGES"
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $PACKAGES
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            frontend/src-tauri
+
+      - name: Build llama-helper sidecar
+        # tauri.conf.json declares bundle.externalBin, and tauri_build::build()
+        # hard-fails if the binary is missing for the host triple — so cargo
+        # check/clippy/test cannot run at all without this. build.rs fetches
+        # ffmpeg itself; llama-helper is not automatic. Debug build, because
+        # nothing in these checks executes the sidecar; it only has to exist.
+        run: |
+          cargo build -p llama-helper
+          TRIPLE="$(rustc -vV | sed -n 's/^host: //p')"
+          mkdir -p frontend/src-tauri/binaries
+          cp "target/debug/llama-helper" "frontend/src-tauri/binaries/llama-helper-${TRIPLE}"
+
+      - name: Format (changed files only)
+        run: |
+          # MEASURED BASELINE: `cargo fmt --check` reports 1062 diffs on an
+          # untouched checkout. The repository has never been rustfmt-clean, so
+          # a tree-wide gate would fail every PR regardless of its content, and
+          # reformatting the tree to satisfy it would bury real changes under
+          # thousands of unrelated lines.
+          #
+          # So: check only the .rs files this PR actually touches. Actionable,
+          # achievable, and it stops the tree getting any less consistent.
+          BASE="${{ github.event.pull_request.base.sha }}"
+          if [ -z "$BASE" ]; then
+            echo "Not a pull request; skipping the changed-file format check."
+            exit 0
+          fi
+          FILES="$(git diff --name-only --diff-filter=ACMR "$BASE"...HEAD -- '*.rs' || true)"
+          if [ -z "$FILES" ]; then
+            echo "No Rust files changed."
+            exit 0
+          fi
+          echo "Checking formatting of:"; echo "$FILES" | sed 's/^/  /'
+          # shellcheck disable=SC2086
+          rustfmt --edition 2021 --check $FILES
+
+      - name: Clippy
+        working-directory: frontend/src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test
+        # Also runs the compiled doctest at src/summary/templates/mod.rs.
+        working-directory: frontend/src-tauri
+        run: cargo test

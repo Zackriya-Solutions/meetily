@@ -21,7 +21,7 @@ pub fn set_bundled_templates_dir(path: PathBuf) {
 /// Returns the platform-specific application data directory for custom templates:
 /// - macOS: ~/Library/Application Support/Meetily/templates/
 /// - Windows: %APPDATA%\Meetily\templates\
-/// - Linux: ~/.config/Meetily/templates/
+/// - Linux: ~/.local/share/Meetily/templates/ (`$XDG_DATA_HOME`, per `dirs::data_dir()`)
 fn get_custom_templates_dir() -> Option<PathBuf> {
     let mut path = dirs::data_dir()?;
     path.push("Meetily");

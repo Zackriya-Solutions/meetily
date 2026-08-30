@@ -49,7 +49,7 @@ Users can add custom templates to the application data directory:
 
 - **macOS**: `~/Library/Application Support/Meetily/templates/`
 - **Windows**: `%APPDATA%\Meetily\templates\`
-- **Linux**: `~/.config/Meetily/templates/`
+- **Linux**: `~/.local/share/Meetily/templates/` (`$XDG_DATA_HOME`, per `dirs::data_dir()`)
 
 Custom templates override built-in templates with the same filename.
 
