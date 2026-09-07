@@ -1,3 +1,4 @@
+#[allow(unused_imports)]
 use std::path::Path;
 use std::sync::OnceLock;
 use log::info;
