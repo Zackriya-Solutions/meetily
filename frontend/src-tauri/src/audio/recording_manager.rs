@@ -107,7 +107,7 @@ fn wake_audio_connection_sync(speaker_device_name: &str) -> Result<()> {
 /// should log the error and proceed if this fails; recording will still work,
 /// it just may have the 60-90s silent startup on BT.
 #[cfg(target_os = "macos")]
-async fn wake_audio_connection(speaker_device_name: &str) -> Result<()> {
+pub(super) async fn wake_audio_connection(speaker_device_name: &str) -> Result<()> {
     let name = speaker_device_name.to_string();
     tokio::task::spawn_blocking(move || {
         wake_audio_connection_sync(&name)
@@ -210,6 +210,9 @@ impl RecordingManager {
 
     /// Start recording with specified devices
     ///
+    /// On macOS, the command entry points wake audio and verify microphone
+    /// access before constructing the manager and calling this method.
+    ///
     /// # Arguments
     /// * `microphone_device` - Optional microphone device to use
     /// * `system_device` - Optional system audio device to use
@@ -271,26 +274,6 @@ impl RecordingManager {
             sys_name,
             sys_kind,
         )?;
-
-        // Wake the audio connection on macOS before opening capture streams.
-        // Without this, a deep-cold Bluetooth link can deliver no mic audio
-        // for the first 60-90 seconds of recording. Non-fatal on failure.
-        #[cfg(target_os = "macos")]
-        {
-            let wake_name = system_device
-                .as_ref()
-                .map(|s| s.name.clone())
-                .or_else(|| {
-                    cpal::default_host()
-                        .default_output_device()
-                        .and_then(|d| d.name().ok())
-                });
-            if let Some(name) = wake_name {
-                if let Err(e) = wake_audio_connection(&name).await {
-                    warn!("[AUDIO_WAKE] Wake failed: {} — proceeding anyway", e);
-                }
-            }
-        }
 
         // Give the pipeline a moment to fully initialize before starting streams
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
