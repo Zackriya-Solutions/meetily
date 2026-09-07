@@ -237,34 +237,6 @@ fn resolve_system_or_default(requested_name: Option<&str>) -> Option<Arc<super::
     }
 }
 
-/// Wake idle audio hardware before checking microphone callbacks, and finish
-/// validation before creating any recording resources.
-#[cfg(target_os = "macos")]
-async fn prepare_audio_for_recording(
-    system_device: Option<&super::AudioDevice>,
-) -> Result<(), String> {
-    use cpal::traits::{DeviceTrait, HostTrait};
-
-    let wake_name = system_device
-        .map(|s| s.name.clone())
-        .or_else(|| {
-            cpal::default_host()
-                .default_output_device()
-                .and_then(|d| d.name().ok())
-        });
-    if let Some(name) = wake_name {
-        if let Err(e) = super::recording_manager::wake_audio_connection(&name).await {
-            warn!("[AUDIO_WAKE] Wake failed: {} — proceeding anyway", e);
-        }
-    }
-
-    if let Err(e) = super::devices::verify_microphone_access().await {
-        error!("Microphone access verification failed: {}", e);
-        return Err(format!("Microphone access required: {}", e));
-    }
-    Ok(())
-}
-
 // ============================================================================
 // RECORDING COMMANDS
 // ============================================================================
@@ -315,6 +287,24 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
         "message": "Recording initialization started"
     })).map_err(|e| e.to_string())?;
 
+    // T12: verify the microphone is actually delivering audio before we start.
+    // A macOS TCC denial lets the input stream be created but never fires
+    // callbacks; without this the app records dead audio silently. Fails the
+    // start loudly (mapped to a permission Alert in the UI).
+    #[cfg(target_os = "macos")]
+    {
+        if let Err(e) = super::devices::verify_microphone_access().await {
+            error!("Microphone access verification failed: {}", e);
+            return Err(format!("Microphone access required: {}", e));
+        }
+    }
+
+    // Async-first approach - no more blocking operations!
+    info!("🚀 Starting async recording initialization");
+
+    // Create new recording manager
+    let mut manager = RecordingManager::new();
+
     // Load recording preferences to get auto_save AND device preferences
     let (auto_save, preferred_mic_name, preferred_system_name) =
         match super::recording_preferences::load_recording_preferences(&app).await {
@@ -329,22 +319,9 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
             }
         };
 
-    #[cfg(not(target_os = "macos"))]
     let microphone_device = resolve_mic_or_default(&app, preferred_mic_name.as_deref());
 
     let system_device = resolve_system_or_default(preferred_system_name.as_deref());
-
-    #[cfg(target_os = "macos")]
-    prepare_audio_for_recording(system_device.as_deref()).await?;
-
-    #[cfg(target_os = "macos")]
-    let microphone_device = resolve_mic_or_default(&app, preferred_mic_name.as_deref());
-
-    // Async-first approach - no more blocking operations!
-    info!("🚀 Starting async recording initialization");
-
-    // Create new recording manager only after startup validation succeeds
-    let mut manager = RecordingManager::new();
 
     // Always ensure a meeting name is set so incremental saver initializes
     let effective_meeting_name = meeting_name.clone().unwrap_or_else(|| {
@@ -497,16 +474,19 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
         "message": "Recording initialization started"
     })).map_err(|e| e.to_string())?;
 
-    #[cfg(not(target_os = "macos"))]
+    // T12: verify the microphone is actually delivering audio before we start
+    // (see the note on the other start path above).
+    #[cfg(target_os = "macos")]
+    {
+        if let Err(e) = super::devices::verify_microphone_access().await {
+            error!("Microphone access verification failed: {}", e);
+            return Err(format!("Microphone access required: {}", e));
+        }
+    }
+
     let mic_device = resolve_mic_or_default(&app, mic_device_name.as_deref());
 
     let system_device = resolve_system_or_default(system_device_name.as_deref());
-
-    #[cfg(target_os = "macos")]
-    prepare_audio_for_recording(system_device.as_deref()).await?;
-
-    #[cfg(target_os = "macos")]
-    let mic_device = resolve_mic_or_default(&app, mic_device_name.as_deref());
 
     // Async-first approach for custom devices - no more blocking operations!
     info!("🚀 Starting async recording initialization with custom devices");
