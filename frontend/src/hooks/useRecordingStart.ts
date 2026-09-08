@@ -278,7 +278,7 @@ export function useRecordingStart(
                 ? TRANSCRIPTION_RUNTIME_USER_MESSAGE
                 : errorMsg);
               if (!isRuntimeError) {
-                alert('Failed to start recording. Check console for details.');
+                alert(`Failed to start recording.\n\n${errorMsg}`);
               }
             }
             Analytics.trackButtonClick('start_recording_error', 'sidebar_auto');
@@ -376,7 +376,7 @@ export function useRecordingStart(
             ? TRANSCRIPTION_RUNTIME_USER_MESSAGE
             : errorMsg);
           if (!isRuntimeError) {
-            alert('Failed to start recording. Check console for details.');
+            alert(`Failed to start recording.\n\n${errorMsg}`);
           }
         }
         Analytics.trackButtonClick('start_recording_error', 'sidebar_direct');
