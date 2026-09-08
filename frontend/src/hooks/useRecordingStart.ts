@@ -265,7 +265,7 @@ export function useRecordingStart(
               Analytics.trackButtonClick('start_recording_error', 'sidebar_auto');
             } else {
               setStatus(RecordingStatus.ERROR, errorMsg);
-              alert('Failed to start recording. Check console for details.');
+              alert(`Failed to start recording.\n\n${errorMsg}`);
               Analytics.trackButtonClick('start_recording_error', 'sidebar_auto');
             }
           } finally {
@@ -359,7 +359,7 @@ export function useRecordingStart(
           Analytics.trackButtonClick('start_recording_error', 'sidebar_direct');
         } else {
           setStatus(RecordingStatus.ERROR, errorMsg);
-          alert('Failed to start recording. Check console for details.');
+          alert(`Failed to start recording.\n\n${errorMsg}`);
           Analytics.trackButtonClick('start_recording_error', 'sidebar_direct');
         }
       } finally {
