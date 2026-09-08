@@ -484,27 +484,56 @@ mod tests {
 
     #[test]
     fn test_vad_chunked_vs_single_processing() {
-        // Generate 60 seconds of audio with speech patterns at 16kHz
-        let audio = generate_test_audio_with_speech(60.0, 16000);
+        // Generate more than the large-file threshold so the production helper
+        // takes its 160,000-sample chunked path.
+        let audio = generate_test_audio_with_speech(61.0, 16000);
         println!("Generated {} samples ({:.1}s)", audio.len(), audio.len() as f32 / 16000.0);
+        assert!(audio.len() > 960_000, "fixture must exercise the large-file path");
 
-        // Process all at once (like small files)
-        let segments_single = get_speech_chunks(&audio, 2000).expect("Single processing failed");
+        // Process the identical input in one call, then flush exactly once.
+        let mut single_processor =
+            ContinuousVadProcessor::new(16000, 2000).expect("Single processor creation failed");
+        let mut segments_single = single_processor
+            .process_audio(&audio)
+            .expect("Single processing failed");
+        segments_single.extend(single_processor.flush().expect("Single flush failed"));
         println!("Single processing found {} segments", segments_single.len());
 
-        // Process in chunks (like large files)
+        // Process the same input through the production large-file helper. It
+        // feeds the processor 160,000 samples at a time and flushes once after
+        // the final chunk.
         let segments_chunked = get_speech_chunks_with_progress(&audio, 2000, |progress, segments| {
             println!("Chunked progress: {}%, {} segments", progress, segments);
             true // Don't cancel
         }).expect("Chunked processing failed");
         println!("Chunked processing found {} segments", segments_chunked.len());
 
-        // Both should find the same number of segments (approximately)
-        // Allow some variance due to chunk boundary effects
-        let diff = (segments_single.len() as i32 - segments_chunked.len() as i32).abs();
-        assert!(diff <= 1,
-            "Chunked and single processing found different segment counts: {} vs {} (diff: {})",
-            segments_single.len(), segments_chunked.len(), diff);
+        assert!(!segments_single.is_empty(), "fixture must produce speech segments");
+        assert_eq!(
+            segments_single.len(),
+            segments_chunked.len(),
+            "chunked and single processing must produce the same segment count"
+        );
+
+        let audio_duration_ms = audio.len() as f64 / 16_000.0 * 1000.0;
+        for (index, (single, chunked)) in segments_single.iter().zip(&segments_chunked).enumerate() {
+            assert_eq!(single.samples.len(), chunked.samples.len(),
+                "segment {index} sample count drifted across chunk boundaries");
+            assert!((single.start_timestamp_ms - chunked.start_timestamp_ms).abs() < 0.001,
+                "segment {index} start timestamp drifted: single={:.3}ms chunked={:.3}ms",
+                single.start_timestamp_ms, chunked.start_timestamp_ms);
+            assert!((single.end_timestamp_ms - chunked.end_timestamp_ms).abs() < 0.001,
+                "segment {index} end timestamp drifted: single={:.3}ms chunked={:.3}ms",
+                single.end_timestamp_ms, chunked.end_timestamp_ms);
+
+            let duration_ms = single.end_timestamp_ms - single.start_timestamp_ms;
+            assert!(duration_ms > 0.0, "segment {index} must have positive duration");
+            assert!(single.start_timestamp_ms >= 0.0,
+                "segment {index} starts before the supplied audio");
+            assert!(single.end_timestamp_ms <= audio_duration_ms,
+                "segment {index} ends beyond the supplied audio: {:.3}ms > {:.3}ms",
+                single.end_timestamp_ms, audio_duration_ms);
+        }
     }
 
     #[test]
