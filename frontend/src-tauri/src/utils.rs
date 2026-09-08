@@ -6,22 +6,59 @@ pub fn format_timestamp(seconds: f64) -> String {
     format!("{:02}:{:02}:{:02}", hours, minutes, secs)
 }
 
+pub(crate) const MAX_LOG_RECORD_CHARS: usize = 4_096;
+
+struct CappedLogLine {
+    value: String,
+    chars: usize,
+    max_chars: usize,
+    truncated: bool,
+}
+impl CappedLogLine {
+    fn new(max_chars: usize) -> Self {
+        Self {
+            value: String::new(),
+            chars: 0,
+            max_chars,
+            truncated: false,
+        }
+    }
+
+    fn finish(mut self) -> String {
+        if self.truncated {
+            self.value.push('…');
+        }
+        self.value
+    }
+}
+
+impl std::fmt::Write for CappedLogLine {
+    fn write_str(&mut self, value: &str) -> std::fmt::Result {
+        for character in value.chars() {
+            if self.chars == self.max_chars {
+                self.truncated = true;
+                break;
+            }
+            self.value
+                .push(if character.is_control() { ' ' } else { character });
+            self.chars += 1;
+        }
+        Ok(())
+    }
+}
+
+pub(crate) fn bounded_log_line(arguments: std::fmt::Arguments<'_>) -> String {
+    let mut line = CappedLogLine::new(MAX_LOG_RECORD_CHARS);
+    let _ = std::fmt::write(&mut line, arguments);
+    line.finish()
+}
+
 pub(crate) fn log_snippet(value: &str, max_chars: usize) -> String {
-    let mut chars = value.chars();
-    let mut snippet = String::new();
+    use std::fmt::Write;
 
-    for _ in 0..max_chars {
-        let Some(character) = chars.next() else {
-            return snippet;
-        };
-        snippet.push(if character.is_control() { ' ' } else { character });
-    }
-
-    if chars.next().is_some() {
-        snippet.push('…');
-    }
-
-    snippet
+    let mut snippet = CappedLogLine::new(max_chars);
+    let _ = snippet.write_str(value);
+    snippet.finish()
 }
 
 pub(crate) fn url_origin_for_log(raw: &str) -> String {
@@ -40,7 +77,7 @@ pub(crate) fn url_origin_for_log(raw: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{log_snippet, url_origin_for_log};
+    use super::{bounded_log_line, log_snippet, url_origin_for_log, MAX_LOG_RECORD_CHARS};
 
     #[test]
     fn logging_helpers_bound_content_and_strip_url_secrets() {
@@ -52,7 +89,29 @@ mod tests {
             url_origin_for_log("https://user:secret@example.com:8443/path?token=secret#fragment"),
             "https://example.com:8443"
         );
-        assert_eq!(url_origin_for_log("not a URL"), "<invalid-url>");
+        assert_eq!(url_origin_for_log("mailto:person@example.com"), "<invalid-url>");
+        assert_eq!(bounded_log_line(format_args!("a\r\nb")), "a  b");
+
+        let endpoint = "https://user:ENDPOINT_SECRET@example.com/path?token=QUERY_SECRET";
+        let line = bounded_log_line(format_args!(
+            "endpoint_origin={}, response_bytes={}, meeting_name_configured={}",
+            url_origin_for_log(endpoint),
+            "REMOTE_BODY_SECRET".len(),
+            Some("MEETING_TITLE_SECRET").is_some()
+        ));
+        for marker in [
+            "ENDPOINT_SECRET",
+            "QUERY_SECRET",
+            "REMOTE_BODY_SECRET",
+            "MEETING_TITLE_SECRET",
+        ] {
+            assert!(!line.contains(marker));
+        }
+
+        let oversized = "x".repeat(10_000_001);
+        let line = bounded_log_line(format_args!("{}\r\n", oversized));
+        assert_eq!(line.chars().count(), MAX_LOG_RECORD_CHARS + 1);
+        assert!(line.ends_with('…'));
     }
 }
 

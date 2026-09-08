@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use silero_rs::{VadConfig, VadSession, VadTransition};
 use log::{debug, info, warn};
 use std::collections::VecDeque;
@@ -213,8 +213,7 @@ impl ContinuousVadProcessor {
             self.large_speech_buffer_warned = true;
         }
 
-        let transitions = self.session.process(chunk)
-            .map_err(|e| anyhow!("VAD processing failed: {}", e))?;
+        let transitions = self.session.process(chunk).context("VAD processing failed")?;
 
 
         // Handle VAD transitions

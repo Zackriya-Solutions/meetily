@@ -666,11 +666,20 @@ impl AudioCapture {
     }
 }
 
+#[derive(Clone, Copy)]
+enum VadOperation {
+    Process,
+    Flush,
+}
+
 #[derive(Default)]
 struct PipelineLogStats {
     emitted: u64,
     short: u64,
-    vad_errors: u64,
+    vad_process_invalid_data_failures: u64,
+    vad_process_inference_failures: u64,
+    vad_flush_invalid_data_failures: u64,
+    vad_flush_inference_failures: u64,
     send_failures: u64,
     duration_sum_ms: f64,
     duration_min_ms: Option<f64>,
@@ -683,6 +692,21 @@ impl PipelineLogStats {
         self.duration_sum_ms += duration_ms;
         self.duration_min_ms = Some(self.duration_min_ms.map_or(duration_ms, |min| min.min(duration_ms)));
         self.duration_max_ms = self.duration_max_ms.max(duration_ms);
+    }
+
+    fn record_vad_failure(&mut self, operation: VadOperation, error: &anyhow::Error) {
+        let invalid_data = error.chain().any(|cause| {
+            matches!(
+                cause.downcast_ref::<silero_rs::VadError>(),
+                Some(silero_rs::VadError::InvalidData)
+            )
+        });
+        match (operation, invalid_data) {
+            (VadOperation::Process, true) => self.vad_process_invalid_data_failures += 1,
+            (VadOperation::Process, false) => self.vad_process_inference_failures += 1,
+            (VadOperation::Flush, true) => self.vad_flush_invalid_data_failures += 1,
+            (VadOperation::Flush, false) => self.vad_flush_inference_failures += 1,
+        }
     }
 
     fn snapshot_and_reset(&mut self) -> Self {
@@ -841,7 +865,7 @@ impl AudioPipeline {
                                         }
                                     }
                                 }
-                                Err(_) => self.log_stats.vad_errors += 1,
+                                Err(error) => self.log_stats.record_vad_failure(VadOperation::Process, &error),
                             }
 
                             // STEP 4: Send mixed audio for recording (WAV file)
@@ -896,7 +920,7 @@ impl AudioPipeline {
                     }
                 }
             }
-            Err(_) => self.log_stats.vad_errors += 1,
+            Err(error) => self.log_stats.record_vad_failure(VadOperation::Flush, &error),
         }
         Ok(())
     }
@@ -910,9 +934,9 @@ impl AudioPipeline {
             stats.duration_sum_ms / stats.emitted as f64
         };
         if final_summary {
-            info!("Audio pipeline summary; emitted={}, short={}, vad_errors={}, send_failures={}, mic_dropped_samples={}, system_dropped_samples={}, segment_min_ms={:.1}, segment_mean_ms={:.1}, segment_max_ms={:.1}", stats.emitted, stats.short, stats.vad_errors, stats.send_failures, mic_dropped, system_dropped, stats.duration_min_ms.unwrap_or(0.0), mean_duration_ms, stats.duration_max_ms);
-        } else if stats.vad_errors > 0 || stats.send_failures > 0 || mic_dropped > 0 || system_dropped > 0 {
-            warn!("Audio pipeline summary; emitted={}, short={}, vad_errors={}, send_failures={}, mic_dropped_samples={}, system_dropped_samples={}", stats.emitted, stats.short, stats.vad_errors, stats.send_failures, mic_dropped, system_dropped);
+            info!("Audio pipeline summary; emitted={}, short={}, vad_process_invalid_data_failures={}, vad_process_inference_failures={}, vad_flush_invalid_data_failures={}, vad_flush_inference_failures={}, send_failures={}, mic_dropped_samples={}, system_dropped_samples={}, segment_min_ms={:.1}, segment_mean_ms={:.1}, segment_max_ms={:.1}", stats.emitted, stats.short, stats.vad_process_invalid_data_failures, stats.vad_process_inference_failures, stats.vad_flush_invalid_data_failures, stats.vad_flush_inference_failures, stats.send_failures, mic_dropped, system_dropped, stats.duration_min_ms.unwrap_or(0.0), mean_duration_ms, stats.duration_max_ms);
+        } else if stats.vad_process_invalid_data_failures > 0 || stats.vad_process_inference_failures > 0 || stats.vad_flush_invalid_data_failures > 0 || stats.vad_flush_inference_failures > 0 || stats.send_failures > 0 || mic_dropped > 0 || system_dropped > 0 {
+            warn!("Audio pipeline summary; emitted={}, short={}, vad_process_invalid_data_failures={}, vad_process_inference_failures={}, vad_flush_invalid_data_failures={}, vad_flush_inference_failures={}, send_failures={}, mic_dropped_samples={}, system_dropped_samples={}", stats.emitted, stats.short, stats.vad_process_invalid_data_failures, stats.vad_process_inference_failures, stats.vad_flush_invalid_data_failures, stats.vad_flush_inference_failures, stats.send_failures, mic_dropped, system_dropped);
         } else {
             debug!("Audio pipeline summary; emitted={}, short={}, segment_min_ms={:.1}, segment_mean_ms={:.1}, segment_max_ms={:.1}", stats.emitted, stats.short, stats.duration_min_ms.unwrap_or(0.0), mean_duration_ms, stats.duration_max_ms);
         }
@@ -1056,7 +1080,7 @@ impl AudioPipelineManager {
 
 #[cfg(test)]
 mod tests {
-    use super::PipelineLogStats;
+    use super::{PipelineLogStats, VadOperation};
 
     #[test]
     fn logging_pipeline_diagnostics_aggregate_and_reset() {
@@ -1064,15 +1088,28 @@ mod tests {
         stats.record_segment(10.0);
         stats.record_segment(30.0);
         stats.short = 1;
-        stats.vad_errors = 2;
+        for operation in [VadOperation::Process, VadOperation::Flush] {
+            stats.record_vad_failure(
+                operation,
+                &anyhow::Error::from(silero_rs::VadError::InvalidData),
+            );
+            stats.record_vad_failure(operation, &anyhow::anyhow!("opaque VAD failure"));
+        }
         let snapshot = stats.snapshot_and_reset();
         assert_eq!(snapshot.emitted, 2);
         assert_eq!(snapshot.short, 1);
-        assert_eq!(snapshot.vad_errors, 2);
+        assert_eq!(snapshot.vad_process_invalid_data_failures, 1);
+        assert_eq!(snapshot.vad_process_inference_failures, 1);
+        assert_eq!(snapshot.vad_flush_invalid_data_failures, 1);
+        assert_eq!(snapshot.vad_flush_inference_failures, 1);
         assert_eq!(snapshot.duration_min_ms, Some(10.0));
         assert_eq!(snapshot.duration_max_ms, 30.0);
         assert_eq!(snapshot.duration_sum_ms / snapshot.emitted as f64, 20.0);
-        assert_eq!(stats.snapshot_and_reset().emitted, 0);
+        let reset = stats.snapshot_and_reset();
+        assert_eq!(reset.vad_process_invalid_data_failures, 0);
+        assert_eq!(reset.vad_process_inference_failures, 0);
+        assert_eq!(reset.vad_flush_invalid_data_failures, 0);
+        assert_eq!(reset.vad_flush_inference_failures, 0);
     }
 }
 

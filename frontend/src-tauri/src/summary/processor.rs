@@ -139,10 +139,9 @@ fn english_markdown_after_normalization_result(
             ))
         }
         Err(error) if cancellation_token.is_some_and(CancellationToken::is_cancelled) => Err(error),
-        Err(e) => {
+        Err(_) => {
             error!(
-                "English normalization pass failed; returning pass-1 markdown without hard fail: {}",
-                e
+                "English normalization failed; stage=normalization, returning pass-1 markdown"
             );
             Ok((
                 CleanedLlmMarkdown {
@@ -435,24 +434,22 @@ pub(crate) async fn generate_meeting_summary(
                             {
                                 return Err("Summary generation was cancelled".to_string());
                             }
-                            Err(error) if should_retry_chunk_failure(attempt, cancellation_token) => {
+                            Err(_) if should_retry_chunk_failure(attempt, cancellation_token) => {
                                 warn!(
-                                    "Failed processing chunk {}/{} on attempt {}/{}: {}; retrying",
+                                    "Summary chunk retry; chunk={}/{}, attempt={}/{}",
                                     index + 1,
                                     num_chunks,
                                     attempt,
-                                    MAX_CHUNK_ATTEMPTS,
-                                    error
+                                    MAX_CHUNK_ATTEMPTS
                                 );
                             }
                             Err(error) => {
                                 error!(
-                                    "Failed processing chunk {}/{} on attempt {}/{}: {}",
+                                    "Summary chunk failed; chunk={}/{}, attempt={}/{}",
                                     index + 1,
                                     num_chunks,
                                     attempt,
-                                    MAX_CHUNK_ATTEMPTS,
-                                    error
+                                    MAX_CHUNK_ATTEMPTS
                                 );
                                 return Err(format!(
                                     "Summary generation could not complete because transcript section {} of {} failed after {} attempts: {}. Please retry.",

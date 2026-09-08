@@ -41,13 +41,39 @@ struct WorkerLogStats {
     empty: u64,
     too_short: u64,
     failed: u64,
+    model_not_loaded_failures: u64,
+    engine_failures: u64,
+    unsupported_language_failures: u64,
+    speech_detected_emit_failures: u64,
+    transcript_update_emit_failures: u64,
     max_queue_depth: u64,
     total_processing_duration: Duration,
     confidence_total: f64,
     confidence_count: u64,
 }
 
+enum WorkerFailureCategory {
+    ModelNotLoaded,
+    EngineFailed,
+    UnsupportedLanguage,
+    SpeechDetectedEmit,
+    TranscriptUpdateEmit,
+}
+
 impl WorkerLogStats {
+    fn record_failure(&mut self, category: WorkerFailureCategory) {
+        self.failed += 1;
+        match category {
+            WorkerFailureCategory::ModelNotLoaded => self.model_not_loaded_failures += 1,
+            WorkerFailureCategory::EngineFailed => self.engine_failures += 1,
+            WorkerFailureCategory::UnsupportedLanguage => self.unsupported_language_failures += 1,
+            WorkerFailureCategory::SpeechDetectedEmit => self.speech_detected_emit_failures += 1,
+            WorkerFailureCategory::TranscriptUpdateEmit => {
+                self.transcript_update_emit_failures += 1
+            }
+        }
+    }
+
     fn snapshot_and_reset(&mut self) -> Self {
         std::mem::take(self)
     }
@@ -62,13 +88,18 @@ fn emit_worker_log_snapshot(stats: WorkerLogStats, final_summary: bool) {
 
     if final_summary {
         info!(
-            "transcription worker final summary queued={} completed={} emitted={} empty={} too_short={} failed={} max_queue_depth={} processing_ms={} confidence_average={:.2} confidence_count={}",
+            "transcription worker final summary queued={} completed={} emitted={} empty={} too_short={} failed={} model_not_loaded_failures={} engine_failures={} unsupported_language_failures={} speech_detected_emit_failures={} transcript_update_emit_failures={} max_queue_depth={} processing_ms={} confidence_average={:.2} confidence_count={}",
             stats.queued,
             stats.completed,
             stats.emitted,
             stats.empty,
             stats.too_short,
             stats.failed,
+            stats.model_not_loaded_failures,
+            stats.engine_failures,
+            stats.unsupported_language_failures,
+            stats.speech_detected_emit_failures,
+            stats.transcript_update_emit_failures,
             stats.max_queue_depth,
             stats.total_processing_duration.as_millis(),
             confidence_average,
@@ -76,19 +107,31 @@ fn emit_worker_log_snapshot(stats: WorkerLogStats, final_summary: bool) {
         );
         if stats.failed > 0 {
             warn!(
-                "transcription worker final failures={} queued={} completed={}",
-                stats.failed, stats.queued, stats.completed
+                "transcription worker final failures={} model_not_loaded_failures={} engine_failures={} unsupported_language_failures={} speech_detected_emit_failures={} transcript_update_emit_failures={} queued={} completed={}",
+                stats.failed,
+                stats.model_not_loaded_failures,
+                stats.engine_failures,
+                stats.unsupported_language_failures,
+                stats.speech_detected_emit_failures,
+                stats.transcript_update_emit_failures,
+                stats.queued,
+                stats.completed
             );
         }
     } else if stats.failed > 0 {
         warn!(
-            "transcription worker summary queued={} completed={} emitted={} empty={} too_short={} failed={} max_queue_depth={} processing_ms={} confidence_average={:.2} confidence_count={}",
+            "transcription worker summary queued={} completed={} emitted={} empty={} too_short={} failed={} model_not_loaded_failures={} engine_failures={} unsupported_language_failures={} speech_detected_emit_failures={} transcript_update_emit_failures={} max_queue_depth={} processing_ms={} confidence_average={:.2} confidence_count={}",
             stats.queued,
             stats.completed,
             stats.emitted,
             stats.empty,
             stats.too_short,
             stats.failed,
+            stats.model_not_loaded_failures,
+            stats.engine_failures,
+            stats.unsupported_language_failures,
+            stats.speech_detected_emit_failures,
+            stats.transcript_update_emit_failures,
             stats.max_queue_depth,
             stats.total_processing_duration.as_millis(),
             confidence_average,
@@ -96,13 +139,18 @@ fn emit_worker_log_snapshot(stats: WorkerLogStats, final_summary: bool) {
         );
     } else {
         debug!(
-            "transcription worker summary queued={} completed={} emitted={} empty={} too_short={} failed={} max_queue_depth={} processing_ms={} confidence_average={:.2} confidence_count={}",
+            "transcription worker summary queued={} completed={} emitted={} empty={} too_short={} failed={} model_not_loaded_failures={} engine_failures={} unsupported_language_failures={} speech_detected_emit_failures={} transcript_update_emit_failures={} max_queue_depth={} processing_ms={} confidence_average={:.2} confidence_count={}",
             stats.queued,
             stats.completed,
             stats.emitted,
             stats.empty,
             stats.too_short,
             stats.failed,
+            stats.model_not_loaded_failures,
+            stats.engine_failures,
+            stats.unsupported_language_failures,
+            stats.speech_detected_emit_failures,
+            stats.transcript_update_emit_failures,
             stats.max_queue_depth,
             stats.total_processing_duration.as_millis(),
             confidence_average,
@@ -188,7 +236,7 @@ pub fn start_transcription_task<R: Runtime>(
                     let processing_started = Instant::now();
 
                     if !engine_clone.is_model_loaded().await {
-                        stats.failed += 1;
+                        stats.record_failure(WorkerFailureCategory::ModelNotLoaded);
                     } else {
                         match transcribe_chunk_with_provider(&engine_clone, chunk, &app_clone).await {
                             Ok((transcript, confidence_opt, is_partial)) => {
@@ -215,7 +263,7 @@ pub fn start_transcription_task<R: Runtime>(
                                             )
                                             .is_err()
                                     {
-                                        stats.failed += 1;
+                                        stats.record_failure(WorkerFailureCategory::SpeechDetectedEmit);
                                     }
 
                                     let sequence_id =
@@ -244,7 +292,7 @@ pub fn start_transcription_task<R: Runtime>(
                                             );
                                         }
                                     } else {
-                                        stats.failed += 1;
+                                        stats.record_failure(WorkerFailureCategory::TranscriptUpdateEmit);
                                     }
                                 } else {
                                     stats.empty += 1;
@@ -254,11 +302,17 @@ pub fn start_transcription_task<R: Runtime>(
                                 stats.too_short += 1;
                             }
                             Err(TranscriptionError::ModelNotLoaded) => {
-                                stats.failed += 1;
+                                stats.record_failure(WorkerFailureCategory::ModelNotLoaded);
                             }
-                            Err(error) => {
-                                stats.failed += 1;
-                                let _ = app_clone.emit("transcription-warning", error.to_string());
+                            Err(error @ TranscriptionError::EngineFailed(_)) => {
+                                stats.record_failure(WorkerFailureCategory::EngineFailed);
+                                let _ =
+                                    app_clone.emit("transcription-warning", error.to_string());
+                            }
+                            Err(error @ TranscriptionError::UnsupportedLanguage(_)) => {
+                                stats.record_failure(WorkerFailureCategory::UnsupportedLanguage);
+                                let _ =
+                                    app_clone.emit("transcription-warning", error.to_string());
                             }
                         }
                     }
@@ -478,11 +532,27 @@ fn format_recording_time(seconds: f64) -> String {
             }
 
             let mut stats = WorkerLogStats::default();
-            for _ in 0..3 {
-                stats.failed += 1;
+            for category in [
+                WorkerFailureCategory::ModelNotLoaded,
+                WorkerFailureCategory::EngineFailed,
+                WorkerFailureCategory::UnsupportedLanguage,
+                WorkerFailureCategory::SpeechDetectedEmit,
+                WorkerFailureCategory::TranscriptUpdateEmit,
+            ] {
+                stats.record_failure(category);
             }
             let snapshot = stats.snapshot_and_reset();
-            assert_eq!(snapshot.failed, 3);
+            assert_eq!(snapshot.failed, 5);
+            assert_eq!(snapshot.model_not_loaded_failures, 1);
+            assert_eq!(snapshot.engine_failures, 1);
+            assert_eq!(snapshot.unsupported_language_failures, 1);
+            assert_eq!(snapshot.speech_detected_emit_failures, 1);
+            assert_eq!(snapshot.transcript_update_emit_failures, 1);
             assert_eq!(stats.failed, 0);
+            assert_eq!(stats.model_not_loaded_failures, 0);
+            assert_eq!(stats.engine_failures, 0);
+            assert_eq!(stats.unsupported_language_failures, 0);
+            assert_eq!(stats.speech_detected_emit_failures, 0);
+            assert_eq!(stats.transcript_update_emit_failures, 0);
         }
     }
