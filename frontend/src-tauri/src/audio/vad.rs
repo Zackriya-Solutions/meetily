@@ -262,8 +262,8 @@ impl ContinuousVadProcessor {
 
         let start_ms = self.speech_start_sample * 1000 / VAD_SAMPLE_RATE as usize;
         let available_end_ms = start_ms + active_samples * 1000 / VAD_SAMPLE_RATE as usize;
-        let end_ms = (start_ms + target_duration_ms).min(
-            start_ms + hard_max_duration_ms,
+        let end_ms = (start_ms + target_duration_ms as usize).min(
+            start_ms + hard_max_duration_ms as usize,
         ).min(available_end_ms);
         if end_ms <= start_ms {
             return Ok(None);
@@ -831,5 +831,36 @@ mod tests {
             processor.flush().expect("second flush failed").is_empty(),
             "flush() must not emit the same forced segment twice"
         );
+    }
+
+    #[test]
+    fn test_live_segment_take_is_bounded_and_contiguous() {
+        // Keep speech active long enough to require two live redemptions. The
+        // small bounds make this deterministic and exercise the same session
+        // take path as the production 20/25 second policy.
+        let audio = generate_late_speech_audio(20.0, 3.0, 16000);
+        let mut processor =
+            ContinuousVadProcessor::new(16000, 2000).expect("Failed to create processor");
+        processor
+            .process_audio(&audio)
+            .expect("process_audio failed");
+        assert!(processor.in_speech, "fixture must remain in active speech");
+
+        let first = processor
+            .take_live_segment_if_ready(500, 1000)
+            .expect("first live take failed")
+            .expect("first live segment should be ready");
+        assert_eq!(first.samples.len(), 8_000);
+        assert_eq!(first.end_timestamp_ms - first.start_timestamp_ms, 500.0);
+        assert!(first.end_timestamp_ms <= first.start_timestamp_ms + 1000.0);
+
+        let second = processor
+            .take_live_segment_if_ready(500, 1000)
+            .expect("second live take failed")
+            .expect("second live segment should be ready");
+        assert_eq!(second.samples.len(), 8_000);
+        assert_eq!(second.start_timestamp_ms, first.end_timestamp_ms);
+        assert_eq!(second.end_timestamp_ms - second.start_timestamp_ms, 500.0);
+        assert!(second.end_timestamp_ms <= second.start_timestamp_ms + 1000.0);
     }
 }
