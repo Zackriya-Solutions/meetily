@@ -68,8 +68,8 @@ fn session_live(s: &Arc<super::RecordingState>) -> bool {
             .map_or(false, |m| Arc::ptr_eq(m.get_state(), s))
 }
 
-/// RAII guard for the stop-tail flag. Sets `IS_RECORDING_STOPPING` true on
-/// construction and clears it on Drop — including during unwind — so a panic
+/// RAII guard for the stop-tail flag. The caller acquires the atomic gate before
+/// construction; Drop clears it on unwind — including during panic — so a panic
 /// anywhere in the ~320-line stop tail can't leave the flag stuck true and
 /// silently kill the mic-disconnect fallback for every later recording.
 ///
@@ -78,9 +78,11 @@ fn session_live(s: &Arc<super::RecordingState>) -> bool {
 /// and the stuck-flag failure mode returns — add a start-time reset then.
 struct StoppingGuard;
 impl StoppingGuard {
-    fn new() -> Self {
-        IS_RECORDING_STOPPING.store(true, Ordering::SeqCst);
-        StoppingGuard
+    fn new() -> Option<Self> {
+        IS_RECORDING_STOPPING
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .ok()
+            .map(|_| StoppingGuard)
     }
 }
 impl Drop for StoppingGuard {
@@ -673,6 +675,87 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
 }
 
 /// Stop recording with optimized graceful shutdown ensuring NO transcript chunks are lost
+///
+/// This entry point is also used by the transcription worker's fatal
+/// initialization path. It deliberately does not touch `TRANSCRIPTION_TASK`,
+/// so a worker can request shutdown without awaiting itself.
+pub(crate) async fn shutdown_after_fatal_transcription_failure<R: Runtime>(
+    app: AppHandle<R>,
+) {
+    if !IS_RECORDING.load(Ordering::SeqCst) {
+        return;
+    }
+    let Some(_stopping_guard) = StoppingGuard::new() else {
+        // A concurrent UI or tray Stop already owns the shutdown tail.
+        return;
+    };
+
+    let manager = RECORDING_MANAGER.lock().unwrap().take();
+    let (folder_path, meeting_name) = if let Some(mut manager) = manager {
+        let folder = manager.get_meeting_folder();
+        let name = manager.get_meeting_name();
+        if let Err(error) = manager.stop_streams_and_force_flush().await {
+            warn!("Fatal transcription failure cleanup could not stop streams: {}", error);
+        }
+        if let Err(error) = manager.save_recording_only(&app).await {
+            let _ = app.emit(
+                "recording-save-failed",
+                serde_json::json!({
+                    "message": error.to_string(),
+                    "meeting_folder": folder.as_ref().map(|path| path.to_string_lossy().to_string()),
+                    "recovery": "Resolve the storage error and retry sidecar/audio recovery from the meeting folder."
+                }),
+            );
+        }
+        (folder, name)
+    } else {
+        (None, None)
+    };
+
+    {
+        use tauri::Listener;
+        if let Some(listener_id) = TRANSCRIPT_LISTENER_ID.lock().unwrap().take() {
+            app.unlisten(listener_id);
+        }
+    }
+    IS_RECORDING.store(false, Ordering::SeqCst);
+    let _ = app.emit(
+        "recording-shutdown-progress",
+        serde_json::json!({
+            "stage": "complete",
+            "message": "Recording stopped after speech recognition initialization failed",
+            "progress": 100,
+            "outcome": "fatal_transcription_failure"
+        }),
+    );
+    let _ = app.emit(
+        "recording-stopped",
+        serde_json::json!({
+            "message": "Recording stopped after speech recognition initialization failed",
+            "folder_path": folder_path,
+            "meeting_name": meeting_name,
+            "outcome": "fatal_transcription_failure"
+        }),
+    );
+    crate::tray::update_tray_menu(&app);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stopping_gate_allows_only_one_owner() {
+        IS_RECORDING_STOPPING.store(false, Ordering::SeqCst);
+        let first = StoppingGuard::new();
+        assert!(first.is_some());
+        assert!(StoppingGuard::new().is_none());
+        drop(first);
+        assert!(StoppingGuard::new().is_some());
+        IS_RECORDING_STOPPING.store(false, Ordering::SeqCst);
+    }
+}
+
 pub async fn stop_recording<R: Runtime>(
     app: AppHandle<R>,
     _args: RecordingArgs,
@@ -681,11 +764,15 @@ pub async fn stop_recording<R: Runtime>(
         "🛑 Starting optimized recording shutdown - ensuring ALL transcript chunks are preserved"
     );
 
-    // Check if recording is active
+    // Check if recording is active and acquire the single shutdown owner.
     if !IS_RECORDING.load(Ordering::SeqCst) {
         info!("Recording was not active");
         return Ok(());
     }
+    let Some(_stopping_guard) = StoppingGuard::new() else {
+        info!("Recording shutdown already in progress");
+        return Ok(());
+    };
 
     // Emit shutdown progress to frontend
     let _ = app.emit(
@@ -708,8 +795,6 @@ pub async fn stop_recording<R: Runtime>(
     // manager. IS_RECORDING itself stays true until the tail completes — the
     // frontend polls it to keep the stop UI up. RAII so a panic in the tail
     // below can't leave the flag stuck true.
-    let _stopping_guard = StoppingGuard::new();
-
     let stop_result = if let Some(mut manager) = manager_for_cleanup {
         // Use FORCE FLUSH to immediately process all accumulated audio - eliminates 30s delay!
         info!("🚀 Using FORCE FLUSH to eliminate pipeline accumulation delays");

@@ -60,6 +60,13 @@ pub fn start_transcription_task<R: Runtime>(
             Ok(engine) => engine,
             Err(e) => {
                 error!("Failed to initialize transcription engine: {}", e);
+                // Complete native shutdown before notifying the frontend. The
+                // helper never awaits this worker, avoiding a self-await when
+                // the global TRANSCRIPTION_TASK handle points here.
+                crate::audio::recording_commands::shutdown_after_fatal_transcription_failure(
+                    app.clone(),
+                )
+                .await;
                 let _ = app.emit("transcription-error", serde_json::json!({
                     "error": e,
                     "userMessage": "Recording failed: Unable to initialize speech recognition. Please check your model settings.",
