@@ -237,6 +237,62 @@ impl ContinuousVadProcessor {
         Ok(completed_segments)
     }
 
+    /// Take one bounded prefix of an active live segment once it reaches the
+    /// target duration. The VAD session remains in speech state, and its
+    /// absolute buffer is advanced with `take_until`, so the next forced or
+    /// natural segment starts exactly where this one ended.
+    pub fn take_live_segment_if_ready(
+        &mut self,
+        target_duration_ms: u32,
+        hard_max_duration_ms: u32,
+    ) -> Result<Option<SpeechSegment>> {
+        if !self.in_speech {
+            return Ok(None);
+        }
+
+        let active_samples = self.session.current_speech_samples();
+        let target_samples = target_duration_ms as usize * VAD_SAMPLE_RATE as usize / 1000;
+        let hard_max_samples = hard_max_duration_ms as usize * VAD_SAMPLE_RATE as usize / 1000;
+        if active_samples < target_samples {
+            return Ok(None);
+        }
+        if target_samples == 0 || hard_max_samples < target_samples {
+            return Err(anyhow!("invalid live VAD segment bounds"));
+        }
+
+        let start_ms = self.speech_start_sample * 1000 / VAD_SAMPLE_RATE as usize;
+        let available_end_ms = start_ms + active_samples * 1000 / VAD_SAMPLE_RATE as usize;
+        let end_ms = (start_ms + target_duration_ms).min(
+            start_ms + hard_max_duration_ms,
+        ).min(available_end_ms);
+        if end_ms <= start_ms {
+            return Ok(None);
+        }
+
+        let samples = self
+            .session
+            .get_speech(start_ms, Some(end_ms))
+            .to_vec();
+        if samples.is_empty() {
+            return Ok(None);
+        }
+
+        // Advance the canonical session buffer. This also updates Silero's
+        // active start, keeping future segments contiguous with no overlap.
+        let _ = self
+            .session
+            .take_until(Duration::from_millis(end_ms as u64));
+        self.speech_start_sample = end_ms * VAD_SAMPLE_RATE as usize / 1000;
+        self.current_speech = self.session.get_current_speech().to_vec();
+
+        Ok(Some(SpeechSegment {
+            samples,
+            start_timestamp_ms: start_ms as f64,
+            end_timestamp_ms: end_ms as f64,
+            confidence: 0.8,
+        }))
+    }
+
     fn process_chunk(&mut self, chunk: &[f32]) -> Result<()> {
         // Track accumulated speech buffer size to detect memory issues
         let current_speech_size = self.current_speech.len();
