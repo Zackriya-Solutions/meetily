@@ -417,6 +417,11 @@ async fn run_retranscription<R: Runtime>(
         return Err(anyhow!("Retranscription cancelled"));
     }
 
+    // Never replace an existing transcript with an empty result. Individual
+    // empty segments are valid and remain skippable, but an all-empty result
+    // must stop before the destructive delete+insert transaction below.
+    ensure_usable_retranscription_result(&all_transcripts)?;
+
     emit_progress(&app, &meeting_id, "saving", 80, "Saving transcripts...");
 
     // Create transcript segments with proper timestamps from VAD
@@ -497,6 +502,18 @@ async fn run_retranscription<R: Runtime>(
         duration_seconds,
         language,
     })
+}
+
+fn ensure_usable_retranscription_result(
+    transcripts: &[(String, f64, f64)],
+) -> Result<()> {
+    if transcripts.is_empty() {
+        return Err(anyhow!(
+            "No transcribable speech was produced; existing transcript was preserved"
+        ));
+    }
+
+    Ok(())
 }
 
 /// Emit progress event
@@ -843,6 +860,27 @@ mod tests {
         let transcripts: Vec<(String, f64, f64)> = vec![];
         let segments = create_transcript_segments(&transcripts);
         assert!(segments.is_empty());
+    }
+
+    #[test]
+    fn test_empty_retranscription_result_is_rejected_before_replacement() {
+        let transcripts: Vec<(String, f64, f64)> = vec![];
+
+        let error = ensure_usable_retranscription_result(&transcripts)
+            .expect_err("an empty result must not replace existing transcript rows");
+
+        assert_eq!(
+            error.to_string(),
+            "No transcribable speech was produced; existing transcript was preserved"
+        );
+    }
+
+    #[test]
+    fn test_non_empty_retranscription_result_is_accepted() {
+        let transcripts = vec![("Recovered text".to_string(), 0.0, 1000.0)];
+
+        ensure_usable_retranscription_result(&transcripts)
+            .expect("a usable result should continue to replacement");
     }
 
     #[test]
