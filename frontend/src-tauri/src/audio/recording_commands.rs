@@ -737,7 +737,6 @@ pub(crate) async fn shutdown_after_fatal_transcription_failure<R: Runtime>(
             "outcome": "fatal_transcription_failure"
         }),
     );
-    #[cfg(not(test))]
     crate::tray::update_tray_menu(&app);
 }
 
