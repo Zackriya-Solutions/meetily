@@ -1217,4 +1217,127 @@ mod tests {
         assert!(mic_tail[12_000..].iter().all(|sample| *sample == 0.0));
         assert!(ring.drain_tail().is_none());
     }
+
+    #[test]
+    fn resampler_handles_non_aligned_non_48khz_input_without_padding_duration() {
+        use std::sync::Arc;
+
+        let state = RecordingState::new();
+        state.start_recording().expect("synthetic recording should start");
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        state.set_audio_sender(sender);
+
+        let device = Arc::new(AudioDevice::new(
+            "synthetic 44.1 kHz system source".to_string(),
+            crate::audio::devices::DeviceType::Input,
+        ));
+        let capture = AudioCapture::new(
+            device,
+            state.clone(),
+            44_100,
+            1,
+            DeviceType::System,
+            None,
+        );
+
+        // Deliberately use callback sizes that do not align to the persistent
+        // 512-sample rubato block, with a non-block-aligned final remainder.
+        let chunk_sizes = [997usize, 1301, 777, 2049];
+        let input_samples = chunk_sizes.iter().sum::<usize>();
+        let mut next_sample = 0.0f32;
+        for size in chunk_sizes {
+            let samples: Vec<f32> = (0..size)
+                .map(|_| {
+                    let value = (next_sample * 0.01).sin() * 0.2;
+                    next_sample += 1.0;
+                    value
+                })
+                .collect();
+            capture.process_audio_data(&samples);
+        }
+
+        // The final partial input block is flushed with synthetic padding,
+        // then trimmed to the duration represented by real input samples.
+        capture.flush_pending_resampler();
+
+        let mut output = Vec::new();
+        while let Ok(chunk) = receiver.try_recv() {
+            output.push(chunk);
+        }
+        let output_samples: usize = output.iter().map(|chunk| chunk.data.len()).sum();
+        let expected_samples = ((input_samples as f64 * 48_000.0 / 44_100.0).round()) as usize;
+        assert_eq!(input_samples % 512, 4);
+        assert!(!output.is_empty(), "resampler should emit complete and flushed blocks");
+        assert!(output.iter().all(|chunk| chunk.sample_rate == 48_000));
+        assert_eq!(
+            output_samples, expected_samples,
+            "output duration must match real input duration, not padded 512-sample blocks"
+        );
+        assert!(
+            output.iter().all(|chunk| chunk.timestamp >= 0.0),
+            "resampler output timestamps must remain non-negative"
+        );
+    }
+
+    #[test]
+    fn callback_in_flight_shutdown_rejects_audio_after_recording_stops() {
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+
+        let state = RecordingState::new();
+        state.start_recording().expect("synthetic recording should start");
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        state.set_audio_sender(sender);
+        let device = Arc::new(AudioDevice::new(
+            "synthetic system source".to_string(),
+            crate::audio::devices::DeviceType::Input,
+        ));
+        let capture = Arc::new(AudioCapture::new(
+            device,
+            state.clone(),
+            48_000,
+            1,
+            DeviceType::System,
+            None,
+        ));
+
+        // Model several callbacks racing the stop request. Every callback is
+        // allowed to finish if it entered before stop, but no callback after
+        // the state transition may enqueue a new chunk.
+        let workers = 8;
+        let barrier = Arc::new(Barrier::new(workers + 1));
+        let handles: Vec<_> = (0..workers)
+            .map(|_| {
+                let capture = Arc::clone(&capture);
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    barrier.wait();
+                    capture.process_audio_data(&vec![0.1; 480]);
+                })
+            })
+            .collect();
+        barrier.wait();
+        for handle in handles {
+            handle.join().expect("callback worker should not panic");
+        }
+
+        state.stop_recording();
+        let chunks_before_post_stop = {
+            let mut count = 0;
+            while receiver.try_recv().is_ok() {
+                count += 1;
+            }
+            count
+        };
+        capture.process_audio_data(&vec![0.1; 480]);
+        assert_eq!(
+            receiver.try_recv().is_ok(),
+            false,
+            "a callback invoked after stop must not enqueue audio"
+        );
+        assert!(
+            chunks_before_post_stop <= workers,
+            "in-flight callbacks may enqueue at most one chunk each"
+        );
+    }
 }
