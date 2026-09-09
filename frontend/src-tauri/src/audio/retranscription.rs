@@ -432,38 +432,9 @@ async fn run_retranscription<R: Runtime>(
         .try_state::<AppState>()
         .ok_or_else(|| anyhow!("App state not available"))?;
 
-    // Wrap delete+insert+update in a transaction to prevent data loss
-    let pool = app_state.db_manager.pool();
-    let mut conn = pool.acquire().await.map_err(|e| anyhow!("DB error: {}", e))?;
-    let mut tx = sqlx::Connection::begin(&mut *conn)
-        .await
-        .map_err(|e| anyhow!("Failed to start transaction: {}", e))?;
-
-    sqlx::query("DELETE FROM transcripts WHERE meeting_id = ?")
-        .bind(&meeting_id)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| anyhow!("Failed to delete existing transcripts: {}", e))?;
-
-    for segment in &segments {
-        sqlx::query(
-            "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration)
-             VALUES (?, ?, ?, ?, ?, ?, ?)"
-        )
-        .bind(&segment.id)
-        .bind(&meeting_id)
-        .bind(&segment.text)
-        .bind(&segment.timestamp)
-        .bind(segment.audio_start_time)
-        .bind(segment.audio_end_time)
-        .bind(segment.duration)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| anyhow!("Failed to insert transcript: {}", e))?;
-    }
-
-    tx.commit().await
-        .map_err(|e| anyhow!("Failed to commit transaction: {}", e))?;
+    // Keep the destructive replacement in one tested transaction. The empty
+    // result guard above must run before this helper is reached.
+    replace_transcripts_in_db(app_state.db_manager.pool(), &meeting_id, &segments).await?;
 
     info!(
         "Updated {} transcripts for meeting {} in transaction",
@@ -513,6 +484,47 @@ fn ensure_usable_retranscription_result(
         ));
     }
 
+    Ok(())
+}
+
+/// Replace the committed transcript rows after ASR has produced a usable
+/// result. This is deliberately separate from the guard so callers cannot
+/// accidentally turn an all-empty model result into an explicit clear.
+async fn replace_transcripts_in_db(
+    pool: &sqlx::SqlitePool,
+    meeting_id: &str,
+    segments: &[crate::api::TranscriptSegment],
+) -> Result<()> {
+    let mut conn = pool.acquire().await.map_err(|e| anyhow!("DB error: {}", e))?;
+    let mut tx = sqlx::Connection::begin(&mut *conn)
+        .await
+        .map_err(|e| anyhow!("Failed to start transaction: {}", e))?;
+
+    sqlx::query("DELETE FROM transcripts WHERE meeting_id = ?")
+        .bind(meeting_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| anyhow!("Failed to delete existing transcripts: {}", e))?;
+
+    for segment in segments {
+        sqlx::query(
+            "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration)
+             VALUES (?, ?, ?, ?, ?, ?, ?)"
+        )
+        .bind(&segment.id)
+        .bind(meeting_id)
+        .bind(&segment.text)
+        .bind(&segment.timestamp)
+        .bind(segment.audio_start_time)
+        .bind(segment.audio_end_time)
+        .bind(segment.duration)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| anyhow!("Failed to insert transcript: {}", e))?;
+    }
+
+    tx.commit().await
+        .map_err(|e| anyhow!("Failed to commit transaction: {}", e))?;
     Ok(())
 }
 
@@ -881,6 +893,141 @@ mod tests {
 
         ensure_usable_retranscription_result(&transcripts)
             .expect("a usable result should continue to replacement");
+    }
+
+    async fn test_transcript_pool() -> sqlx::SqlitePool {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:")
+            .await
+            .expect("in-memory SQLite should open");
+        sqlx::query(
+            "CREATE TABLE transcripts (
+                id TEXT PRIMARY KEY,
+                meeting_id TEXT NOT NULL,
+                transcript TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                audio_start_time REAL,
+                audio_end_time REAL,
+                duration REAL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("transcript table should be created");
+        sqlx::query(
+            "INSERT INTO transcripts
+                (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind("existing-segment")
+        .bind("retranscription-e2e")
+        .bind("Existing transcript must survive an empty model result")
+        .bind("2026-01-01T00:00:00Z")
+        .bind(0.0f64)
+        .bind(2.0f64)
+        .bind(2.0f64)
+        .execute(&pool)
+        .await
+        .expect("existing transcript should be inserted");
+        pool
+    }
+
+    #[tokio::test]
+    async fn retranscription_e2e_mixed_empty_segments_replaces_only_usable_rows() {
+        let pool = test_transcript_pool().await;
+        let folder = tempfile::tempdir().expect("temporary transcript folder should exist");
+        let old_sidecar = create_transcript_segments(&[(
+            "Existing transcript must survive an empty model result".to_string(),
+            0.0,
+            2000.0,
+        )]);
+        write_transcripts_json(folder.path(), &old_sidecar).expect("baseline sidecar should write");
+
+        // This is the raw mixed ASR result. Empty/whitespace segments are
+        // expected false positives and must be skipped before replacement.
+        let raw_results = vec![
+            ("   ".to_string(), 0.0, 1000.0),
+            ("Recovered usable speech".to_string(), 1000.0, 3000.0),
+            ("\n".to_string(), 3000.0, 4000.0),
+        ];
+        let usable_results: Vec<_> = raw_results
+            .into_iter()
+            .filter(|(text, _, _)| !text.trim().is_empty())
+            .collect();
+        ensure_usable_retranscription_result(&usable_results)
+            .expect("one usable segment should permit replacement");
+        let replacement = create_transcript_segments(&usable_results);
+
+        replace_transcripts_in_db(&pool, "retranscription-e2e", &replacement)
+            .await
+            .expect("replacement transaction should commit");
+        write_transcripts_json(folder.path(), &replacement)
+            .expect("replacement sidecar should write");
+
+        let rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT transcript FROM transcripts WHERE meeting_id = ? ORDER BY id",
+        )
+        .bind("retranscription-e2e")
+        .fetch_all(&pool)
+        .await
+        .expect("replacement rows should be queryable");
+        assert_eq!(rows, vec![("Recovered usable speech".to_string(),)]);
+        let sidecar: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(folder.path().join("transcripts.json"))
+                .expect("replacement sidecar should be readable"),
+        )
+        .expect("replacement sidecar should be valid JSON");
+        assert_eq!(sidecar["total_segments"], 1);
+        assert_eq!(sidecar["segments"][0]["text"], "Recovered usable speech");
+    }
+
+    #[tokio::test]
+    async fn retranscription_e2e_empty_result_preserves_database_and_sidecar() {
+        let pool = test_transcript_pool().await;
+        let folder = tempfile::tempdir().expect("temporary transcript folder should exist");
+        let baseline = create_transcript_segments(&[(
+            "Existing transcript must survive an empty model result".to_string(),
+            0.0,
+            2000.0,
+        )]);
+        write_transcripts_json(folder.path(), &baseline).expect("baseline sidecar should write");
+        let before_sidecar = std::fs::read(folder.path().join("transcripts.json"))
+            .expect("baseline sidecar should be readable");
+
+        // An all-empty ASR result is an implicit clear attempt. The only
+        // supported clearing operation is an explicit user action; this path
+        // must stop before the replacement transaction and leave both stores.
+        let empty_results = vec![
+            ("".to_string(), 0.0, 1000.0),
+            ("  \t".to_string(), 1000.0, 2000.0),
+        ];
+        let usable_results: Vec<_> = empty_results
+            .into_iter()
+            .filter(|(text, _, _)| !text.trim().is_empty())
+            .collect();
+        let error = ensure_usable_retranscription_result(&usable_results)
+            .expect_err("all-empty ASR output must not clear committed transcripts");
+        assert_eq!(
+            error.to_string(),
+            "No transcribable speech was produced; existing transcript was preserved"
+        );
+
+        let rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT transcript FROM transcripts WHERE meeting_id = ? ORDER BY id",
+        )
+        .bind("retranscription-e2e")
+        .fetch_all(&pool)
+        .await
+        .expect("preserved rows should be queryable");
+        assert_eq!(
+            rows,
+            vec![("Existing transcript must survive an empty model result".to_string(),)]
+        );
+        assert_eq!(
+            std::fs::read(folder.path().join("transcripts.json"))
+                .expect("preserved sidecar should be readable"),
+            before_sidecar,
+            "empty result must not rewrite transcripts.json"
+        );
     }
 
     #[test]
