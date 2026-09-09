@@ -113,6 +113,7 @@ export function ImportAudioDialog({
     fileInfo,
     progress,
     error,
+    warning,
     isProcessing,
     isBusy,
     selectFile,
@@ -265,6 +266,13 @@ export function ImportAudioDialog({
         </DialogHeader>
 
         <div className="space-y-4 py-4">
+          {warning && !isProcessing && !error && (
+            <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900" role="status">
+              <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-600" />
+              <span>{warning}</span>
+            </div>
+          )}
+
           {/* File selection / info */}
           {!isProcessing && !error && (
             <>
