@@ -744,8 +744,11 @@ pub(crate) async fn shutdown_after_fatal_transcription_failure<R: Runtime>(
 mod tests {
     use super::*;
 
+    static TEST_GLOBAL_STATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn stopping_gate_allows_only_one_owner() {
+        let _global_state_guard = TEST_GLOBAL_STATE.lock().unwrap();
         IS_RECORDING_STOPPING.store(false, Ordering::SeqCst);
         let first = StoppingGuard::new();
         assert!(first.is_some());
@@ -757,6 +760,7 @@ mod tests {
 
     #[test]
     fn stopping_gate_has_one_winner_under_concurrent_stop_race() {
+        let _global_state_guard = TEST_GLOBAL_STATE.lock().unwrap();
         use std::sync::{Arc, Barrier};
         use std::thread;
 
@@ -802,6 +806,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn fatal_worker_shutdown_completes_before_error_event() {
+        let _global_state_guard = TEST_GLOBAL_STATE.lock().unwrap();
         use std::sync::{Arc, Mutex};
         use tauri::{Listener, Manager};
 
@@ -846,6 +851,166 @@ mod tests {
 
         app.unlisten(stopped_listener);
         app.unlisten(error_listener);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn fatal_worker_startup_when_recording_is_inactive_only_emits_error() {
+        let _global_state_guard = TEST_GLOBAL_STATE.lock().unwrap();
+        use std::sync::{Arc, Mutex};
+        use tauri::Listener;
+
+        let app = tauri::test::mock_app();
+        let temp = tempfile::tempdir().expect("temporary database directory should exist");
+        let db_path = temp.path().join("meetily.sqlite");
+        let db_path = db_path.to_string_lossy().into_owned();
+        let db_manager = crate::database::manager::DatabaseManager::new(&db_path, &db_path)
+            .await
+            .expect("mock app database should initialize");
+        app.manage(crate::state::AppState { db_manager });
+
+        let events = Arc::new(Mutex::new(Vec::<&'static str>::new()));
+        let stopped_events = Arc::clone(&events);
+        let stopped_listener = app.listen("recording-stopped", move |_| {
+            stopped_events.lock().unwrap().push("recording-stopped");
+        });
+        let error_events = Arc::clone(&events);
+        let error_listener = app.listen("transcription-error", move |_| {
+            error_events.lock().unwrap().push("transcription-error");
+        });
+
+        IS_RECORDING.store(false, Ordering::SeqCst);
+        IS_RECORDING_STOPPING.store(false, Ordering::SeqCst);
+        *RECORDING_MANAGER.lock().unwrap() = Some(RecordingManager::new());
+        let (_sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        let worker = transcription::start_transcription_task(app.handle().clone(), receiver);
+        tokio::time::timeout(std::time::Duration::from_secs(5), worker)
+            .await
+            .expect("inactive startup failure should return promptly")
+            .expect("inactive startup worker should not panic");
+
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec!["transcription-error"],
+            "inactive startup failure must not run native recording shutdown"
+        );
+        assert!(RECORDING_MANAGER.lock().unwrap().is_some());
+        assert!(!IS_RECORDING_STOPPING.load(Ordering::SeqCst));
+        RECORDING_MANAGER.lock().unwrap().take();
+        app.unlisten(stopped_listener);
+        app.unlisten(error_listener);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn fatal_native_save_failure_emits_error_and_still_completes_cleanup() {
+        let _global_state_guard = TEST_GLOBAL_STATE.lock().unwrap();
+        use std::sync::{Arc, Mutex};
+        use tauri::Listener;
+
+        let app = tauri::test::mock_app();
+        let temp = tempfile::tempdir().expect("temporary database directory should exist");
+        let db_path = temp.path().join("meetily.sqlite");
+        let db_path = db_path.to_string_lossy().into_owned();
+        let db_manager = crate::database::manager::DatabaseManager::new(&db_path, &db_path)
+            .await
+            .expect("mock app database should initialize");
+        app.manage(crate::state::AppState { db_manager });
+
+        let events = Arc::new(Mutex::new(Vec::<&'static str>::new()));
+        let save_events = Arc::clone(&events);
+        let save_listener = app.listen("recording-save-failed", move |_| {
+            save_events.lock().unwrap().push("recording-save-failed");
+        });
+        let stopped_events = Arc::clone(&events);
+        let stopped_listener = app.listen("recording-stopped", move |_| {
+            stopped_events.lock().unwrap().push("recording-stopped");
+        });
+
+        let mut manager = RecordingManager::new();
+        manager.inject_native_save_failure_for_test();
+        IS_RECORDING.store(true, Ordering::SeqCst);
+        IS_RECORDING_STOPPING.store(false, Ordering::SeqCst);
+        *RECORDING_MANAGER.lock().unwrap() = Some(manager);
+
+        shutdown_after_fatal_transcription_failure(app.handle().clone()).await;
+
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec!["recording-save-failed", "recording-stopped"],
+            "save failure must be surfaced before fatal shutdown completion"
+        );
+        assert!(
+            events.lock().unwrap().contains(&"recording-save-failed"),
+            "native save failure must remain caller-visible"
+        );
+        assert!(!IS_RECORDING.load(Ordering::SeqCst));
+        assert!(!IS_RECORDING_STOPPING.load(Ordering::SeqCst));
+        assert!(RECORDING_MANAGER.lock().unwrap().is_none());
+        app.unlisten(save_listener);
+        app.unlisten(stopped_listener);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn fatal_ui_and_tray_stop_callers_share_one_real_shutdown_tail() {
+        let _global_state_guard = TEST_GLOBAL_STATE.lock().unwrap();
+        use std::sync::{Arc, Mutex};
+        use tauri::Listener;
+
+        let app = tauri::test::mock_app();
+        let temp = tempfile::tempdir().expect("temporary database directory should exist");
+        let db_path = temp.path().join("meetily.sqlite");
+        let db_path = db_path.to_string_lossy().into_owned();
+        let db_manager = crate::database::manager::DatabaseManager::new(&db_path, &db_path)
+            .await
+            .expect("mock app database should initialize");
+        app.manage(crate::state::AppState { db_manager });
+
+        let stopped_count = Arc::new(Mutex::new(0usize));
+        let count_for_listener = Arc::clone(&stopped_count);
+        let stopped_listener = app.listen("recording-stopped", move |_| {
+            *count_for_listener.lock().unwrap() += 1;
+        });
+
+        IS_RECORDING.store(true, Ordering::SeqCst);
+        IS_RECORDING_STOPPING.store(false, Ordering::SeqCst);
+        *RECORDING_MANAGER.lock().unwrap() = Some(RecordingManager::new());
+        let fatal_app = app.handle().clone();
+        let ui_app = app.handle().clone();
+        let tray_app = app.handle().clone();
+        let fatal = tokio::spawn(async move {
+            shutdown_after_fatal_transcription_failure(fatal_app).await;
+        });
+        let ui_stop = tokio::spawn(async move {
+            stop_recording(
+                ui_app,
+                RecordingArgs {
+                    save_path: "ui-stop.wav".to_string(),
+                },
+            )
+            .await
+        });
+        let tray_stop = tokio::spawn(async move {
+            stop_recording(
+                tray_app,
+                RecordingArgs {
+                    save_path: "tray-stop.wav".to_string(),
+                },
+            )
+            .await
+        });
+
+        fatal.await.expect("fatal caller should not panic");
+        ui_stop.await.expect("UI stop caller should not panic").expect("UI stop should complete");
+        tray_stop.await.expect("tray stop caller should not panic").expect("tray stop should complete");
+
+        assert_eq!(
+            *stopped_count.lock().unwrap(),
+            1,
+            "fatal, UI, and tray callers must emit one shared stop completion"
+        );
+        assert!(!IS_RECORDING.load(Ordering::SeqCst));
+        assert!(!IS_RECORDING_STOPPING.load(Ordering::SeqCst));
+        assert!(RECORDING_MANAGER.lock().unwrap().is_none());
+        app.unlisten(stopped_listener);
     }
 }
 

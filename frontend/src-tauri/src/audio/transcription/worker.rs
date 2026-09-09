@@ -29,6 +29,13 @@ fn should_emit_transcript(text: &str) -> bool {
     !text.trim().is_empty()
 }
 
+fn emit_recoverable_chunk_warning<R: Runtime>(
+    app: &AppHandle<R>,
+    error: &TranscriptionError,
+) {
+    let _ = app.emit("transcription-warning", error.to_string());
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TranscriptUpdate {
     pub text: String,
@@ -250,7 +257,7 @@ pub fn start_transcription_task<R: Runtime>(
                                         }
                                         _ => {
                                             warn!("Worker {}: Transcription failed: {}", worker_id, e);
-                                            let _ = app_clone.emit("transcription-warning", e.to_string());
+                                            emit_recoverable_chunk_warning(&app_clone, &e);
                                         }
                                     }
                                 }
@@ -600,6 +607,8 @@ fn format_recording_time(seconds: f64) -> String {
     #[cfg(test)]
     mod tests {
         use super::*;
+        use std::sync::{Arc, Mutex};
+        use tauri::Listener;
 
         #[test]
         fn keeps_short_acknowledgements() {
@@ -611,5 +620,37 @@ fn format_recording_time(seconds: f64) -> String {
         fn drops_empty_and_whitespace_only() {
             assert!(!should_emit_transcript(""));
             assert!(!should_emit_transcript("   "));
+        }
+
+        #[tokio::test]
+        async fn recoverable_chunk_error_emits_warning_without_shutdown() {
+            let app = tauri::test::mock_app();
+            let warnings = Arc::new(Mutex::new(Vec::<String>::new()));
+            let warnings_for_listener = Arc::clone(&warnings);
+            let warning_listener = app.listen("transcription-warning", move |event| {
+                warnings_for_listener
+                    .lock()
+                    .unwrap()
+                    .push(event.payload().to_string());
+            });
+            let stopped = Arc::new(Mutex::new(0usize));
+            let stopped_for_listener = Arc::clone(&stopped);
+            let stopped_listener = app.listen("recording-stopped", move |_| {
+                *stopped_for_listener.lock().unwrap() += 1;
+            });
+
+            // This is the same recoverable `EngineFailed` branch used by the
+            // worker for an individual chunk. It reports a warning and must
+            // not invoke fatal native shutdown or emit recording-stopped.
+            emit_recoverable_chunk_warning(
+                &app.handle().clone(),
+                &TranscriptionError::EngineFailed("synthetic chunk failure".to_string()),
+            );
+
+            assert_eq!(warnings.lock().unwrap().len(), 1);
+            assert!(warnings.lock().unwrap()[0].contains("synthetic chunk failure"));
+            assert_eq!(*stopped.lock().unwrap(), 0);
+            app.unlisten(warning_listener);
+            app.unlisten(stopped_listener);
         }
     }
