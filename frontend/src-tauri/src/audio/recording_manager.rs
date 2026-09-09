@@ -20,6 +20,14 @@ pub enum StreamManagerType {
     Standard(AudioStreamManager),
 }
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum RecordingStartError {
+    #[error("Failed to initialize speech recognition: {0}")]
+    TranscriptionRuntime(#[source] anyhow::Error),
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+
 // ============================================================================
 // macOS Core Audio "pre-wake" — ported from feat/audio-device-handling
 // (commit 8bf6af8b, with refinements from d266feac + 7107adc7 + a10f8e55).
@@ -107,7 +115,7 @@ fn wake_audio_connection_sync(speaker_device_name: &str) -> Result<()> {
 /// should log the error and proceed if this fails; recording will still work,
 /// it just may have the 60-90s silent startup on BT.
 #[cfg(target_os = "macos")]
-async fn wake_audio_connection(speaker_device_name: &str) -> Result<()> {
+pub(super) async fn wake_audio_connection(speaker_device_name: &str) -> Result<()> {
     let name = speaker_device_name.to_string();
     tokio::task::spawn_blocking(move || {
         wake_audio_connection_sync(&name)
@@ -210,25 +218,24 @@ impl RecordingManager {
 
     /// Start recording with specified devices
     ///
+    /// On macOS, the command entry points wake audio and verify microphone
+    /// access before constructing the manager and calling this method.
+    ///
     /// # Arguments
     /// * `microphone_device` - Optional microphone device to use
     /// * `system_device` - Optional system audio device to use
     /// * `auto_save` - Whether to save audio checkpoints (true) or just transcripts/metadata (false)
-    pub async fn start_recording(
+    pub(crate) async fn start_recording(
         &mut self,
         microphone_device: Option<Arc<AudioDevice>>,
         system_device: Option<Arc<AudioDevice>>,
         auto_save: bool,
-    ) -> Result<mpsc::UnboundedReceiver<AudioChunk>> {
+    ) -> std::result::Result<mpsc::UnboundedReceiver<AudioChunk>, RecordingStartError> {
         info!("Starting recording manager (auto_save: {})", auto_save);
 
         // Set up transcription channel
         let (transcription_sender, transcription_receiver) = mpsc::unbounded_channel::<AudioChunk>();
-
-        // CRITICAL FIX: Create recording sender for pre-mixed audio from pipeline
-        // Pipeline will mix mic + system audio professionally and send to this channel
-        // Pass auto_save to control whether audio checkpoints are created
-        let recording_sender = self.recording_saver.start_accumulation(auto_save);
+        let (recording_sender, recording_receiver) = mpsc::unbounded_channel::<AudioChunk>();
 
         // Start recording state first
         self.state.start_recording()?;
@@ -251,16 +258,10 @@ impl RecordingManager {
             ("No System Audio".to_string(), super::device_detection::InputDeviceKind::Unknown)
         };
 
-        // Update recording metadata with device information
-        self.recording_saver.set_device_info(
-            microphone_device.as_ref().map(|d| d.name.clone()),
-            system_device.as_ref().map(|d| d.name.clone())
-        );
-
         // Start the audio processing pipeline with FFmpeg adaptive mixer
         // Pipeline will: 1) Mix mic+system audio with adaptive buffering, 2) Send mixed to recording_sender,
         // 3) Apply VAD and send speech segments to transcription
-        self.pipeline_manager.start(
+        if let Err(error) = self.pipeline_manager.start(
             self.state.clone(),
             transcription_sender,
             0, // Ignored - using dynamic sizing internally
@@ -270,27 +271,16 @@ impl RecordingManager {
             mic_kind,
             sys_name,
             sys_kind,
-        )?;
-
-        // Wake the audio connection on macOS before opening capture streams.
-        // Without this, a deep-cold Bluetooth link can deliver no mic audio
-        // for the first 60-90 seconds of recording. Non-fatal on failure.
-        #[cfg(target_os = "macos")]
-        {
-            let wake_name = system_device
-                .as_ref()
-                .map(|s| s.name.clone())
-                .or_else(|| {
-                    cpal::default_host()
-                        .default_output_device()
-                        .and_then(|d| d.name().ok())
-                });
-            if let Some(name) = wake_name {
-                if let Err(e) = wake_audio_connection(&name).await {
-                    warn!("[AUDIO_WAKE] Wake failed: {} — proceeding anyway", e);
-                }
-            }
+        ) {
+            self.state.stop_recording();
+            return Err(RecordingStartError::TranscriptionRuntime(error));
         }
+
+        self.recording_saver.start_accumulation(auto_save, recording_receiver);
+        self.recording_saver.set_device_info(
+            microphone_device.as_ref().map(|d| d.name.clone()),
+            system_device.as_ref().map(|d| d.name.clone())
+        );
 
         // Give the pipeline a moment to fully initialize before starting streams
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
