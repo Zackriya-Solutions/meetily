@@ -234,6 +234,10 @@ pub struct AudioCapture {
     // Buffering for variable-size chunks → fixed-size resampler input
     resampler_input_buffer: Arc<std::sync::Mutex<Vec<f32>>>,
     resampler_chunk_size: usize,  // Fixed chunk size for resampler (512 samples)
+    // Track the real input/output timeline so finite filter delay can be
+    // drained at shutdown without changing recording duration.
+    resampler_input_samples: Arc<std::sync::atomic::AtomicUsize>,
+    resampler_output_samples: Arc<std::sync::atomic::AtomicUsize>,
     // Audio enhancement processors (microphone only)
     noise_suppressor: Arc<std::sync::Mutex<Option<NoiseSuppressionProcessor>>>,
     high_pass_filter: Arc<std::sync::Mutex<Option<HighPassFilter>>>,
@@ -404,6 +408,8 @@ impl AudioCapture {
             resampler: Arc::new(std::sync::Mutex::new(resampler)),
             resampler_input_buffer: Arc::new(std::sync::Mutex::new(Vec::with_capacity(RESAMPLER_CHUNK_SIZE * 2))),
             resampler_chunk_size: RESAMPLER_CHUNK_SIZE,
+            resampler_input_samples: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            resampler_output_samples: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             noise_suppressor: Arc::new(std::sync::Mutex::new(noise_suppressor)),
             high_pass_filter: Arc::new(std::sync::Mutex::new(high_pass_filter)),
             normalizer: Arc::new(std::sync::Mutex::new(normalizer)),
@@ -446,6 +452,10 @@ impl AudioCapture {
             let mut used_persistent_resampler = false;
 
             if let Ok(mut buffer_lock) = self.resampler_input_buffer.lock() {
+                self.resampler_input_samples.fetch_add(
+                    mono_data.len(),
+                    std::sync::atomic::Ordering::SeqCst,
+                );
                 // Add new samples to buffer
                 buffer_lock.extend_from_slice(&mono_data);
 
@@ -486,6 +496,10 @@ impl AudioCapture {
             let has_resampled_output = !resampled_output.is_empty();
 
             if has_resampled_output {
+                self.resampler_output_samples.fetch_add(
+                    resampled_output.len(),
+                    std::sync::atomic::Ordering::SeqCst,
+                );
                 mono_data = resampled_output;
             } else if !used_persistent_resampler {
                 // Only fallback if persistent resampler is not available at all
@@ -690,33 +704,70 @@ impl AudioCapture {
             warn!("Unable to lock resampler input buffer during stream flush");
             return;
         };
-        if pending.is_empty() {
+        let input_samples = self
+            .resampler_input_samples
+            .load(std::sync::atomic::Ordering::SeqCst);
+        if input_samples == 0 {
             return;
         }
 
-        let expected_output = ((pending.len() as f64 * 48_000.0) / self.sample_rate as f64)
+        let expected_total_output = ((input_samples as f64 * 48_000.0)
+            / self.sample_rate as f64)
             .round() as usize;
-        let mut padded = pending;
-        padded.resize(self.resampler_chunk_size, 0.0);
+        let already_emitted = self
+            .resampler_output_samples
+            .load(std::sync::atomic::Ordering::SeqCst);
+        let needed_output = expected_total_output.saturating_sub(already_emitted);
+        if needed_output == 0 {
+            return;
+        }
 
         let mut output = Vec::new();
         if let Ok(mut resampler) = self.resampler.lock() {
             if let Some(resampler) = resampler.as_mut() {
-                match resampler.process(&vec![padded], None) {
-                    Ok(mut waves) => {
-                        if let Some(samples) = waves.pop() {
-                            output = samples;
+                if !pending.is_empty() {
+                    let mut padded = pending;
+                    padded.resize(self.resampler_chunk_size, 0.0);
+                    match resampler.process(&vec![padded], None) {
+                        Ok(mut waves) => {
+                            if let Some(samples) = waves.pop() {
+                                output.extend(samples);
+                            }
+                        }
+                        Err(error) => warn!("Failed to flush persistent resampler: {}", error),
+                    }
+                }
+
+                // SincFixedIn withholds its finite filter delay on the first
+                // call. Feed zero blocks only until the real input timeline is
+                // complete, then discard any remaining synthetic tail.
+                while output.len() < needed_output {
+                    match resampler.process(&vec![vec![0.0; self.resampler_chunk_size]], None) {
+                        Ok(mut waves) => {
+                            let Some(samples) = waves.pop() else { break };
+                            if samples.is_empty() {
+                                break;
+                            }
+                            output.extend(samples);
+                        }
+                        Err(error) => {
+                            warn!("Failed to drain persistent resampler delay: {}", error);
+                            break;
                         }
                     }
-                    Err(error) => warn!("Failed to flush persistent resampler: {}", error),
                 }
             }
         }
 
-        output.truncate(expected_output.min(output.len()));
+        output.truncate(needed_output.min(output.len()));
         if output.is_empty() {
             return;
         }
+
+        self.resampler_output_samples.fetch_add(
+            output.len(),
+            std::sync::atomic::Ordering::SeqCst,
+        );
 
         let chunk_id = self.chunk_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let timestamp = self.state.get_recording_duration().unwrap_or(0.0);
