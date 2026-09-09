@@ -6,6 +6,7 @@ use tauri::{AppHandle, Runtime, Emitter};
 use tokio::sync::mpsc;
 use serde::{Serialize, Deserialize};
 use std::path::PathBuf;
+use tokio::task::JoinHandle;
 
 use super::recording_state::AudioChunk;
 use super::audio_processing::create_meeting_folder;
@@ -54,6 +55,7 @@ pub struct RecordingSaver {
     metadata: Option<MeetingMetadata>,
     transcript_segments: Arc<Mutex<Vec<TranscriptSegment>>>,
     is_saving: Arc<Mutex<bool>>,
+    accumulation_task: Option<JoinHandle<Result<(), String>>>,
 }
 
 impl RecordingSaver {
@@ -65,6 +67,7 @@ impl RecordingSaver {
             metadata: None,
             transcript_segments: Arc::new(Mutex::new(Vec::new())),
             is_saving: Arc::new(Mutex::new(false)),
+            accumulation_task: None,
         }
     }
 
@@ -139,7 +142,7 @@ impl RecordingSaver {
         &mut self,
         auto_save: bool,
         mut receiver: mpsc::UnboundedReceiver<AudioChunk>,
-    ) {
+    ) -> Result<(), String> {
         if auto_save {
             info!("Initializing incremental audio saver for recording (auto-save ENABLED)");
         } else {
@@ -148,48 +151,41 @@ impl RecordingSaver {
 
         // Initialize meeting folder and incremental saver ONLY if auto_save is enabled
         if auto_save {
-            if let Some(name) = self.meeting_name.clone() {
-                match self.initialize_meeting_folder(&name, true) {
-                    Ok(()) => info!("Successfully initialized meeting folder with checkpoints"),
-                    Err(e) => {
-                        error!("Failed to initialize meeting folder: {}", e);
-                        // Continue anyway - will use fallback flat structure
-                    }
-                }
-            }
+            let name = self
+                .meeting_name
+                .clone()
+                .ok_or_else(|| "Cannot enable auto-save without a meeting name".to_string())?;
+            self.initialize_meeting_folder(&name, true)
+                .map_err(|e| format!("Failed to initialize recording storage: {e}"))?;
+            info!("Successfully initialized meeting folder with checkpoints");
         } else {
             // When auto_save is false, still create meeting folder for transcripts/metadata
             // but skip .checkpoints directory
-            if let Some(name) = self.meeting_name.clone() {
-                match self.initialize_meeting_folder(&name, false) {
-                    Ok(()) => info!("Successfully initialized meeting folder (transcripts only)"),
-                    Err(e) => {
-                        error!("Failed to initialize meeting folder: {}", e);
-                    }
-                }
-            }
+            let name = self
+                .meeting_name
+                .clone()
+                .ok_or_else(|| "Cannot initialize transcript storage without a meeting name".to_string())?;
+            self.initialize_meeting_folder(&name, false)
+                .map_err(|e| format!("Failed to initialize transcript storage: {e}"))?;
+            info!("Successfully initialized meeting folder (transcripts only)");
         }
 
-        // Start accumulation task
+        // Mark the receiver as live before spawning. The task drains every
+        // accepted chunk until the producer closes; the old flag check could
+        // discard the first queued chunk after Stop.
+        if let Ok(mut is_saving) = self.is_saving.lock() {
+            *is_saving = true;
+        }
+
         let is_saving_clone = self.is_saving.clone();
         let incremental_saver_arc = self.incremental_saver.clone();
         let save_audio = auto_save;
 
-        tokio::spawn(async move {
+        self.accumulation_task = Some(tokio::spawn(async move {
             info!("Recording saver accumulation task started (save_audio: {})", save_audio);
+            let mut first_error = None;
 
             while let Some(chunk) = receiver.recv().await {
-                // Check if we should continue
-                let should_continue = if let Ok(is_saving) = is_saving_clone.lock() {
-                    *is_saving
-                } else {
-                    false
-                };
-
-                if !should_continue {
-                    break;
-                }
-
                 // Only process audio chunks if auto_save is enabled
                 if save_audio {
                     // Add chunk to incremental saver
@@ -197,9 +193,11 @@ impl RecordingSaver {
                         let mut saver_guard = saver_arc.lock().await;
                         if let Err(e) = saver_guard.add_chunk(chunk) {
                             error!("Failed to add chunk to incremental saver: {}", e);
+                            first_error.get_or_insert_with(|| e.to_string());
                         }
                     } else {
                         error!("Incremental saver not available while accumulating");
+                        first_error.get_or_insert_with(|| "Incremental saver unavailable".to_string());
                     }
                 } else {
                     // auto_save is false: discard audio chunk (no-op)
@@ -208,12 +206,13 @@ impl RecordingSaver {
             }
 
             info!("Recording saver accumulation task ended");
-        });
+            if let Ok(mut is_saving) = is_saving_clone.lock() {
+                *is_saving = false;
+            }
+            first_error.map_or(Ok(()), Err)
+        }));
 
-        // Set saving flag
-        if let Ok(mut is_saving) = self.is_saving.lock() {
-            *is_saving = true;
-        }
+        Ok(())
     }
 
     /// Initialize meeting folder structure and metadata
@@ -356,13 +355,36 @@ impl RecordingSaver {
     ) -> Result<Option<String>, String> {
         info!("Stopping recording saver");
 
-        // Stop accumulation
+        // Stop accepting new work, then await the receiver task. The producer
+        // side is closed by the pipeline before this method is called, so all
+        // chunks already accepted by the saver channel are drained in order.
         if let Ok(mut is_saving) = self.is_saving.lock() {
             *is_saving = false;
         }
 
-        // Give time for final chunks
-        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+        if let Some(task) = self.accumulation_task.take() {
+            match task.await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    return Err(format!(
+                        "Partial save: recording saver could not persist every accepted chunk: {error}; folder={}",
+                        self.meeting_folder
+                            .as_ref()
+                            .map(|folder| folder.display().to_string())
+                            .unwrap_or_else(|| "unavailable".to_string())
+                    ));
+                }
+                Err(error) => {
+                    return Err(format!(
+                        "Partial save: recording saver task failed: {error}; folder={}",
+                        self.meeting_folder
+                            .as_ref()
+                            .map(|folder| folder.display().to_string())
+                            .unwrap_or_else(|| "unavailable".to_string())
+                    ));
+                }
+            }
+        }
 
         // Check if incremental saver exists (indicates auto_save was enabled)
         let should_save_audio = self.incremental_saver.is_some();
