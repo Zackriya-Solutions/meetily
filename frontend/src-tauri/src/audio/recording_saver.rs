@@ -499,3 +499,69 @@ impl Default for RecordingSaver {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn auto_save_start_failure_rolls_back_before_capture() {
+        let mut saver = RecordingSaver::new();
+        let (_sender, receiver) = mpsc::unbounded_channel();
+
+        let error = saver
+            .start_accumulation(true, receiver)
+            .expect_err("auto-save without a meeting name must fail");
+
+        assert!(error.contains("meeting name"));
+        assert!(saver.meeting_folder.is_none());
+        assert!(saver.incremental_saver.is_none());
+        assert!(saver.accumulation_task.is_none());
+        assert!(!*saver.is_saving.lock().unwrap());
+    }
+
+    #[tokio::test]
+    async fn accumulation_task_waits_for_channel_close_and_drains_tail() {
+        let meeting_name = format!(
+            "repostew-drain-test-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        );
+        let mut saver = RecordingSaver::new();
+        saver.set_meeting_name(Some(meeting_name));
+        let (sender, receiver) = mpsc::unbounded_channel();
+        saver
+            .start_accumulation(false, receiver)
+            .expect("transcript-only saver should initialize");
+
+        let mut task = saver
+            .accumulation_task
+            .take()
+            .expect("accumulation task should be spawned");
+        sender
+            .send(AudioChunk {
+                data: vec![0.25; 480],
+                sample_rate: 48_000,
+                timestamp: 0.0,
+                chunk_id: 1,
+                device_type: super::super::recording_state::DeviceType::Microphone,
+            })
+            .expect("chunk should be accepted");
+
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), &mut task)
+                .await
+                .is_err(),
+            "the task must remain live while the producer channel is open"
+        );
+
+        drop(sender);
+        assert!(task.await.expect("accumulation task panicked").is_ok());
+        assert!(!*saver.is_saving.lock().unwrap());
+
+        if let Some(folder) = saver.meeting_folder.as_ref() {
+            let _ = std::fs::remove_dir_all(folder);
+        }
+    }
+}
