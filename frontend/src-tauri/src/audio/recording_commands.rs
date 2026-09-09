@@ -754,6 +754,51 @@ mod tests {
         assert!(StoppingGuard::new().is_some());
         IS_RECORDING_STOPPING.store(false, Ordering::SeqCst);
     }
+
+    #[test]
+    fn stopping_gate_has_one_winner_under_concurrent_stop_race() {
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+
+        IS_RECORDING_STOPPING.store(false, Ordering::SeqCst);
+        let workers = 16;
+        let barrier = Arc::new(Barrier::new(workers));
+        let release = Arc::new(Barrier::new(workers));
+        let winners = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let handles = (0..workers)
+            .map(|_| {
+                let barrier = Arc::clone(&barrier);
+                let release = Arc::clone(&release);
+                let winners = Arc::clone(&winners);
+                thread::spawn(move || {
+                    barrier.wait();
+                    let guard = StoppingGuard::new();
+                    if guard.is_some() {
+                        winners.fetch_add(1, Ordering::SeqCst);
+                    }
+                    // Keep the winning guard alive until every contender has
+                    // performed its one acquisition attempt. This makes the
+                    // assertion test the atomic race itself, rather than
+                    // allowing a fast winner to drop and a later contender to
+                    // become a second sequential owner.
+                    release.wait();
+                    drop(guard);
+                })
+            })
+            .collect::<Vec<_>>();
+
+        for handle in handles {
+            handle.join().expect("stop-race worker panicked");
+        }
+
+        assert_eq!(
+            winners.load(Ordering::SeqCst),
+            1,
+            "exactly one concurrent stop caller may own the shutdown tail"
+        );
+        assert!(StoppingGuard::new().is_some(), "guard must be reusable after the winner exits");
+        IS_RECORDING_STOPPING.store(false, Ordering::SeqCst);
+    }
 }
 
 pub async fn stop_recording<R: Runtime>(
