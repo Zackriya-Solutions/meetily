@@ -18,7 +18,10 @@ use tauri_plugin_dialog::DialogExt;
 use uuid::Uuid;
 
 use super::audio_processing::create_meeting_folder;
-use super::common::{create_transcript_segments, split_segment_at_silence, write_transcripts_json};
+use super::common::{
+    create_transcript_segments, partial_save_error, split_segment_at_silence,
+    write_transcripts_json,
+};
 use super::constants::AUDIO_EXTENSIONS;
 use super::recording_preferences::get_default_recordings_folder;
 
@@ -649,8 +652,10 @@ async fn run_import<R: Runtime>(
     // Write transcripts.json and metadata.json to the meeting folder
     emit_progress(&app, "saving", 90, "Writing transcript files...");
 
+    let mut failed_artifacts = Vec::new();
     if let Err(e) = write_transcripts_json(&meeting_folder, &segments) {
         warn!("Failed to write transcripts.json: {}", e);
+        failed_artifacts.push(format!("transcripts.json ({e})"));
     }
 
     if let Err(e) = write_import_metadata(
@@ -662,6 +667,15 @@ async fn run_import<R: Runtime>(
         "import",
     ) {
         warn!("Failed to write metadata.json: {}", e);
+        failed_artifacts.push(format!("metadata.json ({e})"));
+    }
+
+    if !failed_artifacts.is_empty() {
+        return Err(partial_save_error(
+            &meeting_id,
+            &meeting_folder,
+            &failed_artifacts,
+        ));
     }
 
     emit_progress(&app, "complete", 100, "Import complete");

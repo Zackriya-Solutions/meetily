@@ -4,6 +4,7 @@ use log::{debug, info};
 use once_cell::sync::Lazy;
 use std::path::Path;
 use std::sync::Arc;
+use sqlx::Row;
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 use uuid::Uuid;
 
@@ -100,6 +101,57 @@ pub(crate) fn write_transcripts_json(folder: &Path, segments: &[TranscriptSegmen
         transcript_path.display()
     );
     Ok(())
+}
+
+/// Load the canonical committed transcript rows for sidecar recovery. This
+/// path only reads SQLite and never invokes ASR or creates a new meeting.
+pub(crate) async fn load_committed_transcript_segments(
+    pool: &sqlx::SqlitePool,
+    meeting_id: &str,
+) -> Result<Vec<TranscriptSegment>> {
+    let rows = sqlx::query(
+        "SELECT id, transcript, timestamp, audio_start_time, audio_end_time, duration
+         FROM transcripts WHERE meeting_id = ? ORDER BY rowid",
+    )
+    .bind(meeting_id)
+    .fetch_all(pool)
+    .await?;
+
+    rows.into_iter()
+        .map(|row| {
+            Ok(TranscriptSegment {
+                id: row.try_get("id")?,
+                text: row.try_get("transcript")?,
+                timestamp: row.try_get("timestamp")?,
+                audio_start_time: row.try_get("audio_start_time")?,
+                audio_end_time: row.try_get("audio_end_time")?,
+                duration: row.try_get("duration")?,
+            })
+        })
+        .collect()
+}
+
+/// Regenerate the transcript sidecar from already committed SQLite rows.
+/// Repeated calls overwrite the same atomic file and remain idempotent.
+pub(crate) async fn regenerate_transcripts_json_from_db(
+    pool: &sqlx::SqlitePool,
+    meeting_id: &str,
+    folder: &Path,
+) -> Result<()> {
+    let segments = load_committed_transcript_segments(pool, meeting_id).await?;
+    write_transcripts_json(folder, &segments)
+}
+
+pub(crate) fn partial_save_error(
+    meeting_id: &str,
+    folder: &Path,
+    failed_artifacts: &[String],
+) -> anyhow::Error {
+    anyhow::anyhow!(
+        "Partial save: meeting_id={meeting_id}, folder={}, failed_artifacts={}; retry sidecar recovery from committed SQLite rows",
+        folder.display(),
+        failed_artifacts.join(", ")
+    )
 }
 
 /// Split a long speech segment at the lowest-energy (silence) point near the target size.
@@ -232,5 +284,19 @@ mod tests {
 
         acquired_rx.await.unwrap();
         waiter.await.unwrap();
+    }
+
+    #[test]
+    fn partial_save_error_keeps_recovery_identity_and_artifacts() {
+        let error = partial_save_error(
+            "meeting-123",
+            Path::new("C:/recordings/meeting-123"),
+            &["transcripts.json (rename failed)".to_string(), "metadata.json".to_string()],
+        );
+        let message = error.to_string();
+        assert!(message.contains("meeting_id=meeting-123"));
+        assert!(message.contains("transcripts.json"));
+        assert!(message.contains("metadata.json"));
+        assert!(message.contains("committed SQLite rows"));
     }
 }

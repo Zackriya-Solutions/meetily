@@ -2,7 +2,10 @@
 
 use crate::audio::decoder::decode_audio_file;
 use crate::audio::vad::get_speech_chunks_with_progress;
-use super::common::{create_transcript_segments, split_segment_at_silence, write_transcripts_json};
+use super::common::{
+    create_transcript_segments, partial_save_error, split_segment_at_silence,
+    write_transcripts_json,
+};
 use super::constants::AUDIO_EXTENSIONS;
 use crate::config::{DEFAULT_WHISPER_MODEL, DEFAULT_PARAKEET_MODEL};
 use crate::parakeet_engine::ParakeetEngine;
@@ -469,8 +472,10 @@ async fn run_retranscription<R: Runtime>(
     // Write updated transcripts.json and metadata.json to the meeting folder
     emit_progress(&app, &meeting_id, "saving", 90, "Writing transcript files...");
 
+    let mut failed_artifacts = Vec::new();
     if let Err(e) = write_transcripts_json(&folder_path, &segments) {
         warn!("Failed to write transcripts.json: {}", e);
+        failed_artifacts.push(format!("transcripts.json ({e})"));
     }
 
     // Find audio filename for metadata
@@ -487,6 +492,15 @@ async fn run_retranscription<R: Runtime>(
         &audio_filename,
     ) {
         warn!("Failed to update metadata.json: {}", e);
+        failed_artifacts.push(format!("metadata.json ({e})"));
+    }
+
+    if !failed_artifacts.is_empty() {
+        return Err(partial_save_error(
+            &meeting_id,
+            &folder_path,
+            &failed_artifacts,
+        ));
     }
 
     emit_progress(&app, &meeting_id, "complete", 100, "Retranscription complete");
