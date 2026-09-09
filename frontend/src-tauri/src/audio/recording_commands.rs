@@ -737,6 +737,7 @@ pub(crate) async fn shutdown_after_fatal_transcription_failure<R: Runtime>(
             "outcome": "fatal_transcription_failure"
         }),
     );
+    #[cfg(not(test))]
     crate::tray::update_tray_menu(&app);
 }
 
@@ -798,6 +799,54 @@ mod tests {
         );
         assert!(StoppingGuard::new().is_some(), "guard must be reusable after the winner exits");
         IS_RECORDING_STOPPING.store(false, Ordering::SeqCst);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn fatal_worker_shutdown_completes_before_error_event() {
+        use std::sync::{Arc, Mutex};
+        use tauri::{Listener, Manager};
+
+        let app = tauri::test::mock_app();
+        let temp = tempfile::tempdir().expect("temporary database directory should exist");
+        let db_path = temp.path().join("meetily.sqlite");
+        let db_path = db_path.to_string_lossy().into_owned();
+        let db_manager = crate::database::manager::DatabaseManager::new(&db_path, &db_path)
+            .await
+            .expect("mock app database should initialize");
+        app.manage(crate::state::AppState { db_manager });
+
+        let events = Arc::new(Mutex::new(Vec::<&'static str>::new()));
+        let stopped_events = Arc::clone(&events);
+        let stopped_listener = app.listen("recording-stopped", move |_| {
+            stopped_events.lock().unwrap().push("recording-stopped");
+        });
+        let error_events = Arc::clone(&events);
+        let error_listener = app.listen("transcription-error", move |_| {
+            error_events.lock().unwrap().push("transcription-error");
+        });
+
+        IS_RECORDING.store(true, Ordering::SeqCst);
+        IS_RECORDING_STOPPING.store(false, Ordering::SeqCst);
+        *RECORDING_MANAGER.lock().unwrap() = Some(RecordingManager::new());
+        let (_sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+
+        let worker = transcription::start_transcription_task(app.handle().clone(), receiver);
+        tokio::time::timeout(std::time::Duration::from_secs(5), worker)
+            .await
+            .expect("fatal worker should shut down promptly")
+            .expect("fatal worker should not panic");
+
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec!["recording-stopped", "transcription-error"],
+            "native shutdown must emit completion before the frontend error"
+        );
+        assert!(!IS_RECORDING.load(Ordering::SeqCst));
+        assert!(RECORDING_MANAGER.lock().unwrap().is_none());
+        assert!(!IS_RECORDING_STOPPING.load(Ordering::SeqCst));
+
+        app.unlisten(stopped_listener);
+        app.unlisten(error_listener);
     }
 }
 
