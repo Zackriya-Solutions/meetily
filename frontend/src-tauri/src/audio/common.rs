@@ -299,4 +299,65 @@ mod tests {
         assert!(message.contains("metadata.json"));
         assert!(message.contains("committed SQLite rows"));
     }
+
+    #[tokio::test]
+    async fn regenerate_transcript_sidecar_is_idempotent_from_committed_rows() {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:")
+            .await
+            .expect("in-memory SQLite should open");
+        sqlx::query(
+            "CREATE TABLE transcripts (
+                id TEXT PRIMARY KEY,
+                meeting_id TEXT NOT NULL,
+                transcript TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                audio_start_time REAL,
+                audio_end_time REAL,
+                duration REAL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("transcript table should be created");
+        sqlx::query(
+            "INSERT INTO transcripts
+                (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind("segment-1")
+        .bind("meeting-1")
+        .bind("  committed text  ")
+        .bind("2026-09-09T00:00:00Z")
+        .bind(1.5_f64)
+        .bind(2.5_f64)
+        .bind(1.0_f64)
+        .execute(&pool)
+        .await
+        .expect("committed transcript should be inserted");
+
+        let folder = tempfile::tempdir().expect("temporary folder should be created");
+        regenerate_transcripts_json_from_db(&pool, "meeting-1", folder.path())
+            .await
+            .expect("first sidecar regeneration should succeed");
+        let first: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(folder.path().join("transcripts.json"))
+                .expect("first sidecar should exist"),
+        )
+        .expect("first sidecar should be valid JSON");
+
+        regenerate_transcripts_json_from_db(&pool, "meeting-1", folder.path())
+            .await
+            .expect("second sidecar regeneration should succeed");
+        let second: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(folder.path().join("transcripts.json"))
+                .expect("second sidecar should exist"),
+        )
+        .expect("second sidecar should be valid JSON");
+
+        assert_eq!(first["total_segments"], serde_json::json!(1));
+        assert_eq!(first["segments"][0]["id"], serde_json::json!("segment-1"));
+        assert_eq!(first["segments"][0]["text"], serde_json::json!("  committed text  "));
+        assert_eq!(first["segments"], second["segments"]);
+        assert_eq!(first["total_segments"], second["total_segments"]);
+    }
 }
