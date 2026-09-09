@@ -20,7 +20,7 @@ use uuid::Uuid;
 use super::audio_processing::create_meeting_folder;
 use super::common::{
     create_transcript_segments, partial_save_error, split_segment_at_silence,
-    write_transcripts_json,
+    write_transcripts_json, write_transcripts_json_with_fault, SidecarFault,
 };
 use super::constants::AUDIO_EXTENSIONS;
 use super::recording_preferences::get_default_recordings_folder;
@@ -652,30 +652,17 @@ async fn run_import<R: Runtime>(
     // Write transcripts.json and metadata.json to the meeting folder
     emit_progress(&app, "saving", 90, "Writing transcript files...");
 
-    let mut failed_artifacts = Vec::new();
-    if let Err(e) = write_transcripts_json(&meeting_folder, &segments) {
-        warn!("Failed to write transcripts.json: {}", e);
-        failed_artifacts.push(format!("transcripts.json ({e})"));
-    }
-
-    if let Err(e) = write_import_metadata(
+    if let Err(error) = persist_import_sidecars(
         &meeting_folder,
         &meeting_id,
         &title,
         duration_seconds,
         &dest_filename,
         "import",
+        &segments,
+        None,
     ) {
-        warn!("Failed to write metadata.json: {}", e);
-        failed_artifacts.push(format!("metadata.json ({e})"));
-    }
-
-    if !failed_artifacts.is_empty() {
-        return Err(partial_save_error(
-            &meeting_id,
-            &meeting_folder,
-            &failed_artifacts,
-        ));
+        return Err(error);
     }
 
     emit_progress(&app, "complete", 100, "Import complete");
@@ -899,9 +886,33 @@ fn write_import_metadata(
     audio_filename: &str,
     source: &str,
 ) -> Result<()> {
+    write_import_metadata_with_fault(
+        folder,
+        meeting_id,
+        title,
+        duration_seconds,
+        audio_filename,
+        source,
+        None,
+    )
+}
+
+fn write_import_metadata_with_fault(
+    folder: &Path,
+    meeting_id: &str,
+    title: &str,
+    duration_seconds: f64,
+    audio_filename: &str,
+    source: &str,
+    fault: Option<SidecarFault>,
+) -> Result<()> {
     let metadata_path = folder.join("metadata.json");
     let temp_path = folder.join(".metadata.json.tmp");
     let now = chrono::Utc::now().to_rfc3339();
+
+    if fault == Some(SidecarFault::MetadataWrite) {
+        return Err(anyhow!("injected metadata sidecar write failure"));
+    }
 
     let json = serde_json::json!({
         "version": "1.0",
@@ -918,10 +929,52 @@ fn write_import_metadata(
 
     let json_string = serde_json::to_string_pretty(&json)?;
     std::fs::write(&temp_path, &json_string)?;
+    if fault == Some(SidecarFault::Rename) {
+        return Err(anyhow!("injected metadata sidecar rename failure"));
+    }
     std::fs::rename(&temp_path, &metadata_path)?;
 
     info!("Wrote metadata.json to {}", metadata_path.display());
     Ok(())
+}
+
+/// Persist both import sidecars after the SQLite transaction has committed.
+/// Keeping the partial-save classification in this production helper lets
+/// deterministic tests exercise the same boundary as `run_import`.
+fn persist_import_sidecars(
+    folder: &Path,
+    meeting_id: &str,
+    title: &str,
+    duration_seconds: f64,
+    audio_filename: &str,
+    source: &str,
+    segments: &[TranscriptSegment],
+    fault: Option<SidecarFault>,
+) -> Result<()> {
+    let mut failed_artifacts = Vec::new();
+    if let Err(error) = write_transcripts_json_with_fault(folder, segments, fault) {
+        warn!("Failed to write transcripts.json: {}", error);
+        failed_artifacts.push(format!("transcripts.json ({error})"));
+    }
+
+    if let Err(error) = write_import_metadata_with_fault(
+        folder,
+        meeting_id,
+        title,
+        duration_seconds,
+        audio_filename,
+        source,
+        fault,
+    ) {
+        warn!("Failed to write metadata.json: {}", error);
+        failed_artifacts.push(format!("metadata.json ({error})"));
+    }
+
+    if failed_artifacts.is_empty() {
+        Ok(())
+    } else {
+        Err(partial_save_error(meeting_id, folder, &failed_artifacts))
+    }
 }
 
 // ============================================================================
@@ -1253,6 +1306,90 @@ mod tests {
         assert_eq!(parsed["audio_file"], "audio.mp4");
         assert_eq!(parsed["status"], "completed");
         assert_eq!(parsed["source"], "import");
+    }
+
+    #[tokio::test]
+    async fn import_post_commit_sidecar_faults_report_partial_without_losing_sqlite_rows() {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:")
+            .await
+            .expect("in-memory SQLite should open");
+        sqlx::query(
+            "CREATE TABLE transcripts (
+                id TEXT PRIMARY KEY,
+                meeting_id TEXT NOT NULL,
+                transcript TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("committed transcript table should be created");
+        sqlx::query("INSERT INTO transcripts (id, meeting_id, transcript) VALUES (?, ?, ?)")
+            .bind("import-segment-1")
+            .bind("import-meeting-1")
+            .bind("committed import text")
+            .execute(&pool)
+            .await
+            .expect("committed import row should be inserted");
+
+        let segments = create_transcript_segments(&[(
+            "committed import text".to_string(),
+            0.0,
+            1000.0,
+        )]);
+        for fault in [
+            SidecarFault::TranscriptWrite,
+            SidecarFault::MetadataWrite,
+            SidecarFault::Rename,
+        ] {
+            let folder = tempfile::tempdir().expect("temporary sidecar folder should be created");
+            let error = persist_import_sidecars(
+                folder.path(),
+                "import-meeting-1",
+                "Imported meeting",
+                1.0,
+                "audio.wav",
+                "import",
+                &segments,
+                Some(fault),
+            )
+            .expect_err("post-commit sidecar fault must return partial save");
+            let message = error.to_string();
+            assert!(message.starts_with("Partial save:"));
+            assert!(message.contains("meeting_id=import-meeting-1"));
+            assert!(message.contains(folder.path().to_string_lossy().as_ref()));
+            match fault {
+                SidecarFault::TranscriptWrite => assert!(message.contains("transcripts.json")),
+                SidecarFault::MetadataWrite => assert!(message.contains("metadata.json")),
+                SidecarFault::Rename => {
+                    assert!(message.contains("transcripts.json"));
+                    assert!(message.contains("metadata.json"));
+                }
+            }
+
+            let row_count: (i64,) = sqlx::query_as(
+                "SELECT COUNT(*) FROM transcripts WHERE meeting_id = ?",
+            )
+            .bind("import-meeting-1")
+            .fetch_one(&pool)
+            .await
+            .expect("committed row should remain queryable");
+            assert_eq!(row_count.0, 1, "sidecar failure must not roll back SQLite");
+
+            match fault {
+                SidecarFault::TranscriptWrite => {
+                    assert!(!folder.path().join("transcripts.json").exists());
+                    assert!(folder.path().join("metadata.json").exists());
+                }
+                SidecarFault::MetadataWrite => {
+                    assert!(folder.path().join("transcripts.json").exists());
+                    assert!(!folder.path().join("metadata.json").exists());
+                }
+                SidecarFault::Rename => {
+                    assert!(!folder.path().join("transcripts.json").exists());
+                    assert!(!folder.path().join("metadata.json").exists());
+                }
+            }
+        }
     }
 
     /// Integration test that decodes a real audio file and runs VAD.

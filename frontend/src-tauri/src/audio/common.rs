@@ -71,8 +71,31 @@ pub(crate) fn create_transcript_segments(transcripts: &[(String, f64, f64)]) -> 
 
 /// Write transcripts.json to a meeting folder (atomic write with temp file)
 pub(crate) fn write_transcripts_json(folder: &Path, segments: &[TranscriptSegment]) -> Result<()> {
+    write_transcripts_json_with_fault(folder, segments, None)
+}
+
+/// A deterministic post-commit sidecar fault used by the import and
+/// retranscription contract tests. Production callers pass `None`; keeping
+/// the fault at the shared file boundary makes both flows exercise the same
+/// atomic writer and its real error handling.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SidecarFault {
+    TranscriptWrite,
+    MetadataWrite,
+    Rename,
+}
+
+pub(crate) fn write_transcripts_json_with_fault(
+    folder: &Path,
+    segments: &[TranscriptSegment],
+    fault: Option<SidecarFault>,
+) -> Result<()> {
     let transcript_path = folder.join("transcripts.json");
     let temp_path = folder.join(".transcripts.json.tmp");
+
+    if fault == Some(SidecarFault::TranscriptWrite) {
+        return Err(anyhow::anyhow!("injected transcript sidecar write failure"));
+    }
 
     let json = serde_json::json!({
         "version": "1.0",
@@ -93,6 +116,9 @@ pub(crate) fn write_transcripts_json(folder: &Path, segments: &[TranscriptSegmen
 
     let json_string = serde_json::to_string_pretty(&json)?;
     std::fs::write(&temp_path, &json_string)?;
+    if fault == Some(SidecarFault::Rename) {
+        return Err(anyhow::anyhow!("injected transcript sidecar rename failure"));
+    }
     std::fs::rename(&temp_path, &transcript_path)?;
 
     info!(
