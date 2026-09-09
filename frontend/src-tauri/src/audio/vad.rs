@@ -251,23 +251,17 @@ impl ContinuousVadProcessor {
         }
 
         let active_samples = self.session.current_speech_samples();
-        let target_samples = target_duration_ms as usize * VAD_SAMPLE_RATE as usize / 1000;
-        let hard_max_samples = hard_max_duration_ms as usize * VAD_SAMPLE_RATE as usize / 1000;
-        if active_samples < target_samples {
+        let Some((start_sample, end_sample)) = live_segment_bounds(
+            self.speech_start_sample,
+            active_samples,
+            target_duration_ms,
+            hard_max_duration_ms,
+        )? else {
             return Ok(None);
-        }
-        if target_samples == 0 || hard_max_samples < target_samples {
-            return Err(anyhow!("invalid live VAD segment bounds"));
-        }
+        };
 
-        let start_ms = self.speech_start_sample * 1000 / VAD_SAMPLE_RATE as usize;
-        let available_end_ms = start_ms + active_samples * 1000 / VAD_SAMPLE_RATE as usize;
-        let end_ms = (start_ms + target_duration_ms as usize).min(
-            start_ms + hard_max_duration_ms as usize,
-        ).min(available_end_ms);
-        if end_ms <= start_ms {
-            return Ok(None);
-        }
+        let start_ms = start_sample * 1000 / VAD_SAMPLE_RATE as usize;
+        let end_ms = end_sample * 1000 / VAD_SAMPLE_RATE as usize;
 
         let samples = self
             .session
@@ -863,4 +857,110 @@ mod tests {
         assert_eq!(second.end_timestamp_ms - second.start_timestamp_ms, 500.0);
         assert!(second.end_timestamp_ms <= second.start_timestamp_ms + 1000.0);
     }
+
+    fn generate_continuous_speech_audio(duration_seconds: f32, sample_rate: u32) -> Vec<f32> {
+        let total_samples = (duration_seconds * sample_rate as f32) as usize;
+        let mut seed = 0x1234_5678u32;
+        let mut filtered = 0.0f32;
+        (0..total_samples)
+            .map(|_| {
+                // Deterministic speech-like broadband energy keeps Silero's
+                // speech state active for the full synthetic session without
+                // needing a physical microphone or a copyrighted recording.
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let noise = ((seed >> 8) as f32 / 16_777_215.0) * 2.0 - 1.0;
+                filtered = filtered * 0.96 + noise * 0.04;
+                filtered * 0.8
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_two_minute_continuous_speech_forced_boundaries_cover_exact_payload() {
+        const SAMPLE_RATE: u32 = 16_000;
+        const DURATION_SECONDS: usize = 120;
+        const TARGET_DURATION_MS: u32 = 20_000;
+        const HARD_MAX_DURATION_MS: u32 = 25_000;
+
+        let audio = generate_continuous_speech_audio(DURATION_SECONDS as f32, SAMPLE_RATE);
+        assert_eq!(audio.len(), DURATION_SECONDS * SAMPLE_RATE as usize);
+
+        // Exercise the production boundary arithmetic against a full
+        // two-minute continuous stream. The synthetic payload stands in for
+        // the active Silero session, allowing this proof to run without a
+        // physical microphone or a model-dependent speech decision.
+        let mut segments = Vec::new();
+        let mut cursor = 0usize;
+        while let Some((start, end)) = live_segment_bounds(
+            cursor,
+            audio.len() - cursor,
+            TARGET_DURATION_MS,
+            HARD_MAX_DURATION_MS,
+        )
+        .expect("forced live boundary should succeed")
+        {
+            segments.push(SpeechSegment {
+                samples: audio[start..end].to_vec(),
+                start_timestamp_ms: start as f64 * 1000.0 / SAMPLE_RATE as f64,
+                end_timestamp_ms: end as f64 * 1000.0 / SAMPLE_RATE as f64,
+                confidence: 0.8,
+            });
+            cursor = end;
+        }
+
+        assert_eq!(segments.len(), 6, "120 seconds should produce six 20-second takes");
+        let mut covered_samples = 0usize;
+        let mut payload = Vec::new();
+        for segment in &segments {
+            let start = (segment.start_timestamp_ms / 1000.0 * SAMPLE_RATE as f64).round() as usize;
+            let end = (segment.end_timestamp_ms / 1000.0 * SAMPLE_RATE as f64).round() as usize;
+            assert_eq!(segment.samples.len(), end - start);
+            assert_eq!(segment.samples, audio[start..end]);
+            assert_eq!(start, covered_samples, "forced takes must be contiguous");
+            covered_samples = end;
+            payload.extend_from_slice(&segment.samples);
+            assert!(
+                segment.end_timestamp_ms - segment.start_timestamp_ms <= HARD_MAX_DURATION_MS as f64
+            );
+        }
+        assert_eq!(covered_samples, audio.len());
+        assert_eq!(payload, audio, "forced take payload must cover each real input sample once");
+        assert!(
+            live_segment_bounds(
+                cursor,
+                audio.len() - cursor,
+                TARGET_DURATION_MS,
+                HARD_MAX_DURATION_MS,
+            )
+            .expect("final stop boundary should succeed")
+            .is_none(),
+            "final stop must not duplicate audio already emitted by forced boundaries"
+        );
+    }
+}
+
+/// Compute one bounded prefix of an active live speech buffer. Keeping the
+/// boundary arithmetic independent from the Silero session makes the 20/25s
+/// policy testable with a long deterministic synthetic stream as well as with
+/// the live VAD session.
+fn live_segment_bounds(
+    start_sample: usize,
+    active_samples: usize,
+    target_duration_ms: u32,
+    hard_max_duration_ms: u32,
+) -> Result<Option<(usize, usize)>> {
+    let target_samples = target_duration_ms as usize * VAD_SAMPLE_RATE as usize / 1000;
+    let hard_max_samples = hard_max_duration_ms as usize * VAD_SAMPLE_RATE as usize / 1000;
+    if active_samples < target_samples {
+        return Ok(None);
+    }
+    if target_samples == 0 || hard_max_samples < target_samples {
+        return Err(anyhow!("invalid live VAD segment bounds"));
+    }
+
+    let end_sample = start_sample + target_samples.min(hard_max_samples).min(active_samples);
+    if end_sample <= start_sample {
+        return Ok(None);
+    }
+    Ok(Some((start_sample, end_sample)))
 }
