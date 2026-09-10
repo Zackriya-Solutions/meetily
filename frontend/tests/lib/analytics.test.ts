@@ -63,7 +63,7 @@ test('transcription error spike containment', async () => {
       Analytics.trackTranscriptionError(`Unknown transcription failure for chunk ${i}`),
     ]).flat());
 
-    const expectedEvents = ['auth_rejected', 'ort_failed', 'transcription_failed'].map(errorCode => [
+    const expectedEvents = ['auth_rejected', 'ort_failed', 'transcription_failed'].map<Parameters<typeof invokeMock>>(errorCode => [
       'track_event',
       {
         eventName: 'transcription_error',
