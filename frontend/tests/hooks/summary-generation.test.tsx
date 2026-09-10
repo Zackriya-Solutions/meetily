@@ -18,7 +18,7 @@ mock.module('next/navigation', () => ({ usePathname: () => '/meeting-details', u
 mock.module('../../src/contexts/RecordingStateContext', () => ({ useRecordingState: () => ({ isRecording: false }) }));
 const notify = mock(() => {});
 mock.module('sonner', () => ({ toast: { info: notify, error: notify, success: notify, warning: notify } }));
-const trackCompletion = mock(async () => {});
+const trackCompletion = mock(async (..._args: Parameters<typeof originalAnalytics.default.trackSummaryGenerationCompleted>) => {});
 mock.module('../../src/lib/analytics', () => ({ default: {
   trackBackendConnection() {}, trackSummaryGenerationStarted: async () => {},
   trackSummaryGenerationCompleted: trackCompletion,
