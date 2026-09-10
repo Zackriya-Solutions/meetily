@@ -129,7 +129,7 @@ Build from source following our detailed guides:
 ```bash
 git clone https://github.com/Zackriya-Solutions/meeting-minutes
 cd meeting-minutes/frontend
-pnpm install
+pnpm install --frozen-lockfile
 ./build-gpu.sh
 ```
 

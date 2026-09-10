@@ -339,7 +339,7 @@ By default, the application will be built with CPU-only processing. To enable GP
 
 ### Windows Distribution Builds
 
-The commands above create a local source build. Use the production Windows build workflow for an installer intended for other computers: it enables Vulkan, targets the AVX2 (`x86-64-v2`) baseline, and excludes AVX-512.
+The commands above create a local source build. Use the production Windows build workflow for an installer intended for other computers: it enables Vulkan. Rust targets `x86-64-v2`; native Whisper retains AVX2 with host-native specialization and AVX-512 disabled.
 
 The distribution workflows (`build.yml`, `build-windows.yml`, and `build-devtest.yml`) set `CMAKE_PROJECT_INCLUDE` to `.github/force-portable-ggml.cmake`, which forces `GGML_NATIVE=OFF`, and use `RUSTFLAGS=-C target-cpu=x86-64-v2`. The hook configures Whisper's native C/C++ build; Rust flags do not. `WHISPER_NATIVE=OFF` and plain `GGML_*` variables are not replacements.
 

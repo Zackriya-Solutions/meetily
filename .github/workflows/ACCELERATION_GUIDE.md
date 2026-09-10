@@ -38,8 +38,8 @@ args: --target x86_64-pc-windows-msvc --features vulkan
 
 A release installer is intentionally different from a build optimized for one local machine:
 
-- Rust targets `x86-64-v2`, retaining the AVX2 baseline.
-- Whisper's native build disables host-native specialization.
+- Rust targets `x86-64-v2`.
+- Native Whisper retains AVX2 with host-native specialization disabled.
 - `GGML_AVX512`, `GGML_AVX512_VBMI`, `GGML_AVX512_VNNI`, and `GGML_AVX512_BF16` must all be OFF.
 
 The workflows set `CMAKE_PROJECT_INCLUDE` to `force-portable-ggml.cmake`, which forces:
