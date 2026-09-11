@@ -110,6 +110,8 @@ Whether you're a defense consultant, enterprise executive, legal professional, o
 
 > **Windows compatibility:** The packaged installer uses a Vulkan-enabled Whisper build. It requires an AVX2-capable x64 CPU; AVX-512 is not required. CUDA acceleration requires a source build configured with a compatible NVIDIA CUDA toolchain.
 
+> **📝 Note for Windows Users:** Starting from future releases, pre-built whisper-server binaries for Windows will be available. For detailed Windows setup instructions, including how to build from source, see the [Windows Setup Guide](docs/WINDOWS_SETUP.md).
+
 ### 🍎 **macOS**
 
 1. Download `meetily_0.4.1_aarch64.dmg` from [Releases](https://github.com/Zackriya-Solutions/meeting-minutes/releases/latest)
@@ -207,7 +209,15 @@ For more details, see the [Architecture documentation](docs/architecture.md).
 
 ## For Developers
 
-If you want to contribute to Meetily or build it from source, you'll need to have Rust and Node.js installed. For detailed build instructions, please see the [Building from Source guide](docs/BUILDING.md).
+If you want to contribute to Meetily or build it from source, you'll need to have Rust and Node.js installed. For detailed build instructions, please see:
+
+- [Building from Source guide](docs/BUILDING.md) - General build instructions for all platforms
+- [Windows Setup Guide](docs/WINDOWS_SETUP.md) - Detailed Windows-specific instructions
+- [Building on Linux](docs/building_in_linux.md) - Linux-specific build guide
+
+### Cross-Platform Binary Distribution
+
+The project now includes automated GitHub Actions workflows that build whisper-server binaries for Windows, macOS, and Linux. These binaries are automatically attached to releases, making it easier for users to get started without building from source. Maintainers can trigger manual builds from the Actions tab.
 
 ## Meetily Pro
 
