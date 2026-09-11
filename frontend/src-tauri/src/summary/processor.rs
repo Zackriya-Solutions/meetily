@@ -665,23 +665,136 @@ async fn normalize_markdown_to_english(
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn saved_date_reaches_final_request_for_short_and_chunked_transcripts() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+        use tokio::time::{timeout, Duration};
+
+        for repetitions in [1, 100] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                let mut requests = 0;
+                loop {
+                    let (mut stream, _) = listener.accept().await.unwrap();
+                    let mut bytes = Vec::new();
+                    let request = loop {
+                        let mut buffer = [0; 4096];
+                        let read = stream.read(&mut buffer).await.unwrap();
+                        assert!(read > 0, "request ended before its body");
+                        bytes.extend_from_slice(&buffer[..read]);
+                        if let Some(end) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                            let headers = String::from_utf8_lossy(&bytes[..end]);
+                            let length: usize = headers
+                                .lines()
+                                .find_map(|line| {
+                                    let (name, value) = line.split_once(':')?;
+                                    name.eq_ignore_ascii_case("content-length")
+                                        .then(|| value.trim().parse().unwrap())
+                                })
+                                .unwrap();
+                            if bytes.len() >= end + 4 + length {
+                                break serde_json::from_slice::<serde_json::Value>(
+                                    &bytes[end + 4..end + 4 + length],
+                                )
+                                .unwrap();
+                            }
+                        }
+                    };
+                    requests += 1;
+                    let response = r##"{"choices":[{"message":{"content":"# Meeting\n## Date\nSaved record date: 2026-01-01 (UTC)"}}]}"##;
+                    stream
+                        .write_all(
+                            format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        response.len(), response,
+                    )
+                            .as_bytes(),
+                        )
+                        .await
+                        .unwrap();
+                    if request["messages"][0]["content"]
+                        .as_str()
+                        .unwrap()
+                        .contains("Generate a final meeting report")
+                    {
+                        return (requests, request);
+                    }
+                }
+            });
+            let created_at = DateTime::parse_from_rfc3339("2026-01-01T09:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc);
+            let template = crate::summary::templates::get_template("daily_standup").unwrap();
+            let result = timeout(
+                Duration::from_secs(10),
+                generate_meeting_summary(
+                    &Client::new(),
+                    &LLMProvider::Ollama,
+                    "test",
+                    "",
+                    &"The team agreed to review the roadmap. ".repeat(repetitions),
+                    "Focus on decisions.",
+                    "daily_standup",
+                    &template,
+                    1000,
+                    Some(&endpoint),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some("en"),
+                    Some("en"),
+                    None,
+                    Some(created_at),
+                ),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            let (requests, request) = timeout(Duration::from_secs(1), server)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(requests == 1, repetitions == 1);
+            let user_prompt = request["messages"][1]["content"].as_str().unwrap();
+            assert!(user_prompt.contains("record_created_at_utc: 2026-01-01T09:00:00Z"));
+            assert!(user_prompt.contains("<user_context>\nFocus on decisions.\n</user_context>"));
+            assert!(result.final_markdown.contains("2026-01-01"));
+        }
+    }
+
     #[test]
     fn final_prompt_uses_saved_timestamp_in_utc_without_changing_transcript() {
         // Converting an offset near midnight must preserve the instant and UTC date.
         let created_at = DateTime::parse_from_rfc3339("2026-01-01T00:30:00+02:00")
-            .unwrap().with_timezone(&Utc);
+            .unwrap()
+            .with_timezone(&Utc);
         let prompt = build_final_report_user_prompt(
-            "Discuss the roadmap tomorrow.", "Actual meeting date: December 30.", Some(created_at),
+            "Discuss the roadmap tomorrow.",
+            "Actual meeting date: December 30.",
+            Some(created_at),
         );
-        assert!(prompt.starts_with("<transcript_chunks>\nDiscuss the roadmap tomorrow.\n</transcript_chunks>\n"));
-        assert!(prompt.contains("<meeting_metadata>\nrecord_created_at_utc: 2025-12-31T22:30:00Z\n</meeting_metadata>"));
-        assert!(prompt.contains("<user_context>\nActual meeting date: December 30.\n</user_context>"));
+        assert!(prompt.starts_with(
+            "<transcript_chunks>\nDiscuss the roadmap tomorrow.\n</transcript_chunks>\n"
+        ));
+        assert!(prompt.contains(
+            "<meeting_metadata>\nrecord_created_at_utc: 2025-12-31T22:30:00Z\n</meeting_metadata>"
+        ));
+        assert!(
+            prompt.contains("<user_context>\nActual meeting date: December 30.\n</user_context>")
+        );
     }
 
     #[test]
     fn final_prompt_without_metadata_preserves_existing_format() {
-        assert_eq!(build_final_report_user_prompt("Transcript", "", None),
-                   "<transcript_chunks>\nTranscript\n</transcript_chunks>\n");
+        assert_eq!(
+            build_final_report_user_prompt("Transcript", "", None),
+            "<transcript_chunks>\nTranscript\n</transcript_chunks>\n"
+        );
         assert_eq!(build_final_report_user_prompt("Transcript", "Context", None),
                    "<transcript_chunks>\nTranscript\n</transcript_chunks>\n\n\nUser Provided Context:\n\n<user_context>\nContext\n</user_context>");
     }
