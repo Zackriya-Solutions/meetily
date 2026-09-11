@@ -93,6 +93,9 @@ Summary generation supplies a separate `meeting_metadata` block containing
 regenerating an older meeting, not the current clock. This metadata reaches the
 final report even when a long transcript is summarized in chunks.
 
+The built-in Daily Standup template labels its date section “Saved record date
+(UTC)” so the source and timezone remain visible when the notes are shared.
+
 A custom Date section can use an instruction such as:
 
 ```json

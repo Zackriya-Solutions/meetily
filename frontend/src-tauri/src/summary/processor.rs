@@ -230,9 +230,15 @@ fn build_combine_summary_user_prompt(combined_text: &str) -> String {
 fn build_final_report_system_prompt(
     section_instructions: &str,
     clean_template_markdown: &str,
+    meeting_created_at: Option<DateTime<Utc>>,
 ) -> String {
+    let metadata = meeting_created_at.map(|created_at| format!(
+        "<meeting_metadata>\nrecord_created_at_utc: {}\nSaved record date (UTC): {}\n</meeting_metadata>\n",
+        created_at.to_rfc3339_opts(SecondsFormat::Secs, true),
+        created_at.format("%Y-%m-%d"),
+    )).unwrap_or_default();
     format!(
-        r#"You are an expert meeting summarizer. Generate a final meeting report by filling in the provided Markdown template based on the source text.
+        r#"You are an expert meeting summarizer. Generate a final meeting report by filling in the provided Markdown template based on the source text and supplied meeting metadata.
 
 **CRITICAL INSTRUCTIONS:**
 1. {ENGLISH_BASE_SUMMARY_INSTRUCTION}
@@ -243,30 +249,22 @@ fn build_final_report_system_prompt(
 6. Output **only** the completed Markdown report.
 7. Do not include reasoning, thinking, self-correction, decision strategy, or any meta-commentary sections — output only the completed Markdown report.
 8. If unsure about something, omit it.
-9. `record_created_at_utc` is the saved meeting record timestamp in UTC, not the current date. It may be the import time for uploaded recordings. When a template asks for a date, prefer an explicitly stated meeting date in the transcript or user context; otherwise you may use this timestamp, labeled as the saved record date (UTC). Do not infer deadlines or resolve relative dates from it. If it is absent, do not guess a date.
+9. `record_created_at_utc` is the saved meeting record timestamp in UTC, not the current date. It may be the import time for uploaded recordings. When a template asks for the saved record date, use this timestamp. For an actual meeting date, prefer an explicitly stated meeting date in the transcript or user context; otherwise you may use this timestamp, labeled as the saved record date (UTC). Do not infer deadlines or resolve relative dates from it. If it is absent, do not guess a date.
 
 **SECTION-SPECIFIC INSTRUCTIONS:**
 {section_instructions}
 
 <template>
 {clean_template_markdown}
-</template>"#
+</template>
+
+{metadata}"#
     )
 }
 
-/// Keep record metadata outside transcript chunks so chunk summarization cannot discard it.
-fn build_final_report_user_prompt(
-    content: &str,
-    custom_prompt: &str,
-    meeting_created_at: Option<DateTime<Utc>>,
-) -> String {
+/// Keep transcript and user context separate from trusted meeting metadata in the system prompt.
+fn build_final_report_user_prompt(content: &str, custom_prompt: &str) -> String {
     let mut prompt = format!("<transcript_chunks>\n{content}\n</transcript_chunks>\n");
-    if let Some(created_at) = meeting_created_at {
-        prompt.push_str(&format!(
-            "\n<meeting_metadata>\nrecord_created_at_utc: {}\n</meeting_metadata>\n",
-            created_at.to_rfc3339_opts(SecondsFormat::Secs, true),
-        ));
-    }
     if !custom_prompt.is_empty() {
         prompt.push_str("\n\nUser Provided Context:\n\n<user_context>\n");
         prompt.push_str(custom_prompt);
@@ -518,9 +516,10 @@ pub(crate) async fn generate_meeting_summary(
             let final_system_prompt = build_final_report_system_prompt(
                 &template.to_section_instructions(),
                 &template.to_markdown_structure(),
+                meeting_created_at,
             );
             let final_user_prompt = build_final_report_user_prompt(
-                &content_to_summarize, custom_prompt, meeting_created_at,
+                &content_to_summarize, custom_prompt,
             );
             let completion = generate_summary(
                 client, provider, model_name, api_key, &final_system_prompt, &final_user_prompt,
@@ -761,7 +760,9 @@ mod tests {
                 .unwrap();
             assert_eq!(requests == 1, repetitions == 1);
             let user_prompt = request["messages"][1]["content"].as_str().unwrap();
-            assert!(user_prompt.contains("record_created_at_utc: 2026-01-01T09:00:00Z"));
+            let system_prompt = request["messages"][0]["content"].as_str().unwrap();
+            assert!(system_prompt.contains("record_created_at_utc: 2026-01-01T09:00:00Z"));
+            assert!(!user_prompt.contains("<meeting_metadata>"));
             assert!(user_prompt.contains("<user_context>\nFocus on decisions.\n</user_context>"));
             assert!(result.final_markdown.contains("2026-01-01"));
         }
@@ -776,13 +777,14 @@ mod tests {
         let prompt = build_final_report_user_prompt(
             "Discuss the roadmap tomorrow.",
             "Actual meeting date: December 30.",
-            Some(created_at),
         );
+        let system_prompt =
+            build_final_report_system_prompt("Fill the date", "## Date", Some(created_at));
         assert!(prompt.starts_with(
             "<transcript_chunks>\nDiscuss the roadmap tomorrow.\n</transcript_chunks>\n"
         ));
-        assert!(prompt.contains(
-            "<meeting_metadata>\nrecord_created_at_utc: 2025-12-31T22:30:00Z\n</meeting_metadata>"
+        assert!(system_prompt.contains(
+            "<meeting_metadata>\nrecord_created_at_utc: 2025-12-31T22:30:00Z\nSaved record date (UTC): 2025-12-31\n</meeting_metadata>"
         ));
         assert!(
             prompt.contains("<user_context>\nActual meeting date: December 30.\n</user_context>")
@@ -792,16 +794,16 @@ mod tests {
     #[test]
     fn final_prompt_without_metadata_preserves_existing_format() {
         assert_eq!(
-            build_final_report_user_prompt("Transcript", "", None),
+            build_final_report_user_prompt("Transcript", ""),
             "<transcript_chunks>\nTranscript\n</transcript_chunks>\n"
         );
-        assert_eq!(build_final_report_user_prompt("Transcript", "Context", None),
+        assert_eq!(build_final_report_user_prompt("Transcript", "Context"),
                    "<transcript_chunks>\nTranscript\n</transcript_chunks>\n\n\nUser Provided Context:\n\n<user_context>\nContext\n</user_context>");
     }
 
     #[test]
     fn date_instructions_distinguish_record_creation_from_meeting_occurrence() {
-        let prompt = build_final_report_system_prompt("Fill the date", "## Date");
+        let prompt = build_final_report_system_prompt("Fill the date", "## Date", None);
         assert!(prompt.contains("import time"));
         assert!(prompt.contains("saved record date (UTC)"));
         assert!(prompt.contains("prefer an explicitly stated meeting date"));
@@ -850,7 +852,7 @@ mod tests {
 
     #[test]
     fn final_report_prompt_forces_english_base_output() {
-        let prompt = build_final_report_system_prompt("Fill the section", "# <Add Title here>");
+        let prompt = build_final_report_system_prompt("Fill the section", "# <Add Title here>", None);
 
         assert!(prompt.contains(ENGLISH_BASE_SUMMARY_INSTRUCTION));
         assert!(prompt.contains("SECTION-SPECIFIC INSTRUCTIONS"));
@@ -858,7 +860,7 @@ mod tests {
 
     #[test]
     fn final_report_prompt_forbids_reasoning_output() {
-        let prompt = build_final_report_system_prompt("Fill", "# Title");
+        let prompt = build_final_report_system_prompt("Fill", "# Title", None);
         assert!(prompt.to_lowercase().contains("no reasoning")
             || prompt.contains("meta-commentary")
             || prompt.contains("self-correction"));
