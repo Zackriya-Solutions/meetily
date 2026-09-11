@@ -3,7 +3,7 @@
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import type { PermissionStatus, OnboardingPermissions } from '@/types/onboarding';
+import type { PermissionStatus, OnboardingPermissions, ProductFocus } from '@/types/onboarding';
 import { resolveOnboardingSummaryModelStatus } from '@/lib/onboarding-summary-model';
 import type { ParakeetDownloadProgressEvent } from '@/lib/parakeet';
 
@@ -18,6 +18,7 @@ interface OnboardingStatus {
     summary: string;
     selected_summary_model?: string;
   };
+  product_focus?: ProductFocus;
   last_updated: string;
 }
 
@@ -45,6 +46,7 @@ interface OnboardingContextType {
   summaryModelProgressInfo: SummaryModelProgressInfo;
   selectedSummaryModel: string;
   recommendedSummaryModel: string;
+  productFocus: ProductFocus | '';
   databaseExists: boolean;
   isBackgroundDownloading: boolean;
   // Permissions
@@ -58,6 +60,7 @@ interface OnboardingContextType {
   setParakeetDownloaded: (value: boolean) => void;
   setSummaryModelDownloaded: (value: boolean) => void;
   setSelectedSummaryModel: (value: string) => void;
+  setProductFocus: (value: ProductFocus) => void;
   setDatabaseExists: (value: boolean) => void;
   setPermissionStatus: (permission: keyof OnboardingPermissions, status: PermissionStatus) => void;
   setPermissionsSkipped: (skipped: boolean) => void;
@@ -93,8 +96,9 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
     totalMb: 0,
     speedMbps: 0,
   });
-  const [selectedSummaryModel, setSelectedSummaryModel] = useState<string>('');
+  const [selectedSummaryModel, setSelectedSummaryModelState] = useState<string>('');
   const [recommendedSummaryModel, setRecommendedSummaryModel] = useState<string>('');
+  const [productFocus, setProductFocus] = useState<ProductFocus | ''>('');
   const [databaseExists, setDatabaseExists] = useState(false);
   const [isBackgroundDownloading, setIsBackgroundDownloading] = useState(false);
 
@@ -108,12 +112,25 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
 
   const saveTimeoutRef = useRef<NodeJS.Timeout>();
 
+  // Tracks an explicit model choice made in the UI (e.g. the clinician focus
+  // selecting MedGemma). Async initialization/verification must not overwrite it.
+  const userSelectedModelRef = useRef(false);
+
+  const setSelectedSummaryModel = useCallback((value: string) => {
+    userSelectedModelRef.current = true;
+    setSelectedSummaryModelState(value);
+  }, []);
+
   const initializeSummaryModelSelection = async (preferredModel = selectedSummaryModel) => {
     try {
       const recommendedModel = await invoke<string>('builtin_ai_get_recommended_model');
       setRecommendedSummaryModel(recommendedModel);
+      if (userSelectedModelRef.current) {
+        console.log('[OnboardingContext] User already selected a model, keeping selection');
+        return null;
+      }
       const modelToCheck = preferredModel || recommendedModel;
-      setSelectedSummaryModel(modelToCheck);
+      setSelectedSummaryModelState(modelToCheck);
 
       const selectedModelReady = await invoke<boolean>('builtin_ai_is_model_ready', {
         modelName: modelToCheck,
@@ -125,7 +142,11 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
         selectedModelReady,
       });
 
-      setSelectedSummaryModel(resolved.selectedSummaryModel);
+      if (userSelectedModelRef.current) {
+        console.log('[OnboardingContext] User selected a model during initialization, keeping selection');
+        return null;
+      }
+      setSelectedSummaryModelState(resolved.selectedSummaryModel);
       setSummaryModelDownloaded(resolved.summaryModelDownloaded);
       console.log('[OnboardingContext] Set recommended model:', resolved.selectedSummaryModel);
 
@@ -231,7 +252,7 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
     return () => {
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
     };
-  }, [currentStep, parakeetDownloaded, summaryModelDownloaded, completed]);
+  }, [currentStep, parakeetDownloaded, summaryModelDownloaded, completed, selectedSummaryModel, productFocus]);
 
   // Listen to Parakeet download progress
   useEffect(() => {
@@ -351,7 +372,10 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
           setParakeetDownloaded(status.model_status.parakeet === 'downloaded');
           setSummaryModelDownloaded(status.model_status.summary === 'downloaded');
           if (status.model_status.selected_summary_model) {
-            setSelectedSummaryModel(status.model_status.selected_summary_model);
+            setSelectedSummaryModelState(status.model_status.selected_summary_model);
+          }
+          if (status.product_focus) {
+            setProductFocus(status.product_focus);
           }
           console.log('[OnboardingContext] Restored completed onboarding status without model verification');
           return;
@@ -364,8 +388,11 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
         setCompleted(verifiedStatus.completed);
         setParakeetDownloaded(verifiedStatus.parakeetDownloaded);
         setSummaryModelDownloaded(verifiedStatus.summaryModelDownloaded);
-        if (verifiedStatus.selectedSummaryModel) {
-          setSelectedSummaryModel(verifiedStatus.selectedSummaryModel);
+        if (verifiedStatus.selectedSummaryModel && !userSelectedModelRef.current) {
+          setSelectedSummaryModelState(verifiedStatus.selectedSummaryModel);
+        }
+        if (status.product_focus) {
+          setProductFocus(status.product_focus);
         }
 
         console.log('[OnboardingContext] Verified status:', verifiedStatus);
@@ -420,13 +447,13 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
     }
 
     // Determine the correct step based on verified status
-    // New simplified flow: Step 1: Welcome, Step 2: Setup Overview, Step 3: Download Progress, Step 4: Permissions (macOS)
+    // Flow: Step 1: Welcome, Step 2: Setup Overview, Step 3: Focus, Step 4: Download Progress, Step 5: Permissions (macOS)
     let currentStep = savedStatus.current_step;
     let completed = savedStatus.completed;
 
-    // Clamp step to new max (4)
-    if (currentStep > 4) {
-      currentStep = 3; // Go to download progress step
+    // Clamp step to new max (5)
+    if (currentStep > 5) {
+      currentStep = 4; // Go to download progress step
     }
 
     // Trust the completed status - don't revert based on model downloads
@@ -460,6 +487,7 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
             summary: summaryModelDownloaded ? 'downloaded' : 'not_downloaded',
             selected_summary_model: selectedSummaryModel || undefined,
           },
+          product_focus: productFocus || undefined,
           last_updated: new Date().toISOString(),
         },
       });
@@ -482,7 +510,7 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
       let modelToSave = selectedSummaryModel;
       if (!modelToSave) {
         modelToSave = await invoke<string>('builtin_ai_get_recommended_model');
-        setSelectedSummaryModel(modelToSave);
+        setSelectedSummaryModelState(modelToSave);
       }
 
       const selectedModelReady = await invoke<boolean>('builtin_ai_is_model_ready', {
@@ -589,14 +617,14 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
   }, []);
 
   const goToStep = useCallback((step: number) => {
-    setCurrentStep(Math.max(1, Math.min(step, 4)));
+    setCurrentStep(Math.max(1, Math.min(step, 5)));
   }, []);
 
   const goNext = useCallback(() => {
     setCurrentStep((prev: number) => {
       const next = prev + 1;
-      // Don't go past step 4
-      return Math.min(next, 4);
+      // Don't go past step 5
+      return Math.min(next, 5);
     });
   }, []);
 
@@ -620,6 +648,7 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
         summaryModelProgressInfo,
         selectedSummaryModel,
         recommendedSummaryModel,
+        productFocus,
         databaseExists,
         isBackgroundDownloading,
         permissions,
@@ -630,6 +659,7 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
         setParakeetDownloaded,
         setSummaryModelDownloaded,
         setSelectedSummaryModel,
+        setProductFocus,
         setDatabaseExists,
         setPermissionStatus,
         setPermissionsSkipped,
