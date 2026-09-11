@@ -84,3 +84,28 @@ let available = templates::list_templates();
 let custom_json = std::fs::read_to_string("custom.json")?;
 let validated = templates::validate_template(&custom_json)?;
 ```
+
+## Dates in summaries
+
+Summary generation supplies a separate `meeting_metadata` block containing
+`record_created_at_utc`, the saved meeting record timestamp in RFC 3339 UTC form
+(for example, `2026-01-01T09:00:00Z`). It uses the stored timestamp when
+regenerating an older meeting, not the current clock. This metadata reaches the
+final report even when a long transcript is summarized in chunks.
+
+A custom Date section can use an instruction such as:
+
+```json
+{
+  "title": "Date",
+  "instruction": "Use an explicitly stated meeting date from the transcript or user context. Otherwise show record_created_at_utc from meeting_metadata, labeled Saved record date (UTC). If neither is available, state that the date was not provided.",
+  "format": "paragraph"
+}
+```
+
+For imported recordings, the saved timestamp may be the **import time**, not when
+the conversation happened. Include the actual date in user context when known.
+The timestamp has an explicit UTC timezone; it is not converted to the viewer's
+local time. It must not be used to guess deadlines or resolve relative dates such
+as “tomorrow.” Existing templates need no new placeholders and retain their
+section structure. Templates without a Date section do not require one.
