@@ -237,6 +237,56 @@ impl ContinuousVadProcessor {
         Ok(completed_segments)
     }
 
+    /// Take one bounded prefix of an active live segment once it reaches the
+    /// target duration. The VAD session remains in speech state, and its
+    /// absolute buffer is advanced with `take_until`, so the next forced or
+    /// natural segment starts exactly where this one ended.
+    pub fn take_live_segment_if_ready(
+        &mut self,
+        target_duration_ms: u32,
+        hard_max_duration_ms: u32,
+    ) -> Result<Option<SpeechSegment>> {
+        if !self.in_speech {
+            return Ok(None);
+        }
+
+        let active_samples = self.session.current_speech_samples();
+        let Some((start_sample, end_sample)) = live_segment_bounds(
+            self.speech_start_sample,
+            active_samples,
+            target_duration_ms,
+            hard_max_duration_ms,
+        )? else {
+            return Ok(None);
+        };
+
+        let start_ms = start_sample * 1000 / VAD_SAMPLE_RATE as usize;
+        let end_ms = end_sample * 1000 / VAD_SAMPLE_RATE as usize;
+
+        let samples = self
+            .session
+            .get_speech(start_ms, Some(end_ms))
+            .to_vec();
+        if samples.is_empty() {
+            return Ok(None);
+        }
+
+        // Advance the canonical session buffer. This also updates Silero's
+        // active start, keeping future segments contiguous with no overlap.
+        let _ = self
+            .session
+            .take_until(Duration::from_millis(end_ms as u64));
+        self.speech_start_sample = end_ms * VAD_SAMPLE_RATE as usize / 1000;
+        self.current_speech = self.session.get_current_speech().to_vec();
+
+        Ok(Some(SpeechSegment {
+            samples,
+            start_timestamp_ms: start_ms as f64,
+            end_timestamp_ms: end_ms as f64,
+            confidence: 0.8,
+        }))
+    }
+
     fn process_chunk(&mut self, chunk: &[f32]) -> Result<()> {
         // Track accumulated speech buffer size to detect memory issues
         let current_speech_size = self.current_speech.len();
@@ -776,4 +826,141 @@ mod tests {
             "flush() must not emit the same forced segment twice"
         );
     }
+
+    #[test]
+    fn test_live_segment_take_is_bounded_and_contiguous() {
+        // Keep speech active long enough to require two live redemptions. The
+        // small bounds make this deterministic and exercise the same session
+        // take path as the production 20/25 second policy.
+        let audio = generate_late_speech_audio(20.0, 3.0, 16000);
+        let mut processor =
+            ContinuousVadProcessor::new(16000, 2000).expect("Failed to create processor");
+        processor
+            .process_audio(&audio)
+            .expect("process_audio failed");
+        assert!(processor.in_speech, "fixture must remain in active speech");
+
+        let first = processor
+            .take_live_segment_if_ready(500, 1000)
+            .expect("first live take failed")
+            .expect("first live segment should be ready");
+        assert_eq!(first.samples.len(), 8_000);
+        assert_eq!(first.end_timestamp_ms - first.start_timestamp_ms, 500.0);
+        assert!(first.end_timestamp_ms <= first.start_timestamp_ms + 1000.0);
+
+        let second = processor
+            .take_live_segment_if_ready(500, 1000)
+            .expect("second live take failed")
+            .expect("second live segment should be ready");
+        assert_eq!(second.samples.len(), 8_000);
+        assert_eq!(second.start_timestamp_ms, first.end_timestamp_ms);
+        assert_eq!(second.end_timestamp_ms - second.start_timestamp_ms, 500.0);
+        assert!(second.end_timestamp_ms <= second.start_timestamp_ms + 1000.0);
+    }
+
+    fn generate_continuous_speech_audio(duration_seconds: f32, sample_rate: u32) -> Vec<f32> {
+        let total_samples = (duration_seconds * sample_rate as f32) as usize;
+        let mut seed = 0x1234_5678u32;
+        let mut filtered = 0.0f32;
+        (0..total_samples)
+            .map(|_| {
+                // Deterministic speech-like broadband energy keeps Silero's
+                // speech state active for the full synthetic session without
+                // needing a physical microphone or a copyrighted recording.
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let noise = ((seed >> 8) as f32 / 16_777_215.0) * 2.0 - 1.0;
+                filtered = filtered * 0.96 + noise * 0.04;
+                filtered * 0.8
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_two_minute_continuous_speech_forced_boundaries_cover_exact_payload() {
+        const SAMPLE_RATE: u32 = 16_000;
+        const DURATION_SECONDS: usize = 120;
+        const TARGET_DURATION_MS: u32 = 20_000;
+        const HARD_MAX_DURATION_MS: u32 = 25_000;
+
+        let audio = generate_continuous_speech_audio(DURATION_SECONDS as f32, SAMPLE_RATE);
+        assert_eq!(audio.len(), DURATION_SECONDS * SAMPLE_RATE as usize);
+
+        // Exercise the production boundary arithmetic against a full
+        // two-minute continuous stream. The synthetic payload stands in for
+        // the active Silero session, allowing this proof to run without a
+        // physical microphone or a model-dependent speech decision.
+        let mut segments = Vec::new();
+        let mut cursor = 0usize;
+        while let Some((start, end)) = live_segment_bounds(
+            cursor,
+            audio.len() - cursor,
+            TARGET_DURATION_MS,
+            HARD_MAX_DURATION_MS,
+        )
+        .expect("forced live boundary should succeed")
+        {
+            segments.push(SpeechSegment {
+                samples: audio[start..end].to_vec(),
+                start_timestamp_ms: start as f64 * 1000.0 / SAMPLE_RATE as f64,
+                end_timestamp_ms: end as f64 * 1000.0 / SAMPLE_RATE as f64,
+                confidence: 0.8,
+            });
+            cursor = end;
+        }
+
+        assert_eq!(segments.len(), 6, "120 seconds should produce six 20-second takes");
+        let mut covered_samples = 0usize;
+        let mut payload = Vec::new();
+        for segment in &segments {
+            let start = (segment.start_timestamp_ms / 1000.0 * SAMPLE_RATE as f64).round() as usize;
+            let end = (segment.end_timestamp_ms / 1000.0 * SAMPLE_RATE as f64).round() as usize;
+            assert_eq!(segment.samples.len(), end - start);
+            assert_eq!(segment.samples, audio[start..end]);
+            assert_eq!(start, covered_samples, "forced takes must be contiguous");
+            covered_samples = end;
+            payload.extend_from_slice(&segment.samples);
+            assert!(
+                segment.end_timestamp_ms - segment.start_timestamp_ms <= HARD_MAX_DURATION_MS as f64
+            );
+        }
+        assert_eq!(covered_samples, audio.len());
+        assert_eq!(payload, audio, "forced take payload must cover each real input sample once");
+        assert!(
+            live_segment_bounds(
+                cursor,
+                audio.len() - cursor,
+                TARGET_DURATION_MS,
+                HARD_MAX_DURATION_MS,
+            )
+            .expect("final stop boundary should succeed")
+            .is_none(),
+            "final stop must not duplicate audio already emitted by forced boundaries"
+        );
+    }
+}
+
+/// Compute one bounded prefix of an active live speech buffer. Keeping the
+/// boundary arithmetic independent from the Silero session makes the 20/25s
+/// policy testable with a long deterministic synthetic stream as well as with
+/// the live VAD session.
+fn live_segment_bounds(
+    start_sample: usize,
+    active_samples: usize,
+    target_duration_ms: u32,
+    hard_max_duration_ms: u32,
+) -> Result<Option<(usize, usize)>> {
+    let target_samples = target_duration_ms as usize * VAD_SAMPLE_RATE as usize / 1000;
+    let hard_max_samples = hard_max_duration_ms as usize * VAD_SAMPLE_RATE as usize / 1000;
+    if active_samples < target_samples {
+        return Ok(None);
+    }
+    if target_samples == 0 || hard_max_samples < target_samples {
+        return Err(anyhow!("invalid live VAD segment bounds"));
+    }
+
+    let end_sample = start_sample + target_samples.min(hard_max_samples).min(active_samples);
+    if end_sample <= start_sample {
+        return Ok(None);
+    }
+    Ok(Some((start_sample, end_sample)))
 }
