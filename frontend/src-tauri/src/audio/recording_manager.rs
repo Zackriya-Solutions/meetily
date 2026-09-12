@@ -314,13 +314,14 @@ impl RecordingManager {
             monitor.stop_monitoring().await;
         }
 
-        // Stop recording state first
-        self.state.stop_recording();
-
         // Stop audio streams
         if let Err(e) = self.stream_manager.stop_streams() {
             error!("Error stopping audio streams: {}", e);
         }
+
+        // Streams flush any resampler tail while the pipeline sender is still
+        // open. Only then close recording state and the pipeline channel.
+        self.state.stop_recording();
 
         // Stop audio pipeline
         if let Err(e) = self.pipeline_manager.stop().await {
@@ -342,13 +343,14 @@ impl RecordingManager {
             monitor.stop_monitoring().await;
         }
 
-        // Stop recording state first - this clears device references
-        self.state.stop_recording();
-
         // Stop audio streams immediately
         if let Err(e) = self.stream_manager.stop_streams() {
             error!("Error stopping audio streams: {}", e);
         }
+
+        // The stream stop above pauses producers and flushes their final
+        // resampler blocks before closing the pipeline sender.
+        self.state.stop_recording();
 
         // CRITICAL: Force pipeline to flush ALL accumulated audio before stopping
         debug!("💨 Forcing pipeline to flush accumulated audio immediately");
@@ -398,13 +400,13 @@ impl RecordingManager {
         let recording_duration = self.state.get_active_recording_duration();
         info!("Recording duration before stop: {:?}s", recording_duration);
 
-        // Stop recording state first
-        self.state.stop_recording();
-
         // Stop audio streams
         if let Err(e) = self.stream_manager.stop_streams() {
             error!("Error stopping audio streams: {}", e);
         }
+
+        // Preserve the sender until stream tails have been forwarded.
+        self.state.stop_recording();
 
         // Stop audio pipeline
         if let Err(e) = self.pipeline_manager.stop().await {
