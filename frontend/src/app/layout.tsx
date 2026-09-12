@@ -98,10 +98,18 @@ export default function RootLayout({
       })
   }, [])
 
-  // Disable context menu in production
+  // Disable context menu in production, but keep the native menu inside
+  // editable elements (inputs, textareas, the BlockNote summary editor) so
+  // copy/paste stays available while editing text.
   useEffect(() => {
     if (process.env.NODE_ENV === 'production') {
-      const handleContextMenu = (e: MouseEvent) => e.preventDefault();
+      const handleContextMenu = (e: MouseEvent) => {
+        const target = e.target as HTMLElement | null;
+        if (target?.closest('input, textarea, [contenteditable]')) {
+          return;
+        }
+        e.preventDefault();
+      };
       document.addEventListener('contextmenu', handleContextMenu);
       return () => document.removeEventListener('contextmenu', handleContextMenu);
     }
