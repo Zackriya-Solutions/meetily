@@ -73,6 +73,8 @@ struct SummaryCacheSource {
     max_tokens: Option<u32>,
     temperature: Option<f32>,
     top_p: Option<f32>,
+    #[serde(default)]
+    meeting_created_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -122,6 +124,7 @@ fn build_summary_cache_source(
         max_tokens,
         temperature,
         top_p,
+        meeting_created_at: None,
     }
 }
 
@@ -501,7 +504,19 @@ impl SummaryService {
         };
         let template_fingerprint = template_cache_fingerprint(&template);
 
-        let cache_source = build_summary_cache_source(
+        // Use the stored record timestamp, never the regeneration time. Imported
+        // recordings may have an import timestamp; the prompt labels this explicitly.
+        let meeting_created_at = match MeetingsRepository::get_meeting_metadata(&pool, &meeting_id).await {
+            Ok(meeting) => meeting.map(|meeting| meeting.created_at.0),
+            Err(e) => {
+                warn!(
+                    "Failed to load meeting date for summary (meeting_id={}): {}",
+                    meeting_id, e
+                );
+                None
+            }
+        };
+        let mut cache_source = build_summary_cache_source(
             &text,
             &custom_prompt,
             &template_id,
@@ -515,6 +530,8 @@ impl SummaryService {
             custom_openai_temperature,
             custom_openai_top_p,
         );
+
+        cache_source.meeting_created_at = meeting_created_at;
 
         let cached_english = match SummaryProcessesRepository::get_summary_data(&pool, &meeting_id).await {
             Err(e) => {
@@ -564,6 +581,7 @@ impl SummaryService {
             summary_language.as_deref(),
             detected_summary_language.as_deref(),
             cached_english.as_deref(),
+            meeting_created_at,
         )
         .await;
 
@@ -689,6 +707,73 @@ impl SummaryService {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stored_meeting_date_participates_in_translation_cache_identity() {
+        let mut source = sample_cache_source();
+        source.meeting_created_at = Some(
+            DateTime::parse_from_rfc3339("2026-01-01T09:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+        );
+        let raw = build_summary_result_json(
+            "# Reunion\n## Date\n2026-01-01",
+            "# Meeting\n## Date\n2026-01-01",
+            source.clone(),
+            Some("fr"),
+            false,
+            false,
+        )
+        .unwrap()
+        .to_string();
+        assert!(extract_cached_english_markdown(&raw, &source, Some("de"))
+            .unwrap()
+            .is_some());
+        source.meeting_created_at = source
+            .meeting_created_at
+            .map(|date| date + chrono::Duration::days(1));
+        assert!(extract_cached_english_markdown(&raw, &source, Some("de"))
+            .unwrap()
+            .is_none());
+        source.meeting_created_at = None;
+        assert!(extract_cached_english_markdown(&raw, &source, Some("de"))
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn legacy_cache_without_meeting_date_is_readable_but_not_reused_with_date() {
+        let source = sample_cache_source();
+        let mut value = build_summary_result_json(
+            "# Reunion\nBody",
+            "# Meeting\nBody",
+            source.clone(),
+            Some("fr"),
+            false,
+            false,
+        )
+        .unwrap();
+        value[ENGLISH_CACHE_FIELD]["source"]
+            .as_object_mut()
+            .unwrap()
+            .remove("meeting_created_at");
+        let raw = value.to_string();
+        assert!(extract_cached_english_markdown(&raw, &source, Some("de"))
+            .unwrap()
+            .is_some());
+        let mut with_date = source;
+        with_date.meeting_created_at = Some(
+            DateTime::parse_from_rfc3339("2026-01-01T09:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+        );
+        assert!(
+            extract_cached_english_markdown(&raw, &with_date, Some("de"))
+                .unwrap()
+                .is_none()
+        );
+    }
+
 
     #[test]
     fn stale_cleanup_keeps_the_replacement_cancellation_token() {
