@@ -68,8 +68,8 @@ fn session_live(s: &Arc<super::RecordingState>) -> bool {
             .map_or(false, |m| Arc::ptr_eq(m.get_state(), s))
 }
 
-/// RAII guard for the stop-tail flag. Sets `IS_RECORDING_STOPPING` true on
-/// construction and clears it on Drop — including during unwind — so a panic
+/// RAII guard for the stop-tail flag. The caller acquires the atomic gate before
+/// construction; Drop clears it on unwind — including during panic — so a panic
 /// anywhere in the ~320-line stop tail can't leave the flag stuck true and
 /// silently kill the mic-disconnect fallback for every later recording.
 ///
@@ -78,9 +78,11 @@ fn session_live(s: &Arc<super::RecordingState>) -> bool {
 /// and the stuck-flag failure mode returns — add a start-time reset then.
 struct StoppingGuard;
 impl StoppingGuard {
-    fn new() -> Self {
-        IS_RECORDING_STOPPING.store(true, Ordering::SeqCst);
-        StoppingGuard
+    fn new() -> Option<Self> {
+        IS_RECORDING_STOPPING
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .ok()
+            .map(|_| StoppingGuard)
     }
 }
 impl Drop for StoppingGuard {
@@ -673,6 +675,345 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
 }
 
 /// Stop recording with optimized graceful shutdown ensuring NO transcript chunks are lost
+///
+/// This entry point is also used by the transcription worker's fatal
+/// initialization path. It deliberately does not touch `TRANSCRIPTION_TASK`,
+/// so a worker can request shutdown without awaiting itself.
+pub(crate) async fn shutdown_after_fatal_transcription_failure<R: Runtime>(
+    app: AppHandle<R>,
+) {
+    if !IS_RECORDING.load(Ordering::SeqCst) {
+        return;
+    }
+    let Some(_stopping_guard) = StoppingGuard::new() else {
+        // A concurrent UI or tray Stop already owns the shutdown tail.
+        return;
+    };
+
+    let manager = RECORDING_MANAGER.lock().unwrap().take();
+    let (folder_path, meeting_name) = if let Some(mut manager) = manager {
+        let folder = manager.get_meeting_folder();
+        let name = manager.get_meeting_name();
+        if let Err(error) = manager.stop_streams_and_force_flush().await {
+            warn!("Fatal transcription failure cleanup could not stop streams: {}", error);
+        }
+        if let Err(error) = manager.save_recording_only(&app).await {
+            let _ = app.emit(
+                "recording-save-failed",
+                serde_json::json!({
+                    "message": error.to_string(),
+                    "meeting_folder": folder.as_ref().map(|path| path.to_string_lossy().to_string()),
+                    "recovery": "Resolve the storage error and retry sidecar/audio recovery from the meeting folder."
+                }),
+            );
+        }
+        (folder, name)
+    } else {
+        (None, None)
+    };
+
+    {
+        use tauri::Listener;
+        if let Some(listener_id) = TRANSCRIPT_LISTENER_ID.lock().unwrap().take() {
+            app.unlisten(listener_id);
+        }
+    }
+    IS_RECORDING.store(false, Ordering::SeqCst);
+    let _ = app.emit(
+        "recording-shutdown-progress",
+        serde_json::json!({
+            "stage": "complete",
+            "message": "Recording stopped after speech recognition initialization failed",
+            "progress": 100,
+            "outcome": "fatal_transcription_failure"
+        }),
+    );
+    let _ = app.emit(
+        "recording-stopped",
+        serde_json::json!({
+            "message": "Recording stopped after speech recognition initialization failed",
+            "folder_path": folder_path,
+            "meeting_name": meeting_name,
+            "outcome": "fatal_transcription_failure"
+        }),
+    );
+    crate::tray::update_tray_menu(&app);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    static TEST_GLOBAL_STATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn stopping_gate_allows_only_one_owner() {
+        let _global_state_guard = TEST_GLOBAL_STATE.lock().unwrap();
+        IS_RECORDING_STOPPING.store(false, Ordering::SeqCst);
+        let first = StoppingGuard::new();
+        assert!(first.is_some());
+        assert!(StoppingGuard::new().is_none());
+        drop(first);
+        assert!(StoppingGuard::new().is_some());
+        IS_RECORDING_STOPPING.store(false, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn stopping_gate_has_one_winner_under_concurrent_stop_race() {
+        let _global_state_guard = TEST_GLOBAL_STATE.lock().unwrap();
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+
+        IS_RECORDING_STOPPING.store(false, Ordering::SeqCst);
+        let workers = 16;
+        let barrier = Arc::new(Barrier::new(workers));
+        let release = Arc::new(Barrier::new(workers));
+        let winners = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let handles = (0..workers)
+            .map(|_| {
+                let barrier = Arc::clone(&barrier);
+                let release = Arc::clone(&release);
+                let winners = Arc::clone(&winners);
+                thread::spawn(move || {
+                    barrier.wait();
+                    let guard = StoppingGuard::new();
+                    if guard.is_some() {
+                        winners.fetch_add(1, Ordering::SeqCst);
+                    }
+                    // Keep the winning guard alive until every contender has
+                    // performed its one acquisition attempt. This makes the
+                    // assertion test the atomic race itself, rather than
+                    // allowing a fast winner to drop and a later contender to
+                    // become a second sequential owner.
+                    release.wait();
+                    drop(guard);
+                })
+            })
+            .collect::<Vec<_>>();
+
+        for handle in handles {
+            handle.join().expect("stop-race worker panicked");
+        }
+
+        assert_eq!(
+            winners.load(Ordering::SeqCst),
+            1,
+            "exactly one concurrent stop caller may own the shutdown tail"
+        );
+        assert!(StoppingGuard::new().is_some(), "guard must be reusable after the winner exits");
+        IS_RECORDING_STOPPING.store(false, Ordering::SeqCst);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn fatal_worker_shutdown_completes_before_error_event() {
+        let _global_state_guard = TEST_GLOBAL_STATE.lock().unwrap();
+        use std::sync::{Arc, Mutex};
+        use tauri::{Listener, Manager};
+
+        let app = tauri::test::mock_app();
+        let temp = tempfile::tempdir().expect("temporary database directory should exist");
+        let db_path = temp.path().join("meetily.sqlite");
+        let db_path = db_path.to_string_lossy().into_owned();
+        let db_manager = crate::database::manager::DatabaseManager::new(&db_path, &db_path)
+            .await
+            .expect("mock app database should initialize");
+        app.manage(crate::state::AppState { db_manager });
+
+        let events = Arc::new(Mutex::new(Vec::<&'static str>::new()));
+        let stopped_events = Arc::clone(&events);
+        let stopped_listener = app.listen("recording-stopped", move |_| {
+            stopped_events.lock().unwrap().push("recording-stopped");
+        });
+        let error_events = Arc::clone(&events);
+        let error_listener = app.listen("transcription-error", move |_| {
+            error_events.lock().unwrap().push("transcription-error");
+        });
+
+        IS_RECORDING.store(true, Ordering::SeqCst);
+        IS_RECORDING_STOPPING.store(false, Ordering::SeqCst);
+        *RECORDING_MANAGER.lock().unwrap() = Some(RecordingManager::new());
+        let (_sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+
+        let worker = transcription::start_transcription_task(app.handle().clone(), receiver);
+        tokio::time::timeout(std::time::Duration::from_secs(5), worker)
+            .await
+            .expect("fatal worker should shut down promptly")
+            .expect("fatal worker should not panic");
+
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec!["recording-stopped", "transcription-error"],
+            "native shutdown must emit completion before the frontend error"
+        );
+        assert!(!IS_RECORDING.load(Ordering::SeqCst));
+        assert!(RECORDING_MANAGER.lock().unwrap().is_none());
+        assert!(!IS_RECORDING_STOPPING.load(Ordering::SeqCst));
+
+        app.unlisten(stopped_listener);
+        app.unlisten(error_listener);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn fatal_worker_startup_when_recording_is_inactive_only_emits_error() {
+        let _global_state_guard = TEST_GLOBAL_STATE.lock().unwrap();
+        use std::sync::{Arc, Mutex};
+        use tauri::Listener;
+
+        let app = tauri::test::mock_app();
+        let temp = tempfile::tempdir().expect("temporary database directory should exist");
+        let db_path = temp.path().join("meetily.sqlite");
+        let db_path = db_path.to_string_lossy().into_owned();
+        let db_manager = crate::database::manager::DatabaseManager::new(&db_path, &db_path)
+            .await
+            .expect("mock app database should initialize");
+        app.manage(crate::state::AppState { db_manager });
+
+        let events = Arc::new(Mutex::new(Vec::<&'static str>::new()));
+        let stopped_events = Arc::clone(&events);
+        let stopped_listener = app.listen("recording-stopped", move |_| {
+            stopped_events.lock().unwrap().push("recording-stopped");
+        });
+        let error_events = Arc::clone(&events);
+        let error_listener = app.listen("transcription-error", move |_| {
+            error_events.lock().unwrap().push("transcription-error");
+        });
+
+        IS_RECORDING.store(false, Ordering::SeqCst);
+        IS_RECORDING_STOPPING.store(false, Ordering::SeqCst);
+        *RECORDING_MANAGER.lock().unwrap() = Some(RecordingManager::new());
+        let (_sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        let worker = transcription::start_transcription_task(app.handle().clone(), receiver);
+        tokio::time::timeout(std::time::Duration::from_secs(5), worker)
+            .await
+            .expect("inactive startup failure should return promptly")
+            .expect("inactive startup worker should not panic");
+
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec!["transcription-error"],
+            "inactive startup failure must not run native recording shutdown"
+        );
+        assert!(RECORDING_MANAGER.lock().unwrap().is_some());
+        assert!(!IS_RECORDING_STOPPING.load(Ordering::SeqCst));
+        RECORDING_MANAGER.lock().unwrap().take();
+        app.unlisten(stopped_listener);
+        app.unlisten(error_listener);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn fatal_native_save_failure_emits_error_and_still_completes_cleanup() {
+        let _global_state_guard = TEST_GLOBAL_STATE.lock().unwrap();
+        use std::sync::{Arc, Mutex};
+        use tauri::Listener;
+
+        let app = tauri::test::mock_app();
+        let temp = tempfile::tempdir().expect("temporary database directory should exist");
+        let db_path = temp.path().join("meetily.sqlite");
+        let db_path = db_path.to_string_lossy().into_owned();
+        let db_manager = crate::database::manager::DatabaseManager::new(&db_path, &db_path)
+            .await
+            .expect("mock app database should initialize");
+        app.manage(crate::state::AppState { db_manager });
+
+        let events = Arc::new(Mutex::new(Vec::<&'static str>::new()));
+        let save_events = Arc::clone(&events);
+        let save_listener = app.listen("recording-save-failed", move |_| {
+            save_events.lock().unwrap().push("recording-save-failed");
+        });
+        let stopped_events = Arc::clone(&events);
+        let stopped_listener = app.listen("recording-stopped", move |_| {
+            stopped_events.lock().unwrap().push("recording-stopped");
+        });
+
+        let mut manager = RecordingManager::new();
+        manager.inject_native_save_failure_for_test();
+        IS_RECORDING.store(true, Ordering::SeqCst);
+        IS_RECORDING_STOPPING.store(false, Ordering::SeqCst);
+        *RECORDING_MANAGER.lock().unwrap() = Some(manager);
+
+        shutdown_after_fatal_transcription_failure(app.handle().clone()).await;
+
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec!["recording-save-failed", "recording-stopped"],
+            "save failure must be surfaced before fatal shutdown completion"
+        );
+        assert!(
+            events.lock().unwrap().contains(&"recording-save-failed"),
+            "native save failure must remain caller-visible"
+        );
+        assert!(!IS_RECORDING.load(Ordering::SeqCst));
+        assert!(!IS_RECORDING_STOPPING.load(Ordering::SeqCst));
+        assert!(RECORDING_MANAGER.lock().unwrap().is_none());
+        app.unlisten(save_listener);
+        app.unlisten(stopped_listener);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn fatal_ui_and_tray_stop_callers_share_one_real_shutdown_tail() {
+        let _global_state_guard = TEST_GLOBAL_STATE.lock().unwrap();
+        use std::sync::{Arc, Mutex};
+        use tauri::Listener;
+
+        let app = tauri::test::mock_app();
+        let temp = tempfile::tempdir().expect("temporary database directory should exist");
+        let db_path = temp.path().join("meetily.sqlite");
+        let db_path = db_path.to_string_lossy().into_owned();
+        let db_manager = crate::database::manager::DatabaseManager::new(&db_path, &db_path)
+            .await
+            .expect("mock app database should initialize");
+        app.manage(crate::state::AppState { db_manager });
+
+        let stopped_count = Arc::new(Mutex::new(0usize));
+        let count_for_listener = Arc::clone(&stopped_count);
+        let stopped_listener = app.listen("recording-stopped", move |_| {
+            *count_for_listener.lock().unwrap() += 1;
+        });
+
+        IS_RECORDING.store(true, Ordering::SeqCst);
+        IS_RECORDING_STOPPING.store(false, Ordering::SeqCst);
+        *RECORDING_MANAGER.lock().unwrap() = Some(RecordingManager::new());
+        let fatal_app = app.handle().clone();
+        let ui_app = app.handle().clone();
+        let tray_app = app.handle().clone();
+        let fatal = tokio::spawn(async move {
+            shutdown_after_fatal_transcription_failure(fatal_app).await;
+        });
+        let ui_stop = tokio::spawn(async move {
+            stop_recording(
+                ui_app,
+                RecordingArgs {
+                    save_path: "ui-stop.wav".to_string(),
+                },
+            )
+            .await
+        });
+        let tray_stop = tokio::spawn(async move {
+            stop_recording(
+                tray_app,
+                RecordingArgs {
+                    save_path: "tray-stop.wav".to_string(),
+                },
+            )
+            .await
+        });
+
+        fatal.await.expect("fatal caller should not panic");
+        ui_stop.await.expect("UI stop caller should not panic").expect("UI stop should complete");
+        tray_stop.await.expect("tray stop caller should not panic").expect("tray stop should complete");
+
+        assert_eq!(
+            *stopped_count.lock().unwrap(),
+            1,
+            "fatal, UI, and tray callers must emit one shared stop completion"
+        );
+        assert!(!IS_RECORDING.load(Ordering::SeqCst));
+        assert!(!IS_RECORDING_STOPPING.load(Ordering::SeqCst));
+        assert!(RECORDING_MANAGER.lock().unwrap().is_none());
+        app.unlisten(stopped_listener);
+    }
+}
+
 pub async fn stop_recording<R: Runtime>(
     app: AppHandle<R>,
     _args: RecordingArgs,
@@ -681,11 +1022,15 @@ pub async fn stop_recording<R: Runtime>(
         "🛑 Starting optimized recording shutdown - ensuring ALL transcript chunks are preserved"
     );
 
-    // Check if recording is active
+    // Check if recording is active and acquire the single shutdown owner.
     if !IS_RECORDING.load(Ordering::SeqCst) {
         info!("Recording was not active");
         return Ok(());
     }
+    let Some(_stopping_guard) = StoppingGuard::new() else {
+        info!("Recording shutdown already in progress");
+        return Ok(());
+    };
 
     // Emit shutdown progress to frontend
     let _ = app.emit(
@@ -708,8 +1053,6 @@ pub async fn stop_recording<R: Runtime>(
     // manager. IS_RECORDING itself stays true until the tail completes — the
     // frontend polls it to keep the stop UI up. RAII so a panic in the tail
     // below can't leave the flag stuck true.
-    let _stopping_guard = StoppingGuard::new();
-
     let stop_result = if let Some(mut manager) = manager_for_cleanup {
         // Use FORCE FLUSH to immediately process all accumulated audio - eliminates 30s delay!
         info!("🚀 Using FORCE FLUSH to eliminate pipeline accumulation delays");

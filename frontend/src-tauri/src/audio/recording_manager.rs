@@ -382,12 +382,17 @@ impl RecordingManager {
             }
             Err(e) => {
                 error!("Failed to save recording: {}", e);
-                // Don't fail the stop operation if saving fails
+                return Err(anyhow::anyhow!(e));
             }
         }
 
         debug!("Recording save operation completed");
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn inject_native_save_failure_for_test(&mut self) {
+        self.recording_saver.inject_native_save_failure_for_test();
     }
 
     /// Stop recording and save audio (legacy method)
