@@ -462,6 +462,15 @@ pub fn run() {
         }));
     }
 
+    // macOS routes standard editing commands (Copy/Paste/Cut/Select All/Undo/
+    // Redo) and their Cmd shortcuts through the app menu — without an Edit
+    // menu they never reach the webview, so clipboard actions are dead in
+    // every editable field including the summary editor.
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder.menu(|handle| tauri::menu::Menu::default(handle));
+    }
+
     builder
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_store::Builder::default().build())
