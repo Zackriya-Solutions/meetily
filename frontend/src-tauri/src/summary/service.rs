@@ -10,6 +10,7 @@ use crate::summary::processor::{
 };
 use crate::summary::templates::{self, Template};
 use crate::ollama::metadata::ModelMetadataCache;
+use crate::utils::url_origin_for_log;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
@@ -19,7 +20,7 @@ use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, warn};
+use log::{error, info, warn};
 
 static METADATA_CACHE: LazyLock<ModelMetadataCache> =
     LazyLock::new(|| ModelMetadataCache::new(Duration::from_secs(300)));
@@ -398,7 +399,10 @@ impl SummaryService {
             if provider == LLMProvider::CustomOpenAI {
                 match SettingsRepository::get_custom_openai_config(&pool).await {
                     Ok(Some(config)) => {
-                        info!("✓ Using custom OpenAI endpoint: {}", config.endpoint);
+                        info!(
+                            "✓ Using custom OpenAI endpoint_origin={}",
+                            url_origin_for_log(&config.endpoint)
+                        );
                         (
                             Some(config.endpoint),
                             config.api_key,
@@ -663,8 +667,9 @@ impl SummaryService {
         error_msg: &str,
     ) {
         error!(
-            "Processing failed for meeting_id {}: {}",
-            meeting_id, error_msg
+            "Processing failed for meeting_id={}; error_bytes={}",
+            meeting_id,
+            error_msg.len()
         );
         match SummaryProcessesRepository::update_process_failed(
             pool,

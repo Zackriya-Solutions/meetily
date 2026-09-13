@@ -134,12 +134,12 @@ impl IncrementalAudioSaver {
 
         // Clean up checkpoints directory
         info!("Cleaning up {} checkpoint files", self.checkpoint_count);
-        if let Err(e) = std::fs::remove_dir_all(&self.checkpoints_dir) {
-            warn!("Failed to clean up checkpoints directory: {}", e);
+        if let Err(_) = std::fs::remove_dir_all(&self.checkpoints_dir) {
+            warn!("Failed to clean up checkpoints");
             // Non-fatal - user can manually delete
         }
 
-        info!("Finalized recording: {}", final_audio_path.display());
+        info!("Finalized recording");
 
         Ok(final_audio_path)
     }
@@ -171,7 +171,7 @@ impl IncrementalAudioSaver {
 
         let ffmpeg_path = find_ffmpeg_path()
             .ok_or_else(|| anyhow!("FFmpeg not found. Please install FFmpeg to finalize recordings."))?;
-        info!("Using FFmpeg at: {:?}", ffmpeg_path);
+        info!("FFmpeg selected");
 
         // Run FFmpeg concat command
         // Using concat demuxer with copy codec for fast merging (no re-encoding)
@@ -199,7 +199,7 @@ impl IncrementalAudioSaver {
 
         if !ffmpeg_output.status.success() {
             let stderr = String::from_utf8_lossy(&ffmpeg_output.stderr);
-            error!("FFmpeg merge failed: {}", stderr);
+            error!("FFmpeg merge failed");
             return Err(anyhow!("FFmpeg concat failed: {}", stderr));
         }
 
@@ -208,8 +208,7 @@ impl IncrementalAudioSaver {
             return Err(anyhow!("Merged audio file was not created: {}", output.display()));
         }
 
-        info!("Successfully merged {} checkpoints → {}",
-              self.checkpoint_count, output.display());
+        info!("Successfully merged {} checkpoints", self.checkpoint_count);
 
         Ok(())
     }
@@ -242,14 +241,14 @@ pub async fn recover_audio_from_checkpoints(
     meeting_folder: String,
     _sample_rate: u32
 ) -> Result<AudioRecoveryStatus, String> {
-    info!("Starting audio recovery for folder: {}", meeting_folder);
+    info!("Starting audio recovery");
 
     let folder_path = PathBuf::from(&meeting_folder);
     let checkpoints_dir = folder_path.join(".checkpoints");
 
     // Check if checkpoints directory exists
     if !checkpoints_dir.exists() {
-        info!("No checkpoints directory found at: {}", checkpoints_dir.display());
+        info!("No checkpoints directory found");
         return Ok(AudioRecoveryStatus {
             status: "none".to_string(),
             chunk_count: 0,
@@ -269,7 +268,7 @@ pub async fn recover_audio_from_checkpoints(
         .collect();
 
     if checkpoint_files.is_empty() {
-        info!("No checkpoint files found in: {}", checkpoints_dir.display());
+        info!("No checkpoint files found");
         return Ok(AudioRecoveryStatus {
             status: "none".to_string(),
             chunk_count: 0,
@@ -308,7 +307,7 @@ pub async fn recover_audio_from_checkpoints(
 
     let ffmpeg_path = find_ffmpeg_path()
         .ok_or_else(|| "FFmpeg not found. Please install FFmpeg to recover audio.".to_string())?;
-    info!("Using FFmpeg at: {:?}", ffmpeg_path);
+    info!("FFmpeg selected for recovery");
 
     let mut command = std::process::Command::new(ffmpeg_path);
 
@@ -336,7 +335,7 @@ pub async fn recover_audio_from_checkpoints(
             // Clean up concat file
             let _ = std::fs::remove_file(concat_file_path);
 
-            info!("Successfully recovered audio: {}", output_path_str);
+            info!("Successfully recovered audio from {} checkpoints", chunk_count);
 
             Ok(AudioRecoveryStatus {
                 status: "success".to_string(),
@@ -348,7 +347,7 @@ pub async fn recover_audio_from_checkpoints(
         }
         Ok(output) => {
             let error = String::from_utf8_lossy(&output.stderr);
-            error!("FFmpeg recovery failed: {}", error);
+            error!("FFmpeg recovery failed");
             Ok(AudioRecoveryStatus {
                 status: "failed".to_string(),
                 chunk_count,
@@ -358,7 +357,7 @@ pub async fn recover_audio_from_checkpoints(
             })
         }
         Err(e) => {
-            error!("Failed to run FFmpeg: {}", e);
+            error!("Failed to run FFmpeg");
             Ok(AudioRecoveryStatus {
                 status: "failed".to_string(),
                 chunk_count,
@@ -374,7 +373,7 @@ pub async fn recover_audio_from_checkpoints(
 /// This command is called by the frontend after successful save to clean up checkpoint files
 #[tauri::command]
 pub async fn cleanup_checkpoints(meeting_folder: String) -> Result<(), String> {
-    info!("Cleaning up checkpoints for folder: {}", meeting_folder);
+    info!("Cleaning up checkpoints");
 
     let folder_path = PathBuf::from(&meeting_folder);
     let checkpoints_dir = folder_path.join(".checkpoints");

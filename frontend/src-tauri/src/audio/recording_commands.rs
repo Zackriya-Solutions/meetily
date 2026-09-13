@@ -309,8 +309,8 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
     meeting_name: Option<String>,
 ) -> Result<(), String> {
     info!(
-        "Starting recording with default devices, meeting: {:?}",
-        meeting_name
+        "Starting recording with default devices; meeting_name_configured={}",
+        meeting_name.is_some()
     );
 
     let engine_lifecycle_guard = super::common::acquire_engine_lifecycle_lock().await;
@@ -499,8 +499,10 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
     meeting_name: Option<String>,
 ) -> Result<(), String> {
     info!(
-        "Starting recording with specific devices: mic={:?}, system={:?}, meeting={:?}",
-        mic_device_name, system_device_name, meeting_name
+        "Starting recording with specific devices; microphone_configured={}, system_audio_configured={}, meeting_name_configured={}",
+        mic_device_name.is_some(),
+        system_device_name.is_some(),
+        meeting_name.is_some()
     );
 
     let engine_lifecycle_guard = super::common::acquire_engine_lifecycle_lock().await;
@@ -1025,13 +1027,10 @@ pub async fn stop_recording<R: Runtime>(
             manager.save_recording_only(&app)
         ).await {
             Ok(Ok(_)) => {
-                info!("✅ Recording data saved successfully during cleanup");
+                info!("Recording data saved successfully during cleanup");
             }
-            Ok(Err(e)) => {
-                warn!(
-                    "⚠️ Error during recording cleanup (transcripts preserved): {}",
-                    e
-                );
+            Ok(Err(_)) => {
+                warn!("Recording cleanup failed; transcripts preserved");
                 // Don't fail shutdown - transcripts are already preserved
             }
             Err(_) => {
@@ -1062,9 +1061,11 @@ pub async fn stop_recording<R: Runtime>(
         _ => (None, None),
     };
 
-    info!("📤 Preparing recording metadata for frontend save");
-    info!("   folder_path: {:?}", folder_path_str);
-    info!("   meeting_name: {:?}", meeting_name_str);
+    info!(
+        "Preparing recording metadata for frontend save; folder_available={}, meeting_name_available={}",
+        folder_path_str.is_some(),
+        meeting_name_str.is_some()
+    );
 
     // Database save removed - frontend will handle this after receiving all transcripts
     info!("ℹ️ Skipping database save in Rust - frontend will save after all transcripts received");
