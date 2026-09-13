@@ -87,21 +87,21 @@ export function SummaryGeneratorButtonGroup({
         <Button
           variant="outline"
           size="sm"
-          className="bg-gradient-to-r from-red-50 to-orange-50 hover:from-red-100 hover:to-orange-100 border-red-200 @[40rem]:px-4"
+          className="bg-gradient-to-r from-red-50 to-orange-50 hover:from-red-100 hover:to-orange-100 border-red-200 px-3 gap-2"
           onClick={() => {
             Analytics.trackButtonClick('stop_summary_generation', 'meeting_details');
             onStopGeneration();
           }}
           title="Stop summary generation"
         >
-          <Square className="@[40rem]:mr-2" size={18} fill="currentColor" />
-          <span className="hidden @[40rem]:inline">Stop</span>
+          <Square size={18} fill="currentColor" />
+          <span className="hidden @[24rem]:inline">Stop</span>
         </Button>
       ) : (
         <Button
           variant="outline"
           size="sm"
-          className="bg-gradient-to-r from-blue-50 to-purple-50 hover:from-blue-100 hover:to-purple-100 border-blue-200 @[40rem]:px-4"
+          className="bg-gradient-to-r from-blue-50 to-purple-50 hover:from-blue-100 hover:to-purple-100 border-blue-200 px-3 gap-2"
           onClick={() => {
             Analytics.trackButtonClick('generate_summary', 'meeting_details');
             void onGenerateSummary(customPrompt);
@@ -115,13 +115,13 @@ export function SummaryGeneratorButtonGroup({
         >
           {isModelConfigLoading ? (
             <>
-              <Loader2 className="animate-spin @[40rem]:mr-2" size={18} />
-              <span className="hidden @[40rem]:inline">Processing...</span>
+              <Loader2 className="animate-spin" size={18} />
+              <span className="hidden @[24rem]:inline">Processing...</span>
             </>
           ) : (
             <>
-              <Sparkles className="@[40rem]:mr-2" size={18} />
-              <span className="hidden @[40rem]:inline">{hasSummary ? 'Regenerate' : 'Generate'}</span>
+              <Sparkles size={18} />
+              <span className="hidden @[24rem]:inline">{hasSummary ? 'Regenerate Summary' : 'Generate Summary'}</span>
             </>
           )}
         </Button>
