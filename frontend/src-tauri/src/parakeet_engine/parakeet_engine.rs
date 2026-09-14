@@ -117,6 +117,18 @@ const PARAKEET_V2_ARTIFACTS: &[ArtifactSpec] = &[
     ArtifactSpec { filename: "vocab.txt", exact_bytes: 9_384 },
 ];
 
+const ORUKEET_ARTIFACTS: &[ArtifactSpec] = &[
+    ArtifactSpec { filename: "config.json", exact_bytes: 97 },
+    ArtifactSpec { filename: "encoder-model.int8.onnx", exact_bytes: 653_182_378 },
+    ArtifactSpec { filename: "decoder_joint-model.int8.onnx", exact_bytes: 18_202_844 },
+    ArtifactSpec { filename: "nemo128.onnx", exact_bytes: 139_764 },
+    ArtifactSpec { filename: "vocab.txt", exact_bytes: 93_939 },
+    ArtifactSpec { filename: "LICENSE-WEIGHTS", exact_bytes: 20_137 },
+    ArtifactSpec { filename: "NOTICE.md", exact_bytes: 5_636 },
+    ArtifactSpec { filename: "LICENSE-PREPROCESSOR.txt", exact_bytes: 18_657 },
+    ArtifactSpec { filename: "LICENSE-CONVERTER.txt", exact_bytes: 1_070 },
+];
+
 const PARAKEET_MODEL_SPECS: &[ModelSpec] = &[
     ModelSpec {
         name: "parakeet-tdt-0.6b-v3-int8",
@@ -135,6 +147,15 @@ const PARAKEET_MODEL_SPECS: &[ModelSpec] = &[
         description: "Previous version with int8 quantization, good balance of speed and accuracy",
         source_base_url: "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v2-onnx/resolve/0bbb45a3365852604aef28b538a8f066f4ccaa85",
         artifacts: PARAKEET_V2_ARTIFACTS,
+    },
+    ModelSpec {
+        name: "orukeet-v0.1.0-int8",
+        size_mb: 672,
+        quantization: QuantizationType::Int8,
+        speed: "Fast (INT8)",
+        description: "Orukeet, local transcription in 25 European languages. Weights: CC BY-SA 4.0.",
+        source_base_url: "https://huggingface.co/oruk/orukeet/resolve/1751fce6ecde442f14543cf1804800c49b3e415c/onnx/combined-v0.1.0-int8",
+        artifacts: ORUKEET_ARTIFACTS,
     },
 ];
 
@@ -1232,6 +1253,16 @@ impl ParakeetEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn orukeet_catalog_preserves_default_and_includes_config_and_licenses() {
+        assert_eq!(PARAKEET_MODEL_SPECS[0].name, "parakeet-tdt-0.6b-v3-int8");
+        let spec = find_model_spec("orukeet-v0.1.0-int8").unwrap();
+        assert!(spec.source_base_url.contains("oruk/orukeet/resolve/1751fce6ecde442f14543cf1804800c49b3e415c/"));
+        for name in ["config.json", "encoder-model.int8.onnx", "decoder_joint-model.int8.onnx", "nemo128.onnx", "vocab.txt", "LICENSE-WEIGHTS", "NOTICE.md", "LICENSE-PREPROCESSOR.txt", "LICENSE-CONVERTER.txt"] {
+            assert!(spec.artifacts.iter().any(|a| a.filename == name && a.exact_bytes > 0));
+        }
+        assert!(spec.exact_bytes() < u64::from(spec.size_mb) * 1_000_000);
+    }
     use crossbeam::queue::SegQueue;
     use tempfile::tempdir;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
