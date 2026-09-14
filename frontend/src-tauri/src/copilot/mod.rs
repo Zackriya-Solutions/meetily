@@ -6,9 +6,14 @@
 //! screen-sharing posture. **I2 adds the live-context service** ([`session`]):
 //! a rolling window and a per-session buffer over the existing
 //! `transcript-update` stream, plus a deterministic cue when someone asks or
-//! requests something ([`cue`]). There is still no AI here: no provider call,
-//! no prompt, no retrieval, no model output, and nothing that could produce an
-//! insight to persist. I3 adds the first grounded insights on top of I2.
+//! requests something ([`cue`]). **I3a adds the first model call**
+//! ([`insight`]): the window plus a [`crate::modes::Mode`] become one grounded
+//! answer, redacted at the prompt boundary and gated on an egress policy that
+//! is off by default (ADR-0040). **I3b puts it on screen** — four actions, the
+//! Art. 50 disclosure and marking, and a distinct rendering for every refusal.
+//! Nothing any of it produces is written to disk: "Pin to notes" is *not* in
+//! this epic's shipped surface and is filed as I3c for the reasons in
+//! ADR-0041.
 //!
 //! ## The four invariants, and where each is actually enforced
 //!
@@ -33,9 +38,12 @@
 //! 3. **Draft-only, and nothing a model made is persisted.** The only two
 //!    things written to disk are the user's settings and the panel's last
 //!    position ([`store`]). The live context is memory for one session, and
-//!    its status payload carries counts, never text. When insights arrive in I3 they will be non-persisted
-//!    drafts; "Pin to notes" will write a `draft` block through the existing
-//!    C1 repository, which forces that status.
+//!    its status payload carries counts, never text. An insight is a draft that
+//!    exists only in the panel that asked for it: [`insight`] writes nothing,
+//!    and neither does [`commands::copilot_request_insight`]. Persisting one
+//!    ("Pin to notes") turned out not to be buildable on the existing summary
+//!    repository without destroying user-authored content, so it is deferred
+//!    to I3c rather than shipped — ADR-0041 records the three reasons.
 //! 4. **Dormant by default.** [`config::CopilotConfig::enabled`] is `false`, and
 //!    with it off [`shortcuts::apply`] registers nothing, [`window::open`]
 //!    refuses and [`session::apply_config`] subscribes to nothing
@@ -52,6 +60,8 @@
 //! - [`shortcuts`] — registration with the OS.
 //! - [`session`] — the live context: window, buffer, cue events (I2).
 //! - [`cue`] — the deterministic TR/EN question and request detector (I2).
+//! - [`insight`] — the grounded live insight: prompt, redaction boundary,
+//!   egress policy, grounding (I3a).
 //! - [`commands`] — the Tauri surface (registered in `lib.rs`).
 
 pub mod commands;

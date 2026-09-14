@@ -350,12 +350,20 @@ pub fn prepare(
     }))
 }
 
-/// Produce one grounded insight from the live window.
+/// Ask the model, and ground whatever it says.
+///
+/// Takes the [`Prepared`] window rather than the [`LiveContext`] itself, and
+/// that split is load-bearing rather than tidy: the live context lives behind a
+/// process-global `std::sync::Mutex`, and holding its guard across the `await`
+/// of a model call would block every `transcript-update` for the length of that
+/// call — and risk a deadlock. The caller locks, runs the synchronous
+/// [`prepare`], drops the guard, and only then awaits this.
 ///
 /// Order is the guarantee, exactly as in `ask_meeting`: the window decides
-/// whether a model is consulted at all, the model only ever sees redacted
-/// passages from *this* workspace's live context, and whatever it says is
-/// filtered through [`ground_claims`] before it can reach a user.
+/// whether a model is consulted at all (an empty one never reaches here), the
+/// model only ever sees redacted passages from *this* workspace's live context,
+/// and whatever it says is filtered through [`ground_claims`] before it can
+/// reach a user.
 ///
 /// ## `EvidencePolicy::Open` is not honoured yet, on purpose
 ///
@@ -367,14 +375,13 @@ pub fn prepare(
 /// `SourceFirst` one: the failure mode is "the lecture copilot said less than
 /// it could have", not "something unsourced reached the user".
 #[allow(clippy::too_many_arguments)]
-pub async fn generate_insight(
+pub async fn complete(
     pool: &SqlitePool,
     ctx: &AuthContext,
     app_data_dir: Option<&PathBuf>,
-    context: &LiveContext,
+    prepared: &Prepared,
     mode: &Mode,
     action: LiveAction,
-    redaction: &RedactionConfig,
     model_provider: &str,
     model_name: &str,
     // `CopilotConfig::allow_cloud_insights`. Passed in rather than read here so
@@ -387,13 +394,8 @@ pub async fn generate_insight(
         sources,
         passages,
         turns_omitted,
-    } = match prepare(context, ctx, mode, action, redaction)? {
-        Some(prepared) => prepared,
-        // Nothing was said in the window. The model is not consulted --
-        // answering here would mean answering from prior knowledge rather than
-        // from this conversation.
-        None => return Ok(LiveInsightOutcome::NoContext),
-    };
+    } = prepared;
+    let turns_omitted = *turns_omitted;
 
     // The policy gate sits AFTER the window is built and BEFORE the provider is
     // assembled, which is the only ordering that is both honest and safe: the
@@ -412,8 +414,8 @@ pub async fn generate_insight(
         .await
         .map_err(InsightError::Provider)?;
 
-    let system = system_prompt(mode, action, &sources);
-    let user = user_prompt(action, &passages);
+    let system = system_prompt(mode, action, sources);
+    let user = user_prompt(action, passages);
 
     // Counts only. A turn's text never reaches a log (docs/SECURITY_PRIVACY.md).
     log::debug!(
@@ -450,7 +452,7 @@ pub async fn generate_insight(
         return Err(InsightError::Unparsable);
     }
 
-    let outcome = ground_claims(&parsed.claims, &passages);
+    let outcome = ground_claims(&parsed.claims, passages);
     let turns_considered = passages.len();
 
     if outcome.is_total_rejection() {

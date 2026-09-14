@@ -582,6 +582,19 @@ pub fn stop<R: Runtime>(app: &AppHandle<R>) {
     *live() = None;
 }
 
+/// Run `f` against the live context, if there is one.
+///
+/// The **only** way out of this module for the window's contents, and
+/// deliberately a callback rather than a getter: the context lives behind a
+/// process-global `std::sync::Mutex`, and handing a caller its guard would let
+/// that guard be held across an `await` — blocking every `transcript-update`
+/// for the length of a model call, and inviting a deadlock. `f` is synchronous
+/// by type, so that cannot happen. `copilot::insight::prepare` is written
+/// synchronous for exactly this reason.
+pub fn with_context<T>(f: impl FnOnce(Option<&LiveContext>) -> T) -> T {
+    f(live().as_ref())
+}
+
 pub fn is_subscribed() -> bool {
     subscription().is_some()
 }

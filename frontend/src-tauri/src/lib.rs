@@ -721,12 +721,15 @@ pub fn run() {
             context::api_get_current_workspace_id,
             api::api_search_evidence,
             ask::commands::api_ask_meeting,
-            // Live copilot panel (BACKLOG I1, ADR-0038) — window + shortcuts only.
+            // Live copilot panel (BACKLOG I1/I2/I3b, ADR-0038): window, shortcuts,
+            // and the on-demand grounded insight.
             copilot::commands::copilot_get_status,
             copilot::commands::copilot_set_config,
             copilot::commands::copilot_toggle_panel,
             copilot::commands::copilot_close_panel,
             copilot::commands::copilot_focus_main_window,
+            copilot::commands::copilot_request_insight,
+            copilot::commands::copilot_cancel_insight,
             diarization::commands::api_diarization_availability,
             diarization::commands::api_diarization_download_models,
             diarization::commands::api_diarize_meeting,

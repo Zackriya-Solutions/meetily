@@ -31,6 +31,8 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { copilotService } from '@/services/copilotService';
 import { recordingService } from '@/services/recordingService';
 import { CopilotPanel, appendLine, PanelLine } from '@/components/copilot/CopilotPanel';
+import type { InsightState } from '@/components/copilot/CopilotInsights';
+import { isInsightFailure, type LiveAction } from '@/types/copilot';
 import type { CopilotStatus } from '@/types/copilot';
 import type { TranscriptUpdate } from '@/types';
 import { isTauri } from '@/lib/isTauri';
@@ -43,6 +45,15 @@ export default function CopilotRoute() {
   const [lines, setLines] = useState<PanelLine[]>([]);
   const [paused, setPaused] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [insight, setInsight] = useState<InsightState>({ phase: 'idle' });
+  /**
+   * Which request the visible state belongs to.
+   *
+   * A cancelled or superseded request still resolves, and without this its
+   * answer would land in the card after the user asked for something else. The
+   * counter is the only thing that decides whether a result is still wanted.
+   */
+  const insightRequest = useRef(0);
   const mounted = useRef(true);
 
   const refresh = useCallback(async () => {
@@ -162,6 +173,39 @@ export default function CopilotRoute() {
     }
   }, []);
 
+  const handleRequestInsight = useCallback(async (action: LiveAction) => {
+    const request = (insightRequest.current += 1);
+    setInsight({ phase: 'loading', action });
+    try {
+      const outcome = await copilotService.requestInsight(action);
+      if (insightRequest.current !== request) return;
+      setInsight({ phase: 'done', outcome });
+    } catch (e) {
+      if (insightRequest.current !== request) return;
+      // The backend's tagged failure is what the card branches on. A thrown
+      // value that is not one is a bug in the bridge, not a refusal, so it is
+      // shown as a provider failure rather than silently swallowed.
+      setInsight({
+        phase: 'failed',
+        action,
+        failure: isInsightFailure(e) ? e : { kind: 'provider', message: String(e) },
+      });
+    }
+  }, []);
+
+  const handleCancelInsight = useCallback(async () => {
+    // Bumping first makes the in-flight result unwanted even if the backend
+    // answers before the cancel lands.
+    insightRequest.current += 1;
+    setInsight({ phase: 'idle' });
+    try {
+      await copilotService.cancelInsight();
+    } catch {
+      // Cancelling is best-effort: the card is already back to idle, and an
+      // error here would be noise about work the user has abandoned.
+    }
+  }, []);
+
   const handleOpenMainWindow = useCallback(async () => {
     setError(null);
     try {
@@ -183,6 +227,9 @@ export default function CopilotRoute() {
         onPause={handlePause}
         onResume={handleResume}
         onOpenMainWindow={handleOpenMainWindow}
+        insight={insight}
+        onRequestInsight={handleRequestInsight}
+        onCancelInsight={handleCancelInsight}
       />
     </div>
   );

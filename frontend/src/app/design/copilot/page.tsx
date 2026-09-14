@@ -1,7 +1,7 @@
 'use client';
 
 /**
- * `/design/copilot` — the copilot panel with fixture data (BACKLOG I1).
+ * `/design/copilot` — the copilot panel with fixture data (BACKLOG I1, I3b).
  *
  * The real panel (`/copilot`) renders nothing outside the Tauri shell: it waits
  * on `copilot_get_status` and on the `transcript-update` stream, neither of
@@ -10,15 +10,21 @@
  * valid PNG — so this route feeds the same component fixed props instead, which
  * is what `tools/ui/shoot.py` can actually verify.
  *
- * Four states side by side, because the differences between them are the
+ * The states are side by side because the differences between them are the
  * product decisions worth reviewing: what the panel says when no recording is
  * running (it never records on its own), how honestly it states the
  * screen-sharing posture on a platform that enforces it versus one that cannot,
  * and what it says when the user has switched that request off — where the
  * platform's verdict must not be shown at all, because Mityu never asked.
+ *
+ * I3b adds the second row: the insight region in each of its phases. The three
+ * worth looking hardest at are the refusals, because they are what the product
+ * says when it has nothing — an empty card would read as "there is nothing in
+ * this conversation", which the copilot has no basis for saying.
  */
 
 import { CopilotPanel, PanelLine } from '@/components/copilot/CopilotPanel';
+import type { InsightState } from '@/components/copilot/CopilotInsights';
 import type { CopilotStatus } from '@/types/copilot';
 
 const SHORTCUTS: CopilotStatus['shortcuts'] = [
@@ -67,6 +73,7 @@ const WINDOWS_RECORDING: CopilotStatus = {
     windowTurns: 3,
     evicted: 0,
   },
+  liveActions: ['suggest', 'followUpQuestions', 'recap', 'define'],
 };
 
 const MACOS_RECORDING: CopilotStatus = {
@@ -102,6 +109,46 @@ const LINES: PanelLine[] = [
   { id: 3, text: 'Can you send the retention policy before Friday?', timestamp: '14:02:27' },
 ];
 
+const ANSWERED: InsightState = {
+  phase: 'done',
+  outcome: {
+    status: 'answered',
+    action: 'followUpQuestions',
+    claims: [
+      {
+        text: 'Which retention period applies to the Ankara pilot?',
+        sourceChunkId: 't1',
+        timestamp: '00:11',
+        audioStartTime: 11,
+      },
+      {
+        text: 'What has to close in the audit before the second site starts?',
+        sourceChunkId: 't2',
+        timestamp: '00:19',
+        audioStartTime: 19,
+      },
+    ],
+    dropped: [
+      { text: 'An unsourced extra.', sourceChunkId: 't404', reason: 'ungroundedCitation' },
+    ],
+    turnsConsidered: 3,
+    turnsOmitted: 0,
+  },
+};
+
+const LOADING: InsightState = { phase: 'loading', action: 'recap' };
+
+const NO_CONTEXT: InsightState = { phase: 'done', outcome: { status: 'noContext' } };
+
+const CLOUD_REFUSED: InsightState = {
+  phase: 'failed',
+  action: 'suggest',
+  failure: {
+    kind: 'cloudNotAllowed',
+    message: 'this workspace does not allow live insights to reach a cloud provider',
+  },
+};
+
 function Frame({ title, note, children }: { title: string; note: string; children: React.ReactNode }) {
   return (
     <figure className="space-y-2">
@@ -111,7 +158,7 @@ function Frame({ title, note, children }: { title: string; note: string; childre
       </figcaption>
       {/* The panel sizes itself to its window; the fixed box here stands in for
           one so every state fits on a single review page. */}
-      <div className="h-[420px] w-[360px] overflow-hidden rounded-xl border border-border shadow-sm">
+      <div className="h-[460px] w-[360px] overflow-hidden rounded-xl border border-border shadow-sm">
         {children}
       </div>
     </figure>
@@ -125,9 +172,10 @@ export default function CopilotDesignRoute() {
         <div className="text-xs uppercase tracking-widest text-muted-foreground">BACKLOG I1</div>
         <h1 className="text-2xl font-semibold text-foreground">Live copilot panel</h1>
         <p className="max-w-3xl text-[15px] text-muted-foreground">
-          The shell only: a window, a global shortcut and an honest statement of what the operating
-          system will do about screen sharing. No AI, and no capture of its own — the panel follows
-          a recording the user started.
+          This row is the shell alone — a window, a global shortcut and an honest statement of what
+          the operating system will do about screen sharing — with the insight region switched off,
+          which is exactly how it renders before a mode offers anything. The panel has no capture of
+          its own in any state: it follows a recording the user started.
         </p>
       </header>
 
@@ -155,6 +203,79 @@ export default function CopilotDesignRoute() {
           note="No capture-exclusion API at all, and nothing to show until the user starts a recording."
         >
           <CopilotPanel status={LINUX_IDLE} lines={[]} onClose={() => {}} onOpenMainWindow={() => {}} />
+        </Frame>
+      </div>
+
+      <header className="mb-6 mt-10 space-y-1">
+        <div className="text-xs uppercase tracking-widest text-muted-foreground">BACKLOG I3b</div>
+        <h2 className="text-xl font-semibold text-foreground">On-demand insights</h2>
+        <p className="max-w-3xl text-[15px] text-muted-foreground">
+          Four actions, each answer tied to something that was actually said. The marking under the
+          buttons is present in every one of these frames and has no way to be dismissed — that is
+          the Art. 50(2) obligation, and a test fails if it disappears from any single state.
+        </p>
+      </header>
+
+      <div className="flex flex-wrap gap-8">
+        <Frame
+          title="Answered"
+          note="Each point carries the timestamp of the segment it rests on, taken from the transcript rather than from the model. The dropped line is deliberate: a shortened answer that says nothing about what was removed looks complete."
+        >
+          <CopilotPanel
+            status={WINDOWS_RECORDING}
+            lines={LINES}
+            insight={ANSWERED}
+            onClose={() => {}}
+            onPause={() => {}}
+            onOpenMainWindow={() => {}}
+            onRequestInsight={() => {}}
+            onCancelInsight={() => {}}
+          />
+        </Frame>
+        <Frame
+          title="Working"
+          note="Cancellable. A live answer is wanted inside a pause in the conversation, so it is abandoned after 25 seconds rather than arriving for a moment that has passed."
+        >
+          <CopilotPanel
+            status={WINDOWS_RECORDING}
+            lines={LINES}
+            insight={LOADING}
+            onClose={() => {}}
+            onPause={() => {}}
+            onOpenMainWindow={() => {}}
+            onRequestInsight={() => {}}
+            onCancelInsight={() => {}}
+          />
+        </Frame>
+        <Frame
+          title="Nothing to answer from"
+          note="A refusal, not an empty card. The model is not called at all when the window is empty — answering would mean answering from its own prior knowledge instead of from this conversation."
+        >
+          <CopilotPanel
+            status={WINDOWS_RECORDING}
+            lines={[]}
+            insight={NO_CONTEXT}
+            onClose={() => {}}
+            onPause={() => {}}
+            onOpenMainWindow={() => {}}
+            onRequestInsight={() => {}}
+            onCancelInsight={() => {}}
+          />
+        </Frame>
+        <Frame
+          title="Kept on the device"
+          note="The workspace has a cloud provider configured but has not allowed live insights to leave the machine. It says which setting would change that rather than silently answering with a different model."
+        >
+          <CopilotPanel
+            status={WINDOWS_RECORDING}
+            lines={LINES}
+            insight={CLOUD_REFUSED}
+            onClose={() => {}}
+            onPause={() => {}}
+            onOpenMainWindow={() => {}}
+            onRequestInsight={() => {}}
+            onCancelInsight={() => {}}
+          />
         </Frame>
       </div>
     </main>

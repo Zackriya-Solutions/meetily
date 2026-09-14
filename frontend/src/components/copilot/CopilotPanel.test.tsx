@@ -54,6 +54,7 @@ const BASE_STATUS: CopilotStatus = {
     windowTurns: 0,
     evicted: 0,
   },
+  liveActions: ['suggest', 'followUpQuestions', 'recap', 'define'],
 };
 
 function update(overrides: Partial<TranscriptUpdate>): TranscriptUpdate {

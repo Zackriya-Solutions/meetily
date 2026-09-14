@@ -9,17 +9,30 @@
 //! await invoke('copilot_toggle_panel');
 //! await invoke('copilot_close_panel');
 //! await invoke('copilot_focus_main_window');
+//! await invoke('copilot_request_insight', { action: 'recap' });
+//! await invoke('copilot_cancel_insight');
 //! ```
 //!
-//! Every command here is local, synchronous work over a settings file and a
+//! Most commands here are local, synchronous work over a settings file and a
 //! window handle: no network, no database, no model, no transcript.
+//! [`copilot_request_insight`] is the exception and the reason this note is no
+//! longer a blanket claim — it reads settings from SQLite and calls a model
+//! (I3b). It stays thin in the same way `ask::commands` does: it resolves
+//! identity, config and paths, then delegates to [`super::insight`], where
+//! every rule is testable without a running app.
 
 use super::config::{CopilotConfig, KeybindAction, MAX_LIVE_WINDOW_SECS, MIN_LIVE_WINDOW_SECS};
+use super::insight::{self, InsightError, LiveInsightOutcome};
 use super::policy::ProtectionVerdict;
 use super::session::LiveContextStatus;
 use super::{keybind, session, shortcuts, store, window};
+use crate::modes::{default_mode, LiveAction};
+use crate::state::AppState;
 use serde::Serialize;
-use tauri::{AppHandle, Runtime};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, MutexGuard};
+use tauri::{AppHandle, Manager, Runtime};
+use tokio_util::sync::CancellationToken;
 
 /// One row of the Settings shortcut list: what the binding is, whether it is
 /// actually registered, and — when it is not — why.
@@ -160,6 +173,14 @@ pub struct CopilotStatus {
     /// The I2 live-context service: subscribed or not, and how much it holds.
     /// Counts only — the payload never carries transcript text.
     pub live_context: LiveContextStatus,
+    /// The actions the active mode offers (I3b).
+    ///
+    /// Sent so the panel renders only what the mode allows, rather than showing
+    /// four buttons and letting Rust reject one of them after the click. Until
+    /// I4b lets the user pick a mode this is always the default mode's set —
+    /// the resolution is one line here, and the panel does not change when it
+    /// starts varying.
+    pub live_actions: Vec<LiveAction>,
 }
 
 /// Read the copilot's state. Local-only and cheap enough to poll.
@@ -258,6 +279,7 @@ async fn build_status<R: Runtime>(app: &AppHandle<R>, config: CopilotConfig) -> 
         protection,
         shortcuts,
         live_context: session::status(),
+        live_actions: default_mode().live.allowed_actions,
         config,
     }
 }
@@ -469,5 +491,198 @@ mod tests {
                 action.unavailable_reason()
             );
         }
+    }
+}
+
+// --- Live insights (I3b) -----------------------------------------------------
+
+/// The in-flight insight's cancellation token.
+///
+/// One at a time, deliberately: there is one panel and one visible answer, so a
+/// second request means the user changed their mind. Starting one cancels the
+/// previous rather than racing it to the card.
+/// Paired with a generation number, because `CancellationToken` is not `Eq`
+/// and "is the token in the slot still mine?" has to be answerable without
+/// comparing tokens.
+static INSIGHT_CANCEL: Mutex<Option<(u64, CancellationToken)>> = Mutex::new(None);
+static INSIGHT_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+fn insight_cancel() -> MutexGuard<'static, Option<(u64, CancellationToken)>> {
+    INSIGHT_CANCEL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Why an insight could not be produced, in a shape the panel can branch on.
+///
+/// A plain string would force the UI to match on prose. `kind` is the stable
+/// token; `message` is the sentence to show, written by the error itself so the
+/// backend and the panel cannot drift apart on what a refusal means.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InsightFailure {
+    pub kind: &'static str,
+    pub message: String,
+}
+
+impl From<&InsightError> for InsightFailure {
+    fn from(e: &InsightError) -> Self {
+        let kind = match e {
+            InsightError::ActionNotAllowed(_) => "actionNotAllowed",
+            InsightError::NoUsableSource => "noUsableSource",
+            InsightError::TenantMismatch => "tenantMismatch",
+            InsightError::CloudNotAllowed => "cloudNotAllowed",
+            InsightError::Provider(_) => "provider",
+            InsightError::Unparsable => "unparsable",
+            InsightError::Timeout => "timeout",
+            InsightError::Cancelled => "cancelled",
+        };
+        InsightFailure {
+            kind,
+            message: e.to_string(),
+        }
+    }
+}
+
+/// The provider a live insight uses, and where it came from.
+///
+/// The workspace's configured summary provider, because a live insight is the
+/// same BYOK arrangement as a summary and silently substituting a *different*
+/// model would change the answer's quality without telling anyone. When no
+/// settings row exists yet the built-in local model answers — the local-first
+/// default, and the reason a fresh install can use this offline.
+///
+/// Note what this does **not** do: it never downgrades a cloud provider to the
+/// local one to slip past the egress policy. If the workspace has a cloud
+/// provider configured and has not allowed live insights to leave the device,
+/// `insight::complete` refuses and the panel says so. Being told is better than
+/// being quietly answered by a model you did not choose.
+async fn resolve_live_model(
+    pool: &sqlx::SqlitePool,
+    ctx: &crate::context::AuthContext,
+) -> (String, String) {
+    match crate::database::repositories::setting::SettingsRepository::get_model_config(pool, ctx)
+        .await
+    {
+        Ok(Some(setting)) if !setting.provider.trim().is_empty() => {
+            (setting.provider, setting.model)
+        }
+        _ => ("builtin-ai".to_string(), String::new()),
+    }
+}
+
+/// Ask the copilot for one insight about the last few minutes of speech.
+///
+/// The whole of I3a's ordering is preserved here and none of it is re-decided:
+/// the live window is prepared **synchronously, under the context lock**, the
+/// lock is dropped, and only then is a model awaited. Holding that guard across
+/// the call would stall every `transcript-update` for its duration
+/// (`session::with_context` exists to make that impossible by type).
+#[tauri::command]
+pub async fn copilot_request_insight<R: Runtime>(
+    app: AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+    action: LiveAction,
+) -> Result<LiveInsightOutcome, InsightFailure> {
+    let config = store::load_config(&app);
+    let pool = state.db_manager.pool();
+    let ctx = crate::context::current();
+    let mode = default_mode();
+
+    let redaction =
+        crate::database::repositories::setting::SettingsRepository::get_redaction_config(
+            pool, &ctx,
+        )
+        .await
+        .unwrap_or_default();
+
+    // Prepared under the lock, awaited outside it.
+    let prepared = session::with_context(|live| match live {
+        Some(live) => insight::prepare(live, &ctx, &mode, action, &redaction),
+        // No recording, so no window — the same answer as an empty one, and the
+        // model is not called either way.
+        None => Ok(None),
+    })
+    .map_err(|e| InsightFailure::from(&e))?;
+
+    let Some(prepared) = prepared else {
+        return Ok(LiveInsightOutcome::NoContext);
+    };
+
+    // A second request means the user changed their mind about the first.
+    let cancel = CancellationToken::new();
+    let generation = INSIGHT_GENERATION.fetch_add(1, Ordering::Relaxed);
+    if let Some((_, previous)) = insight_cancel().replace((generation, cancel.clone())) {
+        previous.cancel();
+    }
+
+    let (provider, model) = resolve_live_model(pool, &ctx).await;
+    let app_data_dir = app.path().app_data_dir().ok();
+
+    let outcome = insight::complete(
+        pool,
+        &ctx,
+        app_data_dir.as_ref(),
+        &prepared,
+        &mode,
+        action,
+        &provider,
+        &model,
+        config.allow_cloud_insights,
+        insight::DEFAULT_TIMEOUT,
+        &cancel,
+    )
+    .await;
+
+    // Only clear the slot if it is still ours: a newer request has already
+    // replaced it, and stealing that token would leave the newer call
+    // uncancellable.
+    {
+        let mut slot = insight_cancel();
+        if slot.as_ref().is_some_and(|(g, _)| *g == generation) {
+            *slot = None;
+        }
+    }
+
+    match outcome {
+        // Shape only. Claim text is conversation content and never reaches a log.
+        Ok(o) => {
+            let shape = match &o {
+                LiveInsightOutcome::NoContext => "no_context".to_string(),
+                LiveInsightOutcome::Answered {
+                    claims, dropped, ..
+                } => format!("answered kept={} dropped={}", claims.len(), dropped.len()),
+                LiveInsightOutcome::Refused { dropped, .. } => {
+                    format!("refused dropped={}", dropped.len())
+                }
+            };
+            log::info!(
+                "copilot_request_insight completed (action={}, {shape})",
+                action.wire_name()
+            );
+            Ok(o)
+        }
+        Err(e) => {
+            let failure = InsightFailure::from(&e);
+            log::warn!(
+                "copilot_request_insight failed (action={}, kind={})",
+                action.wire_name(),
+                failure.kind
+            );
+            Err(failure)
+        }
+    }
+}
+
+/// Abandon the in-flight insight, if there is one.
+///
+/// Idempotent and always safe: with nothing running this does nothing, and a
+/// cancelled call resolves as `InsightError::Cancelled` rather than an error the
+/// user has to read.
+#[tauri::command]
+pub async fn copilot_cancel_insight() {
+    if let Some((_, token)) = insight_cancel().take() {
+        token.cancel();
+        log::debug!("copilot: in-flight insight cancelled");
     }
 }

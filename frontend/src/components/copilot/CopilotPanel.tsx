@@ -31,6 +31,7 @@
 import { useMemo } from 'react';
 import { Eye, EyeOff, Mic, Monitor, Pause, Play, ShieldCheck, ShieldAlert, X } from 'lucide-react';
 import type { CopilotStatus } from '@/types/copilot';
+import { CopilotInsights, type InsightState } from './CopilotInsights';
 import type { TranscriptUpdate } from '@/types';
 
 /** One line in the panel's transcript tail. */
@@ -128,6 +129,14 @@ export interface CopilotPanelProps {
   onOpenMainWindow?: () => void;
   paused?: boolean;
   error?: string | null;
+  /**
+   * The insight region's state (I3b). When `onRequestInsight` is absent the
+   * region is not rendered at all — that is how the I1 shell and the design
+   * fixture's transcript-only view stay exactly as they were.
+   */
+  insight?: InsightState;
+  onRequestInsight?: (action: import('@/types/copilot').LiveAction) => void;
+  onCancelInsight?: () => void;
 }
 
 export function CopilotPanel({
@@ -139,6 +148,9 @@ export function CopilotPanel({
   onOpenMainWindow,
   paused = false,
   error = null,
+  insight = { phase: 'idle' },
+  onRequestInsight,
+  onCancelInsight,
 }: CopilotPanelProps) {
   const recording = status?.recording ?? false;
   const toggleShortcut = useMemo(
@@ -256,11 +268,21 @@ export function CopilotPanel({
         )}
       </div>
 
+      {onRequestInsight && (
+        <CopilotInsights
+          state={insight}
+          actions={status?.liveActions ?? []}
+          disabled={!recording}
+          onRequest={onRequestInsight}
+          onCancel={onCancelInsight ?? (() => {})}
+        />
+      )}
+
       <footer className="shrink-0 border-t border-border px-3 py-2">
         <p className="text-[10px] leading-snug text-muted-foreground">
           <Eye className="mr-1 inline h-3 w-3 align-[-2px]" />
-          This panel mirrors the live transcript. Suggestions, follow-up questions and recaps
-          arrive in a later version.
+          This panel mirrors the live transcript and answers only from it. Nothing it offers is
+          saved.
           {toggleShortcut?.registered && <> Press {toggleShortcut.keybind} to hide it.</>}
         </p>
       </footer>

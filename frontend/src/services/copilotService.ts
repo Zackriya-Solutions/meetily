@@ -12,7 +12,12 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import { isTauri } from '@/lib/isTauri';
-import type { CopilotConfig, CopilotStatus } from '@/types/copilot';
+import type {
+  CopilotConfig,
+  CopilotStatus,
+  LiveAction,
+  LiveInsightOutcome,
+} from '@/types/copilot';
 
 /**
  * What the design routes see. Mirrors the Rust defaults: off, protection
@@ -47,6 +52,7 @@ const BROWSER_STUB: CopilotStatus = {
     windowTurns: 0,
     evicted: 0,
   },
+  liveActions: [],
 };
 
 export class CopilotService {
@@ -87,6 +93,34 @@ export class CopilotService {
   async focusMainWindow(): Promise<void> {
     if (!isTauri()) return;
     await invoke('copilot_focus_main_window');
+  }
+
+  /**
+   * Ask for one insight about the last few minutes of speech.
+   *
+   * **Rejects with an `InsightFailure`, not an `Error`.** The backend returns a
+   * tagged failure so the panel can branch on `kind` — "this workspace keeps
+   * live insights on the device" is a different thing to show than "the model
+   * timed out", and matching on prose would break the first time a sentence is
+   * reworded. Callers should use `isInsightFailure` rather than reading
+   * `String(e)`.
+   *
+   * Outside Tauri there is no backend and no live window, so the honest answer
+   * is the refusal — never a fabricated card in the design route.
+   */
+  async requestInsight(action: LiveAction): Promise<LiveInsightOutcome> {
+    if (!isTauri()) return { status: 'noContext' };
+    return invoke<LiveInsightOutcome>('copilot_request_insight', { action });
+  }
+
+  /**
+   * Abandon the in-flight insight. Idempotent: safe to call with nothing
+   * running, and the abandoned request resolves as `cancelled` rather than as
+   * an error the user has to read.
+   */
+  async cancelInsight(): Promise<void> {
+    if (!isTauri()) return;
+    await invoke('copilot_cancel_insight');
   }
 }
 
