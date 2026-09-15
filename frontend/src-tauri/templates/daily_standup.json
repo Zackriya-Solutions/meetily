@@ -3,8 +3,8 @@
   "description": "Time-boxed daily updates for engineering/product teams.",
   "sections": [
     {
-      "title": "Date",
-      "instruction": "YYYY-MM-DD",
+      "title": "Saved record date (UTC)",
+      "instruction": "YYYY-MM-DD from the supplied meeting_metadata",
       "format": "string"
     },
     {
