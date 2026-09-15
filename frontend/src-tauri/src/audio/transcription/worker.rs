@@ -63,8 +63,7 @@ pub fn start_transcription_task<R: Runtime>(
                 let _ = app.emit("transcription-error", serde_json::json!({
                     "error": e,
                     "userMessage": "Recording failed: Unable to initialize speech recognition. Please check your model settings.",
-                    "actionable": true,
-                    "phase": "active"
+                    "actionable": true
                 }));
                 return;
             }
@@ -469,8 +468,7 @@ async fn transcribe_chunk_with_provider<R: Runtime>(
                         &serde_json::json!({
                             "error": transcription_error.to_string(),
                             "userMessage": format!("Transcription failed: {}", transcription_error),
-                            "actionable": false,
-                            "phase": "active"
+                            "actionable": false
                         }),
                     );
 
@@ -506,8 +504,7 @@ async fn transcribe_chunk_with_provider<R: Runtime>(
                         &serde_json::json!({
                             "error": transcription_error.to_string(),
                             "userMessage": format!("Transcription failed: {}", transcription_error),
-                            "actionable": false,
-                            "phase": "active"
+                            "actionable": false
                         }),
                     );
 
@@ -543,28 +540,36 @@ async fn transcribe_chunk_with_provider<R: Runtime>(
                     Ok((cleaned_text, result.confidence, result.is_partial))
                 }
                 Err(e) => {
-                    error!(
-                        "{} transcription failed for chunk {}: {}",
-                        provider.provider_name(),
-                        chunk.chunk_id,
-                        e
-                    );
+                    if should_emit_transcription_error(&e) {
+                        error!(
+                            "{} transcription failed for chunk {}: {}",
+                            provider.provider_name(),
+                            chunk.chunk_id,
+                            e
+                        );
 
-                    let _ = app.emit(
-                        "transcription-error",
-                        &serde_json::json!({
-                            "error": e.to_string(),
-                            "userMessage": format!("Transcription failed: {}", e),
-                            "actionable": false,
-                            "phase": "active"
-                        }),
-                    );
+                        let _ = app.emit(
+                            "transcription-error",
+                            &serde_json::json!({
+                                "error": e.to_string(),
+                                "userMessage": format!("Transcription failed: {}", e),
+                                "actionable": false
+                            }),
+                        );
+                    }
 
                     Err(e)
                 }
             }
         }
     }
+}
+
+fn should_emit_transcription_error(error: &TranscriptionError) -> bool {
+    !matches!(
+        error,
+        TranscriptionError::AudioTooShort { .. } | TranscriptionError::ModelNotLoaded
+    )
 }
 
 /// Format current timestamp (wall-clock time)
@@ -588,21 +593,37 @@ fn format_recording_time(seconds: f64) -> String {
     let secs = total_seconds % 60;
 
     format!("[{:02}:{:02}]", minutes, secs)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keeps_short_acknowledgements() {
+        assert!(should_emit_transcript("Yes"));
+        assert!(should_emit_transcript("ok"));
     }
 
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        #[test]
-        fn keeps_short_acknowledgements() {
-            assert!(should_emit_transcript("Yes"));
-            assert!(should_emit_transcript("ok"));
-        }
-
-        #[test]
-        fn drops_empty_and_whitespace_only() {
-            assert!(!should_emit_transcript(""));
-            assert!(!should_emit_transcript("   "));
-        }
+    #[test]
+    fn drops_empty_and_whitespace_only() {
+        assert!(!should_emit_transcript(""));
+        assert!(!should_emit_transcript("   "));
     }
+
+    #[test]
+    fn expected_short_audio_does_not_reach_the_user_error_channel() {
+        assert!(!should_emit_transcription_error(
+            &TranscriptionError::AudioTooShort {
+                samples: 1_120,
+                minimum: 1_600,
+            }
+        ));
+        assert!(!should_emit_transcription_error(
+            &TranscriptionError::ModelNotLoaded
+        ));
+        assert!(should_emit_transcription_error(
+            &TranscriptionError::EngineFailed("decoder failed".to_string())
+        ));
+    }
+}
