@@ -54,6 +54,8 @@ pub struct RecordingSaver {
     metadata: Option<MeetingMetadata>,
     transcript_segments: Arc<Mutex<Vec<TranscriptSegment>>>,
     is_saving: Arc<Mutex<bool>>,
+    #[cfg(test)]
+    fail_native_save: bool,
 }
 
 impl RecordingSaver {
@@ -65,7 +67,14 @@ impl RecordingSaver {
             metadata: None,
             transcript_segments: Arc::new(Mutex::new(Vec::new())),
             is_saving: Arc::new(Mutex::new(false)),
+            #[cfg(test)]
+            fail_native_save: false,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn inject_native_save_failure_for_test(&mut self) {
+        self.fail_native_save = true;
     }
 
     /// Set the meeting name for this recording session
@@ -359,6 +368,11 @@ impl RecordingSaver {
         // Stop accumulation
         if let Ok(mut is_saving) = self.is_saving.lock() {
             *is_saving = false;
+        }
+
+        #[cfg(test)]
+        if self.fail_native_save {
+            return Err("injected native save failure".to_string());
         }
 
         // Give time for final chunks

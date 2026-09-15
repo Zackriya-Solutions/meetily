@@ -201,6 +201,7 @@ whisper-rs = { version = "0.13.2", features = ["raw-api"] }
 futures-channel = "0.3.31"
 
 [dev-dependencies]
+tauri = { version = "2.6.2", features = ["test"] }
 tempfile = "3.3.0"
 infer = "0.15"
 criterion = { version = "0.5.1", features = ["async_tokio"] }
