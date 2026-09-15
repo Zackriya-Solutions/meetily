@@ -26,6 +26,11 @@ use super::vad::{ContinuousVadProcessor};
 /// during continuous speech is tracked separately in #756.
 const VAD_REDEMPTION_TIME_MS: u32 = 500;
 
+/// Live transcription is delivered incrementally during uninterrupted speech.
+/// The target leaves room for a frame to arrive before the hard ceiling.
+const LIVE_SEGMENT_TARGET_MS: u32 = 20_000;
+const LIVE_SEGMENT_HARD_MAX_MS: u32 = 25_000;
+
 /// Ring buffer for synchronized audio mixing
 /// Accumulates samples from mic and system streams until we have aligned windows
 struct AudioMixerRingBuffer {
@@ -860,33 +865,27 @@ impl AudioPipeline {
                             match self.vad_processor.process_audio(&mixed_with_gain) {
                                 Ok(speech_segments) => {
                                     for segment in speech_segments {
-                                        let duration_ms = segment.end_timestamp_ms - segment.start_timestamp_ms;
-
-                                        if segment.samples.len() >= 800 {  // Minimum 50ms at 16kHz - matches Parakeet capability
-                                            info!("📤 Sending VAD segment: {:.1}ms, {} samples",
-                                                  duration_ms, segment.samples.len());
-
-                                            let transcription_chunk = AudioChunk {
-                                                data: segment.samples,
-                                                sample_rate: 16000,
-                                                timestamp: segment.start_timestamp_ms / 1000.0,
-                                                chunk_id: self.chunk_id_counter,
-                                                device_type: DeviceType::Microphone,  // Mixed audio
-                                            };
-
-                                            if let Err(e) = self.transcription_sender.send(transcription_chunk) {
-                                                warn!("Failed to send VAD segment: {}", e);
-                                            } else {
-                                                self.chunk_id_counter += 1;
-                                            }
-                                        } else {
-                                            debug!("⏭️ Dropping short VAD segment: {:.1}ms ({} samples < 800)",
-                                                   duration_ms, segment.samples.len());
-                                        }
+                                        self.send_vad_segment(segment);
                                     }
                                 }
                                 Err(e) => {
                                     warn!("⚠️ VAD error: {}", e);
+                                }
+                            }
+
+                            // Bound uninterrupted live speech while leaving the
+                            // established 500ms redemption policy unchanged.
+                            loop {
+                                match self.vad_processor.take_live_segment_if_ready(
+                                    LIVE_SEGMENT_TARGET_MS,
+                                    LIVE_SEGMENT_HARD_MAX_MS,
+                                ) {
+                                    Ok(Some(segment)) => self.send_vad_segment(segment),
+                                    Ok(None) => break,
+                                    Err(e) => {
+                                        warn!("⚠️ Failed to force live VAD boundary: {}", e);
+                                        break;
+                                    }
                                 }
                             }
 
@@ -920,6 +919,30 @@ impl AudioPipeline {
 
         info!("VAD-driven audio pipeline ended");
         Ok(())
+    }
+
+    fn send_vad_segment(&mut self, segment: super::vad::SpeechSegment) {
+        let duration_ms = segment.end_timestamp_ms - segment.start_timestamp_ms;
+        if segment.samples.len() < 800 {
+            debug!("⏭️ Dropping short VAD segment: {:.1}ms ({} samples < 800)",
+                   duration_ms, segment.samples.len());
+            return;
+        }
+
+        info!("📤 Sending VAD segment: {:.1}ms, {} samples",
+              duration_ms, segment.samples.len());
+        let transcription_chunk = AudioChunk {
+            data: segment.samples,
+            sample_rate: 16000,
+            timestamp: segment.start_timestamp_ms / 1000.0,
+            chunk_id: self.chunk_id_counter,
+            device_type: DeviceType::Microphone,
+        };
+        if let Err(e) = self.transcription_sender.send(transcription_chunk) {
+            warn!("Failed to send VAD segment: {}", e);
+        } else {
+            self.chunk_id_counter += 1;
+        }
     }
 
     fn flush_remaining_audio(&mut self) -> Result<()> {
@@ -1112,5 +1135,12 @@ mod tests {
         // uninterrupted speech. Batch import/retranscription use 2000ms.
         // See #679 and #756.
         assert_eq!(VAD_REDEMPTION_TIME_MS, 500);
+    }
+
+    #[test]
+    fn live_segment_bounds_leave_no_unbounded_interval() {
+        assert_eq!(LIVE_SEGMENT_TARGET_MS, 20_000);
+        assert_eq!(LIVE_SEGMENT_HARD_MAX_MS, 25_000);
+        assert!(LIVE_SEGMENT_TARGET_MS <= LIVE_SEGMENT_HARD_MAX_MS);
     }
 }
