@@ -452,6 +452,7 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
                     display_time: update.timestamp.clone(), // Use wall-clock timestamp for display
                     confidence: update.confidence,
                     sequence_id: update.sequence_id,
+                    source: Some(update.source),
                 };
 
                 // Save to recording manager
@@ -639,6 +640,7 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
                     display_time: update.timestamp.clone(), // Use wall-clock timestamp for display
                     confidence: update.confidence,
                     sequence_id: update.sequence_id,
+                    source: Some(update.source),
                 };
 
                 // Save to recording manager
