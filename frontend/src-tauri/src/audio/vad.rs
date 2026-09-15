@@ -8,6 +8,13 @@ use std::time::Duration;
 /// sample count and timestamp inside this module is expressed in it.
 const VAD_SAMPLE_RATE: u32 = 16000;
 
+/// Inputs longer than one minute at 16kHz take the chunked path in
+/// `get_speech_chunks_with_progress` so progress can be reported and cancelled.
+const LARGE_FILE_THRESHOLD: usize = 960_000;
+
+/// Size of a single chunk on the large-file path: 10 seconds at 16kHz.
+const CHUNK_SIZE: usize = 160_000;
+
 /// Represents a complete speech segment detected by VAD
 #[derive(Debug, Clone)]
 pub struct SpeechSegment {
@@ -380,10 +387,6 @@ where
 
     let total_samples = samples_mono_16k.len();
 
-    // For large files (>1 minute at 16kHz = 960,000 samples), process in chunks with progress logging
-    const LARGE_FILE_THRESHOLD: usize = 960_000;
-    const CHUNK_SIZE: usize = 160_000; // 10 seconds at 16kHz
-
     let mut all_segments = Vec::new();
 
     if total_samples > LARGE_FILE_THRESHOLD {
@@ -484,27 +487,134 @@ mod tests {
 
     #[test]
     fn test_vad_chunked_vs_single_processing() {
-        // Generate 60 seconds of audio with speech patterns at 16kHz
-        let audio = generate_test_audio_with_speech(60.0, 16000);
-        println!("Generated {} samples ({:.1}s)", audio.len(), audio.len() as f32 / 16000.0);
+        // 29 seconds of silence followed by 40 seconds of speech-like audio is
+        // 1,104,000 samples at 16kHz, strictly above LARGE_FILE_THRESHOLD. The previous
+        // 60-second fixture was exactly 960,000 samples, so both sides of the comparison
+        // took the small-file branch and the chunked path was never run.
+        //
+        // The leading silence also pushes the detected speech past the first
+        // CHUNK_SIZE call and across a chunk boundary, so a session clock that restarted
+        // per call would report the segment near 0ms instead of near 29s.
+        let leading_silence_samples = 29 * VAD_SAMPLE_RATE as usize;
+        let mut audio = vec![0.0f32; leading_silence_samples];
+        audio.extend(generate_test_audio_with_speech(40.0, 16000));
+        assert!(
+            audio.len() > LARGE_FILE_THRESHOLD,
+            "Fixture must exceed the large-file threshold to exercise the chunked path: {} samples",
+            audio.len()
+        );
+        let total_duration_ms = audio.len() as f64 / VAD_SAMPLE_RATE as f64 * 1000.0;
 
-        // Process all at once (like small files)
-        let segments_single = get_speech_chunks(&audio, 2000).expect("Single processing failed");
-        println!("Single processing found {} segments", segments_single.len());
+        // Whole input in a single call, flushed once - what the small-file branch does.
+        let mut single_processor =
+            ContinuousVadProcessor::new(16000, 2000).expect("Single processor creation failed");
+        let mut segments_single = single_processor
+            .process_audio(&audio)
+            .expect("Single processing failed");
+        segments_single.extend(single_processor.flush().expect("Single flush failed"));
 
-        // Process in chunks (like large files)
-        let segments_chunked = get_speech_chunks_with_progress(&audio, 2000, |progress, segments| {
-            println!("Chunked progress: {}%, {} segments", progress, segments);
-            true // Don't cancel
-        }).expect("Chunked processing failed");
-        println!("Chunked processing found {} segments", segments_chunked.len());
+        // Identical input in CHUNK_SIZE calls, flushed once - what the large-file branch does.
+        let mut chunked_processor =
+            ContinuousVadProcessor::new(16000, 2000).expect("Chunked processor creation failed");
+        let mut segments_chunked = Vec::new();
+        for chunk in audio.chunks(CHUNK_SIZE) {
+            segments_chunked.extend(
+                chunked_processor
+                    .process_audio(chunk)
+                    .expect("Chunked processing failed"),
+            );
+        }
+        segments_chunked.extend(chunked_processor.flush().expect("Chunked flush failed"));
 
-        // Both should find the same number of segments (approximately)
-        // Allow some variance due to chunk boundary effects
-        let diff = (segments_single.len() as i32 - segments_chunked.len() as i32).abs();
-        assert!(diff <= 1,
-            "Chunked and single processing found different segment counts: {} vs {} (diff: {})",
-            segments_single.len(), segments_chunked.len(), diff);
+        println!(
+            "single: {} segments, chunked: {} segments at {:?}",
+            segments_single.len(),
+            segments_chunked.len(),
+            segments_chunked
+                .iter()
+                .map(|segment| (segment.start_timestamp_ms, segment.end_timestamp_ms))
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            !segments_single.is_empty(),
+            "Expected at least one speech segment from the fixture"
+        );
+        assert_eq!(
+            segments_single.len(),
+            segments_chunked.len(),
+            "Chunked and single processing found different segment counts"
+        );
+
+        // Splitting the input must not change where segments land: the 480-sample VAD
+        // framing and the session clock both carry across process_audio calls.
+        for (index, (single, chunked)) in segments_single
+            .iter()
+            .zip(segments_chunked.iter())
+            .enumerate()
+        {
+            assert_eq!(
+                single.start_timestamp_ms, chunked.start_timestamp_ms,
+                "Segment {} start timestamp drifted: {}ms single vs {}ms chunked",
+                index, single.start_timestamp_ms, chunked.start_timestamp_ms
+            );
+            assert_eq!(
+                single.end_timestamp_ms, chunked.end_timestamp_ms,
+                "Segment {} end timestamp drifted: {}ms single vs {}ms chunked",
+                index, single.end_timestamp_ms, chunked.end_timestamp_ms
+            );
+            assert_eq!(
+                single.samples.len(),
+                chunked.samples.len(),
+                "Segment {} sample count differs: {} single vs {} chunked",
+                index,
+                single.samples.len(),
+                chunked.samples.len()
+            );
+        }
+
+        // Ordering and duration bounds, checked on the chunked side because that is the
+        // path under test.
+        for (index, segment) in segments_chunked.iter().enumerate() {
+            assert!(
+                segment.end_timestamp_ms > segment.start_timestamp_ms,
+                "Segment {} has non-positive duration: [{}ms, {}ms]",
+                index,
+                segment.start_timestamp_ms,
+                segment.end_timestamp_ms
+            );
+            assert!(
+                segment.start_timestamp_ms >= 0.0
+                    && segment.end_timestamp_ms <= total_duration_ms,
+                "Segment {} falls outside the {}ms input: [{}ms, {}ms]",
+                index,
+                total_duration_ms,
+                segment.start_timestamp_ms,
+                segment.end_timestamp_ms
+            );
+        }
+        assert!(
+            segments_chunked
+                .windows(2)
+                .all(|pair| pair[0].start_timestamp_ms <= pair[1].start_timestamp_ms),
+            "Expected segments in ascending start order: {:?}",
+            segments_chunked
+                .iter()
+                .map(|segment| segment.start_timestamp_ms)
+                .collect::<Vec<_>>()
+        );
+
+        // Guards against the session clock restarting per call: all speech in this
+        // fixture is behind 29 seconds of silence, so a processor that forgot how much
+        // audio it had already seen would place it inside the first chunk.
+        let chunk_duration_ms = CHUNK_SIZE as f64 / VAD_SAMPLE_RATE as f64 * 1000.0;
+        let first_start_ms = segments_chunked[0].start_timestamp_ms;
+        assert!(
+            first_start_ms > chunk_duration_ms,
+            "Session timestamps appear to reset across process_audio calls: first segment \
+             starts at {}ms, which is inside the first {}ms chunk",
+            first_start_ms,
+            chunk_duration_ms
+        );
     }
 
     #[test]
