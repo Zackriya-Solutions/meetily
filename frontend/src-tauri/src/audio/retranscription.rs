@@ -2,7 +2,11 @@
 
 use crate::audio::decoder::decode_audio_file;
 use crate::audio::vad::get_speech_chunks_with_progress;
-use super::common::{create_transcript_segments, split_segment_at_silence, write_transcripts_json};
+use crate::api::TranscriptSegment;
+use super::common::{
+    create_transcript_segments, partial_save_error, split_segment_at_silence,
+    write_transcripts_json_with_fault, SidecarFault,
+};
 use super::constants::AUDIO_EXTENSIONS;
 use crate::config::{DEFAULT_WHISPER_MODEL, DEFAULT_PARAKEET_MODEL};
 use crate::parakeet_engine::ParakeetEngine;
@@ -469,10 +473,6 @@ async fn run_retranscription<R: Runtime>(
     // Write updated transcripts.json and metadata.json to the meeting folder
     emit_progress(&app, &meeting_id, "saving", 90, "Writing transcript files...");
 
-    if let Err(e) = write_transcripts_json(&folder_path, &segments) {
-        warn!("Failed to write transcripts.json: {}", e);
-    }
-
     // Find audio filename for metadata
     let audio_filename = audio_path
         .file_name()
@@ -480,13 +480,15 @@ async fn run_retranscription<R: Runtime>(
         .unwrap_or("audio.mp4")
         .to_string();
 
-    if let Err(e) = write_retranscription_metadata(
+    if let Err(error) = persist_retranscription_sidecars(
         &folder_path,
         &meeting_id,
         duration_seconds,
         &audio_filename,
+        &segments,
+        None,
     ) {
-        warn!("Failed to update metadata.json: {}", e);
+        return Err(error);
     }
 
     emit_progress(&app, &meeting_id, "complete", 100, "Retranscription complete");
@@ -728,9 +730,29 @@ fn write_retranscription_metadata(
     duration_seconds: f64,
     audio_filename: &str,
 ) -> Result<()> {
+    write_retranscription_metadata_with_fault(
+        folder,
+        meeting_id,
+        duration_seconds,
+        audio_filename,
+        None,
+    )
+}
+
+fn write_retranscription_metadata_with_fault(
+    folder: &Path,
+    meeting_id: &str,
+    duration_seconds: f64,
+    audio_filename: &str,
+    fault: Option<SidecarFault>,
+) -> Result<()> {
     let metadata_path = folder.join("metadata.json");
     let temp_path = folder.join(".metadata.json.tmp");
     let now = chrono::Utc::now().to_rfc3339();
+
+    if fault == Some(SidecarFault::MetadataWrite) {
+        return Err(anyhow!("injected metadata sidecar write failure"));
+    }
 
     // Try to read existing metadata and update it
     let json = if metadata_path.exists() {
@@ -761,10 +783,48 @@ fn write_retranscription_metadata(
 
     let json_string = serde_json::to_string_pretty(&json)?;
     std::fs::write(&temp_path, &json_string)?;
+    if fault == Some(SidecarFault::Rename) {
+        return Err(anyhow!("injected metadata sidecar rename failure"));
+    }
     std::fs::rename(&temp_path, &metadata_path)?;
 
     info!("Wrote metadata.json to {}", metadata_path.display());
     Ok(())
+}
+
+/// Persist retranscription sidecars after the replacement transcript
+/// transaction has committed. Tests inject faults through this same helper
+/// to verify the real partial-save boundary without running ASR.
+fn persist_retranscription_sidecars(
+    folder: &Path,
+    meeting_id: &str,
+    duration_seconds: f64,
+    audio_filename: &str,
+    segments: &[TranscriptSegment],
+    fault: Option<SidecarFault>,
+) -> Result<()> {
+    let mut failed_artifacts = Vec::new();
+    if let Err(error) = write_transcripts_json_with_fault(folder, segments, fault) {
+        warn!("Failed to write transcripts.json: {}", error);
+        failed_artifacts.push(format!("transcripts.json ({error})"));
+    }
+
+    if let Err(error) = write_retranscription_metadata_with_fault(
+        folder,
+        meeting_id,
+        duration_seconds,
+        audio_filename,
+        fault,
+    ) {
+        warn!("Failed to update metadata.json: {}", error);
+        failed_artifacts.push(format!("metadata.json ({error})"));
+    }
+
+    if failed_artifacts.is_empty() {
+        Ok(())
+    } else {
+        Err(partial_save_error(meeting_id, folder, &failed_artifacts))
+    }
 }
 
 // Tauri commands
@@ -1050,5 +1110,99 @@ mod tests {
         assert_eq!(metadata["summary_language"], "fr");
         assert_eq!(metadata["custom_field"], "preserve me");
         assert!(metadata.get("detected_summary_language").is_none());
+    }
+
+    #[tokio::test]
+    async fn retranscription_post_commit_sidecar_faults_report_partial_without_losing_replacement_rows() {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:")
+            .await
+            .expect("in-memory SQLite should open");
+        sqlx::query(
+            "CREATE TABLE transcripts (
+                id TEXT PRIMARY KEY,
+                meeting_id TEXT NOT NULL,
+                transcript TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("committed transcript table should be created");
+        sqlx::query("INSERT INTO transcripts (id, meeting_id, transcript) VALUES (?, ?, ?)")
+            .bind("retranscription-segment-new")
+            .bind("retranscription-meeting-1")
+            .bind("replacement transcript")
+            .execute(&pool)
+            .await
+            .expect("replacement row should be committed");
+
+        let segments = create_transcript_segments(&[(
+            "replacement transcript".to_string(),
+            0.0,
+            1200.0,
+        )]);
+        for fault in [
+            SidecarFault::TranscriptWrite,
+            SidecarFault::MetadataWrite,
+            SidecarFault::Rename,
+        ] {
+            let folder = tempfile::tempdir().expect("temporary sidecar folder should be created");
+            std::fs::write(
+                folder.path().join("transcripts.json"),
+                r#"{"segments":[{"text":"stale transcript"}],"total_segments":1}"#,
+            )
+            .expect("stale transcript sidecar should be written");
+            std::fs::write(
+                folder.path().join("metadata.json"),
+                r#"{"meeting_id":"retranscription-meeting-1","status":"completed","duration_seconds":9}"#,
+            )
+            .expect("existing metadata sidecar should be written");
+
+            let error = persist_retranscription_sidecars(
+                folder.path(),
+                "retranscription-meeting-1",
+                1.2,
+                "audio.mp4",
+                &segments,
+                Some(fault),
+            )
+            .expect_err("post-commit sidecar fault must return partial save");
+            let message = error.to_string();
+            assert!(message.starts_with("Partial save:"));
+            assert!(message.contains("meeting_id=retranscription-meeting-1"));
+            assert!(message.contains(folder.path().to_string_lossy().as_ref()));
+            match fault {
+                SidecarFault::TranscriptWrite => assert!(message.contains("transcripts.json")),
+                SidecarFault::MetadataWrite => assert!(message.contains("metadata.json")),
+                SidecarFault::Rename => {
+                    assert!(message.contains("transcripts.json"));
+                    assert!(message.contains("metadata.json"));
+                }
+            }
+
+            let row: (String,) = sqlx::query_as(
+                "SELECT transcript FROM transcripts WHERE meeting_id = ? ORDER BY rowid",
+            )
+            .bind("retranscription-meeting-1")
+            .fetch_one(&pool)
+            .await
+            .expect("committed replacement row should remain queryable");
+            assert_eq!(row.0, "replacement transcript");
+
+            match fault {
+                SidecarFault::TranscriptWrite | SidecarFault::Rename => {
+                    let stale = std::fs::read_to_string(folder.path().join("transcripts.json"))
+                        .expect("old transcript sidecar should remain after failed rename");
+                    assert!(stale.contains("stale transcript"));
+                }
+                SidecarFault::MetadataWrite => {
+                    let current: serde_json::Value = serde_json::from_str(
+                        &std::fs::read_to_string(folder.path().join("transcripts.json"))
+                            .expect("transcript sidecar should be written"),
+                    )
+                    .expect("transcript sidecar should remain valid JSON");
+                    assert_eq!(current["segments"][0]["text"], "replacement transcript");
+                }
+            }
+        }
     }
 }

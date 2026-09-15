@@ -4,6 +4,7 @@ use log::{debug, info};
 use once_cell::sync::Lazy;
 use std::path::Path;
 use std::sync::Arc;
+use sqlx::Row;
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 use uuid::Uuid;
 
@@ -70,8 +71,31 @@ pub(crate) fn create_transcript_segments(transcripts: &[(String, f64, f64)]) -> 
 
 /// Write transcripts.json to a meeting folder (atomic write with temp file)
 pub(crate) fn write_transcripts_json(folder: &Path, segments: &[TranscriptSegment]) -> Result<()> {
+    write_transcripts_json_with_fault(folder, segments, None)
+}
+
+/// A deterministic post-commit sidecar fault used by the import and
+/// retranscription contract tests. Production callers pass `None`; keeping
+/// the fault at the shared file boundary makes both flows exercise the same
+/// atomic writer and its real error handling.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SidecarFault {
+    TranscriptWrite,
+    MetadataWrite,
+    Rename,
+}
+
+pub(crate) fn write_transcripts_json_with_fault(
+    folder: &Path,
+    segments: &[TranscriptSegment],
+    fault: Option<SidecarFault>,
+) -> Result<()> {
     let transcript_path = folder.join("transcripts.json");
     let temp_path = folder.join(".transcripts.json.tmp");
+
+    if fault == Some(SidecarFault::TranscriptWrite) {
+        return Err(anyhow::anyhow!("injected transcript sidecar write failure"));
+    }
 
     let json = serde_json::json!({
         "version": "1.0",
@@ -92,6 +116,9 @@ pub(crate) fn write_transcripts_json(folder: &Path, segments: &[TranscriptSegmen
 
     let json_string = serde_json::to_string_pretty(&json)?;
     std::fs::write(&temp_path, &json_string)?;
+    if fault == Some(SidecarFault::Rename) {
+        return Err(anyhow::anyhow!("injected transcript sidecar rename failure"));
+    }
     std::fs::rename(&temp_path, &transcript_path)?;
 
     info!(
@@ -100,6 +127,57 @@ pub(crate) fn write_transcripts_json(folder: &Path, segments: &[TranscriptSegmen
         transcript_path.display()
     );
     Ok(())
+}
+
+/// Load the canonical committed transcript rows for sidecar recovery. This
+/// path only reads SQLite and never invokes ASR or creates a new meeting.
+pub(crate) async fn load_committed_transcript_segments(
+    pool: &sqlx::SqlitePool,
+    meeting_id: &str,
+) -> Result<Vec<TranscriptSegment>> {
+    let rows = sqlx::query(
+        "SELECT id, transcript, timestamp, audio_start_time, audio_end_time, duration
+         FROM transcripts WHERE meeting_id = ? ORDER BY rowid",
+    )
+    .bind(meeting_id)
+    .fetch_all(pool)
+    .await?;
+
+    rows.into_iter()
+        .map(|row| {
+            Ok(TranscriptSegment {
+                id: row.try_get("id")?,
+                text: row.try_get("transcript")?,
+                timestamp: row.try_get("timestamp")?,
+                audio_start_time: row.try_get("audio_start_time")?,
+                audio_end_time: row.try_get("audio_end_time")?,
+                duration: row.try_get("duration")?,
+            })
+        })
+        .collect()
+}
+
+/// Regenerate the transcript sidecar from already committed SQLite rows.
+/// Repeated calls overwrite the same atomic file and remain idempotent.
+pub(crate) async fn regenerate_transcripts_json_from_db(
+    pool: &sqlx::SqlitePool,
+    meeting_id: &str,
+    folder: &Path,
+) -> Result<()> {
+    let segments = load_committed_transcript_segments(pool, meeting_id).await?;
+    write_transcripts_json(folder, &segments)
+}
+
+pub(crate) fn partial_save_error(
+    meeting_id: &str,
+    folder: &Path,
+    failed_artifacts: &[String],
+) -> anyhow::Error {
+    anyhow::anyhow!(
+        "Partial save: meeting_id={meeting_id}, folder={}, failed_artifacts={}; retry sidecar recovery from committed SQLite rows",
+        folder.display(),
+        failed_artifacts.join(", ")
+    )
 }
 
 /// Split a long speech segment at the lowest-energy (silence) point near the target size.
@@ -232,5 +310,80 @@ mod tests {
 
         acquired_rx.await.unwrap();
         waiter.await.unwrap();
+    }
+
+    #[test]
+    fn partial_save_error_keeps_recovery_identity_and_artifacts() {
+        let error = partial_save_error(
+            "meeting-123",
+            Path::new("C:/recordings/meeting-123"),
+            &["transcripts.json (rename failed)".to_string(), "metadata.json".to_string()],
+        );
+        let message = error.to_string();
+        assert!(message.contains("meeting_id=meeting-123"));
+        assert!(message.contains("transcripts.json"));
+        assert!(message.contains("metadata.json"));
+        assert!(message.contains("committed SQLite rows"));
+    }
+
+    #[tokio::test]
+    async fn regenerate_transcript_sidecar_is_idempotent_from_committed_rows() {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:")
+            .await
+            .expect("in-memory SQLite should open");
+        sqlx::query(
+            "CREATE TABLE transcripts (
+                id TEXT PRIMARY KEY,
+                meeting_id TEXT NOT NULL,
+                transcript TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                audio_start_time REAL,
+                audio_end_time REAL,
+                duration REAL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("transcript table should be created");
+        sqlx::query(
+            "INSERT INTO transcripts
+                (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind("segment-1")
+        .bind("meeting-1")
+        .bind("  committed text  ")
+        .bind("2026-09-09T00:00:00Z")
+        .bind(1.5_f64)
+        .bind(2.5_f64)
+        .bind(1.0_f64)
+        .execute(&pool)
+        .await
+        .expect("committed transcript should be inserted");
+
+        let folder = tempfile::tempdir().expect("temporary folder should be created");
+        regenerate_transcripts_json_from_db(&pool, "meeting-1", folder.path())
+            .await
+            .expect("first sidecar regeneration should succeed");
+        let first: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(folder.path().join("transcripts.json"))
+                .expect("first sidecar should exist"),
+        )
+        .expect("first sidecar should be valid JSON");
+
+        regenerate_transcripts_json_from_db(&pool, "meeting-1", folder.path())
+            .await
+            .expect("second sidecar regeneration should succeed");
+        let second: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(folder.path().join("transcripts.json"))
+                .expect("second sidecar should exist"),
+        )
+        .expect("second sidecar should be valid JSON");
+
+        assert_eq!(first["total_segments"], serde_json::json!(1));
+        assert_eq!(first["segments"][0]["id"], serde_json::json!("segment-1"));
+        assert_eq!(first["segments"][0]["text"], serde_json::json!("  committed text  "));
+        assert_eq!(first["segments"], second["segments"]);
+        assert_eq!(first["total_segments"], second["total_segments"]);
     }
 }
