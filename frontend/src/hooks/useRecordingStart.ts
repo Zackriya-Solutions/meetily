@@ -13,6 +13,7 @@ import {
   type ModelWithStatus,
 } from '@/lib/transcription-model-readiness';
 import { toast } from 'sonner';
+import { CALENDAR_RECORDING_STARTED_EVENT } from '@/services/calendarAutomationService';
 
 const TRANSCRIPTION_RUNTIME_START_ERROR_CODE = 'TRANSCRIPTION_RUNTIME_INITIALIZATION_FAILED';
 const TRANSCRIPTION_RUNTIME_USER_MESSAGE = 'Speech recognition could not initialize. Restart Meetily. If the problem continues, repair or reinstall the app.';
@@ -215,7 +216,11 @@ export function useRecordingStart(
         if (shouldAutoStart === 'true' && !isRecording && !isAutoStarting) {
           console.log('Auto-starting recording from navigation...');
           setIsAutoStarting(true);
+          const requestedMeetingTitle = sessionStorage.getItem('autoStartMeetingTitle');
+          const calendarMeetingId = sessionStorage.getItem('autoStartCalendarMeetingId');
           sessionStorage.removeItem('autoStartRecording'); // Clear the flag
+          sessionStorage.removeItem('autoStartMeetingTitle');
+          sessionStorage.removeItem('autoStartCalendarMeetingId');
 
           // Check the selected transcription model before starting.
           const modelReady = await checkModelReady();
@@ -243,7 +248,7 @@ export function useRecordingStart(
           // Start the actual backend recording
           try {
             // Generate meeting title
-            const generatedMeetingTitle = generateMeetingTitle();
+            const generatedMeetingTitle = requestedMeetingTitle?.trim() || generateMeetingTitle();
 
             // Set STARTING status before initiating backend recording
             setStatus(RecordingStatus.STARTING, 'Initializing recording...');
@@ -262,6 +267,11 @@ export function useRecordingStart(
             setIsRecording(true);
             clearTranscripts();
             setIsMeetingActive(true);
+            if (calendarMeetingId) {
+              window.dispatchEvent(new CustomEvent(CALENDAR_RECORDING_STARTED_EVENT, {
+                detail: { calendarMeetingId },
+              }));
+            }
             Analytics.trackButtonClick('start_recording', 'sidebar_auto');
 
             // Show recording notification if enabled
@@ -307,11 +317,18 @@ export function useRecordingStart(
 
   // Listen for direct recording trigger from sidebar when already on home page
   useEffect(() => {
-    const handleDirectStart = async () => {
+    const handleDirectStart = async (event: Event) => {
       if (isRecording || isAutoStarting) {
         console.log('Recording already in progress, ignoring direct start event');
         return;
       }
+
+      const requestedMeetingTitle = event instanceof CustomEvent
+        ? String(event.detail?.meetingTitle ?? '').trim()
+        : '';
+      const calendarMeetingId = event instanceof CustomEvent
+        ? String(event.detail?.calendarMeetingId ?? '').trim()
+        : '';
 
       console.log('Direct start from sidebar - checking selected transcription model status');
       setIsAutoStarting(true);
@@ -341,7 +358,7 @@ export function useRecordingStart(
 
       try {
         // Generate meeting title
-        const generatedMeetingTitle = generateMeetingTitle();
+        const generatedMeetingTitle = requestedMeetingTitle || generateMeetingTitle();
 
         // Set STARTING status before initiating backend recording
         setStatus(RecordingStatus.STARTING, 'Initializing recording...');
@@ -360,6 +377,11 @@ export function useRecordingStart(
         setIsRecording(true);
         clearTranscripts();
         setIsMeetingActive(true);
+        if (calendarMeetingId) {
+          window.dispatchEvent(new CustomEvent(CALENDAR_RECORDING_STARTED_EVENT, {
+            detail: { calendarMeetingId },
+          }));
+        }
         Analytics.trackButtonClick('start_recording', 'sidebar_direct');
 
         // Show recording notification if enabled

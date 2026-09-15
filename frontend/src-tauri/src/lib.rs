@@ -38,6 +38,7 @@ pub(crate) use perf_trace;
 pub mod analytics;
 pub mod api;
 pub mod audio;
+pub mod calendar;
 pub mod config;
 pub mod console_utils;
 pub mod database;
@@ -63,6 +64,15 @@ use tauri::{AppHandle, Manager, Runtime};
 use tokio::sync::RwLock;
 
 static RECORDING_FLAG: AtomicBool = AtomicBool::new(false);
+
+fn should_start_in_background<I, S>(args: I) -> bool
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    args.into_iter()
+        .any(|arg| matches!(arg.as_ref(), "--background" | "--autostart"))
+}
 
 #[cfg(target_os = "windows")]
 static ONNX_RUNTIME_INIT_ERROR: std::sync::OnceLock<String> = std::sync::OnceLock::new();
@@ -458,7 +468,11 @@ pub fn run() {
                 cwd
             );
 
-            tray::focus_main_window(app);
+            // Windows may invoke the login task while Meetily is already
+            // running. A background launch must not steal focus in that case.
+            if !should_start_in_background(&args) {
+                tray::focus_main_window(app);
+            }
         }));
     }
 
@@ -510,6 +524,20 @@ pub fn run() {
             if let Err(e) = tray::create_tray(_app.handle()) {
                 log::error!("Failed to create system tray: {}", e);
             }
+
+            if should_start_in_background(std::env::args()) {
+                if let Some(window) = _app.get_webview_window("main") {
+                    if let Err(e) = window.hide() {
+                        log::error!("Failed to start Meetily in the background: {}", e);
+                    } else {
+                        log::info!("Meetily started hidden in the system tray");
+                    }
+                }
+            }
+
+            // Drive calendar automation from the native runtime so checks still
+            // run while the WebView window is hidden in the system tray.
+            calendar::start_calendar_tick_emitter(_app.handle().clone());
 
             // Initialize notification system with proper defaults
             log::info!("Initializing notification system...");
@@ -613,6 +641,7 @@ pub fn run() {
             start_recording,
             stop_recording,
             is_recording,
+            calendar::fetch_google_calendar_ics,
             get_transcription_status,
             read_audio_file,
             save_transcript,
@@ -865,4 +894,21 @@ pub fn run() {
                 _ => {}
             }
         });
+}
+
+#[cfg(test)]
+mod background_start_tests {
+    use super::should_start_in_background;
+
+    #[test]
+    fn recognizes_supported_background_arguments() {
+        assert!(should_start_in_background(["meetily", "--background"]));
+        assert!(should_start_in_background(["meetily", "--autostart"]));
+    }
+
+    #[test]
+    fn normal_launch_stays_visible() {
+        assert!(!should_start_in_background(["meetily"]));
+        assert!(!should_start_in_background(["meetily", "--help"]));
+    }
 }
