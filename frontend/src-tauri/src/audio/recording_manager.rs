@@ -276,7 +276,15 @@ impl RecordingManager {
             return Err(RecordingStartError::TranscriptionRuntime(error));
         }
 
-        self.recording_saver.start_accumulation(auto_save, recording_receiver);
+        if let Err(error) = self
+            .recording_saver
+            .start_accumulation(auto_save, recording_receiver)
+        {
+            error!("Recording storage initialization failed before capture: {}", error);
+            self.state.stop_recording();
+            let _ = self.pipeline_manager.stop().await;
+            return Err(RecordingStartError::Other(anyhow::anyhow!(error)));
+        }
         self.recording_saver.set_device_info(
             microphone_device.as_ref().map(|d| d.name.clone()),
             system_device.as_ref().map(|d| d.name.clone())
@@ -382,7 +390,7 @@ impl RecordingManager {
             }
             Err(e) => {
                 error!("Failed to save recording: {}", e);
-                // Don't fail the stop operation if saving fails
+                return Err(anyhow::anyhow!(e));
             }
         }
 
@@ -421,7 +429,7 @@ impl RecordingManager {
             }
             Err(e) => {
                 error!("Failed to save recording: {}", e);
-                // Don't fail the stop operation if saving fails
+                return Err(anyhow::anyhow!(e));
             }
         }
 

@@ -1013,43 +1013,57 @@ pub async fn stop_recording<R: Runtime>(
     );
 
     // Perform final cleanup with the manager if available
-    let (meeting_folder, meeting_name) = if let Some(mut manager) = manager_for_cleanup {
+    let (meeting_folder, meeting_name, save_error) = if let Some(mut manager) = manager_for_cleanup {
         info!("🧹 Performing final cleanup and saving recording data");
 
         // Extract meeting info BEFORE async operations
         let meeting_folder = manager.get_meeting_folder();
         let meeting_name = manager.get_meeting_name();
 
-        match tokio::time::timeout(
+        let save_error = match tokio::time::timeout(
             tokio::time::Duration::from_secs(300), // 5 minutes max for file I/O
             manager.save_recording_only(&app)
         ).await {
             Ok(Ok(_)) => {
                 info!("✅ Recording data saved successfully during cleanup");
+                None
             }
             Ok(Err(e)) => {
                 warn!(
-                    "⚠️ Error during recording cleanup (transcripts preserved): {}",
+                    "⚠️ Error during recording cleanup: {}",
                     e
                 );
-                // Don't fail shutdown - transcripts are already preserved
+                Some(e.to_string())
             }
             Err(_) => {
-                warn!("⏱️ File I/O timeout (5 minutes) reached during save, continuing shutdown");
-                // Don't fail shutdown - transcripts are already preserved
+                warn!("⏱️ File I/O timeout (5 minutes) reached during save");
+                Some("Partial save: recording persistence timed out after 5 minutes".to_string())
             }
-        }
+        };
 
-        (meeting_folder, meeting_name)
+        (meeting_folder, meeting_name, save_error)
     } else {
         info!("ℹ️ No recording manager available for cleanup");
-        (None, None)
+        (None, None, None)
     };
 
     // Set recording flag to false
     info!("🔍 Setting IS_RECORDING to false");
     IS_RECORDING.store(false, Ordering::SeqCst);
     // IS_RECORDING_STOPPING is cleared by _stopping_guard on scope exit.
+
+    if let Some(error) = save_error {
+        let _ = app.emit(
+            "recording-save-failed",
+            serde_json::json!({
+                "message": error,
+                "meeting_folder": meeting_folder.as_ref().map(|path| path.to_string_lossy().to_string()),
+                "recovery": "Retry saving from the meeting folder after resolving the storage error."
+            }),
+        );
+        crate::tray::update_tray_menu(&app);
+        return Err(error);
+    }
 
     // Step 4.5: Prepare metadata for frontend (NO database save)
     // NOTE: We do NOT save to database here. The frontend will save after all transcripts are displayed.
