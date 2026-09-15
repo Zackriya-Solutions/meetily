@@ -32,6 +32,7 @@ unsafe impl Send for StreamBackend {}
 pub struct AudioStream {
     device: Arc<AudioDevice>,
     backend: StreamBackend,
+    capture: AudioCapture,
 }
 
 // SAFETY: AudioStream contains StreamBackend which we've marked as Send
@@ -137,6 +138,7 @@ impl AudioStream {
         Ok(Self {
             device,
             backend: StreamBackend::Cpal(stream),
+            capture,
         })
     }
 
@@ -230,6 +232,7 @@ impl AudioStream {
             backend: StreamBackend::CoreAudio {
                 task: Some(task),
             },
+            capture,
         })
     }
 
@@ -320,23 +323,31 @@ impl AudioStream {
     pub fn stop(self) -> Result<()> {
         info!("Stopping audio stream for device: {}", self.device.name);
 
+        // Pause/abort the producer before flushing so no callback can append
+        // more input while the final resampler block is emitted.
+        match &self.backend {
+            StreamBackend::Cpal(stream) => {
+                if let Err(e) = stream.pause() {
+                    warn!("Failed to pause stream before flush: {}", e);
+                }
+            }
+            #[cfg(target_os = "macos")]
+            StreamBackend::CoreAudio { task } => {
+                if let Some(task) = task {
+                    task.abort();
+                }
+            }
+        }
+        self.capture.flush_pending_resampler();
+
         match self.backend {
             StreamBackend::Cpal(stream) => {
-                // CRITICAL: Pause the stream first to stop callbacks immediately
-                // This ensures closures stop executing before we drop the stream,
-                // allowing Arc references captured in callbacks to be released
-                if let Err(e) = stream.pause() {
-                    warn!("Failed to pause stream before drop: {}", e);
-                }
                 info!("Stream paused, now dropping to release callbacks");
                 drop(stream);
             }
             #[cfg(target_os = "macos")]
             StreamBackend::CoreAudio { task } => {
-                // Abort the processing task and wait briefly for cleanup
                 if let Some(task_handle) = task {
-                    info!("Aborting Core Audio task...");
-                    task_handle.abort();
                     // Give the runtime a moment to clean up the aborted task
                     // This helps ensure Arc references in the closure are dropped
                     std::thread::sleep(std::time::Duration::from_millis(50));
