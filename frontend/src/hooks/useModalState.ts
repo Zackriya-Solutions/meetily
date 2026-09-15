@@ -8,6 +8,7 @@ export type ModalType =
   | 'modelSettings'
   | 'deviceSettings'
   | 'languageSettings'
+  | 'meetingDomainSettings'
   | 'modelSelector'
   | 'errorAlert'
   | 'chunkDropWarning';
@@ -16,6 +17,7 @@ interface ModalState {
   modelSettings: boolean;
   deviceSettings: boolean;
   languageSettings: boolean;
+  meetingDomainSettings: boolean;
   modelSelector: boolean;
   errorAlert: boolean;
   chunkDropWarning: boolean;
@@ -50,6 +52,7 @@ export function useModalState(transcriptModelConfig?: TranscriptModelProps): Use
     modelSettings: false,
     deviceSettings: false,
     languageSettings: false,
+    meetingDomainSettings: false,
     modelSelector: false,
     errorAlert: false,
     chunkDropWarning: false,
@@ -88,6 +91,7 @@ export function useModalState(transcriptModelConfig?: TranscriptModelProps): Use
       modelSettings: false,
       deviceSettings: false,
       languageSettings: false,
+      meetingDomainSettings: false,
       modelSelector: false,
       errorAlert: false,
       chunkDropWarning: false,
