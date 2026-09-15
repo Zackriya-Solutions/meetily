@@ -481,7 +481,8 @@ async fn transcribe_chunk_with_provider<R: Runtime>(
         TranscriptionEngine::Parakeet(parakeet_engine) => {
             match parakeet_engine.transcribe_audio(speech_samples).await {
                 Ok(text) => {
-                    let cleaned_text = text.trim().to_string();
+                    // Same hallucination filtering the local-Whisper path gets.
+                    let cleaned_text = super::text_cleanup::clean_transcript_text(&text);
                     if cleaned_text.is_empty() {
                         return Ok((String::new(), None, false));
                     }
@@ -521,7 +522,10 @@ async fn transcribe_chunk_with_provider<R: Runtime>(
 
             match provider.transcribe(speech_samples, language).await {
                 Ok(result) => {
-                    let cleaned_text = result.text.trim().to_string();
+                    // Same hallucination filtering the local-Whisper path gets.
+                    // Cloud providers hand back Whisper's subtitle-corpus artifacts
+                    // verbatim, so this is where they get removed.
+                    let cleaned_text = super::text_cleanup::clean_transcript_text(&result.text);
                     if cleaned_text.is_empty() {
                         return Ok((String::new(), result.confidence, result.is_partial));
                     }
