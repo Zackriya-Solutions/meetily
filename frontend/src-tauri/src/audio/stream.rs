@@ -13,6 +13,9 @@ use super::capture::{AudioCaptureBackend, get_current_backend};
 #[cfg(target_os = "macos")]
 use super::capture::CoreAudioCapture;
 
+#[cfg(target_os = "linux")]
+use super::capture::PulseMonitorCapture;
+
 /// Stream backend implementation
 pub enum StreamBackend {
     /// CPAL-based stream (ScreenCaptureKit or default)
@@ -21,6 +24,12 @@ pub enum StreamBackend {
     #[cfg(target_os = "macos")]
     CoreAudio {
         task: Option<tokio::task::JoinHandle<()>>,
+    },
+    /// `parec`-backed capture of a PulseAudio/PipeWire monitor source (Linux only) —
+    /// cpal has no PulseAudio host, so a virtual monitor source can't be opened via CPAL.
+    #[cfg(target_os = "linux")]
+    PulseMonitor {
+        capture: Option<PulseMonitorCapture>,
     },
 }
 
@@ -87,6 +96,15 @@ impl AudioStream {
             return Self::create_core_audio_stream(device, state, device_type, recording_sender).await;
         }
 
+        // A PulseAudio/PipeWire monitor source (named "*.monitor") can't be opened
+        // through CPAL at all — cpal's only Linux host is ALSA, and a virtual
+        // monitor source never appears as a plain ALSA PCM. Route it to `parec` instead.
+        #[cfg(target_os = "linux")]
+        if device_type == DeviceType::System && device.name.ends_with(".monitor") {
+            info!("🔊 Stream: Using PulseAudio/PipeWire monitor backend (parec) for system audio");
+            return Self::create_pulse_monitor_stream(device, state, device_type, recording_sender).await;
+        }
+
         // Default path: use CPAL
         #[cfg(target_os = "macos")]
         let backend_name = if backend_type == AudioCaptureBackend::ScreenCaptureKit {
@@ -100,6 +118,42 @@ impl AudioStream {
 
         info!("🎵 Stream: Using CPAL backend ({}) for device: {}", backend_name, device.name);
         Self::create_cpal_stream(device, state, device_type, recording_sender).await
+    }
+
+    /// Create a `parec`-backed stream reading a PulseAudio/PipeWire monitor
+    /// source directly by name (Linux only). See `capture::PulseMonitorCapture`.
+    #[cfg(target_os = "linux")]
+    async fn create_pulse_monitor_stream(
+        device: Arc<AudioDevice>,
+        state: Arc<RecordingState>,
+        device_type: DeviceType,
+        recording_sender: Option<mpsc::UnboundedSender<super::recording_state::AudioChunk>>,
+    ) -> Result<Self> {
+        use super::capture::pulse_monitor::{CHANNELS, SAMPLE_RATE};
+
+        info!("🔊 Stream: Creating PulseAudio/PipeWire monitor stream for device: {}", device.name);
+
+        // Requesting the pipeline's target rate/channels directly from parec
+        // means no resampling is needed downstream.
+        let capture = AudioCapture::new(
+            device.clone(),
+            state.clone(),
+            SAMPLE_RATE,
+            CHANNELS,
+            device_type,
+            recording_sender,
+        );
+
+        let monitor_capture = PulseMonitorCapture::spawn(&device.name, capture)?;
+
+        info!("✅ Stream: PulseAudio/PipeWire monitor stream started for device: {}", device.name);
+
+        Ok(Self {
+            device,
+            backend: StreamBackend::PulseMonitor {
+                capture: Some(monitor_capture),
+            },
+        })
     }
 
     /// Create a CPAL-based stream (ScreenCaptureKit on macOS)
@@ -341,6 +395,15 @@ impl AudioStream {
                     // This helps ensure Arc references in the closure are dropped
                     std::thread::sleep(std::time::Duration::from_millis(50));
                     info!("Core Audio task aborted");
+                }
+            }
+            #[cfg(target_os = "linux")]
+            StreamBackend::PulseMonitor { capture } => {
+                if let Some(monitor_capture) = capture {
+                    info!("Stopping parec monitor capture...");
+                    if let Err(e) = monitor_capture.stop() {
+                        warn!("Failed to stop parec monitor capture: {}", e);
+                    }
                 }
             }
         }

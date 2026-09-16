@@ -65,8 +65,16 @@ else
   exit 1
 fi
 
+# Treat cpu/none as an explicit request to skip GPU features entirely,
+# bypassing auto-detection
+FORCE_CPU=false
+if [ "$TAURI_GPU_FEATURE" = "cpu" ] || [ "$TAURI_GPU_FEATURE" = "none" ]; then
+    FORCE_CPU=true
+    TAURI_GPU_FEATURE="none"
+fi
+
 # Detect GPU feature if not already set
-if [ -z "$TAURI_GPU_FEATURE" ]; then
+if [ "$FORCE_CPU" = false ] && [ -z "$TAURI_GPU_FEATURE" ]; then
     echo -e "${BLUE}🔍 Detecting GPU features...${NC}"
     # Run the detection script and capture output
     # We need to run it from frontend dir
@@ -108,11 +116,14 @@ fi
 # Note: llama-cpp-2 does NOT support coreml, only metal/cuda/vulkan
 # So for macOS Apple Silicon (which returns 'coreml' for Whisper), use 'metal' for llama-helper
 HELPER_FEATURES=""
-if [ -n "$TAURI_GPU_FEATURE" ]; then
+if [ "$FORCE_CPU" = false ] && [ -n "$TAURI_GPU_FEATURE" ]; then
     LLAMA_FEATURE="$TAURI_GPU_FEATURE"
     if [ "$LLAMA_FEATURE" = "coreml" ]; then
         LLAMA_FEATURE="metal"
         echo -e "${YELLOW}   Note: llama-cpp-2 doesn't support CoreML, using Metal instead${NC}"
+    elif [ "$LLAMA_FEATURE" = "hipblas" ]; then
+        LLAMA_FEATURE="vulkan"
+        echo -e "${YELLOW}   Note: llama-cpp-2 doesn't support HIPBlas, using Vulkan instead${NC}"
     fi
     HELPER_FEATURES="--features $LLAMA_FEATURE"
 fi
