@@ -5,23 +5,23 @@
 // avoids the need to hand-register monitor sources as named ALSA pseudo-devices
 // in ~/.asoundrc: sink descriptions and monitor sources come straight from the
 // server's real metadata.
+//
+// Device enumeration (list_sinks, list_sources, default_source_description)
+// is delegated to `pulse_enumerator.rs`, which keeps a single persistent
+// libpulse connection on a dedicated thread instead of opening and destroying
+// two fresh connections every 2 seconds for the whole meeting. See TECH-02
+// for the rationale.
 
-use std::cell::RefCell;
-use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
-use libpulse_binding::callbacks::ListResult;
-use libpulse_binding::context::introspect::ServerInfo;
-use libpulse_binding::context::{Context, FlagSet as ContextFlagSet, State as ContextState};
-use libpulse_binding::mainloop::standard::{IterateResult, Mainloop};
-use libpulse_binding::operation::{Operation, State as OperationState};
-use libpulse_binding::proplist::Proplist;
 use libpulse_binding::sample::{Format, Spec};
 use libpulse_binding::stream::Direction;
 use libpulse_simple_binding::Simple;
-use log::{info, warn};
+use log::{debug, warn};
+
+use super::pulse_enumerator;
 
 /// A PulseAudio sink, with the metadata needed to offer it as a "System Audio"
 /// capture device: a real display description and its monitor source name.
@@ -29,138 +29,6 @@ use log::{info, warn};
 pub struct PulseSink {
     pub description: String,
     pub monitor_source_name: String,
-}
-
-/// Fixed capture format requested from the server. PulseAudio/PipeWire
-/// transparently resamples and remixes the monitor source to this spec
-/// server-side, so the rest of the pipeline (which expects 48kHz) never needs
-/// to know the sink's native sample rate or channel count.
-const CAPTURE_SAMPLE_RATE: u32 = 48000;
-
-/// Pump the mainloop until `operation` finishes, blocking between iterations.
-fn run_operation_to_completion<T: ?Sized>(
-    mainloop: &mut Mainloop,
-    operation: &Operation<T>,
-) -> Result<()> {
-    loop {
-        match mainloop.iterate(true) {
-            IterateResult::Quit(_) | IterateResult::Err(_) => {
-                return Err(anyhow!("PulseAudio mainloop iteration failed"));
-            }
-            IterateResult::Success(_) => {}
-        }
-
-        match operation.get_state() {
-            OperationState::Done => return Ok(()),
-            OperationState::Cancelled => {
-                return Err(anyhow!("PulseAudio operation was cancelled"));
-            }
-            OperationState::Running => continue,
-        }
-    }
-}
-
-/// Connect a fresh context to the default PulseAudio/PipeWire server, blocking
-/// until it's ready. Each call opens (and the caller later drops) its own
-/// connection — unlike ALSA's cached global config, there's no stale-state
-/// problem to work around here, so every call sees the server's current sinks.
-fn connect() -> Result<(Mainloop, Context)> {
-    info!("🔊 pulse_linux::connect: creating mainloop");
-    let mut mainloop =
-        Mainloop::new().ok_or_else(|| anyhow!("Failed to create PulseAudio mainloop"))?;
-
-    let proplist =
-        Proplist::new().ok_or_else(|| anyhow!("Failed to create PulseAudio proplist"))?;
-    let mut context = Context::new_with_proplist(&mainloop, "Meetily", &proplist)
-        .ok_or_else(|| anyhow!("Failed to create PulseAudio context"))?;
-
-    info!("🔊 pulse_linux::connect: calling context.connect()");
-    context
-        .connect(None, ContextFlagSet::NOFLAGS, None)
-        .map_err(|e| anyhow!("Failed to connect to PulseAudio/PipeWire server: {}", e))?;
-
-    info!("🔊 pulse_linux::connect: waiting for context to become Ready");
-    let mut iterations: u32 = 0;
-    loop {
-        iterations += 1;
-        if iterations % 50 == 0 {
-            info!("🔊 pulse_linux::connect: still waiting after {} iterations, state={:?}", iterations, context.get_state());
-        }
-
-        match mainloop.iterate(true) {
-            IterateResult::Quit(_) | IterateResult::Err(_) => {
-                return Err(anyhow!(
-                    "PulseAudio mainloop iteration failed while connecting"
-                ));
-            }
-            IterateResult::Success(_) => {}
-        }
-
-        match context.get_state() {
-            ContextState::Ready => break,
-            ContextState::Failed | ContextState::Terminated => {
-                return Err(anyhow!(
-                    "PulseAudio/PipeWire context connection failed or was terminated"
-                ));
-            }
-            _ => {}
-        }
-    }
-    info!("🔊 pulse_linux::connect: context Ready after {} iterations", iterations);
-
-    Ok((mainloop, context))
-}
-
-/// List all sinks (playback outputs) with their monitor source name, for use as
-/// "System Audio" capture devices. Descriptions come straight from the server —
-/// no manual ~/.asoundrc registration needed, and switching outputs (new DAC,
-/// different Bluetooth device) is picked up on the next call since nothing here
-/// is cached between calls.
-pub fn list_sinks() -> Result<Vec<PulseSink>> {
-    info!("🔊 pulse_linux::list_sinks: connecting");
-    let (mut mainloop, context) = connect()?;
-
-    info!("🔊 pulse_linux::list_sinks: connected, requesting sink list");
-    let sinks: Rc<RefCell<Vec<PulseSink>>> = Rc::new(RefCell::new(Vec::new()));
-    let sinks_cb = sinks.clone();
-
-    let operation = context.introspect().get_sink_info_list(move |result| {
-        if let ListResult::Item(info) = result {
-            let monitor_source_name = info.monitor_source_name.as_deref().unwrap_or_default();
-            if monitor_source_name.is_empty() {
-                return;
-            }
-
-            let description = info
-                .description
-                .as_deref()
-                .unwrap_or("Unknown output")
-                .to_string();
-
-            sinks_cb.borrow_mut().push(PulseSink {
-                description,
-                monitor_source_name: monitor_source_name.to_string(),
-            });
-        }
-    });
-
-    info!("🔊 pulse_linux::list_sinks: pumping mainloop until sink list operation completes");
-    run_operation_to_completion(&mut mainloop, &operation)?;
-    drop(operation);
-
-    let result = sinks.borrow().clone();
-    info!("🔊 pulse_linux::list_sinks: got {} sink(s)", result.len());
-    Ok(result)
-}
-
-/// Resolve a sink's real monitor source name from its display description (as
-/// shown in the "System Audio" picker, e.g. "JBL Tune 770NC").
-pub fn find_monitor_source_by_description(description: &str) -> Result<String> {
-    list_sinks()?
-        .into_iter()
-        .find(|sink| sink.description == description)
-        .map(|sink| sink.monitor_source_name)
-        .ok_or_else(|| anyhow!("No PulseAudio sink found matching '{}'", description))
 }
 
 /// A PulseAudio input source (microphone, line-in, …), excluding sink monitors.
@@ -175,49 +43,45 @@ pub struct PulseSource {
     pub source_name: String,
 }
 
+/// Fixed capture format requested from the server. PulseAudio/PipeWire
+/// transparently resamples and remixes the monitor source to this spec
+/// server-side, so the rest of the pipeline (which expects 48kHz) never needs
+/// to know the sink's native sample rate or channel count.
+const CAPTURE_SAMPLE_RATE: u32 = 48000;
+
+/// List all sinks (playback outputs) with their monitor source name, for use as
+/// "System Audio" capture devices. Descriptions come straight from the server
+/// and are refreshed on every call: a persistent connection does not cache
+/// server state, it only avoids the repeated connect/handshake/disconnect churn
+/// (see TECH-02).
+pub fn list_sinks() -> Result<Vec<PulseSink>> {
+    debug!("pulse_linux::list_sinks: requesting");
+    let result = pulse_enumerator::list_sinks();
+    if let Ok(ref sinks) = result {
+        debug!("pulse_linux::list_sinks: got {} sink(s)", sinks.len());
+    }
+    result
+}
+
+/// Resolve a sink's real monitor source name from its display description (as
+/// shown in the "System Audio" picker, e.g. "JBL Tune 770NC").
+pub fn find_monitor_source_by_description(description: &str) -> Result<String> {
+    list_sinks()?
+        .into_iter()
+        .find(|sink| sink.description == description)
+        .map(|sink| sink.monitor_source_name)
+        .ok_or_else(|| anyhow!("No PulseAudio sink found matching '{}'", description))
+}
+
 /// List all real input sources (sink monitors excluded — those are offered as
 /// "System Audio" devices via `list_sinks`).
 pub fn list_sources() -> Result<Vec<PulseSource>> {
-    info!("🎤 pulse_linux::list_sources: connecting");
-    let (mut mainloop, context) = connect()?;
-
-    info!("🎤 pulse_linux::list_sources: connected, requesting source list");
-    let sources: Rc<RefCell<Vec<PulseSource>>> = Rc::new(RefCell::new(Vec::new()));
-    let sources_cb = sources.clone();
-
-    let operation = context.introspect().get_source_info_list(move |result| {
-        if let ListResult::Item(info) = result {
-            // Monitors of sinks are already exposed as "System Audio" devices
-            // through list_sinks(); ignore them here.
-            if info.monitor_of_sink.is_some() {
-                return;
-            }
-
-            let source_name = info.name.as_deref().unwrap_or_default();
-            if source_name.is_empty() {
-                return;
-            }
-
-            let description = info
-                .description
-                .as_deref()
-                .unwrap_or(source_name)
-                .to_string();
-
-            sources_cb.borrow_mut().push(PulseSource {
-                description,
-                source_name: source_name.to_string(),
-            });
-        }
-    });
-
-    info!("🎤 pulse_linux::list_sources: pumping mainloop until source list operation completes");
-    run_operation_to_completion(&mut mainloop, &operation)?;
-    drop(operation);
-
-    let result = sources.borrow().clone();
-    info!("🎤 pulse_linux::list_sources: got {} source(s)", result.len());
-    Ok(result)
+    debug!("pulse_linux::list_sources: requesting");
+    let result = pulse_enumerator::list_sources();
+    if let Ok(ref sources) = result {
+        debug!("pulse_linux::list_sources: got {} source(s)", sources.len());
+    }
+    result
 }
 
 /// Resolve a source's real PulseAudio name from its display description.
@@ -231,7 +95,7 @@ pub fn find_source_by_description(description: &str) -> Result<String> {
         let count = matches.clone().count();
         if count > 1 {
             warn!(
-                "🎤 pulse_linux::find_source_by_description: {} sources share the description '{}'; using the first one",
+                "pulse_linux::find_source_by_description: {} sources share the description '{}'; using the first one",
                 count, description
             );
         }
@@ -246,47 +110,25 @@ pub fn find_source_by_description(description: &str) -> Result<String> {
 /// Description of the server's default input source, if any.
 /// Used to resolve "Default Microphone".
 pub fn default_source_description() -> Result<Option<String>> {
-    info!("🎤 pulse_linux::default_source_description: connecting");
-    let (mut mainloop, context) = connect()?;
+    debug!("pulse_linux::default_source_description: requesting server info");
+    let default_name = pulse_enumerator::default_source_name()?;
 
-    info!("🎤 pulse_linux::default_source_description: requesting server info");
-    let default_name: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
-    let default_name_cb = default_name.clone();
-
-    let operation = context.introspect().get_server_info(move |info: &ServerInfo| {
-        if let Some(name) = info.default_source_name.as_deref() {
-            *default_name_cb.borrow_mut() = Some(name.to_string());
-        }
-    });
-
-    run_operation_to_completion(&mut mainloop, &operation)?;
-    drop(operation);
-
-    let default_name = default_name.borrow().clone();
     let Some(default_name) = default_name else {
         return Ok(None);
     };
 
-    info!(
-        "🎤 pulse_linux::default_source_description: default source name is '{}'",
-        default_name
-    );
-
-    // Resolve the display description for the default source. Do a second
-    // introspection call: it's rare (startup of a recording) and keeps the code
-    // straightforward.
+    // Resolve the display description for the default source. The second
+    // introspection call now travels through the same persistent connection as
+    // the first one, so this no longer opens a second libpulse client.
     let sources = list_sources()?;
     let default_source = sources.iter().find(|s| s.source_name == default_name);
 
     if let Some(source) = default_source {
-        info!(
-            "🎤 pulse_linux::default_source_description: default source description is '{}'",
-            source.description
-        );
+        debug!("pulse_linux::default_source_description: resolved");
         Ok(Some(source.description.clone()))
     } else {
         warn!(
-            "🎤 pulse_linux::default_source_description: default source '{}' not found in source list",
+            "pulse_linux::default_source_description: default source '{}' not found in source list",
             default_name
         );
         Ok(None)
@@ -326,8 +168,7 @@ impl PulseCapture {
         .map_err(|e| {
             anyhow!(
                 "Failed to open PulseAudio record stream on '{}': {}",
-                source_name,
-                e
+                source_name, e
             )
         })?;
 

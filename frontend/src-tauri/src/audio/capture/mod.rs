@@ -10,6 +10,9 @@ pub mod core_audio;
 #[cfg(target_os = "linux")]
 pub mod pulse_linux;
 
+#[cfg(target_os = "linux")]
+pub(crate) mod pulse_enumerator;
+
 // Re-export capture functionality
 pub use system::{
     SystemAudioCapture, SystemAudioStream,
