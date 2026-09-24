@@ -1,11 +1,12 @@
 'use client';
 
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
-import { ChevronDown, ChevronRight, File, Settings, ChevronLeftCircle, ChevronRightCircle, Calendar, StickyNote, Home, Trash2, Mic, Square, Plus, Search, Pencil, NotebookPen, SearchIcon, X, Upload } from 'lucide-react';
+import { ChevronDown, ChevronRight, File, Settings, ChevronLeftCircle, ChevronRightCircle, Calendar, StickyNote, Home, Trash2, Mic, Square, Plus, Search, Pencil, NotebookPen, SearchIcon, X, Upload, Bot } from 'lucide-react';
 import { useRouter, usePathname } from 'next/navigation';
 import { useSidebar } from './SidebarProvider';
 import type { CurrentMeeting } from '@/components/Sidebar/SidebarProvider';
 import { ConfirmationModal } from '../ConfirmationModel/confirmation-modal';
+import { AskMeetingsModal } from '../AskMeetingsModal';
 import { ModelConfig } from '@/components/ModelSettingsModal';
 import { SettingTabs } from '../SettingTabs';
 import { TranscriptModelProps } from '@/components/TranscriptSettings';
@@ -64,6 +65,7 @@ const Sidebar: React.FC = () => {
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set(['meetings']));
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [showModelSettings, setShowModelSettings] = useState(false);
+  const [showAskMeetingsAI, setShowAskMeetingsAI] = useState(false);
   const [modelConfig, setModelConfig] = useState<ModelConfig>({
     provider: 'ollama',
     model: '',
@@ -438,9 +440,14 @@ const Sidebar: React.FC = () => {
       setShowModelSettings(true);
     };
 
+    (window as any).openAskMeetingsAI = () => {
+      setShowAskMeetingsAI(true);
+    };
+
     // Cleanup on unmount
     return () => {
       delete (window as any).openSettings;
+      delete (window as any).openAskMeetingsAI;
     };
   }, []);
 
@@ -505,6 +512,20 @@ const Sidebar: React.FC = () => {
               </TooltipContent>
             </Tooltip>
           )}
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={() => setShowAskMeetingsAI(true)}
+                className="p-2 rounded-lg transition-colors duration-150 hover:bg-blue-100 bg-blue-50"
+              >
+                <Bot className="w-5 h-5 text-blue-600" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right">
+              <p>Ask Your Meetings</p>
+            </TooltipContent>
+          </Tooltip>
 
           <Tooltip>
             <TooltipTrigger asChild>
@@ -803,6 +824,14 @@ const Sidebar: React.FC = () => {
             )}
 
             <button
+              onClick={() => setShowAskMeetingsAI(true)}
+              className="w-full flex items-center justify-center px-3 py-2 mt-1 text-sm font-medium text-gray-700 bg-blue-100 hover:bg-blue-200 rounded-lg transition-colors shadow-sm"
+            >
+              <Bot className="w-4 h-4 mr-2" />
+              <span>Ask Your Meetings</span>
+            </button>
+
+            <button
               onClick={() => router.push('/settings')}
               className="w-full flex items-center justify-center px-3 py-1.5 mt-1 mb-1 text-sm font-medium text-gray-700 bg-gray-200 hover:bg-gray-300 rounded-lg transition-colors shadow-sm"
             >
@@ -875,6 +904,15 @@ const Sidebar: React.FC = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Ask Your Meetings AI Modal */}
+      <AskMeetingsModal
+        isOpen={showAskMeetingsAI}
+        onClose={() => setShowAskMeetingsAI(false)}
+        meetings={meetings.map(m => ({ id: m.id, title: m.title }))}
+        currentMeetingId={currentMeeting?.id}
+        onOpenSettings={() => router.push('/settings?tab=summary')}
+      />
     </div>
   );
 };
