@@ -1,5 +1,6 @@
 use log::{debug as log_debug, error as log_error, info as log_info, warn as log_warn};
 use serde::{Deserialize, Serialize};
+use sqlx::Connection;
 use std::collections::HashMap;
 use tauri::{AppHandle, Runtime};
 use tauri_plugin_store::StoreExt;
@@ -137,6 +138,8 @@ pub struct MeetingTranscript {
     pub audio_end_time: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speaker: Option<String>,
 }
 
 /// Meeting metadata without transcripts (for pagination)
@@ -188,6 +191,8 @@ pub struct TranscriptSegment {
     pub audio_end_time: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speaker: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -878,6 +883,7 @@ pub async fn api_get_meeting_transcripts<R: Runtime>(
                     audio_start_time: t.audio_start_time,
                     audio_end_time: t.audio_end_time,
                     duration: t.duration,
+                    speaker: t.speaker,
                 })
                 .collect::<Vec<_>>();
 
@@ -1381,3 +1387,286 @@ pub async fn api_test_custom_openai_connection<R: Runtime>(
         }
     }
 }
+
+// Helper functions for WAV generation and Base64 encoding
+fn base64_encode(data: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0] as usize;
+        let b1 = chunk.get(1).copied().unwrap_or(0) as usize;
+        let b2 = chunk.get(2).copied().unwrap_or(0) as usize;
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(TABLE[(n >> 18) & 63] as char);
+        out.push(TABLE[(n >> 12) & 63] as char);
+        if chunk.len() > 1 {
+            out.push(TABLE[(n >> 6) & 63] as char);
+        } else {
+            out.push('=');
+        }
+        if chunk.len() > 2 {
+            out.push(TABLE[n & 63] as char);
+        } else {
+            out.push('=');
+        }
+    }
+    out
+}
+
+fn create_wav_bytes(samples: &[f32], sample_rate: u32) -> Vec<u8> {
+    let num_samples = samples.len() as u32;
+    let num_channels = 1u16;
+    let bits_per_sample = 16u16;
+    let byte_rate = sample_rate * num_channels as u32 * (bits_per_sample as u32 / 8);
+    let block_align = num_channels * (bits_per_sample / 8);
+    let data_size = num_samples * (bits_per_sample as u32 / 8);
+    let file_size = 36 + data_size;
+
+    let mut bytes = Vec::with_capacity((44 + data_size) as usize);
+    bytes.extend_from_slice(b"RIFF");
+    bytes.extend_from_slice(&file_size.to_le_bytes());
+    bytes.extend_from_slice(b"WAVE");
+    bytes.extend_from_slice(b"fmt ");
+    bytes.extend_from_slice(&16u32.to_le_bytes()); // subchunk1 size (16 for PCM)
+    bytes.extend_from_slice(&1u16.to_le_bytes());  // AudioFormat (1 = PCM)
+    bytes.extend_from_slice(&num_channels.to_le_bytes());
+    bytes.extend_from_slice(&sample_rate.to_le_bytes());
+    bytes.extend_from_slice(&byte_rate.to_le_bytes());
+    bytes.extend_from_slice(&block_align.to_le_bytes());
+    bytes.extend_from_slice(&bits_per_sample.to_le_bytes());
+    bytes.extend_from_slice(b"data");
+    bytes.extend_from_slice(&data_size.to_le_bytes());
+
+    for &s in samples {
+        let clamped = s.clamp(-1.0, 1.0);
+        let val = (clamped * 32767.0) as i16;
+        bytes.extend_from_slice(&val.to_le_bytes());
+    }
+    bytes
+}
+
+#[tauri::command]
+pub async fn api_get_speaker_sample_audio<R: Runtime>(
+    _app: AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+    meeting_id: String,
+    speaker: String,
+) -> Result<String, String> {
+    log_info!(
+        "api_get_speaker_sample_audio called for meeting: {}, speaker: {}",
+        meeting_id,
+        speaker
+    );
+
+    let pool = state.db_manager.pool();
+    let meeting_details = MeetingsRepository::get_meeting(pool, &meeting_id)
+        .await
+        .map_err(|e| format!("Failed to query meeting: {}", e))?
+        .ok_or_else(|| "Meeting not found".to_string())?;
+
+    // Find transcript segments for this speaker
+    let matching_segments: Vec<&MeetingTranscript> = meeting_details
+        .transcripts
+        .iter()
+        .filter(|t| t.speaker.as_deref() == Some(&speaker))
+        .collect();
+
+    if matching_segments.is_empty() {
+        return Err(format!("No audio segments found for speaker '{}'", speaker));
+    }
+
+    // Pick best segment: prioritize durations between 1.5s and 5.0s, or the longest
+    let best_segment = matching_segments
+        .iter()
+        .max_by(|a, b| {
+            let dur_a = a.duration.unwrap_or_else(|| {
+                match (a.audio_start_time, a.audio_end_time) {
+                    (Some(s), Some(e)) if e > s => e - s,
+                    _ => 0.0,
+                }
+            });
+            let dur_b = b.duration.unwrap_or_else(|| {
+                match (b.audio_start_time, b.audio_end_time) {
+                    (Some(s), Some(e)) if e > s => e - s,
+                    _ => 0.0,
+                }
+            });
+            dur_a.partial_cmp(&dur_b).unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .copied()
+        .ok_or_else(|| "Failed to select representative segment".to_string())?;
+
+    let start_time = best_segment.audio_start_time.unwrap_or(0.0);
+    let total_dur = best_segment.duration.unwrap_or_else(|| {
+        match (best_segment.audio_start_time, best_segment.audio_end_time) {
+            (Some(s), Some(e)) if e > s => e - s,
+            _ => 3.0,
+        }
+    });
+    // Limit sample to 4.0 seconds for quick, responsive playback
+    let sample_dur = total_dur.min(4.0).max(0.8);
+
+    // Locate the audio file
+    let meeting_metadata = MeetingsRepository::get_meeting_metadata(pool, &meeting_id)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let mut audio_path: Option<std::path::PathBuf> = None;
+    if let Some(meta) = meeting_metadata {
+        if let Some(folder_str) = meta.folder_path {
+            let folder = std::path::Path::new(&folder_str);
+            let candidates = [
+                "audio.mp4", "audio.m4a", "audio.wav", "audio.mp3",
+                "audio.flac", "audio.ogg", "recording.mp4",
+                "audio.mkv", "audio.webm", "audio.wma",
+            ];
+            for name in candidates {
+                let candidate = folder.join(name);
+                if candidate.exists() {
+                    audio_path = Some(candidate);
+                    break;
+                }
+            }
+            if audio_path.is_none() {
+                if let Ok(entries) = std::fs::read_dir(folder) {
+                    for entry in entries.flatten() {
+                        let p = entry.path();
+                        if let Some(ext) = p.extension() {
+                            let ext_str = ext.to_string_lossy().to_lowercase();
+                            if ["mp4", "m4a", "wav", "mp3", "flac", "ogg", "mkv", "webm", "wma"].contains(&ext_str.as_str()) {
+                                audio_path = Some(p);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Fallback path check
+    if audio_path.is_none() {
+        let debug_audio = std::path::PathBuf::from(r"H:\opencode\meetily\target\debug\audio\audio.mp4");
+        if debug_audio.exists() {
+            audio_path = Some(debug_audio);
+        }
+    }
+
+    let audio_file_path = audio_path.ok_or_else(|| "Could not locate audio file for meeting".to_string())?;
+    log_info!("Decoding sample audio from: {}", audio_file_path.display());
+
+    let path_clone = audio_file_path.clone();
+    let decoded = tokio::task::spawn_blocking(move || {
+        crate::audio::decoder::decode_audio_file(&path_clone)
+    })
+    .await
+    .map_err(|e| format!("Audio decode task join error: {}", e))?
+    .map_err(|e| format!("Audio decode error: {}", e))?;
+
+    let sample_rate = decoded.sample_rate;
+    let channels = decoded.channels as usize;
+    let total_frames = decoded.samples.len() / channels;
+
+    let start_frame = ((start_time * sample_rate as f64) as usize).min(total_frames);
+    let sample_frames = (sample_dur * sample_rate as f64) as usize;
+    let end_frame = (start_frame + sample_frames).min(total_frames);
+
+    if start_frame >= end_frame {
+        return Err("Audio slice is empty or out of bounds".to_string());
+    }
+
+    let slice_samples: Vec<f32> = if channels == 1 {
+        decoded.samples[start_frame..end_frame].to_vec()
+    } else {
+        let raw = &decoded.samples[start_frame * channels..end_frame * channels];
+        crate::audio::audio_processing::audio_to_mono(raw, decoded.channels)
+    };
+
+    let wav_bytes = create_wav_bytes(&slice_samples, sample_rate);
+    let base64_str = base64_encode(&wav_bytes);
+    Ok(format!("data:audio/wav;base64,{}", base64_str))
+}
+
+#[tauri::command]
+pub async fn api_rename_meeting_speakers<R: Runtime>(
+    _app: AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+    meeting_id: String,
+    renames: HashMap<String, String>,
+) -> Result<bool, String> {
+    log_info!(
+        "api_rename_meeting_speakers called for meeting: {}, renames: {:?}",
+        meeting_id,
+        renames
+    );
+
+    let pool = state.db_manager.pool();
+    let mut conn = pool.acquire().await.map_err(|e| e.to_string())?;
+    let mut transaction = conn.begin().await.map_err(|e| e.to_string())?;
+
+    for (old_name, new_name) in &renames {
+        let trimmed = new_name.trim();
+        if !trimmed.is_empty() && trimmed != old_name {
+            sqlx::query(
+                "UPDATE transcripts SET speaker = ? WHERE meeting_id = ? AND speaker = ?"
+            )
+            .bind(trimmed)
+            .bind(&meeting_id)
+            .bind(old_name)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|e| {
+                log_error!("Failed to update speaker name: {}", e);
+                e.to_string()
+            })?;
+        }
+    }
+
+    let now = chrono::Utc::now();
+    let _ = sqlx::query("UPDATE meetings SET updated_at = ? WHERE id = ?")
+        .bind(now)
+        .bind(&meeting_id)
+        .execute(&mut *transaction)
+        .await;
+
+    transaction.commit().await.map_err(|e| e.to_string())?;
+
+    // Also update transcripts.json on disk if present
+    if let Ok(Some(metadata)) = MeetingsRepository::get_meeting_metadata(pool, &meeting_id).await {
+        if let Some(folder_path) = metadata.folder_path {
+            let transcript_file = std::path::Path::new(&folder_path).join("transcripts.json");
+            if transcript_file.exists() {
+                if let Ok(content) = std::fs::read_to_string(&transcript_file) {
+                    if let Ok(mut json) = serde_json::from_str::<serde_json::Value>(&content) {
+                        if let Some(segments) = json.get_mut("segments").and_then(|s| s.as_array_mut()) {
+                            let mut modified = false;
+                            for seg in segments {
+                                if let Some(spk) = seg.get("speaker").and_then(|s| s.as_str()) {
+                                    if let Some(new_name) = renames.get(spk) {
+                                        let trimmed = new_name.trim();
+                                        if !trimmed.is_empty() && trimmed != spk {
+                                            seg["speaker"] = serde_json::json!(trimmed);
+                                            modified = true;
+                                        }
+                                    }
+                                }
+                            }
+                            if modified {
+                                let temp_file = std::path::Path::new(&folder_path).join(".transcripts.json.tmp");
+                                if let Ok(serialized) = serde_json::to_string_pretty(&json) {
+                                    if std::fs::write(&temp_file, &serialized).is_ok() {
+                                        let _ = std::fs::rename(&temp_file, &transcript_file);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    log_info!("✅ Successfully renamed speakers for meeting {}", meeting_id);
+    Ok(true)
+}
+

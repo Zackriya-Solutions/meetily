@@ -7,6 +7,7 @@ import { Label } from './ui/label';
 import { Eye, EyeOff, Lock, Unlock } from 'lucide-react';
 import { ModelManager } from './WhisperModelManager';
 import { ParakeetModelManager } from './ParakeetModelManager';
+import { DiarizationSettings } from './DiarizationSettings';
 
 
 export interface TranscriptModelProps {
@@ -219,6 +220,11 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
                             </div>
                         </div>
                     )}
+
+                    {/* Speaker Diarization Settings (Nemotron-3) */}
+                    <div className="mt-6 pt-4 border-t border-gray-100">
+                        <DiarizationSettings />
+                    </div>
                 </div>
             </div>
         </div >

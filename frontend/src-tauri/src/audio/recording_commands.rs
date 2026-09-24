@@ -347,6 +347,26 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
     }
     info!("✅ Transcription model validation passed");
 
+    // Prepare Nemotron-3 Diarization if enabled
+    if let Some(diar_engine) = crate::diarization_engine::commands::get_diarization_engine() {
+        let diar_config = diar_engine.get_config().await;
+        if diar_config.enabled {
+            info!(
+                "🎤 Nemotron-3 Diarization is ENABLED for this session (max_speakers: {}, preset: {:?})",
+                diar_config.max_speakers, diar_config.preset
+            );
+            diar_engine.reset_streaming_state().await;
+            if !diar_engine.is_model_loaded().await {
+                info!("🎤 Loading Nemotron-3 Diarization model for recording session...");
+                if let Err(e) = diar_engine.load_model().await {
+                    warn!("⚠️ Failed to pre-load Diarization model: {}", e);
+                }
+            }
+        } else {
+            info!("🎤 Nemotron-3 Diarization is disabled in settings");
+        }
+    }
+
     // Notify frontend that startup has begun (surfaces STARTING state)
     app.emit("recording-starting", serde_json::json!({
         "message": "Recording initialization started"
@@ -452,6 +472,7 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
                     display_time: update.timestamp.clone(), // Use wall-clock timestamp for display
                     confidence: update.confidence,
                     sequence_id: update.sequence_id,
+                    speaker: update.speaker.clone(),
                 };
 
                 // Save to recording manager
@@ -536,6 +557,26 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
         return Err(validation_error);
     }
     info!("✅ Transcription model validation passed");
+
+    // Prepare Nemotron-3 Diarization if enabled
+    if let Some(diar_engine) = crate::diarization_engine::commands::get_diarization_engine() {
+        let diar_config = diar_engine.get_config().await;
+        if diar_config.enabled {
+            info!(
+                "🎤 Nemotron-3 Diarization is ENABLED for this session (max_speakers: {}, preset: {:?})",
+                diar_config.max_speakers, diar_config.preset
+            );
+            diar_engine.reset_streaming_state().await;
+            if !diar_engine.is_model_loaded().await {
+                info!("🎤 Loading Nemotron-3 Diarization model for recording session...");
+                if let Err(e) = diar_engine.load_model().await {
+                    warn!("⚠️ Failed to pre-load Diarization model: {}", e);
+                }
+            }
+        } else {
+            info!("🎤 Nemotron-3 Diarization is disabled in settings");
+        }
+    }
 
     // Notify frontend that startup has begun (surfaces STARTING state)
     app.emit("recording-starting", serde_json::json!({
@@ -639,6 +680,7 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
                     display_time: update.timestamp.clone(), // Use wall-clock timestamp for display
                     confidence: update.confidence,
                     sequence_id: update.sequence_id,
+                    speaker: update.speaker.clone(),
                 };
 
                 // Save to recording manager
@@ -897,6 +939,12 @@ pub async fn stop_recording<R: Runtime>(
                 warn!("⚠️ No Whisper engine found to unload model");
             }
         }
+    }
+
+    // Safely unload Diarization model to free VRAM/RAM
+    if let Some(diar_engine) = crate::diarization_engine::commands::get_diarization_engine() {
+        info!("🎤 Unloading Nemotron-3 Diarization model after recording session...");
+        diar_engine.unload_model().await;
     }
 
     // Step 3.5: Track meeting ended analytics with privacy-safe metadata

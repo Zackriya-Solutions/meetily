@@ -563,6 +563,23 @@ impl ParakeetEngine {
         Ok(result.text)
     }
 
+    /// Transcribe audio samples returning timestamped result with token information
+    pub async fn transcribe_audio_timestamped(
+        &self,
+        audio_data: Vec<f32>,
+    ) -> Result<crate::parakeet_engine::model::TimestampedResult> {
+        let mut model_guard = self.current_model.write().await;
+        let model = model_guard
+            .as_mut()
+            .ok_or_else(|| anyhow!("No Parakeet model loaded. Please load a model first."))?;
+
+        let result = model
+            .transcribe_samples(audio_data)
+            .map_err(|e| anyhow!("Parakeet transcription failed: {}", e))?;
+
+        Ok(result)
+    }
+
     /// Get the models directory path
     pub async fn get_models_directory(&self) -> PathBuf {
         self.models_dir.clone()

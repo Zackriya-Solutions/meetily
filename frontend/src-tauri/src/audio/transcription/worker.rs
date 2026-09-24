@@ -42,6 +42,7 @@ pub struct TranscriptUpdate {
     pub audio_start_time: f64, // Seconds from recording start (e.g., 125.3)
     pub audio_end_time: f64,   // Seconds from recording start (e.g., 128.6)
     pub duration: f64,          // Segment duration in seconds (e.g., 3.3)
+    pub speaker: Option<String>, // Speaker attribution (e.g. "Speaker 1")
 }
 
 // NOTE: get_transcript_history and get_recording_meeting_name functions
@@ -147,8 +148,11 @@ pub fn start_transcription_task<R: Runtime>(
                                 continue;
                             }
 
+                            let chunk_id = chunk.chunk_id;
                             let chunk_timestamp = chunk.timestamp;
                             let chunk_duration = chunk.data.len() as f64 / chunk.sample_rate as f64;
+                            let chunk_audio_samples = chunk.data.clone();
+                            let chunk_sample_rate = chunk.sample_rate;
 
                             // Transcribe with provider-agnostic approach
                             match transcribe_chunk_with_provider(
@@ -158,7 +162,7 @@ pub fn start_transcription_task<R: Runtime>(
                             )
                             .await
                             {
-                                Ok((transcript, confidence_opt, is_partial)) => {
+                                Ok((transcript, confidence_opt, is_partial, timestamped_opt)) => {
                                     let confidence_str = match confidence_opt {
                                         Some(c) => format!("{:.2}", c),
                                         None => "N/A".to_string(),
@@ -173,10 +177,7 @@ pub fn start_transcription_task<R: Runtime>(
                                               worker_id, transcript, confidence_str, is_partial);
 
                                         // Emit speech-detected event for frontend UX (only on first detection per session)
-                                        // This is lightweight and provides better user feedback
                                         let current_flag = SPEECH_DETECTED_EMITTED.load(Ordering::SeqCst);
-                                        info!("🔍 Checking speech-detected flag: current={}, will_emit={}", current_flag, !current_flag);
-
                                         if !current_flag {
                                             SPEECH_DETECTED_EMITTED.store(true, Ordering::SeqCst);
                                             match app_clone.emit("speech-detected", serde_json::json!({
@@ -185,46 +186,93 @@ pub fn start_transcription_task<R: Runtime>(
                                                 Ok(_) => info!("🎤 ✅ First speech detected - successfully emitted speech-detected event"),
                                                 Err(e) => error!("🎤 ❌ Failed to emit speech-detected event: {}", e),
                                             }
-                                        } else {
-                                            info!("🔍 Speech already detected in this session, not re-emitting");
                                         }
 
-                                        // Generate sequence ID and calculate timestamps FIRST
-                                        let sequence_id = SEQUENCE_COUNTER.fetch_add(1, Ordering::SeqCst);
-                                        let audio_start_time = chunk_timestamp; // Already in seconds from recording start
-                                        let audio_end_time = chunk_timestamp + chunk_duration;
-
-                                        // Save structured transcript segment to recording manager (only final results)
-                                        // Save ALL segments (partial and final) to ensure complete JSON
-                                        // Create structured segment with full timestamp data
-                                        // NOTE: This is now handled via the transcript-update event emission below
-                                        // The recording_commands module listens to these events and saves them
-                                        // This decouples the transcription worker from direct RECORDING_MANAGER access
-
-                                        // Emit transcript update with NEW recording-relative timestamps
-
-                                        let update = TranscriptUpdate {
-                                            text: transcript,
-                                            timestamp: format_current_timestamp(), // Wall-clock for reference
-                                            source: "Audio".to_string(),
-                                            sequence_id,
-                                            chunk_start_time: chunk_timestamp, // Legacy compatibility
-                                            is_partial,
-                                            confidence: confidence_opt.unwrap_or(0.85), // Default for providers without confidence
-                                            // NEW: Recording-relative timestamps for sync
-                                            audio_start_time,
-                                            audio_end_time,
-                                            duration: chunk_duration,
+                                        // Run diarization if enabled
+                                        let diar_res_opt = if let Some(diar_engine) = crate::diarization_engine::commands::get_diarization_engine() {
+                                            let diar_config = diar_engine.get_config().await;
+                                            if diar_config.enabled {
+                                                match diar_engine.diarize_audio(&chunk_audio_samples, chunk_sample_rate).await {
+                                                    Ok(res) => {
+                                                        info!("🎤 Worker {}: Diarization returned {} segments, primary={:?}",
+                                                            worker_id, res.segments.len(), res.primary_speaker);
+                                                        Some(res)
+                                                    }
+                                                    Err(e) => {
+                                                        warn!("🎤 Worker {}: Diarization failed: {}", worker_id, e);
+                                                        None
+                                                    }
+                                                }
+                                            } else {
+                                                None
+                                            }
+                                        } else {
+                                            None
                                         };
 
-                                        if let Err(e) = app_clone.emit("transcript-update", &update)
-                                        {
-                                            error!(
-                                                "Worker {}: Failed to emit transcript update: {}",
-                                                worker_id, e
-                                            );
+                                        // Check for multi-speaker turns alignment (via Parakeet word timestamps)
+                                        let mut emitted_multi_turns = false;
+                                        if let (Some(ref diar_res), Some(ref ts)) = (&diar_res_opt, &timestamped_opt) {
+                                            let words = ts.extract_words(chunk_duration);
+                                            let turns = crate::diarization_engine::align_words_to_speaker_turns(&words, &diar_res.segments);
+
+                                            if turns.len() > 1 {
+                                                info!("🎤 Worker {}: Chunk {} segmented into {} distinct speaker turns!",
+                                                    worker_id, chunk_id, turns.len());
+
+                                                for turn in turns {
+                                                    if !should_emit_transcript(&turn.text) {
+                                                        continue;
+                                                    }
+                                                    let sequence_id = SEQUENCE_COUNTER.fetch_add(1, Ordering::SeqCst);
+                                                    let turn_start = chunk_timestamp + turn.start_seconds;
+                                                    let turn_end = (chunk_timestamp + turn.end_seconds).max(turn_start + 0.1);
+                                                    let update = TranscriptUpdate {
+                                                        text: turn.text,
+                                                        timestamp: format_current_timestamp(),
+                                                        source: "Audio".to_string(),
+                                                        sequence_id,
+                                                        chunk_start_time: turn_start,
+                                                        is_partial,
+                                                        confidence: confidence_opt.unwrap_or(0.90),
+                                                        audio_start_time: turn_start,
+                                                        audio_end_time: turn_end,
+                                                        duration: turn_end - turn_start,
+                                                        speaker: Some(turn.speaker),
+                                                    };
+
+                                                    if let Err(e) = app_clone.emit("transcript-update", &update) {
+                                                        error!("Worker {}: Failed to emit turn transcript update: {}", worker_id, e);
+                                                    }
+                                                }
+                                                emitted_multi_turns = true;
+                                            }
                                         }
-                                        // PERFORMANCE: Removed verbose logging of every emission
+
+                                        if !emitted_multi_turns {
+                                            let speaker = diar_res_opt.and_then(|r| r.primary_speaker);
+                                            let sequence_id = SEQUENCE_COUNTER.fetch_add(1, Ordering::SeqCst);
+                                            let audio_start_time = chunk_timestamp;
+                                            let audio_end_time = chunk_timestamp + chunk_duration;
+
+                                            let update = TranscriptUpdate {
+                                                text: transcript,
+                                                timestamp: format_current_timestamp(),
+                                                source: "Audio".to_string(),
+                                                sequence_id,
+                                                chunk_start_time: chunk_timestamp,
+                                                is_partial,
+                                                confidence: confidence_opt.unwrap_or(0.85),
+                                                audio_start_time,
+                                                audio_end_time,
+                                                duration: chunk_duration,
+                                                speaker,
+                                            };
+
+                                            if let Err(e) = app_clone.emit("transcript-update", &update) {
+                                                error!("Worker {}: Failed to emit transcript update: {}", worker_id, e);
+                                            }
+                                        }
                                     }
                                 }
                                 Err(e) => {
@@ -396,12 +444,13 @@ pub fn start_transcription_task<R: Runtime>(
 }
 
 /// Transcribe audio chunk using the appropriate provider (Whisper, Parakeet, or trait-based)
-/// Returns: (text, confidence Option, is_partial)
+/// Transcribe audio chunk using the appropriate provider (Whisper, Parakeet, or trait-based)
+/// Returns: (text, confidence Option, is_partial, TimestampedResult Option)
 async fn transcribe_chunk_with_provider<R: Runtime>(
     engine: &TranscriptionEngine,
     chunk: AudioChunk,
     app: &AppHandle<R>,
-) -> std::result::Result<(String, Option<f32>, bool), TranscriptionError> {
+) -> std::result::Result<(String, Option<f32>, bool, Option<crate::parakeet_engine::model::TimestampedResult>), TranscriptionError> {
     // Convert to 16kHz mono for transcription
     let transcription_data = if chunk.sample_rate != 16000 {
         crate::audio::audio_processing::resample_audio(&chunk.data, chunk.sample_rate, 16000)
@@ -447,7 +496,7 @@ async fn transcribe_chunk_with_provider<R: Runtime>(
                 Ok((text, confidence, is_partial)) => {
                     let cleaned_text = text.trim().to_string();
                     if cleaned_text.is_empty() {
-                        return Ok((String::new(), Some(confidence), is_partial));
+                        return Ok((String::new(), Some(confidence), is_partial, None));
                     }
 
                     info!(
@@ -455,7 +504,7 @@ async fn transcribe_chunk_with_provider<R: Runtime>(
                         chunk.chunk_id, cleaned_text, confidence, is_partial
                     );
 
-                    Ok((cleaned_text, Some(confidence), is_partial))
+                    Ok((cleaned_text, Some(confidence), is_partial, None))
                 }
                 Err(e) => {
                     error!(
@@ -479,20 +528,20 @@ async fn transcribe_chunk_with_provider<R: Runtime>(
             }
         }
         TranscriptionEngine::Parakeet(parakeet_engine) => {
-            match parakeet_engine.transcribe_audio(speech_samples).await {
-                Ok(text) => {
-                    let cleaned_text = text.trim().to_string();
+            match parakeet_engine.transcribe_audio_timestamped(speech_samples).await {
+                Ok(ts_result) => {
+                    let cleaned_text = ts_result.text.trim().to_string();
                     if cleaned_text.is_empty() {
-                        return Ok((String::new(), None, false));
+                        return Ok((String::new(), None, false, None));
                     }
 
                     info!(
-                        "Parakeet transcription complete for chunk {}: '{}'",
-                        chunk.chunk_id, cleaned_text
+                        "Parakeet transcription complete for chunk {}: '{}' ({} tokens)",
+                        chunk.chunk_id, cleaned_text, ts_result.tokens.len()
                     );
 
-                    // Parakeet doesn't provide confidence or partial results
-                    Ok((cleaned_text, None, false))
+                    // Parakeet doesn't provide confidence or partial results, but provides timestamped tokens
+                    Ok((cleaned_text, None, false, Some(ts_result)))
                 }
                 Err(e) => {
                     error!(
@@ -523,24 +572,19 @@ async fn transcribe_chunk_with_provider<R: Runtime>(
                 Ok(result) => {
                     let cleaned_text = result.text.trim().to_string();
                     if cleaned_text.is_empty() {
-                        return Ok((String::new(), result.confidence, result.is_partial));
+                        return Ok((String::new(), result.confidence, result.is_partial, None));
                     }
 
-                    let confidence_str = match result.confidence {
-                        Some(c) => format!("confidence: {:.2}", c),
-                        None => "no confidence".to_string(),
-                    };
-
                     info!(
-                        "{} transcription complete for chunk {}: '{}' ({}, partial: {})",
+                        "{} transcription complete for chunk {}: '{}' (confidence: {:?}, partial: {})",
                         provider.provider_name(),
                         chunk.chunk_id,
                         cleaned_text,
-                        confidence_str,
+                        result.confidence,
                         result.is_partial
                     );
 
-                    Ok((cleaned_text, result.confidence, result.is_partial))
+                    Ok((cleaned_text, result.confidence, result.is_partial, None))
                 }
                 Err(e) => {
                     error!(

@@ -31,6 +31,29 @@ function formatRecordingTime(seconds: number | undefined): string {
   return `[${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}]`;
 }
 
+// Helper to provide accessible, distinct color-coding for speaker pills
+export function getSpeakerColorClass(speaker: string): string {
+  const normalized = speaker.toLowerCase().trim();
+  if (normalized.includes('1')) {
+    return 'bg-blue-50 text-blue-700 border border-blue-200/80';
+  } else if (normalized.includes('2')) {
+    return 'bg-purple-50 text-purple-700 border border-purple-200/80';
+  } else if (normalized.includes('3')) {
+    return 'bg-emerald-50 text-emerald-700 border border-emerald-200/80';
+  } else if (normalized.includes('4')) {
+    return 'bg-amber-50 text-amber-700 border border-amber-200/80';
+  } else if (normalized.includes('5')) {
+    return 'bg-rose-50 text-rose-700 border border-rose-200/80';
+  } else if (normalized.includes('6')) {
+    return 'bg-cyan-50 text-cyan-700 border border-cyan-200/80';
+  } else if (normalized.includes('7')) {
+    return 'bg-indigo-50 text-indigo-700 border border-indigo-200/80';
+  } else if (normalized.includes('8')) {
+    return 'bg-teal-50 text-teal-700 border border-teal-200/80';
+  }
+  return 'bg-gray-100 text-gray-700 border border-gray-200';
+}
+
 // Helper function to remove consecutive word repetitions (especially short words ≤2 letters)
 function cleanRepetitions(text: string): string {
   if (!text || text.trim().length === 0) return text;
@@ -305,6 +328,13 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({ transcripts, isR
                 </TooltipContent>
               </Tooltip>
               <div className="flex-1">
+                {transcript.speaker && (
+                  <div className="mb-1">
+                    <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium ${getSpeakerColorClass(transcript.speaker)}`}>
+                      {transcript.speaker}
+                    </span>
+                  </div>
+                )}
                 {isStreaming ? (
                   // Streaming transcript - show in bubble (full width)
                   <div className="bg-gray-100 border border-gray-200 rounded-lg px-3 py-2">

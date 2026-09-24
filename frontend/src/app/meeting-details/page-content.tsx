@@ -34,6 +34,7 @@ export default function PageContent({
   totalCount,
   loadedCount,
   onLoadMore,
+  source,
 }: {
   meeting: any;
   summaryData: MeetingSummary | null;
@@ -42,6 +43,7 @@ export default function PageContent({
   onAutoGenerateComplete?: () => void;
   onMeetingUpdated?: () => Promise<void>;
   onRefetchTranscripts?: () => Promise<void>;
+  source?: string | null;
   // Pagination props
   segments?: any[];
   hasMore?: boolean;
@@ -60,6 +62,8 @@ export default function PageContent({
   const [customPrompt, setCustomPrompt] = useState<string>('');
   const isRecording = false;
   const [activeTab, setActiveTab] = useState<MeetingDetailsTab>('transcript');
+  const [showSpeakerModal, setShowSpeakerModal] = useState<boolean>(false);
+  const hasPromptedSpeakerRenameRef = useRef<boolean>(false);
 
   // Ref to store the modal open function from SummaryGeneratorButtonGroup
   const openModelSettingsRef = useRef<(() => void) | null>(null);
@@ -185,6 +189,34 @@ export default function PageContent({
     onAutoGenerateComplete,
   ]);
 
+  // Auto-prompt speaker renaming modal when navigated from a completed recording
+  useEffect(() => {
+    if (
+      source === 'recording' &&
+      !hasPromptedSpeakerRenameRef.current
+    ) {
+      const allSpeakers = new Set<string>();
+      if (segments) {
+        for (const s of segments) {
+          if (s.speaker && s.speaker.trim()) allSpeakers.add(s.speaker.trim());
+        }
+      }
+      if (meetingData.transcripts) {
+        for (const t of meetingData.transcripts) {
+          if (t.speaker && t.speaker.trim()) allSpeakers.add(t.speaker.trim());
+        }
+      }
+
+      if (allSpeakers.size > 0) {
+        hasPromptedSpeakerRenameRef.current = true;
+        const timer = setTimeout(() => {
+          setShowSpeakerModal(true);
+        }, 600);
+        return () => clearTimeout(timer);
+      }
+    }
+  }, [source, segments, meetingData.transcripts]);
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 20 }}
@@ -218,6 +250,8 @@ export default function PageContent({
               meetingId={meeting.id}
               meetingFolderPath={meeting.folder_path}
               onRefetchTranscripts={onRefetchTranscripts}
+              showSpeakerModal={showSpeakerModal}
+              onSpeakerModalOpenChange={setShowSpeakerModal}
             />
           }
           summary={

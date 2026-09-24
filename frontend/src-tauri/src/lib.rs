@@ -49,6 +49,7 @@ pub mod anthropic;
 pub mod groq;
 pub mod openrouter;
 pub mod parakeet_engine;
+pub mod diarization_engine;
 pub mod state;
 pub mod summary;
 pub mod tray;
@@ -557,6 +558,17 @@ pub fn run() {
                 }
             });
 
+            // Set Nemotron Diarization models directory
+            diarization_engine::commands::set_models_directory(&_app.handle());
+
+            // Initialize Diarization engine on startup
+            let app_for_diar = _app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = diarization_engine::commands::diarization_init(app_for_diar).await {
+                    log::error!("Failed to initialize Diarization engine on startup: {}", e);
+                }
+            });
+
             // Initialize ModelManager for summary engine (async, non-blocking)
             let app_handle_for_model_manager = _app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -593,6 +605,35 @@ pub fn run() {
                 summary::templates::set_bundled_templates_dir(templates_dir);
             } else {
                 log::warn!("Failed to resolve resource directory for templates");
+            }
+
+            // Ensure main window is shown and focused on startup
+            tray::focus_main_window(&_app.handle());
+
+            // Dev mode watchdog: if webview got stuck on chrome-error page due to race condition with Next.js compilation, auto-reload
+            #[cfg(debug_assertions)]
+            {
+                let app_handle_watchdog = _app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    for _ in 0..12 {
+                        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+                        if let Some(win) = app_handle_watchdog.get_webview_window("main") {
+                            if let Ok(url) = win.url() {
+                                let u = url.as_str();
+                                if u.starts_with("chrome-error://") || u.contains("chromewebdata") {
+                                    log::warn!("[Dev Watchdog] Webview on error page ({}), re-navigating to http://localhost:3118", u);
+                                    if let Ok(target) = tauri::Url::parse("http://localhost:3118") {
+                                        let _ = win.navigate(target);
+                                    }
+                                } else if u.contains("localhost:3118") {
+                                    let _ = win.show();
+                                    let _ = win.set_focus();
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                });
             }
 
             Ok(())
@@ -668,6 +709,20 @@ pub fn run() {
             parakeet_engine::commands::parakeet_cancel_download,
             parakeet_engine::commands::parakeet_delete_corrupted_model,
             parakeet_engine::commands::open_parakeet_models_folder,
+            // Diarization engine commands (Nemotron-3)
+            diarization_engine::commands::diarization_init,
+            diarization_engine::commands::diarization_get_model_info,
+            diarization_engine::commands::diarization_is_model_loaded,
+            diarization_engine::commands::diarization_is_model_available,
+            diarization_engine::commands::diarization_load_model,
+            diarization_engine::commands::diarization_unload_model,
+            diarization_engine::commands::diarization_download_model,
+            diarization_engine::commands::diarization_cancel_download,
+            diarization_engine::commands::diarization_delete_model,
+            diarization_engine::commands::diarization_get_settings,
+            diarization_engine::commands::diarization_save_settings,
+            diarization_engine::commands::diarization_is_ready,
+            diarization_engine::commands::open_diarization_models_folder,
             // Parallel processing commands
             whisper_engine::parallel_commands::initialize_parallel_processor,
             whisper_engine::parallel_commands::start_parallel_processing,
@@ -731,6 +786,8 @@ pub fn run() {
             api::api_get_meeting_transcripts,
             api::api_save_meeting_title,
             api::api_save_transcript,
+            api::api_get_speaker_sample_audio,
+            api::api_rename_meeting_speakers,
             api::open_meeting_folder,
             api::test_backend_connection,
             api::debug_backend_connection,

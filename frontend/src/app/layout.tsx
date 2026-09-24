@@ -230,6 +230,27 @@ export default function RootLayout({
     window.location.reload()
   }
 
+  // Safety watchdog: ensure pointer-events: none is never permanently stuck on body or html
+  // when no modal/dialog is active.
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const hasActiveDialog = document.querySelector('[role="dialog"]') !== null ||
+                              document.querySelector('[data-state="open"]') !== null;
+      if (!hasActiveDialog) {
+        if (document.body && document.body.style.pointerEvents === 'none') {
+          console.warn('[Layout] Clearing stuck pointer-events: none on body');
+          document.body.style.pointerEvents = 'auto';
+        }
+        if (document.documentElement && document.documentElement.style.pointerEvents === 'none') {
+          console.warn('[Layout] Clearing stuck pointer-events: none on html');
+          document.documentElement.style.pointerEvents = 'auto';
+        }
+      }
+    }, 500);
+
+    return () => clearInterval(interval);
+  }, []);
+
   return (
     <html lang="en">
       <body className={`${sourceSans3.variable} font-sans antialiased`}>
