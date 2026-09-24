@@ -196,6 +196,7 @@ impl HardwareProfile {
         Self::has_windows_vulkan_loader(Path::new(r"C:\Windows"))
     }
 
+    #[allow(dead_code)]
     fn has_windows_vulkan_loader(system_root: &Path) -> bool {
         system_root.join("System32").join("vulkan-1.dll").is_file()
     }
