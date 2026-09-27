@@ -75,14 +75,14 @@ Stored in `MODELS_DIR/diarization/`:
 
 Input: the meeting's stored audio decoded with `decode_audio_file` and converted to 16 kHz mono
 (`to_whisper_format`). Output: `Diarization { turns: Vec<Turn>, speakers: Vec<SpeakerCentroid> }`
-where `Turn { start_s, end_s, key }` and `SpeakerCentroid { key, embedding: [f32; 192],
+where `Turn { start_s, end_s, key }` and `SpeakerCentroid { key, embedding: Vec<f32> (the model's output size, 512 for CAM++ VoxCeleb),
 speech_seconds }`.
 
 1. **Segmentation** (`segmentation.rs`): 10 s windows with a 2.5 s step (constant, tuned by
    measurement). Each window yields per-frame scores (~17 ms frames) over 7 powerset classes,
    decoded to activity for up to 3 local speakers, including 2-speaker overlap.
-2. **Features** (`fbank.rs`): Kaldi-compatible 80-bin log-mel fbank. 25 ms frame, 10 ms shift,
-   Povey window, pre-emphasis 0.97, DC removal, dither 0, `snip_edges = false`, per-utterance mean
+2. **Features** (`fbank.rs`): Kaldi-compatible 80-bin log-mel fbank matching sherpa-onnx's CAM++ front end: mel range 20 Hz to
+   Nyquist − 400 Hz (7600 Hz at 16 kHz), 25 ms frame, 10 ms shift, Povey window, pre-emphasis 0.97, DC removal, dither 0, `snip_edges = false`, per-utterance mean
    normalisation as the model metadata requires. Written by hand on `realfft`.
 3. **Embeddings** (`embedding.rs`): for each (window, local speaker) with at least 0.5 s of
    non-overlapped activity, one CAM++ embedding over those frames. Shorter local speakers are
@@ -129,7 +129,7 @@ CREATE TABLE IF NOT EXISTS meeting_speakers (
 );
 ```
 
-- `embedding`: 192 little-endian `f32`. NULL for a speaker created by manual reassignment.
+- `embedding`: little-endian `f32` values, one per model output dimension (512 for CAM++ VoxCeleb). NULL for a speaker created by manual reassignment.
 - `display_name` NULL renders as "Speaker N" where N = key index + 1.
 - `delete_meeting_with_transaction` also deletes from `meeting_speakers` (the codebase cascades
   manually).
@@ -246,8 +246,9 @@ All are registered in `lib.rs`'s `invoke_handler!`.
 - **Unit (no models)**: clustering (threshold and N), powerset decoding, reconstruction and
   smoothing, row assignment and the mixed-row rule, carry-over matching, merge centroid math,
   speaker repository operations against an in-memory SQLite with the real migrations.
-- **Reference (`#[ignore]`, need `DIARIZATION_MODELS_DIR` and the sample wavs)**:
-  - fbank matches Python `kaldi-native-fbank` output within 1e-3.
+- **Reference (`#[ignore]`, need `DIARIZATION_REF_DIR` with the models and sample wavs)**:
+  - fbank matches Python `kaldi-native-fbank` output within 1e-3, configured with sherpa-onnx's
+    options (low 20 Hz, high −400 Hz).
   - CAM++ embeddings match sherpa-onnx's (cosine ≥ 0.999).
   - Same-speaker cosine is high and cross-speaker cosine is low on the sherpa `sr-data` wavs.
   - End-to-end: a synthetic wav concatenated from several speakers gives the right speaker count
