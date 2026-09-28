@@ -18,6 +18,7 @@ import {
   readCachedDetectedSummaryLanguage,
 } from '@/lib/summary-language-preferences';
 import { parseSummaryContent, readSummaryMetadata } from '@/lib/summary-content';
+import { fetchSpeakerNames, formatTranscriptLine } from '@/lib/speakers';
 
 async function resolveSummaryLanguage(
   meetingId: string,
@@ -433,22 +434,10 @@ export function useSummaryGeneration({
     }
   }, []);
 
-  const buildSummaryTranscriptPayload = useCallback((allTranscripts: Transcript[]) => {
-    const formatTime = (seconds: number | undefined, fallbackTimestamp: string): string => {
-      if (seconds === undefined) {
-        return fallbackTimestamp;
-      }
-      const totalSecs = Math.floor(seconds);
-      return `[${Math.floor(totalSecs / 60).toString().padStart(2, '0')}:${(totalSecs % 60).toString().padStart(2, '0')}]`;
-    };
-
-    return {
-      transcriptText: allTranscripts
-        .map((transcript) => `${formatTime(transcript.audio_start_time, transcript.timestamp)} ${transcript.text}`)
-        .join('\n'),
-      transcriptTexts: allTranscripts.map((transcript) => transcript.text),
-    };
-  }, []);
+  const buildSummaryTranscriptPayload = useCallback((allTranscripts: Transcript[], names: Record<string, string>) => ({
+    transcriptText: allTranscripts.map((t) => formatTranscriptLine(t, names)).join('\n'),
+    transcriptTexts: allTranscripts.map((t) => t.text),
+  }), []);
 
   const showPreflightError = useCallback((message: string) => {
     setSummaryError(message);
@@ -500,7 +489,7 @@ export function useSummaryGeneration({
     }
 
     await processSummary({
-      ...buildSummaryTranscriptPayload(allTranscripts),
+      ...buildSummaryTranscriptPayload(allTranscripts, await fetchSpeakerNames(meeting.id)),
       customPrompt,
     });
   }, [
@@ -525,7 +514,7 @@ export function useSummaryGeneration({
     }
 
     await processSummary({
-      ...buildSummaryTranscriptPayload(allTranscripts),
+      ...buildSummaryTranscriptPayload(allTranscripts, await fetchSpeakerNames(meeting.id)),
       isRegeneration: true
     });
   }, [meeting.id, fetchAllTranscripts, buildSummaryTranscriptPayload, processSummary]);

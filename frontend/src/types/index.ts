@@ -16,6 +16,7 @@ export interface Transcript {
   audio_start_time?: number; // Seconds from recording start (e.g., 125.3)
   audio_end_time?: number;   // Seconds from recording start (e.g., 128.6)
   duration?: number;          // Segment duration in seconds (e.g., 3.3)
+  speaker?: string | null;
 }
 
 export interface TranscriptUpdate {
@@ -141,4 +142,31 @@ export interface TranscriptSegmentData {
   endTime?: number; // audio_end_time in seconds
   text: string;
   confidence?: number;
+  speaker?: string | null;
+}
+
+export interface MeetingSpeaker {
+  speaker_key: string;
+  display_name: string | null;
+  speech_seconds: number;
+  /** Transcript rows currently labelled with this speaker */
+  row_count: number;
+  /** Seconds covered by those rows */
+  row_seconds: number;
+}
+
+export interface SpeakerJobStatus {
+  meeting_id: string;
+  state: 'queued' | 'running';
+  /** 'audio' | 'waiting' | 'download' | 'segmentation' | 'embeddings' | 'clustering' | 'splitting' | 'saving' | 'done'; null while queued */
+  stage: string | null;
+  percent: number;
+  message: string;
+}
+
+export interface DiarizationModelsStatus {
+  installed: boolean;
+  total_bytes: number;
+  downloaded_bytes: number;
+  directory: string;
 }
