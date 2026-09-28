@@ -266,6 +266,12 @@ pub async fn start_import<R: Runtime>(
     // Reset cancellation flag
     IMPORT_CANCELLED.store(false, Ordering::SeqCst);
 
+    // One batch job at a time uses the shared transcription engine (load to unload).
+    if super::common::batch_engine_busy() {
+        emit_progress(&app, "waiting", 0, "Waiting for another transcription job to finish...");
+    }
+    let batch_guard = super::common::acquire_batch_engine_lock().await;
+
     let use_parakeet = provider.as_deref() == Some("parakeet");
     let result = run_import(
         app.clone(),
@@ -279,6 +285,7 @@ pub async fn start_import<R: Runtime>(
 
     // Unload the engine after the batch job (success, failure, or cancellation)
     super::common::unload_engine_after_batch(use_parakeet).await;
+    drop(batch_guard);
 
     // Guard will automatically clear flag on drop
     // No need for manual: IMPORT_IN_PROGRESS.store(false, Ordering::SeqCst);

@@ -784,6 +784,8 @@ pub async fn api_delete_meeting<R: Runtime>(
     );
 
     let pool = state.db_manager.pool();
+    // Stop any queued or running speaker identification for this meeting.
+    let _ = crate::diarization::jobs::cancel(&_app, &meeting_id);
 
     match MeetingsRepository::delete_meeting(pool, &meeting_id).await {
         Ok(true) => {

@@ -962,6 +962,13 @@ pub fn run() {
             diarization::commands::diarization_models_status,
             diarization::commands::diarization_download_models,
             diarization::commands::diarization_delete_models,
+            diarization::commands::start_speaker_identification,
+            diarization::commands::cancel_speaker_identification,
+            diarization::commands::get_speaker_identification_status,
+            diarization::commands::api_list_meeting_speakers,
+            diarization::commands::api_rename_meeting_speaker,
+            diarization::commands::api_merge_meeting_speakers,
+            diarization::commands::api_set_transcript_speaker,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

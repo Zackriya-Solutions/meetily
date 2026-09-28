@@ -14,6 +14,20 @@ pub(crate) async fn acquire_engine_lifecycle_lock() -> OwnedMutexGuard<()> {
     ENGINE_LIFECYCLE_LOCK.clone().lock_owned().await
 }
 
+/// Held by every batch job (retranscription, import, speaker-identification splitting) from
+/// engine load to unload, so one job cannot unload or swap the model another is using.
+static BATCH_ENGINE_LOCK: Lazy<Arc<AsyncMutex<()>>> =
+    Lazy::new(|| Arc::new(AsyncMutex::new(())));
+
+pub(crate) async fn acquire_batch_engine_lock() -> OwnedMutexGuard<()> {
+    BATCH_ENGINE_LOCK.clone().lock_owned().await
+}
+
+/// True while a batch job holds the transcription engine.
+pub(crate) fn batch_engine_busy() -> bool {
+    BATCH_ENGINE_LOCK.try_lock().is_err()
+}
+
 /// Unload the transcription engine after a batch job (import or retranscription).
 /// Skips unloading if a live recording is currently in progress, since recording
 /// uses the same global engine instances.
@@ -42,6 +56,34 @@ pub(crate) async fn unload_engine_after_batch(use_parakeet: bool) {
         };
         if let Some(e) = engine {
             e.unload_model().await;
+        }
+    }
+}
+
+/// A loaded local transcription engine for batch jobs.
+pub(crate) enum BatchEngine {
+    Whisper(Arc<crate::whisper_engine::WhisperEngine>),
+    Parakeet(Arc<crate::parakeet_engine::ParakeetEngine>),
+}
+
+impl BatchEngine {
+    pub(crate) fn is_parakeet(&self) -> bool {
+        matches!(self, BatchEngine::Parakeet(_))
+    }
+
+    pub(crate) async fn transcribe(&self, samples: Vec<f32>, language: Option<String>) -> Result<String> {
+        match self {
+            BatchEngine::Whisper(e) => {
+                let (text, _, _) = e
+                    .transcribe_audio_with_confidence(samples, language)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Whisper transcription failed: {}", e))?;
+                Ok(text)
+            }
+            BatchEngine::Parakeet(e) => e
+                .transcribe_audio(samples)
+                .await
+                .map_err(|e| anyhow::anyhow!("Parakeet transcription failed: {}", e)),
         }
     }
 }
@@ -264,5 +306,13 @@ mod tests {
 
         acquired_rx.await.unwrap();
         waiter.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_batch_engine_busy_tracks_the_guard() {
+        let guard = acquire_batch_engine_lock().await;
+        assert!(batch_engine_busy());
+        drop(guard);
+        assert!(!batch_engine_busy());
     }
 }

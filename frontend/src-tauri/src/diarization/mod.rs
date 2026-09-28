@@ -6,6 +6,7 @@ pub mod commands;
 pub mod diarizer;
 pub mod embedding;
 pub mod fbank;
+pub mod jobs;
 pub mod models;
 pub mod reconstruct;
 pub mod segmentation;

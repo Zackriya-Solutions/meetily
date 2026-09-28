@@ -51,60 +51,82 @@ impl DecodedAudio {
 
     /// Convert decoded audio to Whisper format with optional progress callback
     pub fn to_whisper_format_with_progress(&self, progress_callback: Option<ProgressCallback>) -> Vec<f32> {
-        // Step 1: Convert to mono if needed
-        let mono_samples = if self.channels > 1 {
+        whisper_format_from(self.samples.clone(), self.sample_rate, self.channels, progress_callback)
+    }
+
+    /// Like `to_whisper_format`, but consumes the decoded audio instead of copying its samples,
+    /// which keeps the peak memory of long recordings down.
+    pub fn into_whisper_format(self) -> Vec<f32> {
+        self.into_whisper_format_with_progress(None)
+    }
+
+    /// Consuming variant of `to_whisper_format_with_progress`.
+    pub fn into_whisper_format_with_progress(self, progress_callback: Option<ProgressCallback>) -> Vec<f32> {
+        let DecodedAudio { samples, sample_rate, channels, .. } = self;
+        whisper_format_from(samples, sample_rate, channels, progress_callback)
+    }
+}
+
+/// Mono conversion, normalisation and resampling to 16 kHz. Takes ownership of `samples` so no
+/// full-length copy is made.
+fn whisper_format_from(
+    samples: Vec<f32>,
+    sample_rate: u32,
+    channels: u16,
+    progress_callback: Option<ProgressCallback>,
+) -> Vec<f32> {
+    // Step 1: Convert to mono if needed (the interleaved samples are freed right away)
+    let mono_samples = if channels > 1 {
+        info!("Converting {} channels to mono ({} samples)", channels, samples.len());
+        let mono = audio_to_mono(&samples, channels);
+        drop(samples);
+        mono
+    } else {
+        samples
+    };
+
+    // Step 1.5: Normalize samples to valid range (-1.0 to 1.0)
+    // Some audio files may have samples slightly outside this range
+    let mono_samples = normalize_audio_samples(mono_samples);
+
+    // Step 2: Resample to 16kHz if needed
+    const WHISPER_SAMPLE_RATE: u32 = 16000;
+    if sample_rate != WHISPER_SAMPLE_RATE {
+        // Large files are processed in chunks through the sinc resampler
+        // to keep memory bounded while preserving audio quality.
+        // Linear interpolation (fast_resample) was removed because it lacks
+        // an anti-aliasing filter, causing aliasing artifacts that make VAD
+        // miss ~99% of speech in long recordings.
+        const LARGE_FILE_THRESHOLD: usize = 14_400_000;
+
+        let mut resampled = if mono_samples.len() > LARGE_FILE_THRESHOLD {
             info!(
-                "Converting {} channels to mono ({} samples)",
-                self.channels,
-                self.samples.len()
+                "Chunked sinc resampling {} samples from {}Hz to {}Hz (large file mode)",
+                mono_samples.len(),
+                sample_rate,
+                WHISPER_SAMPLE_RATE
             );
-            audio_to_mono(&self.samples, self.channels)
+            chunked_resample_with_progress(&mono_samples, sample_rate, WHISPER_SAMPLE_RATE, progress_callback)
         } else {
-            self.samples.clone()
+            info!(
+                "Resampling {} samples from {}Hz to {}Hz",
+                mono_samples.len(),
+                sample_rate,
+                WHISPER_SAMPLE_RATE
+            );
+            resample_audio(&mono_samples, sample_rate, WHISPER_SAMPLE_RATE)
         };
+        drop(mono_samples);
 
-        // Step 1.5: Normalize samples to valid range (-1.0 to 1.0)
-        // Some audio files may have samples slightly outside this range
-        let mono_samples = normalize_audio_samples(mono_samples);
-
-        // Step 2: Resample to 16kHz if needed
-        const WHISPER_SAMPLE_RATE: u32 = 16000;
-        if self.sample_rate != WHISPER_SAMPLE_RATE {
-            // Large files are processed in chunks through the sinc resampler
-            // to keep memory bounded while preserving audio quality.
-            // Linear interpolation (fast_resample) was removed because it lacks
-            // an anti-aliasing filter, causing aliasing artifacts that make VAD
-            // miss ~99% of speech in long recordings.
-            const LARGE_FILE_THRESHOLD: usize = 14_400_000;
-
-            let mut resampled = if mono_samples.len() > LARGE_FILE_THRESHOLD {
-                info!(
-                    "Chunked sinc resampling {} samples from {}Hz to {}Hz (large file mode)",
-                    mono_samples.len(),
-                    self.sample_rate,
-                    WHISPER_SAMPLE_RATE
-                );
-                chunked_resample_with_progress(&mono_samples, self.sample_rate, WHISPER_SAMPLE_RATE, progress_callback)
-            } else {
-                info!(
-                    "Resampling {} samples from {}Hz to {}Hz",
-                    mono_samples.len(),
-                    self.sample_rate,
-                    WHISPER_SAMPLE_RATE
-                );
-                resample_audio(&mono_samples, self.sample_rate, WHISPER_SAMPLE_RATE)
-            };
-
-            // Clamp after resampling: the sinc resampler can overshoot
-            // slightly beyond [-1.0, 1.0] (Gibbs phenomenon), which causes
-            // VAD to reject samples with "Float sample must be in the range -1.0 to 1.0"
-            for s in &mut resampled {
-                *s = s.clamp(-1.0, 1.0);
-            }
-            resampled
-        } else {
-            mono_samples
+        // Clamp after resampling: the sinc resampler can overshoot
+        // slightly beyond [-1.0, 1.0] (Gibbs phenomenon), which causes
+        // VAD to reject samples with "Float sample must be in the range -1.0 to 1.0"
+        for s in &mut resampled {
+            *s = s.clamp(-1.0, 1.0);
         }
+        resampled
+    } else {
+        mono_samples
     }
 }
 
@@ -117,10 +139,11 @@ impl DecodedAudio {
 ///
 /// Chunked resampling with optional progress callback.
 ///
-/// Resamples `input` in parallel 60-second chunks via [`rayon`], then merges
-/// the results sequentially with a 100ms cross-fade to eliminate discontinuities
-/// at chunk boundaries. Each chunk's [`resample`] call is independent and
-/// CPU-bound, making this ideal for data parallelism.
+/// Resamples `input` via [`rayon`] in bounded parallel batches of 60-second
+/// chunks (one chunk per worker thread per batch), and merges each batch
+/// sequentially with a 100ms cross-fade before the next batch starts, so at
+/// most one batch of resampled chunks is held beside the output. Each chunk's
+/// [`resample`] call is independent and CPU-bound.
 ///
 /// Falls back to [`resample_audio`] (single-pass sinc) if any chunk fails.
 fn chunked_resample_with_progress(
@@ -157,65 +180,67 @@ fn chunked_resample_with_progress(
         input.len()
     );
 
-    // Resample all chunks in parallel — each is independent and CPU-bound
-    let resampled_chunks: Vec<Result<Vec<f32>>> = chunk_ranges
-        .par_iter()
-        .map(|&(chunk_start, chunk_end)| {
-            let chunk = &input[chunk_start..chunk_end];
-            resample(chunk, from_rate, to_rate)
-        })
-        .collect();
-
-    // Merge sequentially with cross-fade (order-dependent, must be serial)
+    // Resample one batch of chunks in parallel (one chunk per worker thread) and merge it before
+    // the next batch, so at most one batch of resampled chunks is held beside the output.
+    let batch_size = rayon::current_num_threads().max(1);
     let mut output = Vec::with_capacity(estimated_output);
-    for (chunk_idx, result) in resampled_chunks.into_iter().enumerate() {
-        match result {
-            Ok(resampled) => {
-                if chunk_idx == 0 {
-                    output.extend_from_slice(&resampled);
-                } else {
-                    // Cross-fade the overlap region with the tail of the previous output
-                    let fade_len = overlap_output.min(resampled.len()).min(output.len());
-                    if fade_len > 0 {
-                        let out_start = output.len() - fade_len;
-                        for i in 0..fade_len {
-                            let t = i as f32 / fade_len as f32;
-                            output[out_start + i] =
-                                output[out_start + i] * (1.0 - t) + resampled[i] * t;
-                        }
-                        if fade_len < resampled.len() {
-                            output.extend_from_slice(&resampled[fade_len..]);
-                        }
-                    } else {
+    for (batch_idx, batch) in chunk_ranges.chunks(batch_size).enumerate() {
+        let resampled_batch: Vec<Result<Vec<f32>>> = batch
+            .par_iter()
+            .map(|&(chunk_start, chunk_end)| resample(&input[chunk_start..chunk_end], from_rate, to_rate))
+            .collect();
+
+        // Merge sequentially with cross-fade (order-dependent, must be serial)
+        for (offset, result) in resampled_batch.into_iter().enumerate() {
+            let chunk_idx = batch_idx * batch_size + offset;
+            match result {
+                Ok(resampled) => {
+                    if chunk_idx == 0 {
                         output.extend_from_slice(&resampled);
+                    } else {
+                        // Cross-fade the overlap region with the tail of the previous output
+                        let fade_len = overlap_output.min(resampled.len()).min(output.len());
+                        if fade_len > 0 {
+                            let out_start = output.len() - fade_len;
+                            for i in 0..fade_len {
+                                let t = i as f32 / fade_len as f32;
+                                output[out_start + i] =
+                                    output[out_start + i] * (1.0 - t) + resampled[i] * t;
+                            }
+                            if fade_len < resampled.len() {
+                                output.extend_from_slice(&resampled[fade_len..]);
+                            }
+                        } else {
+                            output.extend_from_slice(&resampled);
+                        }
                     }
                 }
+                Err(e) => {
+                    warn!(
+                        "Resampling failed on chunk {}/{}: {}, falling back to single-pass sinc resampler",
+                        chunk_idx + 1,
+                        total_chunks,
+                        e
+                    );
+                    return resample_audio(input, from_rate, to_rate);
+                }
             }
-            Err(e) => {
-                warn!(
-                    "Resampling failed on chunk {}/{}: {}, falling back to single-pass sinc resampler",
-                    chunk_idx + 1,
-                    total_chunks,
-                    e
-                );
-                return resample_audio(input, from_rate, to_rate);
-            }
-        }
 
-        if let Some(callback) = &progress_callback {
-            let progress_pct = ((chunk_idx + 1) as f64 / total_chunks as f64) * 100.0;
-            if (chunk_idx + 1) % 10 == 0 || chunk_idx + 1 == total_chunks {
-                info!(
-                    "Resampling progress: {}/{} chunks ({:.0}%)",
-                    chunk_idx + 1,
-                    total_chunks,
-                    progress_pct
+            if let Some(callback) = &progress_callback {
+                let progress_pct = ((chunk_idx + 1) as f64 / total_chunks as f64) * 100.0;
+                if (chunk_idx + 1) % 10 == 0 || chunk_idx + 1 == total_chunks {
+                    info!(
+                        "Resampling progress: {}/{} chunks ({:.0}%)",
+                        chunk_idx + 1,
+                        total_chunks,
+                        progress_pct
+                    );
+                }
+                callback(
+                    progress_pct as u32,
+                    &format!("Resampling audio: {:.0}%", progress_pct),
                 );
             }
-            callback(
-                progress_pct as u32,
-                &format!("Resampling audio: {:.0}%", progress_pct),
-            );
         }
     }
 
@@ -475,15 +500,22 @@ pub fn decode_audio_file_with_progress(
         .make(&track.codec_params, &DecoderOptions::default())
         .map_err(|e| anyhow!("Failed to create decoder: {}", e))?;
 
-    // Decode all packets
-    let mut all_samples: Vec<f32> = Vec::new();
-    let mut sample_buf: Option<SampleBuffer<f32>> = None;
-
-    // Calculate expected samples for progress tracking
+    // Calculate expected samples for progress tracking (and to size the buffer once)
     let expected_duration = track.codec_params.n_frames
         .map(|frames| frames as f64 / sample_rate as f64);
     let expected_samples = expected_duration
         .map(|dur| (dur * sample_rate as f64 * channels as f64) as usize);
+
+    // Decode all packets. The frame count comes from the file header and can be bogus
+    // (streamed WAV writes u32::MAX, MP3 Xing counts are unchecked), so a failed
+    // reservation falls back to growing the buffer while decoding.
+    let mut all_samples: Vec<f32> = Vec::new();
+    if let Some(n) = expected_samples {
+        if all_samples.try_reserve_exact(n).is_err() {
+            warn!("Could not pre-allocate {} samples; growing the buffer while decoding", n);
+        }
+    }
+    let mut sample_buf: Option<SampleBuffer<f32>> = None;
 
     let mut last_progress = 0u32;
 
@@ -865,5 +897,23 @@ mod tests {
         assert!(!needs_ffmpeg_conversion(Path::new("audio.m4a")));
         // No extension
         assert!(!needs_ffmpeg_conversion(Path::new("noext")));
+    }
+
+    #[test]
+    fn test_into_whisper_format_matches_to_whisper_format() {
+        let mono = DecodedAudio {
+            samples: (0..48_000).map(|i| (i as f32 * 0.01).sin() * 0.5).collect(),
+            sample_rate: 48_000,
+            channels: 1,
+            duration_seconds: 1.0,
+        };
+        assert_eq!(mono.to_whisper_format(), mono.clone().into_whisper_format());
+        let stereo = DecodedAudio {
+            samples: (0..96_000).map(|i| if i % 2 == 0 { 0.25 } else { -0.5 }).collect(),
+            sample_rate: 48_000,
+            channels: 2,
+            duration_seconds: 1.0,
+        };
+        assert_eq!(stereo.to_whisper_format(), stereo.clone().into_whisper_format());
     }
 }

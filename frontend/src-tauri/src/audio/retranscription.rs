@@ -87,29 +87,31 @@ pub fn cancel_retranscription() {
     RETRANSCRIPTION_CANCELLED.store(true, Ordering::SeqCst);
 }
 
-/// Start retranscription of a meeting's audio
-pub async fn start_retranscription<R: Runtime>(
+/// Start retranscription of a meeting's audio. The caller holds the in-progress guard.
+async fn start_retranscription<R: Runtime>(
     app: AppHandle<R>,
     meeting_id: String,
     meeting_folder_path: String,
     language: Option<String>,
     model: Option<String>,
     provider: Option<String>,
+    _guard: RetranscriptionGuard,
 ) -> Result<RetranscriptionResult> {
-    // Acquire guard - ensures flag is cleared even on panic/early return
-    let _guard = RetranscriptionGuard::acquire().map_err(|e| anyhow!(e))?;
-
     // Reset cancellation flag
     RETRANSCRIPTION_CANCELLED.store(false, Ordering::SeqCst);
+
+    // One batch job at a time uses the shared transcription engine (load to unload).
+    if super::common::batch_engine_busy() {
+        emit_progress(&app, &meeting_id, "waiting", 0, "Waiting for another transcription job to finish...");
+    }
+    let batch_guard = super::common::acquire_batch_engine_lock().await;
 
     let use_parakeet = provider.as_deref() == Some("parakeet");
     let result = run_retranscription(app.clone(), meeting_id.clone(), meeting_folder_path, language, model, provider).await;
 
     // Unload the engine after the batch job (success, failure, or cancellation)
     super::common::unload_engine_after_batch(use_parakeet).await;
-
-    // Guard will automatically clear flag on drop
-    // No need for manual: RETRANSCRIPTION_IN_PROGRESS.store(false, Ordering::SeqCst);
+    drop(batch_guard);
 
     match &result {
         Ok(res) => {
@@ -139,7 +141,7 @@ pub async fn start_retranscription<R: Runtime>(
 
 /// Find audio file in meeting folder
 /// Tries common names first, then scans for any file with an audio extension
-fn find_audio_file(folder: &Path) -> Result<PathBuf> {
+pub(crate) fn find_audio_file(folder: &Path) -> Result<PathBuf> {
     let candidates = [
         "audio.mp4", "audio.m4a", "audio.wav", "audio.mp3",
         "audio.flac", "audio.ogg", "recording.mp4",
@@ -500,6 +502,21 @@ async fn run_retranscription<R: Runtime>(
     })
 }
 
+/// Load the local engine configured in transcript settings (Parakeet or Whisper).
+/// Call it while holding the batch engine lock.
+pub(crate) async fn load_configured_engine<R: Runtime>(app: &AppHandle<R>) -> Result<super::common::BatchEngine> {
+    let app_state = app.try_state::<AppState>().ok_or_else(|| anyhow!("App state not available"))?;
+    let provider: Option<String> = sqlx::query_scalar("SELECT provider FROM transcript_settings WHERE id = '1'")
+        .fetch_optional(app_state.db_manager.pool())
+        .await
+        .map_err(|e| anyhow!("Failed to query transcript config: {}", e))?;
+    if provider.as_deref() == Some("parakeet") {
+        Ok(super::common::BatchEngine::Parakeet(get_or_init_parakeet(app, None).await?))
+    } else {
+        Ok(super::common::BatchEngine::Whisper(get_or_init_whisper(app, None).await?))
+    }
+}
+
 /// Emit progress event
 fn emit_progress<R: Runtime>(
     app: &AppHandle<R>,
@@ -787,26 +804,20 @@ pub async fn start_retranscription_command<R: Runtime>(
     model: Option<String>,
     provider: Option<String>,
 ) -> Result<RetranscriptionStarted, String> {
-
-    // Check if retranscription is already in progress (guard will be acquired in start_retranscription)
-    if RETRANSCRIPTION_IN_PROGRESS.load(Ordering::SeqCst) {
-        return Err("Retranscription already in progress".to_string());
-    }
+    // Take the in-progress guard first and before spawning, so two quick requests cannot both
+    // start and a rejected request never touches the running one's meeting claim.
+    let guard = RetranscriptionGuard::acquire()?;
+    // Refuse while speaker identification is queued or running for this meeting, and keep new
+    // identification jobs off it until retranscription ends.
+    let claim = crate::diarization::jobs::claim_for_retranscription(&meeting_id)?;
 
     // Clone values for the spawned task
     let meeting_id_clone = meeting_id.clone();
 
     // Spawn the retranscription in a background task
     tauri::async_runtime::spawn(async move {
-        let result = start_retranscription(
-            app,
-            meeting_id_clone,
-            meeting_folder_path,
-            language,
-            model,
-            provider,
-        )
-        .await;
+        let result = start_retranscription(app, meeting_id_clone, meeting_folder_path, language, model, provider, guard).await;
+        drop(claim);
 
         // Errors are already emitted as events in start_retranscription
         // so we just log here for debugging
