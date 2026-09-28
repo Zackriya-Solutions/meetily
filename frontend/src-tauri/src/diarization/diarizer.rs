@@ -334,8 +334,12 @@ mod tests {
         let dir = std::path::PathBuf::from(std::env::var("DIARIZATION_REF_DIR").expect("DIARIZATION_REF_DIR"));
         let reference: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(dir.join("reference.json")).unwrap()).unwrap();
-        let checked = embed_reference_clips(&dir, &reference, "embeddings").len()
-            + embed_reference_clips(&dir, &reference, "en_embeddings").len();
+        let mut checked = 0;
+        for key in ["embeddings", "en_embeddings"] {
+            let clips = embed_reference_clips(&dir, &reference, key).len();
+            assert!(clips > 0, "reference.json has no clips under {key}");
+            checked += clips;
+        }
         eprintln!("{checked} clips match the reference embeddings");
     }
 
