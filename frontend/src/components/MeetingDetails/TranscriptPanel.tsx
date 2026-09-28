@@ -115,6 +115,9 @@ export function TranscriptPanel({
           meetingId={meetingId}
           meetingFolderPath={meetingFolderPath}
           onRefetchTranscripts={onRefetchTranscripts}
+          onIdentifySpeakers={speakerTools?.onStartIdentify}
+          hasSpeakers={(speakerTools?.speakers.length ?? 0) > 0}
+          speakerJobActive={!!speakerTools?.job}
         />
       </div>
 

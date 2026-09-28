@@ -20,6 +20,8 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import { toast } from 'sonner';
 import { useConfig } from '@/contexts/ConfigContext';
+import { Switch } from '../ui/switch';
+import { SpeakerCountSelect } from '@/components/Speakers/SpeakerCountSelect';
 import { LANGUAGES } from '@/constants/languages';
 import { useTranscriptionModels, ModelOption } from '@/hooks/useTranscriptionModels';
 import Analytics from '@/lib/analytics';
@@ -44,6 +46,8 @@ interface RetranscriptionResult {
   segments_count: number;
   duration_seconds: number;
   language: string | null;
+  speaker_count?: number | null;
+  speaker_warning?: string | null;
 }
 
 interface RetranscriptionError {
@@ -58,11 +62,13 @@ export function RetranscribeDialog({
   meetingFolderPath,
   onComplete,
 }: RetranscribeDialogProps) {
-  const { selectedLanguage, transcriptModelConfig } = useConfig();
+  const { selectedLanguage, transcriptModelConfig, betaFeatures } = useConfig();
   const [isProcessing, setIsProcessing] = useState(false);
   const [progress, setProgress] = useState<RetranscriptionProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedLang, setSelectedLang] = useState(selectedLanguage || 'auto');
+  const [identifySpeakers, setIdentifySpeakers] = useState(true);
+  const [speakerCount, setSpeakerCount] = useState<number | null>(null);
 
   // Use centralized model fetching hook
   const {
@@ -153,9 +159,13 @@ export function RetranscribeDialog({
             });
 
             setIsProcessing(false);
-            toast.success(
-              `Retranscription complete! ${event.payload.segments_count} segments created.`
-            );
+            const { segments_count, speaker_count, speaker_warning } = event.payload;
+            if (speaker_warning) {
+              toast.warning('Transcript updated without speaker labels', { description: speaker_warning });
+            } else {
+              const speakersNote = speaker_count ? `, ${speaker_count} speaker${speaker_count === 1 ? '' : 's'} identified` : '';
+              toast.success(`Retranscription complete! ${segments_count} segments created${speakersNote}.`);
+            }
             onCompleteRef.current?.();
             onOpenChangeRef.current(false);
           }
@@ -220,6 +230,8 @@ export function RetranscribeDialog({
         language: languageToSend,
         model: selectedModelDetails?.name || null,
         provider: selectedModelDetails?.provider || null,
+        identifySpeakers: betaFeatures.speakerIdentification && identifySpeakers,
+        numSpeakers: speakerCount,
       });
     } catch (err: any) {
       setIsProcessing(false);
@@ -357,6 +369,19 @@ export function RetranscribeDialog({
               <p className="text-xs text-muted-foreground">
                 Choose a transcription model
               </p>
+            </div>
+          )}
+
+          {!isProcessing && !error && betaFeatures.speakerIdentification && (
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-sm font-medium">Identify speakers</div>
+                <div className="text-xs text-gray-500">Label who said each line</div>
+              </div>
+              <div className="flex items-center gap-2">
+                {identifySpeakers && <SpeakerCountSelect value={speakerCount} onChange={setSpeakerCount} />}
+                <Switch checked={identifySpeakers} onCheckedChange={setIdentifySpeakers} />
+              </div>
             </div>
           )}
 
