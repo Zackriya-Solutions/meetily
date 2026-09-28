@@ -440,9 +440,12 @@ mod tests {
 
     #[test]
     fn test_builtin_mic_detection() {
-        let kind = InputDeviceKind::detect("MacBook Pro Microphone", 0, 0);
-        // Should fall through to Unknown (no Bluetooth pattern, no buffer size)
-        assert_eq!(kind, InputDeviceKind::Unknown);
+        // No Bluetooth pattern and no buffer size, so the heuristic layers
+        // return nothing. detect() is not used here because its native layer
+        // queries the host's real devices, and on a MacBook Pro Core Audio
+        // reports this mic as built-in (Wired).
+        assert_eq!(InputDeviceKind::detect_by_name("MacBook Pro Microphone"), None);
+        assert_eq!(InputDeviceKind::detect_by_buffer_size(0, 0), None);
     }
 
     #[test]
