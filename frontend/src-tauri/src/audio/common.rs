@@ -28,6 +28,22 @@ pub(crate) fn batch_engine_busy() -> bool {
     BATCH_ENGINE_LOCK.try_lock().is_err()
 }
 
+/// Speaker identification settings for retranscription and import.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SpeakerOptions {
+    pub identify: bool,
+    pub num_speakers: Option<usize>,
+}
+
+impl SpeakerOptions {
+    pub fn from_command(identify: Option<bool>, num_speakers: Option<u32>) -> Self {
+        Self {
+            identify: identify.unwrap_or(false),
+            num_speakers: num_speakers.filter(|n| *n > 0).map(|n| n as usize),
+        }
+    }
+}
+
 /// Unload the transcription engine after a batch job (import or retranscription).
 /// Skips unloading if a live recording is currently in progress, since recording
 /// uses the same global engine instances.
@@ -265,6 +281,16 @@ pub(crate) fn split_segment_at_silence(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn speaker_options_default_to_off() {
+        let o = SpeakerOptions::from_command(None, None);
+        assert!(!o.identify);
+        let o = SpeakerOptions::from_command(Some(true), Some(3));
+        assert!(o.identify);
+        assert_eq!(o.num_speakers, Some(3));
+        assert_eq!(SpeakerOptions::from_command(Some(true), Some(0)).num_speakers, None);
+    }
 
     #[test]
     fn transcripts_json_includes_speakers() {

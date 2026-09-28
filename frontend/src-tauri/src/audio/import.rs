@@ -86,6 +86,12 @@ pub struct ImportResult {
     pub title: String,
     pub segments_count: usize,
     pub duration_seconds: f64,
+    /// Number of speakers identified, when identification ran and found speakers.
+    #[serde(default)]
+    pub speaker_count: Option<usize>,
+    /// Why speakers were not identified although requested.
+    #[serde(default)]
+    pub speaker_warning: Option<String>,
 }
 
 /// Error during import
@@ -259,6 +265,7 @@ pub async fn start_import<R: Runtime>(
     language: Option<String>,
     model: Option<String>,
     provider: Option<String>,
+    speakers: super::common::SpeakerOptions,
 ) -> Result<ImportResult> {
     // Acquire guard - ensures flag is cleared even on panic/early return
     let _guard = ImportGuard::acquire().map_err(|e| anyhow!(e))?;
@@ -280,6 +287,7 @@ pub async fn start_import<R: Runtime>(
         language,
         model,
         provider,
+        speakers,
     )
     .await;
 
@@ -298,7 +306,9 @@ pub async fn start_import<R: Runtime>(
                     "meeting_id": res.meeting_id,
                     "title": res.title,
                     "segments_count": res.segments_count,
-                    "duration_seconds": res.duration_seconds
+                    "duration_seconds": res.duration_seconds,
+                    "speaker_count": res.speaker_count,
+                    "speaker_warning": res.speaker_warning
                 }),
             );
         }
@@ -323,6 +333,7 @@ async fn run_import<R: Runtime>(
     language: Option<String>,
     model: Option<String>,
     provider: Option<String>,
+    speakers: super::common::SpeakerOptions,
 ) -> Result<ImportResult> {
     let source = PathBuf::from(&source_path);
 
@@ -417,11 +428,13 @@ async fn run_import<R: Runtime>(
         emit_progress(&app_for_resample, "resampling", overall_progress, msg);
     });
 
-    let audio_samples = tokio::task::spawn_blocking(move || {
-        decoded.to_whisper_format_with_progress(Some(resample_progress))
-    })
-    .await
-    .map_err(|e| anyhow!("Resample task join error: {}", e))?;
+    let audio_samples = Arc::new(
+        tokio::task::spawn_blocking(move || {
+            decoded.into_whisper_format_with_progress(Some(resample_progress))
+        })
+        .await
+        .map_err(|e| anyhow!("Resample task join error: {}", e))?,
+    );
     info!(
         "Converted to 16kHz mono format: {} samples",
         audio_samples.len()
@@ -437,10 +450,11 @@ async fn run_import<R: Runtime>(
 
     // Use VAD to find speech segments
     let app_for_vad = app.clone();
+    let samples_for_vad = audio_samples.clone();
 
     let speech_segments = tokio::task::spawn_blocking(move || {
         get_speech_chunks_with_progress(
-            &audio_samples,
+            &samples_for_vad,
             VAD_REDEMPTION_TIME_MS,
             |vad_progress, segments_found| {
                 let overall_progress = 25 + (vad_progress as f32 * 0.05) as u32;
@@ -513,6 +527,40 @@ async fn run_import<R: Runtime>(
         return Err(anyhow!("Import cancelled"));
     }
 
+    let (diarization, speaker_warning): (Option<crate::diarization::diarizer::Diarization>, Option<String>) =
+        if speakers.identify && total_segments > 0 {
+            emit_progress(&app, "speakers", 30, "Identifying speakers...");
+            let (app_d, app_w, app_p) = (app.clone(), app.clone(), app.clone());
+            match crate::diarization::jobs::diarize_samples(
+                audio_samples.clone(),
+                speakers.num_speakers,
+                move |p| {
+                    crate::diarization::commands::emit_download_progress(&app_d, p.clone());
+                    emit_progress(&app_d, "speakers", 30, &format!("Downloading speaker models... {}%", p.percent));
+                },
+                move || emit_progress(&app_w, "speakers", 30, "Waiting for another speaker identification..."),
+                move |p| emit_progress(&app_p, "speakers", 30, &format!("Identifying speakers... {}%", p)),
+                || IMPORT_CANCELLED.load(Ordering::SeqCst),
+            )
+            .await
+            {
+                Ok(d) if !d.speakers.is_empty() => (Some(d), None),
+                Ok(_) => (None, Some("No distinct speakers were found".to_string())),
+                Err(e) if e.is::<crate::diarization::Cancelled>() => {
+                    let _ = std::fs::remove_dir_all(&meeting_folder);
+                    return Err(anyhow!("Import cancelled"));
+                }
+                Err(e) => {
+                    warn!("Speaker identification failed, continuing without speakers: {:#}", e);
+                    (None, Some(format!("Speaker identification failed: {:#}", e)))
+                }
+            }
+        } else {
+            (None, None)
+        };
+    // The full-length 16 kHz buffer is no longer needed; VAD segments carry their own samples.
+    drop(audio_samples);
+
     emit_progress(&app, "transcribing", 30, "Loading transcription engine...");
 
     // Initialize the appropriate engine
@@ -547,6 +595,10 @@ async fn run_import<R: Runtime>(
         } else {
             processable_segments.push(segment.clone());
         }
+    }
+
+    if let Some(d) = &diarization {
+        processable_segments = crate::diarization::assign::split_segments_at_turns(processable_segments, &d.turns, 16000);
     }
 
     let processable_count = processable_segments.len();
@@ -638,7 +690,25 @@ async fn run_import<R: Runtime>(
     emit_progress(&app, "saving", 85, "Creating meeting...");
 
     // Create transcript segments
-    let segments = create_transcript_segments(&all_transcripts);
+    let mut segments = create_transcript_segments(&all_transcripts);
+    if let Some(d) = &diarization {
+        crate::diarization::assign::label_segments(&mut segments, &d.turns);
+    }
+
+    let new_speakers: Vec<crate::database::repositories::speaker::NewSpeaker> = diarization
+        .as_ref()
+        .map(|d| {
+            d.speakers
+                .iter()
+                .map(|s| crate::database::repositories::speaker::NewSpeaker {
+                    key: s.key.clone(),
+                    display_name: None,
+                    embedding: s.embedding.clone(),
+                    speech_seconds: s.speech_seconds,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
 
     // Save to database
     let app_state = app
@@ -650,13 +720,17 @@ async fn run_import<R: Runtime>(
         &title,
         &segments,
         meeting_folder.to_string_lossy().to_string(),
+        new_speakers,
     )
     .await?;
 
     // Write transcripts.json and metadata.json to the meeting folder
     emit_progress(&app, "saving", 90, "Writing transcript files...");
 
-    if let Err(e) = write_transcripts_json(&meeting_folder, &segments, &std::collections::BTreeMap::new()) {
+    let labels = crate::database::repositories::speaker::SpeakersRepository::labels(app_state.db_manager.pool(), &meeting_id)
+        .await
+        .unwrap_or_default();
+    if let Err(e) = write_transcripts_json(&meeting_folder, &segments, &labels) {
         warn!("Failed to write transcripts.json: {}", e);
     }
 
@@ -678,6 +752,8 @@ async fn run_import<R: Runtime>(
         title,
         segments_count: segments.len(),
         duration_seconds,
+        speaker_count: diarization.as_ref().map(|d| d.speakers.len()),
+        speaker_warning,
     })
 }
 
@@ -700,6 +776,7 @@ async fn create_meeting_with_transcripts(
     title: &str,
     segments: &[TranscriptSegment],
     folder_path: String,
+    speakers: Vec<crate::database::repositories::speaker::NewSpeaker>,
 ) -> Result<String> {
     let meeting_id = format!("meeting-{}", Uuid::new_v4());
     let now = chrono::Utc::now();
@@ -742,6 +819,14 @@ async fn create_meeting_with_transcripts(
         .await
         .map_err(|e| anyhow!("Failed to insert transcript: {}", e))?;
     }
+
+    crate::database::repositories::speaker::SpeakersRepository::replace_for_meeting(
+        &mut tx,
+        &meeting_id,
+        &crate::database::repositories::speaker::SpeakerWrite { speakers, ..Default::default() },
+    )
+    .await
+    .map_err(|e| anyhow!("Failed to save speakers: {}", e))?;
 
     tx.commit()
         .await
@@ -977,6 +1062,8 @@ pub async fn start_import_audio_command<R: Runtime>(
     language: Option<String>,
     model: Option<String>,
     provider: Option<String>,
+    identify_speakers: Option<bool>,
+    num_speakers: Option<u32>,
 ) -> Result<ImportStarted, String> {
     // Check if import is already in progress (guard will be acquired in start_import)
     if IMPORT_IN_PROGRESS.load(Ordering::SeqCst) {
@@ -985,7 +1072,16 @@ pub async fn start_import_audio_command<R: Runtime>(
 
     // Spawn import in background
     tauri::async_runtime::spawn(async move {
-        let result = start_import(app, source_path, title, language, model, provider).await;
+        let result = start_import(
+            app,
+            source_path,
+            title,
+            language,
+            model,
+            provider,
+            super::common::SpeakerOptions::from_command(identify_speakers, num_speakers),
+        )
+        .await;
 
         if let Err(e) = result {
             error!("Import failed: {}", e);
