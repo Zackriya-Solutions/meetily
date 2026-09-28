@@ -102,6 +102,15 @@ export default function PageContent({
     start: startSpeakerIdentification,
     cancel: cancelSpeakerIdentification,
   } = speakerIdentification;
+  // Give automatic speaker identification up to 120 s before auto-summarising.
+  const [speakerWaitExpired, setSpeakerWaitExpired] = useState(false);
+  useEffect(() => {
+    if (!shouldAutoGenerate) return;
+    const timer = setTimeout(() => setSpeakerWaitExpired(true), 120_000);
+    return () => clearTimeout(timer);
+  }, [shouldAutoGenerate]);
+  const waitingForSpeakers = !speakerWaitExpired
+    && (!speakerIdentification.statusKnown || speakerIdentification.isActive);
   const onMergeSpeakers = useCallback(async (fromKey: string, intoKey: string) => {
     await mergeSpeakers(fromKey, intoKey);
     onSpeakerChange?.({ fromKey, toKey: intoKey });
@@ -227,6 +236,7 @@ export default function PageContent({
       || isModelConfigLoading
       || meetingData.transcripts.length === 0
       || autoGenerationStartedMeetingIdRef.current === meeting.id
+      || waitingForSpeakers
     ) {
       return;
     }
@@ -245,6 +255,7 @@ export default function PageContent({
     summaryGeneration.handleGenerateSummary,
     summaryGeneration.summaryStatus,
     onAutoGenerateComplete,
+    waitingForSpeakers,
   ]);
 
   return (
