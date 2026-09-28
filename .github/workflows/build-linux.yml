@@ -68,7 +68,7 @@ jobs:
         id: get-version
         shell: bash
         run: |
-          VERSION=$(grep -o '"version": "[^"]*"' frontend/src-tauri/tauri.conf.json | cut -d'"' -f4)
+          VERSION=$(node -p "require('./frontend/package.json').version")
           echo "Application version: $VERSION"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
@@ -190,11 +190,11 @@ jobs:
         run: |
           echo "Building llama-helper sidecar (CPU mode)..."
           cargo build --release -p llama-helper
-          
+
           # Copy binary to binaries directory
           mkdir -p frontend/src-tauri/binaries
           cp target/release/llama-helper frontend/src-tauri/binaries/llama-helper-x86_64-unknown-linux-gnu
-          
+
           echo "Copied llama-helper to frontend/src-tauri/binaries/"
           ls -la frontend/src-tauri/binaries/
 

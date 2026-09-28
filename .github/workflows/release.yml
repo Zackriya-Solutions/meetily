@@ -42,7 +42,7 @@ jobs:
             exit 0
           fi
 
-          BASE_VERSION=$(grep -o '"version": "[^"]*"' frontend/src-tauri/tauri.conf.json | cut -d'"' -f4)
+          BASE_VERSION=$(node -p "require('./frontend/package.json').version")
           echo "Base version from tauri.conf.json: $BASE_VERSION"
 
           # Fetch all tags

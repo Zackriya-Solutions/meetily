@@ -21,7 +21,7 @@ jobs:
       - name: Get version from tauri.conf.json
         id: get-version
         run: |
-          VERSION=$(grep -o '"version": "[^"]*"' frontend/src-tauri/tauri.conf.json | cut -d'"' -f4)
+          VERSION=$(node -p "require('./frontend/package.json').version")
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Version: $VERSION"
 
@@ -32,8 +32,8 @@ jobs:
 
           if [[ "$CURRENT_BRANCH" == "main" ]]; then
             echo "On main branch - ready for release"
-          elif [[ "$CURRENT_BRANCH" == "devtest" ]]; then
-            echo "On devtest branch - ready for testing"
+          elif [[ "$CURRENT_BRANCH" == "dev" ]]; then
+            echo "On dev branch - ready for testing"
           else
             echo "On feature branch: $CURRENT_BRANCH"
           fi
