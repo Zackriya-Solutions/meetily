@@ -2,6 +2,11 @@ name: "Release"
 
 on:
   workflow_dispatch:
+  push:
+    tags:
+      # Both tag shapes exist in this repository's history (v1.0-alpha, 1.0.0)
+      - "v*"
+      - "[0-9]+.[0-9]+.[0-9]+"
 
 # Prevent duplicate releases
 concurrency:
@@ -17,6 +22,7 @@ jobs:
     outputs:
       release-id: ${{ steps.create-release.outputs.result }}
       version: ${{ steps.get-version.outputs.version }}
+      tag: ${{ steps.get-version.outputs.tag }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -27,6 +33,15 @@ jobs:
         id: get-version
         shell: bash
         run: |
+          # Tag-push runs are authoritative: the pushed tag is the release tag.
+          if [ "${{ github.event_name }}" = "push" ]; then
+            TAG="${{ github.ref_name }}"
+            echo "Release tag from pushed ref: $TAG"
+            echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+            echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           BASE_VERSION=$(grep -o '"version": "[^"]*"' frontend/src-tauri/tauri.conf.json | cut -d'"' -f4)
           echo "Base version from tauri.conf.json: $BASE_VERSION"
 
@@ -65,6 +80,7 @@ jobs:
 
           echo "Final version: $VERSION"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Create Draft Release
         id: create-release
@@ -74,8 +90,8 @@ jobs:
             const { data } = await github.rest.repos.createRelease({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              tag_name: `v${{ steps.get-version.outputs.version }}`,
-              name: `Meetily v${{ steps.get-version.outputs.version }}`,
+              tag_name: `${{ steps.get-version.outputs.tag }}`,
+              name: `Meet4Specs v${{ steps.get-version.outputs.version }}`,
               draft: true,
               prerelease: false,
               generate_release_notes: true
@@ -106,7 +122,7 @@ jobs:
       target: ${{ matrix.target }}
       build-args: ${{ matrix.args }}
       sign-binaries: true
-      asset-prefix: "meetily"
+      asset-prefix: "meet4specs"
       upload-artifacts: false  # tauri-action uploads directly to release
       release-id: ${{ needs.create-release.outputs.release-id }}
     secrets: inherit
@@ -122,6 +138,7 @@ jobs:
         id: release-info
         run: |
           VERSION="${{ needs.create-release.outputs.version }}"
+          TAG="${{ needs.create-release.outputs.tag }}"
           RELEASE_ID="${{ needs.create-release.outputs.release-id }}"
 
           echo "## Release Assets" >> $GITHUB_STEP_SUMMARY
@@ -136,7 +153,7 @@ jobs:
 
           # Download and show latest.json
           echo "### latest.json content" >> $GITHUB_STEP_SUMMARY
-          gh release download "v${VERSION}" --pattern "latest.json" --dir . 2>/dev/null || echo "latest.json not yet available"
+          gh release download "${TAG}" --pattern "latest.json" --dir . 2>/dev/null || echo "latest.json not yet available"
           if [ -f latest.json ]; then
             echo "\`\`\`json" >> $GITHUB_STEP_SUMMARY
             cat latest.json >> $GITHUB_STEP_SUMMARY
@@ -147,11 +164,11 @@ jobs:
           # Download links
           echo "### Download Links" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Release page:** https://github.com/${{ github.repository }}/releases/tag/v${VERSION}" >> $GITHUB_STEP_SUMMARY
+          echo "**Release page:** https://github.com/${{ github.repository }}/releases/tag/${TAG}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Download all as ZIP:** https://github.com/${{ github.repository }}/archive/refs/tags/v${VERSION}.zip" >> $GITHUB_STEP_SUMMARY
+          echo "**Download all as ZIP:** https://github.com/${{ github.repository }}/archive/refs/tags/${TAG}.zip" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Manual S3 upload:** Download latest.json from release and upload to \`s3://meetily-updates/latest.json\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Manual S3 upload:** Download latest.json from release and upload to \`s3://meet4specs-updates/latest.json\`" >> $GITHUB_STEP_SUMMARY
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -160,8 +177,8 @@ jobs:
           echo "============================================"
           echo "=== Release Created Successfully ==="
           echo "============================================"
-          echo "Version: v${{ needs.create-release.outputs.version }}"
-          echo "Release URL: https://github.com/${{ github.repository }}/releases/tag/v${{ needs.create-release.outputs.version }}"
+          echo "Version: ${{ needs.create-release.outputs.tag }}"
+          echo "Release URL: https://github.com/${{ github.repository }}/releases/tag/${{ needs.create-release.outputs.tag }}"
           echo ""
           echo "Uploaded assets (via tauri-action):"
           echo "  - macOS: DMG installer + app.tar.gz (for updater) + .sig"
@@ -177,9 +194,9 @@ jobs:
           # Add to GitHub Step Summary
           echo "## Release Created Successfully" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Version:** v${{ needs.create-release.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** ${{ needs.create-release.outputs.tag }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Release URL:** [View Release](https://github.com/${{ github.repository }}/releases/tag/v${{ needs.create-release.outputs.version }})" >> $GITHUB_STEP_SUMMARY
+          echo "**Release URL:** [View Release](https://github.com/${{ github.repository }}/releases/tag/${{ needs.create-release.outputs.tag }})" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Uploaded Assets" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -191,7 +208,7 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "1. [Review the draft release](https://github.com/${{ github.repository }}/releases/tag/v${{ needs.create-release.outputs.version }})" >> $GITHUB_STEP_SUMMARY
+          echo "1. [Review the draft release](https://github.com/${{ github.repository }}/releases/tag/${{ needs.create-release.outputs.tag }})" >> $GITHUB_STEP_SUMMARY
           echo "2. Edit release notes if needed" >> $GITHUB_STEP_SUMMARY
           echo "3. Publish the release when ready" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY

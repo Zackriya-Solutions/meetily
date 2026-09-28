@@ -84,5 +84,6 @@ frontend/src-tauri/binaries/
 .codegraph/
 .serena/
 .github/
+odd/
 commit_context.md
 .playwright-cli/
