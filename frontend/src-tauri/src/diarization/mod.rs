@@ -1,5 +1,6 @@
 //! Offline speaker diarization: who spoke when, per individual person.
 
+pub mod assign;
 pub mod cluster;
 pub mod reconstruct;
 
