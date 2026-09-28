@@ -174,7 +174,9 @@ re-transcribed cannot be diarized at the same time.
 `api_save_transcript` is where both normal stop and crash recovery persist. After its commit,
 if the preference is on and the meeting folder has audio, it enqueues an Identify job
 (Auto count). If the models are missing, the download runs first. Failures are logged and
-the meeting stays unlabelled.
+the meeting stays unlabelled. While a new recording is live, the automatic job waits before
+decoding, diarizing and splitting rows (stage `waiting`), and diarization models use half the
+cores, so identification does not compete with live transcription.
 
 **Summary race**: the recording-stop flow auto-generates a summary. That generation waits for a
 running diarization job on the same meeting (cap 120 s), then proceeds either way.
@@ -184,7 +186,9 @@ running diarization job on the same meeting (cap 120 s), then proceeds either wa
 1. Decode audio → `diarize` → assign rows.
 2. For mixed rows: cut the row's audio at the split points and re-transcribe each piece with the
    configured local engine (Whisper or Parakeet, via the existing `get_or_init_*` helpers). If the
-   engine cannot load, fall back to majority labels with a warning.
+   engine cannot load, fall back to majority labels with a warning. Pieces under 1 s join a
+   neighbour first (whisper.cpp returns no text for shorter input). If any piece fails or comes
+   back empty, the row stays whole with its majority label and counts toward the warning.
 3. One transaction: update row speakers, replace split rows with their pieces, replace
    `meeting_speakers` (names carried over).
 4. Rewrite `transcripts.json`, emit `diarization-complete`. The frontend refetches.
@@ -193,7 +197,7 @@ running diarization job on the same meeting (cap 120 s), then proceeds either wa
 
 `start_retranscription_command` and the import command gain `identify_speakers: bool` and
 `num_speakers: Option<u32>`. When on: diarize **before** transcription, then cut the VAD
-segments at turn boundaries (pieces under 0.3 s join a neighbour), so each piece carries one
+segments at turn boundaries (pieces under 1 s join a neighbour), so each piece carries one
 speaker into the INSERT. `meeting_speakers` is replaced in the same transaction as the rows,
 with names carried over.
 
@@ -277,3 +281,5 @@ outside the repository and are never committed.
 - Auto count can split or merge speakers; the explicit count and merge tool are the remedies.
 - CAM++ voxceleb is English-centric.
 - Labels are per meeting; the same person in two meetings has two unrelated keys.
+- Peak memory while identifying speakers is roughly 1.7× the decoded 48 kHz audio (about 1.9 GB for a 2 h and 3.7 GB for a 4 h recording, the same cost retranscription already has); streaming decode is future work.
+- The recording time map assumes live recordings are joined from 30 s AAC checkpoints; a 48 kHz AAC file of whole frames without import/retranscription metadata is treated as checkpoint-joined, so audio from app versions before checkpoints could have labels shifted by about 37 ms per 30 s.
