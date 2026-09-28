@@ -48,7 +48,7 @@ jobs:
         id: get-version
         shell: bash
         run: |
-          VERSION=$(grep -o '"version": "[^"]*"' frontend/src-tauri/tauri.conf.json | cut -d'"' -f4)
+          VERSION=$(node -p "require('./frontend/package.json').version")
           echo "Application version: $VERSION"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 

@@ -42,7 +42,7 @@ jobs:
             exit 0
           fi
 
-          BASE_VERSION=$(grep -o '"version": "[^"]*"' frontend/src-tauri/tauri.conf.json | cut -d'"' -f4)
+          BASE_VERSION=$(node -p "require('./frontend/package.json').version")
           echo "Base version from tauri.conf.json: $BASE_VERSION"
 
           # Fetch all tags
@@ -92,6 +92,20 @@ jobs:
               repo: context.repo.repo,
               tag_name: `${{ steps.get-version.outputs.tag }}`,
               name: `Meet4Specs v${{ steps.get-version.outputs.version }}`,
+              body: [
+                '## Code signing policy',
+                '',
+                'Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org)',
+                '',
+                'Installers published on this page are code signed. Each signing request is approved manually by the maintainer.',
+                '',
+                'Roles: Authors, Reviewers and Approvers are all held by [Mauricio Gallardo](https://github.com/xmagcx).',
+                'Privacy policy: [PRIVACY_POLICY.md](https://github.com/xmagcx/meet4specs/blob/main/PRIVACY_POLICY.md).',
+                'Third-party attribution: [NOTICE.md](https://github.com/xmagcx/meet4specs/blob/main/NOTICE.md).',
+                '',
+                '---',
+                ''
+              ].join('\n'),
               draft: true,
               prerelease: false,
               generate_release_notes: true

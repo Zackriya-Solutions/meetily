@@ -110,7 +110,6 @@ We will notify users of any material changes to this privacy policy through:
 ## Contact Us
 
 For privacy-related questions or concerns:
-- **GitHub Issues**: [Create an issue](https://github.com/xmagcx/meet4specs/issues)
 - **Email**: [mauricio.gallardo@outlook.com](mailto:mauricio.gallardo@outlook.com)
 
 ## Open Source Commitment
