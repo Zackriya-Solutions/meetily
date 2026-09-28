@@ -92,6 +92,7 @@ impl MeetingsRepository {
                     audio_start_time: t.audio_start_time,
                     audio_end_time: t.audio_end_time,
                     duration: t.duration,
+                    speaker: t.speaker,
                 })
                 .collect::<Vec<_>>();
 
@@ -254,6 +255,12 @@ async fn delete_meeting_with_transaction(
 
     // 2. Delete from summary_processes
     sqlx::query("DELETE FROM summary_processes WHERE meeting_id = ?")
+        .bind(meeting_id)
+        .execute(&mut *transaction)
+        .await?;
+
+    // Delete from meeting_speakers
+    sqlx::query("DELETE FROM meeting_speakers WHERE meeting_id = ?")
         .bind(meeting_id)
         .execute(&mut *transaction)
         .await?;

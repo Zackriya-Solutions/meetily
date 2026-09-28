@@ -649,7 +649,7 @@ async fn run_import<R: Runtime>(
     // Write transcripts.json and metadata.json to the meeting folder
     emit_progress(&app, "saving", 90, "Writing transcript files...");
 
-    if let Err(e) = write_transcripts_json(&meeting_folder, &segments) {
+    if let Err(e) = write_transcripts_json(&meeting_folder, &segments, &std::collections::BTreeMap::new()) {
         warn!("Failed to write transcripts.json: {}", e);
     }
 
@@ -720,8 +720,8 @@ async fn create_meeting_with_transcripts(
     // Insert transcripts
     for segment in segments {
         sqlx::query(
-            "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration)
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration, speaker)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&segment.id)
         .bind(&meeting_id)
@@ -730,6 +730,7 @@ async fn create_meeting_with_transcripts(
         .bind(segment.audio_start_time)
         .bind(segment.audio_end_time)
         .bind(segment.duration)
+        .bind(&segment.speaker)
         .execute(&mut *tx)
         .await
         .map_err(|e| anyhow!("Failed to insert transcript: {}", e))?;
@@ -1182,6 +1183,7 @@ mod tests {
                 audio_start_time: Some(0.0),
                 audio_end_time: Some(1.5),
                 duration: Some(1.5),
+                speaker: None,
             },
             TranscriptSegment {
                 id: "t-2".to_string(),
@@ -1190,10 +1192,11 @@ mod tests {
                 audio_start_time: Some(2.0),
                 audio_end_time: Some(3.5),
                 duration: Some(1.5),
+                speaker: None,
             },
         ];
 
-        let result = write_transcripts_json(dir.path(), &segments);
+        let result = write_transcripts_json(dir.path(), &segments, &std::collections::BTreeMap::new());
         assert!(result.is_ok(), "write_transcripts_json failed: {:?}", result);
 
         // Verify file exists and is valid JSON

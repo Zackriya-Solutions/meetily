@@ -47,8 +47,8 @@ impl TranscriptsRepository {
         for segment in transcripts {
             let transcript_id = format!("transcript-{}", Uuid::new_v4());
             let result = sqlx::query(
-                "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration)
-                 VALUES (?, ?, ?, ?, ?, ?, ?)"
+                "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration, speaker)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
             )
             .bind(&transcript_id)
             .bind(&meeting_id)
@@ -57,6 +57,7 @@ impl TranscriptsRepository {
             .bind(segment.audio_start_time)
             .bind(segment.audio_end_time)
             .bind(segment.duration)
+            .bind(&segment.speaker)
             .execute(&mut *transaction)
             .await;
 
@@ -139,5 +140,67 @@ impl TranscriptsRepository {
             }
             None => transcript.chars().take(200).collect(), // Fallback to the start of the transcript
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::database::repositories::meeting::MeetingsRepository;
+    use crate::database::test_support::migrated_pool;
+
+    fn segment(id: &str, start: f64, speaker: Option<&str>) -> TranscriptSegment {
+        TranscriptSegment {
+            id: id.to_string(),
+            text: format!("text {id}"),
+            timestamp: "2026-09-27T10:00:00Z".to_string(),
+            audio_start_time: Some(start),
+            audio_end_time: Some(start + 1.0),
+            duration: Some(1.0),
+            speaker: speaker.map(str::to_string),
+        }
+    }
+
+    #[tokio::test]
+    async fn saved_speakers_round_trip_through_pagination() {
+        let pool = migrated_pool().await;
+        let meeting_id = TranscriptsRepository::save_transcript(
+            &pool,
+            "Standup",
+            &[segment("a", 0.0, Some("spk_1")), segment("b", 2.0, None)],
+            None,
+        )
+        .await
+        .unwrap();
+
+        let (rows, total) =
+            MeetingsRepository::get_meeting_transcripts_paginated(&pool, &meeting_id, 10, 0)
+                .await
+                .unwrap();
+        assert_eq!(total, 2);
+        assert_eq!(rows[0].speaker.as_deref(), Some("spk_1"));
+        assert_eq!(rows[1].speaker, None);
+    }
+
+    #[tokio::test]
+    async fn deleting_a_meeting_removes_its_speakers() {
+        let pool = migrated_pool().await;
+        let meeting_id = TranscriptsRepository::save_transcript(&pool, "M", &[segment("a", 0.0, Some("spk_0"))], None)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO meeting_speakers (meeting_id, speaker_key, created_at) VALUES (?, 'spk_0', '2026-09-27T10:00:00Z')")
+            .bind(&meeting_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        assert!(MeetingsRepository::delete_meeting(&pool, &meeting_id).await.unwrap());
+
+        let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM meeting_speakers WHERE meeting_id = ?")
+            .bind(&meeting_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
     }
 }

@@ -63,20 +63,28 @@ pub(crate) fn create_transcript_segments(transcripts: &[(String, f64, f64)]) -> 
                 audio_start_time: Some(start_seconds),
                 audio_end_time: Some(end_seconds),
                 duration: Some(duration),
+                speaker: None,
             }
         })
         .collect()
 }
 
-/// Write transcripts.json to a meeting folder (atomic write with temp file)
-pub(crate) fn write_transcripts_json(folder: &Path, segments: &[TranscriptSegment]) -> Result<()> {
+/// Write transcripts.json to a meeting folder (atomic write with temp file).
+/// `speaker_labels` maps speaker keys to the label shown to the user.
+pub(crate) fn write_transcripts_json(
+    folder: &Path,
+    segments: &[TranscriptSegment],
+    speaker_labels: &std::collections::BTreeMap<String, String>,
+) -> Result<()> {
     let transcript_path = folder.join("transcripts.json");
-    let temp_path = folder.join(".transcripts.json.tmp");
+    // Unique per call: speaker edits, jobs and retranscription may rewrite the file concurrently.
+    let temp_path = folder.join(format!(".transcripts.json.{}.tmp", Uuid::new_v4()));
 
     let json = serde_json::json!({
         "version": "1.0",
         "last_updated": chrono::Utc::now().to_rfc3339(),
         "total_segments": segments.len(),
+        "speakers": speaker_labels,
         "segments": segments.iter().enumerate().map(|(i, s)| {
             serde_json::json!({
                 "id": s.id,
@@ -85,6 +93,7 @@ pub(crate) fn write_transcripts_json(folder: &Path, segments: &[TranscriptSegmen
                 "audio_start_time": s.audio_start_time,
                 "audio_end_time": s.audio_end_time,
                 "duration": s.duration,
+                "speaker": s.speaker,
                 "sequence_id": i
             })
         }).collect::<Vec<_>>()
@@ -214,6 +223,29 @@ pub(crate) fn split_segment_at_silence(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transcripts_json_includes_speakers() {
+        let dir = tempfile::tempdir().unwrap();
+        let segments = vec![crate::api::TranscriptSegment {
+            id: "t1".into(),
+            text: "hello".into(),
+            timestamp: "ts".into(),
+            audio_start_time: Some(0.0),
+            audio_end_time: Some(1.0),
+            duration: Some(1.0),
+            speaker: Some("spk_0".into()),
+        }];
+        let mut labels = std::collections::BTreeMap::new();
+        labels.insert("spk_0".to_string(), "Noah".to_string());
+
+        write_transcripts_json(dir.path(), &segments, &labels).unwrap();
+
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.path().join("transcripts.json")).unwrap()).unwrap();
+        assert_eq!(json["segments"][0]["speaker"], "spk_0");
+        assert_eq!(json["speakers"]["spk_0"], "Noah");
+    }
 
     #[tokio::test]
     async fn test_engine_lifecycle_lock_serializes_acquirers() {
