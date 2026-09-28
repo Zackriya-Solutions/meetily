@@ -26,6 +26,7 @@ pub struct NewSpeaker {
     pub speech_seconds: f64,
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub struct SplitRow {
     pub text: String,
     pub start_s: f64,

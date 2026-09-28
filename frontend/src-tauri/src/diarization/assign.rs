@@ -9,6 +9,9 @@ pub const MIXED_MIN_SECONDS: f64 = 1.5;
 pub const MIXED_MIN_FRACTION: f64 = 0.3;
 pub const NEAREST_TURN_MAX_GAP_S: f64 = 1.0;
 pub const MIN_PIECE_S: f64 = 0.3;
+/// Shortest piece sent to a transcription engine when a row or segment is cut at speaker
+/// changes: whisper.cpp returns no text for input under one second.
+pub const MIN_TRANSCRIBED_PIECE_S: f64 = 1.0;
 pub const CARRY_OVER_MIN_SIMILARITY: f32 = 0.6;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -69,23 +72,7 @@ pub fn pieces_for_span(span: RowSpan, turns: &[Turn]) -> Vec<Turn> {
             _ => pieces.push(Turn { start_s: start, end_s: end, key: t.key.clone() }),
         }
     }
-    // Fold tiny pieces into their predecessor (or successor for the first one).
-    let mut merged: Vec<Turn> = Vec::with_capacity(pieces.len());
-    for p in pieces {
-        if p.duration() < MIN_PIECE_S {
-            if let Some(last) = merged.last_mut() {
-                last.end_s = p.end_s;
-                continue;
-            }
-        }
-        match merged.last_mut() {
-            Some(last) if last.key == p.key => last.end_s = p.end_s,
-            Some(last) if last.duration() < MIN_PIECE_S => {
-                *last = Turn { start_s: last.start_s, end_s: p.end_s, key: p.key.clone() };
-            }
-            _ => merged.push(p),
-        }
-    }
+    let mut merged = fold_short_pieces(pieces, MIN_PIECE_S);
     // Close gaps so no audio falls between pieces, and stretch to the span edges.
     for i in 1..merged.len() {
         let prev_end = merged[i - 1].end_s;
@@ -96,6 +83,29 @@ pub fn pieces_for_span(span: RowSpan, turns: &[Turn]) -> Vec<Turn> {
     }
     if let Some(last) = merged.last_mut() {
         last.end_s = span.end_s;
+    }
+    merged
+}
+
+/// Fold pieces shorter than `min_s` into their predecessor (or successor for the first one) and
+/// join neighbours with the same speaker. Contiguous input stays contiguous; only a span shorter
+/// than `min_s` can leave a piece that short.
+pub fn fold_short_pieces(pieces: Vec<Turn>, min_s: f64) -> Vec<Turn> {
+    let mut merged: Vec<Turn> = Vec::with_capacity(pieces.len());
+    for p in pieces {
+        if p.duration() < min_s {
+            if let Some(last) = merged.last_mut() {
+                last.end_s = p.end_s;
+                continue;
+            }
+        }
+        match merged.last_mut() {
+            Some(last) if last.key == p.key => last.end_s = p.end_s,
+            Some(last) if last.duration() < min_s => {
+                *last = Turn { start_s: last.start_s, end_s: p.end_s, key: p.key.clone() };
+            }
+            _ => merged.push(p),
+        }
     }
     merged
 }
@@ -127,12 +137,13 @@ pub fn label_rows(rows: &[Option<RowSpan>], turns: &[Turn]) -> Vec<RowLabel> {
         .collect()
 }
 
-/// Cut VAD segments at speaker changes so each piece carries one speaker.
+/// Cut VAD segments at speaker changes so each piece carries one speaker. Pieces are at least
+/// `MIN_TRANSCRIBED_PIECE_S` long, because each one is transcribed on its own.
 pub fn split_segments_at_turns(segments: Vec<SpeechSegment>, turns: &[Turn], sample_rate: usize) -> Vec<SpeechSegment> {
     let mut out = Vec::with_capacity(segments.len());
     for seg in segments {
         let span = RowSpan { start_s: seg.start_timestamp_ms / 1000.0, end_s: seg.end_timestamp_ms / 1000.0 };
-        let pieces = pieces_for_span(span, turns);
+        let pieces = fold_short_pieces(pieces_for_span(span, turns), MIN_TRANSCRIBED_PIECE_S);
         if pieces.len() <= 1 {
             out.push(seg);
             continue;
@@ -281,6 +292,48 @@ mod tests {
         assert_eq!(out[1].samples.len(), 16000 * 2);
         assert_eq!(out[0].end_timestamp_ms, 3000.0);
         assert_eq!(out[1].start_timestamp_ms, 3000.0);
+    }
+
+    #[test]
+    fn vad_segment_pieces_are_never_shorter_than_a_second() {
+        let seg = |s: f64, e: f64| SpeechSegment {
+            samples: vec![0.1; ((e - s) * 16000.0).round() as usize],
+            start_timestamp_ms: s * 1000.0,
+            end_timestamp_ms: e * 1000.0,
+            confidence: 0.9,
+        };
+        let turns = vec![
+            turn(0.0, 3.0, "spk_0"),
+            turn(3.0, 3.6, "spk_1"),
+            turn(3.6, 6.0, "spk_2"),
+            turn(10.0, 12.6, "spk_0"),
+            turn(12.6, 13.3, "spk_1"),
+            turn(13.3, 16.0, "spk_0"),
+        ];
+        let out = split_segments_at_turns(vec![seg(0.0, 6.0), seg(10.0, 16.0)], &turns, 16000);
+        for piece in &out {
+            let seconds = (piece.end_timestamp_ms - piece.start_timestamp_ms) / 1000.0;
+            assert!(seconds >= MIN_TRANSCRIBED_PIECE_S, "piece {:?} is {seconds}s", (piece.start_timestamp_ms, piece.end_timestamp_ms));
+            assert_eq!(piece.samples.len(), (seconds * 16000.0).round() as usize);
+        }
+        let bounds: Vec<(f64, f64)> = out.iter().map(|p| (p.start_timestamp_ms, p.end_timestamp_ms)).collect();
+        assert_eq!(bounds, vec![(0.0, 3600.0), (3600.0, 6000.0), (10000.0, 16000.0)]);
+        assert_eq!(out.iter().map(|p| p.samples.len()).sum::<usize>(), 2 * 6 * 16000, "no audio is dropped");
+    }
+
+    #[test]
+    fn segment_shorter_than_a_second_is_not_cut() {
+        let seg = SpeechSegment { samples: vec![0.1; 12800], start_timestamp_ms: 0.0, end_timestamp_ms: 800.0, confidence: 0.9 };
+        let out = split_segments_at_turns(vec![seg], &[turn(0.0, 0.4, "spk_0"), turn(0.4, 0.8, "spk_1")], 16000);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].samples.len(), 12800);
+    }
+
+    #[test]
+    fn short_pieces_fold_into_a_neighbour_at_the_transcription_minimum() {
+        let pieces = vec![turn(0.0, 0.6, "spk_1"), turn(0.6, 3.0, "spk_0"), turn(3.0, 3.7, "spk_1"), turn(3.7, 6.0, "spk_2")];
+        let folded = fold_short_pieces(pieces, MIN_TRANSCRIBED_PIECE_S);
+        assert_eq!(folded, vec![turn(0.0, 3.7, "spk_0"), turn(3.7, 6.0, "spk_2")]);
     }
 
     #[test]

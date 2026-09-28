@@ -1,5 +1,8 @@
 //! Speaker identification jobs: one at a time, queued, cancellable.
-use super::assign::{carry_over_names, label_rows, RowLabel, RowSpan, CARRY_OVER_MIN_SIMILARITY};
+use super::assign::{
+    carry_over_names, fold_short_pieces, label_rows, RowLabel, RowSpan, CARRY_OVER_MIN_SIMILARITY,
+    MIN_TRANSCRIBED_PIECE_S,
+};
 use super::diarizer::{Diarization, DiarizeOptions, Diarizer};
 use super::models::{self, DownloadProgress};
 use super::timing::{read_metadata, recording_time_map, TimeMap};
@@ -16,6 +19,7 @@ use once_cell::sync::Lazy;
 use serde::Serialize;
 use sqlx::{Row, SqliteConnection, SqlitePool};
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -480,7 +484,52 @@ struct RowUpdates {
     row_labels: Vec<(String, Option<String>)>,
     row_splits: Vec<(String, Vec<SplitRow>)>,
     pieces_done: usize,
+    /// Rows with a speaker change that kept their majority label because a piece failed.
+    kept_whole: usize,
     warning: Option<String>,
+}
+
+/// What happens to a row with a speaker change.
+#[derive(Debug, PartialEq)]
+enum RowDecision {
+    /// Keep the row and its text; label it with this speaker.
+    Whole(String),
+    /// Replace the row with these pieces.
+    Split(Vec<SplitRow>),
+}
+
+/// The pieces of a row with a speaker change to transcribe, each with its 16 kHz sample range.
+/// Pieces shorter than `MIN_TRANSCRIBED_PIECE_S` are folded into a neighbour first. None when the
+/// row should stay whole: fewer than two pieces remain, or a piece has no audio.
+fn plan_row_pieces(pieces: Vec<Turn>, time_map: TimeMap, samples_len: usize) -> Option<Vec<(Turn, Range<usize>)>> {
+    let pieces = fold_short_pieces(pieces, MIN_TRANSCRIBED_PIECE_S);
+    if pieces.len() < 2 {
+        return None;
+    }
+    pieces
+        .into_iter()
+        .map(|p| {
+            // Pieces are in transcript time; cut the audio at the matching file positions.
+            let a = ((time_map.file_s(p.start_s) * 16000.0) as usize).min(samples_len);
+            let b = ((time_map.file_s(p.end_s) * 16000.0) as usize).min(samples_len);
+            (b > a).then_some((p, a..b))
+        })
+        .collect()
+}
+
+/// Split the row only when every piece came back with text; otherwise its words would be lost,
+/// so it stays whole with the majority label.
+fn decide_row_update(majority: String, pieces: &[Turn], texts: &[String]) -> RowDecision {
+    if pieces.len() < 2 || texts.len() != pieces.len() || texts.iter().any(|t| t.trim().is_empty()) {
+        return RowDecision::Whole(majority);
+    }
+    RowDecision::Split(
+        pieces
+            .iter()
+            .zip(texts)
+            .map(|(p, t)| SplitRow { text: t.trim().to_string(), start_s: p.start_s, end_s: p.end_s, speaker: p.key.clone() })
+            .collect(),
+    )
 }
 
 async fn meeting_exists(conn: &mut SqliteConnection, meeting_id: &str) -> Result<bool> {
@@ -624,7 +673,7 @@ async fn run_identify<R: Runtime>(app: &AppHandle<R>, req: &IdentifyRequest) -> 
         unload_engine_after_batch(engine.is_parakeet()).await;
     }
     drop(batch_guard);
-    let RowUpdates { row_labels, row_splits, pieces_done, warning: piece_warning } = updates?;
+    let RowUpdates { row_labels, row_splits, pieces_done, kept_whole, warning: piece_warning } = updates?;
     let t_split = split_started.elapsed();
     if is_cancelled() {
         return Err(Cancelled.into());
@@ -651,7 +700,7 @@ async fn run_identify<R: Runtime>(app: &AppHandle<R>, req: &IdentifyRequest) -> 
 
     let total = started.elapsed();
     log::info!(
-        "Identify job {}: {:.1}s audio | decode {:?} | diarize {:?} | engine load {:?} | split {} rows/{} pieces {:?} | save {:?} | total {:?} ({:.2}% of audio)",
+        "Identify job {}: {:.1}s audio | decode {:?} | diarize {:?} | engine load {:?} | split {} rows/{} pieces ({} kept whole) {:?} | save {:?} | total {:?} ({:.2}% of audio)",
         meeting_id,
         decoded_s,
         t_decode,
@@ -659,6 +708,7 @@ async fn run_identify<R: Runtime>(app: &AppHandle<R>, req: &IdentifyRequest) -> 
         t_load,
         mixed_count,
         pieces_done,
+        kept_whole,
         t_split,
         t_save,
         total,
@@ -669,7 +719,7 @@ async fn run_identify<R: Runtime>(app: &AppHandle<R>, req: &IdentifyRequest) -> 
 }
 
 /// Label every row and re-transcribe the pieces of rows with a clear speaker change. A piece
-/// that fails to transcribe leaves its row whole with the majority label.
+/// that fails to transcribe or comes back empty leaves its row whole with the majority label.
 #[allow(clippy::too_many_arguments)]
 async fn build_row_updates<R: Runtime>(
     app: &AppHandle<R>,
@@ -682,7 +732,8 @@ async fn build_row_updates<R: Runtime>(
     mixed_count: usize,
     language: Option<String>,
 ) -> Result<RowUpdates> {
-    let mut out = RowUpdates { row_labels: Vec::new(), row_splits: Vec::new(), pieces_done: 0, warning: None };
+    let mut out =
+        RowUpdates { row_labels: Vec::new(), row_splits: Vec::new(), pieces_done: 0, kept_whole: 0, warning: None };
     let mut done_mixed = 0usize;
     for (row, label) in rows.iter().zip(labels) {
         if is_cancelled() {
@@ -704,32 +755,33 @@ async fn build_row_updates<R: Runtime>(
                     out.row_labels.push((row.id.clone(), Some(majority)));
                     continue;
                 };
-                let mut split = Vec::new();
-                for p in &pieces {
-                    // Pieces are in transcript time; cut the audio at the matching file positions.
-                    let a = ((time_map.file_s(p.start_s) * 16000.0) as usize).min(samples.len());
-                    let b = ((time_map.file_s(p.end_s) * 16000.0) as usize).min(samples.len());
-                    if b <= a {
-                        continue;
-                    }
-                    let text = match engine.transcribe(samples[a..b].to_vec(), language.clone()).await {
-                        Ok(t) => t,
+                let Some(plan) = plan_row_pieces(pieces, time_map, samples.len()) else {
+                    out.row_labels.push((row.id.clone(), Some(majority)));
+                    continue;
+                };
+                let mut texts = Vec::with_capacity(plan.len());
+                for (_, range) in &plan {
+                    match engine.transcribe(samples[range.clone()].to_vec(), language.clone()).await {
+                        Ok(t) => texts.push(t),
                         Err(e) => {
                             log::warn!("Piece transcription failed for row {}, keeping majority label: {:#}", row.id, e);
-                            out.warning.get_or_insert_with(|| "Some lines with two speakers were kept whole".into());
-                            split.clear();
                             break;
                         }
-                    };
+                    }
                     out.pieces_done += 1;
-                    if !text.trim().is_empty() {
-                        split.push(SplitRow { text: text.trim().to_string(), start_s: p.start_s, end_s: p.end_s, speaker: p.key.clone() });
+                    if texts.last().is_some_and(|t| t.trim().is_empty()) {
+                        log::warn!("A piece of row {} transcribed to no text, keeping majority label", row.id);
+                        break;
                     }
                 }
-                if split.is_empty() {
-                    out.row_labels.push((row.id.clone(), Some(majority)));
-                } else {
-                    out.row_splits.push((row.id.clone(), split));
+                let pieces: Vec<Turn> = plan.into_iter().map(|(p, _)| p).collect();
+                match decide_row_update(majority, &pieces, &texts) {
+                    RowDecision::Whole(label) => {
+                        out.kept_whole += 1;
+                        out.warning.get_or_insert_with(|| "Some lines with two speakers were kept whole".into());
+                        out.row_labels.push((row.id.clone(), Some(label)));
+                    }
+                    RowDecision::Split(split) => out.row_splits.push((row.id.clone(), split)),
                 }
             }
         }
@@ -827,6 +879,60 @@ mod tests {
         assert!(is_retranscribing(id));
         drop(claim);
         assert!(!is_retranscribing(id));
+    }
+
+    fn turn(s: f64, e: f64, k: &str) -> Turn {
+        Turn { start_s: s, end_s: e, key: k.into() }
+    }
+
+    fn split_row(text: &str, s: f64, e: f64, k: &str) -> SplitRow {
+        SplitRow { text: text.into(), start_s: s, end_s: e, speaker: k.into() }
+    }
+
+    #[test]
+    fn row_with_an_empty_piece_stays_whole_with_its_majority_label() {
+        let pieces = vec![turn(0.0, 2.0, "spk_0"), turn(2.0, 4.5, "spk_1")];
+        let texts = vec!["hello there".to_string(), "  ".to_string()];
+        assert_eq!(decide_row_update("spk_1".into(), &pieces, &texts), RowDecision::Whole("spk_1".into()));
+        let texts = vec![String::new(), "general kenobi".to_string()];
+        assert_eq!(decide_row_update("spk_1".into(), &pieces, &texts), RowDecision::Whole("spk_1".into()));
+    }
+
+    #[test]
+    fn row_splits_when_every_piece_has_text() {
+        let pieces = vec![turn(0.0, 2.0, "spk_0"), turn(2.0, 4.5, "spk_1")];
+        let texts = vec![" hello there ".to_string(), "general kenobi".to_string()];
+        assert_eq!(
+            decide_row_update("spk_1".into(), &pieces, &texts),
+            RowDecision::Split(vec![split_row("hello there", 0.0, 2.0, "spk_0"), split_row("general kenobi", 2.0, 4.5, "spk_1")])
+        );
+    }
+
+    #[test]
+    fn row_stays_whole_when_texts_do_not_match_its_pieces() {
+        let pieces = vec![turn(0.0, 2.0, "spk_0"), turn(2.0, 4.5, "spk_1")];
+        let texts = vec!["hello there".to_string()];
+        assert_eq!(decide_row_update("spk_1".into(), &pieces, &texts), RowDecision::Whole("spk_1".into()));
+    }
+
+    #[test]
+    fn short_pieces_are_folded_before_transcription() {
+        let pieces = vec![turn(10.0, 12.0, "spk_0"), turn(12.0, 12.5, "spk_1"), turn(12.5, 15.0, "spk_2")];
+        let plan = plan_row_pieces(pieces, TimeMap::Identity, 16_000 * 20).expect("two pieces remain");
+        assert_eq!(plan.iter().map(|(t, _)| t.clone()).collect::<Vec<_>>(), vec![turn(10.0, 12.5, "spk_0"), turn(12.5, 15.0, "spk_2")]);
+        assert_eq!(plan.iter().map(|(_, r)| r.clone()).collect::<Vec<_>>(), vec![160_000..200_000, 200_000..240_000]);
+        for (t, r) in &plan {
+            assert!(t.duration() >= MIN_TRANSCRIBED_PIECE_S);
+            assert!(r.len() >= 16_000);
+        }
+    }
+
+    #[test]
+    fn row_stays_whole_when_folding_leaves_one_piece_or_a_piece_has_no_audio() {
+        let short = vec![turn(0.0, 0.75, "spk_0"), turn(0.75, 1.5, "spk_1")];
+        assert!(plan_row_pieces(short, TimeMap::Identity, 16_000 * 20).is_none());
+        let past_the_end = vec![turn(0.0, 2.0, "spk_0"), turn(2.0, 4.0, "spk_1")];
+        assert!(plan_row_pieces(past_the_end, TimeMap::Identity, 16_000 * 2).is_none());
     }
 
     #[tokio::test]
