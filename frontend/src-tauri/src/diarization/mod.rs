@@ -3,9 +3,12 @@
 pub mod assign;
 pub mod cluster;
 pub mod commands;
+pub mod diarizer;
+pub mod embedding;
 pub mod fbank;
 pub mod models;
 pub mod reconstruct;
+pub mod segmentation;
 
 use serde::{Deserialize, Serialize};
 
