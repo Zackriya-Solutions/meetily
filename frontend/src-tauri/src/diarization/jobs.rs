@@ -358,6 +358,45 @@ pub async fn wait_for_audio(folder: &Path, timeout: Duration, cancelled: &(dyn F
     }
 }
 
+/// Wait while `recording()` reports a live recording, calling `waiting` once if it has to wait.
+pub async fn wait_while_recording<F, Fut>(
+    recording: F,
+    cancelled: &(dyn Fn() -> bool + Sync),
+    waiting: impl FnOnce(),
+    poll: Duration,
+) -> Result<()>
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    let mut waiting = Some(waiting);
+    while recording().await {
+        if cancelled() {
+            return Err(Cancelled.into());
+        }
+        if let Some(w) = waiting.take() {
+            w();
+        }
+        tokio::time::sleep(poll).await;
+    }
+    Ok(())
+}
+
+/// Hold an automatic job before a heavy stage while a recording is live, so identification does
+/// not compete with live transcription for CPU. Jobs the user started are not held.
+async fn yield_to_recording<R: Runtime>(app: &AppHandle<R>, req: &IdentifyRequest, percent: u32) -> Result<()> {
+    if !req.automatic {
+        return Ok(());
+    }
+    wait_while_recording(
+        crate::audio::recording_commands::is_recording,
+        &is_cancelled,
+        || emit_progress(app, &req.meeting_id, "waiting", percent, "Waiting for the recording to finish…"),
+        LOCK_POLL,
+    )
+    .await
+}
+
 /// 16 kHz samples plus what the time map needs to know about the decoded file.
 struct DecodedMeetingAudio {
     samples: Arc<Vec<f32>>,
@@ -554,6 +593,7 @@ async fn run_identify<R: Runtime>(app: &AppHandle<R>, req: &IdentifyRequest) -> 
     let wait = if req.automatic { AUTO_AUDIO_WAIT } else { Duration::ZERO };
     let audio_path = wait_for_audio(&req.folder_path, wait, &is_cancelled).await?;
 
+    yield_to_recording(app, req, 1).await?;
     emit_progress(app, &meeting_id, "audio", 1, "Decoding audio…");
     let decoded = decode_16k(audio_path).await?;
     let samples = decoded.samples;
@@ -589,6 +629,7 @@ async fn run_identify<R: Runtime>(app: &AppHandle<R>, req: &IdentifyRequest) -> 
     })
     .collect();
 
+    yield_to_recording(app, req, 2).await?;
     let diarize_started = Instant::now();
     let (app_dl, app_wait, app_p) = (app.clone(), app.clone(), app.clone());
     let (id_dl, id_wait, id_p) = (meeting_id.clone(), meeting_id.clone(), meeting_id.clone());
@@ -638,6 +679,7 @@ async fn run_identify<R: Runtime>(app: &AppHandle<R>, req: &IdentifyRequest) -> 
     let load_started = Instant::now();
     let mut batch_guard: Option<tokio::sync::OwnedMutexGuard<()>> = None;
     let engine = if mixed_count > 0 && timing_ok {
+        yield_to_recording(app, req, 86).await?;
         if batch_engine_busy() {
             emit_progress(app, &meeting_id, "waiting", 86, "Waiting for another transcription to finish…");
         }
@@ -933,6 +975,36 @@ mod tests {
         assert!(plan_row_pieces(short, TimeMap::Identity, 16_000 * 20).is_none());
         let past_the_end = vec![turn(0.0, 2.0, "spk_0"), turn(2.0, 4.0, "spk_1")];
         assert!(plan_row_pieces(past_the_end, TimeMap::Identity, 16_000 * 2).is_none());
+    }
+
+    #[tokio::test]
+    async fn automatic_job_waits_until_the_recording_stops() {
+        let polls = std::sync::atomic::AtomicUsize::new(0);
+        let waits = std::sync::atomic::AtomicUsize::new(0);
+        let recording = || {
+            let n = polls.fetch_add(1, Ordering::SeqCst);
+            async move { n < 3 }
+        };
+        wait_while_recording(recording, &|| false, || { waits.fetch_add(1, Ordering::SeqCst); }, Duration::from_millis(1))
+            .await
+            .unwrap();
+        assert_eq!(polls.load(Ordering::SeqCst), 4, "polled until the recording stopped");
+        assert_eq!(waits.load(Ordering::SeqCst), 1, "the waiting message is sent once");
+    }
+
+    #[tokio::test]
+    async fn job_is_not_held_without_a_recording() {
+        let waits = std::sync::atomic::AtomicUsize::new(0);
+        wait_while_recording(|| async { false }, &|| false, || { waits.fetch_add(1, Ordering::SeqCst); }, Duration::from_millis(1))
+            .await
+            .unwrap();
+        assert_eq!(waits.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn waiting_for_the_recording_stops_when_cancelled() {
+        let err = wait_while_recording(|| async { true }, &|| true, || {}, Duration::from_millis(1)).await.unwrap_err();
+        assert!(err.is::<Cancelled>());
     }
 
     #[tokio::test]

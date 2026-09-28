@@ -77,6 +77,7 @@ impl EmbeddingModel {
         let session = Session::builder()?
             .with_optimization_level(GraphOptimizationLevel::Level3)?
             .with_execution_providers(vec![CPUExecutionProvider::default().build()])?
+            .with_intra_threads(super::intra_op_threads())?
             .commit_from_memory(&model)?;
         let meta = |key: &str| session.metadata().ok().and_then(|m| m.custom(key).ok().flatten());
         let scale_to_int16 = meta("normalize_samples").map(|v| v == "0").unwrap_or(false);

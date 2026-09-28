@@ -33,6 +33,7 @@ impl SegmentationModel {
         let session = Session::builder()?
             .with_optimization_level(GraphOptimizationLevel::Level3)?
             .with_execution_providers(vec![CPUExecutionProvider::default().build()])?
+            .with_intra_threads(super::intra_op_threads())?
             .commit_from_file(path)?;
         let window_samples = meta_usize(&session, "window_size", 160_000);
         let geometry = FrameGeometry {
