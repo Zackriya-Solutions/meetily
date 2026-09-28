@@ -281,12 +281,12 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs DIARIZATION_REF_DIR with models, mix.wav and reference.json"]
+    #[ignore = "needs DIARIZATION_REF_DIR with models, mix_en.wav and reference.json"]
     fn separates_speakers_in_the_synthetic_meeting() {
         let dir = std::path::PathBuf::from(std::env::var("DIARIZATION_REF_DIR").expect("DIARIZATION_REF_DIR"));
         let reference: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(dir.join("reference.json")).unwrap()).unwrap();
-        let samples = crate::audio::decoder::decode_audio_file(&dir.join("mix.wav")).unwrap().to_whisper_format();
+        let samples = crate::audio::decoder::decode_audio_file(&dir.join("mix_en.wav")).unwrap().to_whisper_format();
 
         let started = std::time::Instant::now();
         let mut diarizer = Diarizer::load(&dir).unwrap();
@@ -295,7 +295,7 @@ mod tests {
 
         // Each true speaker maps to exactly one key, and different speakers to different keys.
         let mut key_of: std::collections::HashMap<String, String> = Default::default();
-        for seg in reference["truth"].as_array().unwrap() {
+        for seg in reference["en_truth"].as_array().unwrap() {
             let (s, e, who) = (seg[0].as_f64().unwrap(), seg[1].as_f64().unwrap(), seg[2].as_str().unwrap().to_string());
             let key = match &label_rows(&[Some(RowSpan { start_s: s, end_s: e })], &d.turns)[0] {
                 RowLabel::Single(k) => k.clone(),
@@ -311,22 +311,41 @@ mod tests {
         assert_eq!(d.speakers.len(), key_of.len());
     }
 
-    #[test]
-    #[ignore = "needs DIARIZATION_REF_DIR with models, wavs and reference.json"]
-    fn embeddings_match_reference_and_separate_speakers() {
-        let dir = std::path::PathBuf::from(std::env::var("DIARIZATION_REF_DIR").expect("DIARIZATION_REF_DIR"));
-        let reference: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(dir.join("reference.json")).unwrap()).unwrap();
+    /// Our embedding of every clip listed under `key` in reference.json, checked against the
+    /// reference embedding of the same clip. Returns (speaker, embedding) pairs.
+    fn embed_reference_clips(dir: &std::path::Path, reference: &serde_json::Value, key: &str) -> Vec<(String, Vec<f32>)> {
         let mut model = crate::diarization::embedding::EmbeddingModel::load(&dir.join("campplus-voxceleb.onnx")).unwrap();
         let mut ours = Vec::new();
-        for (file, expected) in reference["embeddings"].as_object().unwrap() {
+        for (file, expected) in reference[key].as_object().unwrap_or_else(|| panic!("reference.json has no {key}")) {
             let samples = crate::audio::decoder::decode_audio_file(&dir.join(file)).unwrap().to_whisper_format();
             let e = model.embed(&samples).unwrap();
             let expected: Vec<f32> = expected.as_array().unwrap().iter().map(|v| v.as_f64().unwrap() as f32).collect();
             let sim = crate::diarization::cluster::cosine(&e, &expected);
             assert!(sim >= 0.999, "{file}: cosine to reference {sim}");
-            ours.push((file.split('-').next().unwrap().to_string(), e));
+            let name = std::path::Path::new(file).file_name().unwrap().to_str().unwrap();
+            ours.push((name.split('-').next().unwrap().to_string(), e));
         }
+        ours
+    }
+
+    #[test]
+    #[ignore = "needs DIARIZATION_REF_DIR with models, wavs and reference.json"]
+    fn embeddings_match_reference() {
+        let dir = std::path::PathBuf::from(std::env::var("DIARIZATION_REF_DIR").expect("DIARIZATION_REF_DIR"));
+        let reference: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("reference.json")).unwrap()).unwrap();
+        let checked = embed_reference_clips(&dir, &reference, "embeddings").len()
+            + embed_reference_clips(&dir, &reference, "en_embeddings").len();
+        eprintln!("{checked} clips match the reference embeddings");
+    }
+
+    #[test]
+    #[ignore = "needs DIARIZATION_REF_DIR with models, English wavs and reference.json"]
+    fn embeddings_separate_english_speakers() {
+        let dir = std::path::PathBuf::from(std::env::var("DIARIZATION_REF_DIR").expect("DIARIZATION_REF_DIR"));
+        let reference: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("reference.json")).unwrap()).unwrap();
+        let ours = embed_reference_clips(&dir, &reference, "en_embeddings");
         for (i, (a, ea)) in ours.iter().enumerate() {
             for (b, eb) in ours.iter().skip(i + 1) {
                 let s = crate::diarization::cluster::cosine(ea, eb);
