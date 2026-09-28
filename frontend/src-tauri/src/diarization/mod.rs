@@ -1,6 +1,7 @@
 //! Offline speaker diarization: who spoke when, per individual person.
 
 pub mod cluster;
+pub mod reconstruct;
 
 use serde::{Deserialize, Serialize};
 
