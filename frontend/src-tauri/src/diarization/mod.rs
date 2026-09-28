@@ -9,6 +9,7 @@ pub mod fbank;
 pub mod models;
 pub mod reconstruct;
 pub mod segmentation;
+pub mod timing;
 
 use serde::{Deserialize, Serialize};
 
