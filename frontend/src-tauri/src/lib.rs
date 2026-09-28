@@ -675,6 +675,9 @@ pub fn run() {
             // Set Parakeet models directory
             parakeet_engine::commands::set_models_directory(&_app.handle());
 
+            // Set speaker identification models directory
+            diarization::models::set_models_directory(&_app.handle());
+
             // Initialize Parakeet engine on startup
             tauri::async_runtime::spawn(async {
                 if let Err(e) = parakeet_engine::commands::parakeet_init().await {
@@ -955,6 +958,10 @@ pub fn run() {
             audio::import::start_import_audio_command,
             audio::import::cancel_import_command,
             audio::import::is_import_in_progress_command,
+            // Speaker identification commands
+            diarization::commands::diarization_models_status,
+            diarization::commands::diarization_download_models,
+            diarization::commands::diarization_delete_models,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

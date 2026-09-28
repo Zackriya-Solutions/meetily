@@ -2,7 +2,9 @@
 
 pub mod assign;
 pub mod cluster;
+pub mod commands;
 pub mod fbank;
+pub mod models;
 pub mod reconstruct;
 
 use serde::{Deserialize, Serialize};
