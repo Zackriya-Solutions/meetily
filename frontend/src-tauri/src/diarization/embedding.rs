@@ -23,8 +23,8 @@ const COUNT_INCLUDE_PAD_ONE: &[u8] = b"\x0a\x11count_include_pad\x18\x01";
 ///
 /// CAM++ pools segments with AveragePool(ceil_mode=1, count_include_pad=1, pads=0). onnxruntime
 /// before 1.29 divides the overhanging last window by the full kernel instead of by the frames it
-/// covers, which shrinks that segment's statistics and corrupts most embeddings
-/// (microsoft/onnxruntime#29629, fixed in 1.29). With zero pads the only "padding" is that
+/// covers, which shrinks that segment's statistics and corrupts most embeddings (fixed in
+/// onnxruntime 1.29). With zero pads the only "padding" is that
 /// overhang, so excluding it gives exactly the PyTorch result on every onnxruntime version, and
 /// the patch is a no-op where the bug is fixed. Returns the patched bytes and the number of
 /// attributes rewritten.
