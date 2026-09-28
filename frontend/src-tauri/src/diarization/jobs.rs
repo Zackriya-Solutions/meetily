@@ -12,6 +12,7 @@ use crate::audio::common::{
     acquire_batch_engine_lock, batch_engine_busy, unload_engine_after_batch, write_transcripts_json, BatchEngine,
 };
 use crate::audio::decoder::decode_audio_file;
+use crate::database::repositories::meeting::MeetingsRepository;
 use crate::database::repositories::speaker::{NewSpeaker, SpeakerWrite, SpeakersRepository, SplitRow};
 use crate::state::AppState;
 use anyhow::{anyhow, Result};
@@ -513,6 +514,19 @@ pub async fn rewrite_transcripts_json(pool: &SqlitePool, meeting_id: &str, folde
         .map_err(|e| anyhow!("transcripts.json write task panicked: {}", e))?
 }
 
+/// The meeting's folder as stored in the database; `fallback` when it has none.
+async fn transcripts_json_folder(pool: &SqlitePool, meeting_id: &str, fallback: &Path) -> PathBuf {
+    match MeetingsRepository::get_meeting_metadata(pool, meeting_id).await {
+        Ok(Some(meeting)) => meeting.folder_path.filter(|f| !f.is_empty()).map(PathBuf::from),
+        Ok(None) => None,
+        Err(e) => {
+            log::warn!("Failed to read the folder of meeting {}: {}", meeting_id, e);
+            None
+        }
+    }
+    .unwrap_or_else(|| fallback.to_path_buf())
+}
+
 struct StoredRow {
     id: String,
     span: Option<RowSpan>,
@@ -735,7 +749,8 @@ async fn run_identify<R: Runtime>(app: &AppHandle<R>, req: &IdentifyRequest) -> 
     SpeakersRepository::replace_for_meeting(&mut tx, &meeting_id, &SpeakerWrite { speakers, row_labels, row_splits }).await?;
     tx.commit().await?;
     drop(conn);
-    if let Err(e) = rewrite_transcripts_json(&pool, &meeting_id, &req.folder_path).await {
+    let json_folder = transcripts_json_folder(&pool, &meeting_id, &req.folder_path).await;
+    if let Err(e) = rewrite_transcripts_json(&pool, &meeting_id, &json_folder).await {
         log::warn!("Failed to rewrite transcripts.json for {}: {:#}", meeting_id, e);
     }
     let t_save = save_started.elapsed();
@@ -975,6 +990,24 @@ mod tests {
         assert!(plan_row_pieces(short, TimeMap::Identity, 16_000 * 20).is_none());
         let past_the_end = vec![turn(0.0, 2.0, "spk_0"), turn(2.0, 4.0, "spk_1")];
         assert!(plan_row_pieces(past_the_end, TimeMap::Identity, 16_000 * 2).is_none());
+    }
+
+    #[tokio::test]
+    async fn transcripts_json_goes_to_the_stored_meeting_folder() {
+        use crate::database::test_support::{migrated_pool, seed_meeting};
+        let pool = migrated_pool().await;
+        seed_meeting(&pool, "stored", &[]).await;
+        seed_meeting(&pool, "no-folder", &[]).await;
+        sqlx::query("UPDATE meetings SET folder_path = ? WHERE id = ?")
+            .bind("/meetings/stored")
+            .bind("stored")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let given = Path::new("/from/request");
+        assert_eq!(transcripts_json_folder(&pool, "stored", given).await, PathBuf::from("/meetings/stored"));
+        assert_eq!(transcripts_json_folder(&pool, "no-folder", given).await, given);
+        assert_eq!(transcripts_json_folder(&pool, "missing", given).await, given);
     }
 
     #[tokio::test]
