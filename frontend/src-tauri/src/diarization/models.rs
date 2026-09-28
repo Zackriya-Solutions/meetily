@@ -29,6 +29,7 @@ pub const SEGMENTATION: ModelFile = ModelFile {
 };
 
 /// 3D-Speaker CAM++ trained on VoxCeleb (Apache-2.0), ONNX export, pinned to an immutable revision.
+/// Update `embedding::PATCHED_SHA256` together with this pin, or every load fails as a damaged model.
 pub const EMBEDDING: ModelFile = ModelFile {
     file_name: "campplus-voxceleb.onnx",
     url: "https://huggingface.co/csukuangfj/speaker-embedding-models/resolve/0743f301363dec56491a490f6d6cbc9d67f9a3bf/3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx",
