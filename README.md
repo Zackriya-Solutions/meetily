@@ -10,6 +10,7 @@ Turn user interviews into OpenSpec-ready development bundles — locally, privat
 [![CI](https://img.shields.io/github/actions/workflow/status/xmagcx/meet4specs/build-test.yml?style=flat-square&label=CI)](https://github.com/xmagcx/meet4specs/actions)
 [![Last commit](https://img.shields.io/github/last-commit/xmagcx/meet4specs?style=flat-square)](https://github.com/xmagcx/meet4specs/commits)
 [![Top language](https://img.shields.io/github/languages/top/xmagcx/meet4specs?style=flat-square)](https://github.com/xmagcx/meet4specs)
+[![Built with Gentle-AI](https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/docs/assets/brand/built-with-gentle-ai.png)](https://github.com/Gentleman-Programming/gentle-ai)
 </div>
 
 ## Quick Demo
@@ -246,17 +247,60 @@ Only for the **Generate development specification** feature, which invokes the O
 ### Is the old `backend/` folder still supported?
 No. It is retained for historical reference. Current supported architecture is the Tauri desktop app.
 
+## Uninstall
+
+### Windows
+
+Open **Settings > Apps > Installed apps > Meet4Specs > Uninstall**. Both the MSI and the NSIS (`-setup.exe`) installers register an uninstaller, so either install path can be removed this way.
+
+### macOS
+
+Drag `Meet4Specs.app` from `/Applications` to the Trash.
+
+### Linux
+
+- `.deb` install: `sudo apt remove meet4specs`
+- AppImage: delete the AppImage file.
+
+### Removing leftover local data
+
+Uninstalling the application does not remove locally stored app data. Delete these directories to remove transcripts, local database, settings, and downloaded transcription models (Whisper/Parakeet model files are stored inside these app-data directories):
+
+- Windows: `%APPDATA%\com.meet4specs.ai`
+- macOS: `~/Library/Application Support/com.meet4specs.ai`
+- Linux: `~/.local/share/com.meet4specs.ai`
+
 ## Contributing
 
 Contributions welcome. Best path:
 
 1. Open or confirm issue first.
-2. Branch from `devtest`.
+2. Branch from `dev`.
 3. Keep change focused.
 4. Add or update tests.
-5. Open PR against `devtest` and complete template.
+5. Open PR against `dev` and complete template.
 
 For details, read [CONTRIBUTING.md](CONTRIBUTING.md). If the repo starts labeling onboarding issues, `good first issue` is best place to begin.
+
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org)
+
+### Team roles
+
+This is a single-maintainer repository, so all signing roles are held by the same person:
+
+- **Authors:** [Mauricio Gallardo](https://github.com/xmagcx)
+- **Reviewers:** [Mauricio Gallardo](https://github.com/xmagcx)
+- **Approvers:** [Mauricio Gallardo](https://github.com/xmagcx)
+
+### Privacy policy
+
+See [PRIVACY_POLICY.md](PRIVACY_POLICY.md). The application processes audio and transcripts locally on your device, and only transfers data to networked systems when you explicitly enable optional analytics or configure a cloud AI provider.
+
+### Signed releases
+
+Signed installers for Windows, macOS, and Linux are published on the [GitHub Releases](https://github.com/xmagcx/meet4specs/releases) page. Each release signing request requires manual approval by the maintainer.
 
 ## Author & Contact
 
@@ -268,6 +312,8 @@ For details, read [CONTRIBUTING.md](CONTRIBUTING.md). If the repo starts labelin
 ## License
 
 Distributed under the MIT License. See [LICENSE.md](LICENSE.md).
+
+For third-party and upstream attribution, see [NOTICE.md](NOTICE.md).
 
 ## Star History
 

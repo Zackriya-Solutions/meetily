@@ -6,7 +6,14 @@ param(
 # tauri-auto.js only enables this signCommand when DIGICERT_KEYPAIR_ALIAS is set.
 # Keep this guard for direct/manual invocations so local builds do not fail.
 if (-not $env:DIGICERT_KEYPAIR_ALIAS) {
-    Write-Warning "DIGICERT_KEYPAIR_ALIAS is not set; skipping signing."
+    if ($env:CI) {
+        Write-Error "DIGICERT_KEYPAIR_ALIAS is not set; signing is mandatory in CI."
+        Write-Error "Release artifacts must never be produced unsigned; skipping signing here would work around signing enforcement."
+        Write-Error "Configure the DigiCert KeyLocker workflow step so this variable is available, then re-run the build."
+        exit 1
+    }
+
+    Write-Warning "DIGICERT_KEYPAIR_ALIAS is not set; skipping signing for local build."
     Write-Warning "CI builds set this variable via the DigiCert KeyLocker workflow step."
     Write-Warning "Distributing this unsigned binary will trigger Windows Defender SmartScreen."
     exit 0

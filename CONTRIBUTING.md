@@ -1,4 +1,4 @@
-# Contributing to Meeting Minutes Updates
+# Contributing to Meet4Specs
 
 Thank you for your interest in contributing to Meet4Specs! This document provides guidelines and instructions for contributing to this project.
 
@@ -7,8 +7,8 @@ Thank you for your interest in contributing to Meet4Specs! This document provide
 ### Branch Strategy
 
 - `main` - Production branch
-- `devtest` - Development and testing branch
-- Feature branches should be created from `devtest`
+- `dev` - Integration, development and testing branch
+- Feature branches should be created from `dev`
 
 ### Getting Started
 
@@ -21,16 +21,16 @@ Thank you for your interest in contributing to Meet4Specs! This document provide
    ```bash
    git remote add upstream https://github.com/xmagcx/meet4specs.git
    ```
-4. Create a new branch from `devtest`:
+4. Create a new branch from `dev`:
    ```bash
-   git checkout devtest
-   git pull upstream devtest
+   git checkout dev
+   git pull upstream dev
    git checkout -b feature/your-feature-name
    ```
 
 ### Development Process
 
-1. Always start your work from the `devtest` branch
+1. Always start your work from the `dev` branch
 2. Create a new branch for each feature/fix
 3. Make your changes
 4. Write or update tests as needed
@@ -52,13 +52,13 @@ Before starting work on a new feature or bug fix:
 
 ### Pull Request Process
 
-1. Create a PR from your feature branch to `devtest`
+1. Create a PR from your feature branch to `dev`
 2. Link the PR to the related issue using the issue number (e.g., "Fixes #123")
 3. Fill out the PR template completely
 4. Ensure CI checks pass
 5. Request review from at least one maintainer
 6. Address any review comments
-7. Once approved, the PR will be merged into `devtest`
+7. Once approved, the PR will be merged into `dev`
 
 ### PR Template
 
@@ -138,8 +138,18 @@ Types:
 
 1. PRs require at least one review
 2. Address all review comments
-3. Keep the PR up to date with `devtest`
+3. Keep the PR up to date with `dev`
 4. Squash commits if requested
+
+## Code signing roles
+
+Releases are code signed, and the signing process separates three roles:
+
+- **Authors** - contributors trusted to modify the source code without additional review. Their changes enter the codebase through the normal workflow.
+- **Reviewers** - every change proposed by someone who is not a committer must be reviewed by a team member before it is merged. `.github/CODEOWNERS` enforces maintainer review on every change.
+- **Approvers** - every signing request requires explicit approval before a signed artifact is produced.
+
+All three roles are currently held by the sole maintainer, Mauricio Gallardo (`@xmagcx`). Every release signing request requires manual approval; no signing request is approved automatically.
 
 ## Getting Help
 

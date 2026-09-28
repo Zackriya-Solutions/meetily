@@ -1,0 +1,10 @@
+# GitHub Actions workflows embed shell commands and expression interpolations
+# that cannot be wrapped without changing their meaning, so the 80-column rule
+# does not apply to this repository.
+extends: default
+
+rules:
+  line-length: disable
+  truthy:
+    # GitHub Actions uses `on:` as the trigger key.
+    allowed-values: ["true", "false", "on"]
