@@ -1,10 +1,26 @@
 "use client";
 
-import { Transcript, TranscriptSegmentData } from '@/types';
 import { TranscriptView } from '@/components/TranscriptView';
+import { MeetingSpeaker, SpeakerJobStatus, Transcript, TranscriptSegmentData } from '@/types';
+import { SpeakerChip } from '@/components/Speakers/SpeakerChip';
+import { SpeakerBar } from '@/components/Speakers/SpeakerBar';
+import { SpeakerJobBanner } from '@/components/Speakers/SpeakerJobBanner';
+import { useCallback, useMemo } from 'react';
 import { VirtualizedTranscriptView } from '@/components/VirtualizedTranscriptView';
 import { TranscriptButtonGroup } from './TranscriptButtonGroup';
-import { useMemo } from 'react';
+
+export interface SpeakerTools {
+  speakers: MeetingSpeaker[];
+  names: Record<string, string>;
+  editable: boolean;
+  job: SpeakerJobStatus | null;
+  onRename: (key: string, name: string) => Promise<void>;
+  onMerge: (fromKey: string, intoKey: string) => Promise<void>;
+  onReassign: (transcriptId: string, key: string | null) => Promise<void>;
+  onCancelJob: () => Promise<void>;
+  onStartIdentify: (numSpeakers: number | null) => Promise<void>;
+}
+
 
 interface TranscriptPanelProps {
   transcripts: Transcript[];
@@ -28,6 +44,8 @@ interface TranscriptPanelProps {
   meetingId?: string;
   meetingFolderPath?: string | null;
   onRefetchTranscripts?: () => Promise<void>;
+
+  speakerTools?: SpeakerTools;
 }
 
 export function TranscriptPanel({
@@ -48,6 +66,7 @@ export function TranscriptPanel({
   meetingId,
   meetingFolderPath,
   onRefetchTranscripts,
+  speakerTools,
 }: TranscriptPanelProps) {
   // Convert transcripts to segments if pagination is not used but we want virtualization
   const convertedSegments = useMemo(() => {
@@ -65,6 +84,26 @@ export function TranscriptPanel({
     }));
   }, [transcripts, usePagination, segments]);
 
+  // Stable for a given speakerTools, so the memoised chips skip re-rendering while the list scrolls.
+  const renderSpeaker = useCallback((segment: TranscriptSegmentData, isRunStart: boolean) => {
+    if (!speakerTools || !segment.speaker) return null;
+    // Rows inside a run only get the hover control, and only while editing is possible.
+    if (!isRunStart && !speakerTools.editable) return null;
+    return (
+      <SpeakerChip
+        compact={!isRunStart}
+        speakerKey={segment.speaker}
+        transcriptId={segment.id}
+        speakers={speakerTools.speakers}
+        names={speakerTools.names}
+        editable={speakerTools.editable}
+        onRename={speakerTools.onRename}
+        onMerge={speakerTools.onMerge}
+        onReassign={speakerTools.onReassign}
+      />
+    );
+  }, [speakerTools]);
+
   return (
     <div className="flex h-full min-w-0 w-full bg-white flex-col relative @container">
       {/* Title area */}
@@ -78,6 +117,13 @@ export function TranscriptPanel({
           onRefetchTranscripts={onRefetchTranscripts}
         />
       </div>
+
+      {speakerTools && (
+        <>
+          <SpeakerJobBanner job={speakerTools.job} onCancel={() => void speakerTools.onCancelJob()} />
+          <SpeakerBar speakers={speakerTools.speakers} names={speakerTools.names} editable={speakerTools.editable} onRename={speakerTools.onRename} />
+        </>
+      )}
 
       {/* Transcript content - use virtualized view for better performance */}
       <div className="flex-1 overflow-hidden pb-4">
@@ -95,6 +141,7 @@ export function TranscriptPanel({
           totalCount={totalCount}
           loadedCount={loadedCount}
           onLoadMore={onLoadMore}
+          renderSpeaker={speakerTools ? renderSpeaker : undefined}
         />
       </div>
 

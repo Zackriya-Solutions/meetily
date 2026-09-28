@@ -1,12 +1,14 @@
 "use client";
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { MeetingSummary, SummaryProcessResponse } from '@/types';
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
 import Analytics from '@/lib/analytics';
 import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
-import { TranscriptPanel } from '@/components/MeetingDetails/TranscriptPanel';
+import { TranscriptPanel, type SpeakerTools } from '@/components/MeetingDetails/TranscriptPanel';
+import { useMeetingSpeakers } from '@/hooks/useMeetingSpeakers';
+import { useSpeakerIdentification } from '@/hooks/useSpeakerIdentification';
 import { SummaryPanel } from '@/components/MeetingDetails/SummaryPanel';
 import { MeetingDetailsSplitView, type MeetingDetailsTab } from '@/components/MeetingDetails/MeetingDetailsSplitView';
 import { ModelConfig } from '@/components/ModelSettingsModal';
@@ -34,6 +36,7 @@ export default function PageContent({
   totalCount,
   loadedCount,
   onLoadMore,
+  onSpeakerChange,
 }: {
   meeting: any;
   summaryData: MeetingSummary | null;
@@ -49,6 +52,7 @@ export default function PageContent({
   totalCount?: number;
   loadedCount?: number;
   onLoadMore?: () => void;
+  onSpeakerChange?: (change: { transcriptId?: string; fromKey?: string; toKey: string }) => void;
 }) {
   console.log('📄 PAGE CONTENT: Initializing with data:', {
     meetingId: meeting.id,
@@ -71,11 +75,69 @@ export default function PageContent({
   const { serverAddress } = useSidebar();
 
   // Get model config from ConfigContext
-  const { modelConfig, setModelConfig, isModelConfigLoading } = useConfig();
+  const { modelConfig, setModelConfig, isModelConfigLoading, betaFeatures } = useConfig();
 
   // Custom hooks
   const meetingData = useMeetingData({ meeting, summaryData, onMeetingUpdated });
   const templates = useTemplates();
+
+  // Speakers
+  const {
+    speakers,
+    names: speakerNames,
+    refetch: refetchSpeakers,
+    rename: renameSpeaker,
+    merge: mergeSpeakers,
+    reassign: reassignSpeaker,
+  } = useMeetingSpeakers(meeting.id);
+  // Enhance (retranscription) and Identify both replace the meeting's speakers, so reload them with the rows.
+  const refetchTranscriptsAndSpeakers = useCallback(async () => {
+    await onRefetchTranscripts?.();
+    await refetchSpeakers();
+  }, [onRefetchTranscripts, refetchSpeakers]);
+  const speakerIdentification = useSpeakerIdentification(meeting.id, refetchTranscriptsAndSpeakers);
+  const {
+    job: speakerJob,
+    isActive: speakerJobActive,
+    start: startSpeakerIdentification,
+    cancel: cancelSpeakerIdentification,
+  } = speakerIdentification;
+  const onMergeSpeakers = useCallback(async (fromKey: string, intoKey: string) => {
+    await mergeSpeakers(fromKey, intoKey);
+    onSpeakerChange?.({ fromKey, toKey: intoKey });
+  }, [mergeSpeakers, onSpeakerChange]);
+  const onReassignSpeaker = useCallback(async (transcriptId: string, key: string | null) => {
+    const newKey = await reassignSpeaker(transcriptId, key);
+    onSpeakerChange?.({ transcriptId, toKey: newKey });
+  }, [reassignSpeaker, onSpeakerChange]);
+  const onStartIdentify = useCallback(
+    (numSpeakers: number | null) => startSpeakerIdentification(meeting.folder_path, numSpeakers),
+    [startSpeakerIdentification, meeting.folder_path],
+  );
+  // Stable references let the memoised speaker chips skip re-rendering while the list scrolls.
+  const speakerTools = useMemo<SpeakerTools>(() => ({
+    speakers,
+    names: speakerNames,
+    // Edits made while a job runs would be overwritten by its final write.
+    editable: betaFeatures.speakerIdentification && !speakerJobActive,
+    job: speakerJob,
+    onRename: renameSpeaker,
+    onMerge: onMergeSpeakers,
+    onReassign: onReassignSpeaker,
+    onCancelJob: cancelSpeakerIdentification,
+    onStartIdentify,
+  }), [
+    speakers,
+    speakerNames,
+    betaFeatures.speakerIdentification,
+    speakerJobActive,
+    speakerJob,
+    renameSpeaker,
+    onMergeSpeakers,
+    onReassignSpeaker,
+    cancelSpeakerIdentification,
+    onStartIdentify,
+  ]);
 
   // Callback to register the modal open function
   const handleRegisterModalOpen = (openFn: () => void) => {
@@ -217,7 +279,8 @@ export default function PageContent({
               onLoadMore={onLoadMore}
               meetingId={meeting.id}
               meetingFolderPath={meeting.folder_path}
-              onRefetchTranscripts={onRefetchTranscripts}
+              onRefetchTranscripts={refetchTranscriptsAndSpeakers}
+              speakerTools={speakerTools}
             />
           }
           summary={
