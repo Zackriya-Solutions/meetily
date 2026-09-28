@@ -20,9 +20,16 @@ pub struct RecordingPreferences {
     pub preferred_mic_device: Option<String>,
     #[serde(default)]
     pub preferred_system_device: Option<String>,
+    /// Run speaker identification when a recording is saved.
+    #[serde(default = "default_identify_speakers")]
+    pub identify_speakers_after_recording: bool,
     #[cfg(target_os = "macos")]
     #[serde(default)]
     pub system_audio_backend: Option<String>,
+}
+
+fn default_identify_speakers() -> bool {
+    true
 }
 
 impl Default for RecordingPreferences {
@@ -33,6 +40,7 @@ impl Default for RecordingPreferences {
             file_format: "mp4".to_string(),
             preferred_mic_device: None,
             preferred_system_device: None,
+            identify_speakers_after_recording: true,
             #[cfg(target_os = "macos")]
             system_audio_backend: Some("coreaudio".to_string()),
         }
@@ -385,3 +393,20 @@ pub async fn get_audio_backend_info() -> Result<Vec<BackendInfo>, String> {
     }
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn old_preferences_enable_speaker_identification_by_default() {
+        let json = serde_json::json!({
+            "save_folder": "/tmp/rec",
+            "auto_save": true,
+            "file_format": "mp4"
+        });
+        let prefs: RecordingPreferences = serde_json::from_value(json).unwrap();
+        assert!(prefs.identify_speakers_after_recording);
+        assert!(RecordingPreferences::default().identify_speakers_after_recording);
+    }
+}

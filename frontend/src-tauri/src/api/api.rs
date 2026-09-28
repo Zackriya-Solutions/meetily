@@ -959,6 +959,35 @@ pub async fn api_save_meeting_title<R: Runtime>(
     }
 }
 
+/// Automatic identification needs both the beta flag (sent by the frontend) and the preference.
+pub fn auto_identify_enabled(identify_speakers: Option<bool>, preference: bool) -> bool {
+    identify_speakers.unwrap_or(false) && preference
+}
+
+/// Whether a freshly saved recording should get automatic speaker identification.
+pub fn should_auto_identify(folder_path: Option<&str>, enabled: bool, has_audio: bool) -> bool {
+    enabled && has_audio && folder_path.map(|f| !f.trim().is_empty()).unwrap_or(false)
+}
+
+/// True when `folder` already belongs to another meeting, for example a stale folder left
+/// over from the previous recording. Speaker identification must not run on it.
+pub(crate) async fn folder_owned_by_other_meeting(pool: &sqlx::SqlitePool, folder: &str, meeting_id: &str) -> bool {
+    let metadata_owner = std::fs::read_to_string(std::path::Path::new(folder).join("metadata.json"))
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .and_then(|v| v.get("meeting_id").and_then(|m| m.as_str()).map(str::to_string));
+    if metadata_owner.is_some_and(|owner| owner != meeting_id) {
+        return true;
+    }
+    sqlx::query_scalar::<_, i64>("SELECT 1 FROM meetings WHERE folder_path = ? AND id != ? LIMIT 1")
+        .bind(folder)
+        .bind(meeting_id)
+        .fetch_optional(pool)
+        .await
+        .map(|row| row.is_some())
+        .unwrap_or(false)
+}
+
 #[tauri::command]
 pub async fn api_save_transcript<R: Runtime>(
     _app: AppHandle<R>,
@@ -967,6 +996,7 @@ pub async fn api_save_transcript<R: Runtime>(
     transcripts: Vec<serde_json::Value>,
     folder_path: Option<String>,
     auth_token: Option<String>,
+    identify_speakers: Option<bool>,
 ) -> Result<serde_json::Value, String> {
     log_info!(
         "Transcript save requested; transcript_count={}, folder_configured={}, auth_present={}",
@@ -985,8 +1015,8 @@ pub async fn api_save_transcript<R: Runtime>(
             format!("Invalid transcript data format: {}. Please check the data structure.", e)
         })?;
 
-
     let pool = state.db_manager.pool();
+    let folder_for_speakers = folder_path.clone();
 
     // Now, call the repository with the correctly typed data.
     match TranscriptsRepository::save_transcript(
@@ -1002,10 +1032,43 @@ pub async fn api_save_transcript<R: Runtime>(
                 "Successfully saved transcript and created meeting with id: {}",
                 meeting_id
             );
+
+            let preference = crate::audio::recording_preferences::load_recording_preferences(&_app)
+                .await
+                .map(|p| p.identify_speakers_after_recording)
+                .unwrap_or(false);
+            let enabled = auto_identify_enabled(identify_speakers, preference);
+            // Audio is finalised before the save; with auto-save off there is no file and no job.
+            let has_audio = folder_for_speakers
+                .as_deref()
+                .map(|f| crate::audio::retranscription::find_audio_file(std::path::Path::new(f)).is_ok())
+                .unwrap_or(false);
+            let mut speaker_identification_queued = false;
+            if should_auto_identify(folder_for_speakers.as_deref(), enabled, has_audio) {
+                let folder = folder_for_speakers.clone().unwrap_or_default();
+                if folder_owned_by_other_meeting(pool, &folder, &meeting_id).await {
+                    log_warn!("Not identifying speakers for {}: its recording folder belongs to another meeting", meeting_id);
+                } else {
+                    match crate::diarization::jobs::enqueue(
+                        &_app,
+                        crate::diarization::jobs::IdentifyRequest {
+                            meeting_id: meeting_id.clone(),
+                            folder_path: std::path::PathBuf::from(folder),
+                            num_speakers: None,
+                            automatic: true,
+                        },
+                    ) {
+                        Ok(()) => speaker_identification_queued = true,
+                        Err(e) => log_warn!("Could not queue speaker identification for {}: {}", meeting_id, e),
+                    }
+                }
+            }
+
             Ok(serde_json::json!({
                 "status": "success",
                 "message": "Transcript saved successfully",
-                "meeting_id": meeting_id
+                "meeting_id": meeting_id,
+                "speaker_identification_queued": speaker_identification_queued
             }))
         }
         Err(e) => {
@@ -1406,5 +1469,47 @@ pub async fn api_test_custom_openai_connection<R: Runtime>(
                 Err(format!("Connection failed: {}", error))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod speaker_tests {
+    use super::{auto_identify_enabled, folder_owned_by_other_meeting, should_auto_identify};
+
+    #[test]
+    fn auto_identify_needs_a_folder_audio_and_the_preference() {
+        assert!(should_auto_identify(Some("/rec/m1"), true, true));
+        assert!(!should_auto_identify(Some("/rec/m1"), false, true));
+        assert!(!should_auto_identify(None, true, true));
+        assert!(!should_auto_identify(Some("  "), true, true));
+        assert!(!should_auto_identify(Some("/rec/m1"), true, false));
+    }
+
+    #[test]
+    fn beta_flag_and_preference_must_both_be_on() {
+        assert!(!auto_identify_enabled(None, true));
+        assert!(!auto_identify_enabled(Some(false), true));
+        assert!(!auto_identify_enabled(Some(true), false));
+        assert!(auto_identify_enabled(Some(true), true));
+    }
+
+    #[tokio::test]
+    async fn folder_owned_by_other_meeting_detects_reused_folders() {
+        let pool = crate::database::test_support::migrated_pool().await;
+        sqlx::query(
+            "INSERT INTO meetings (id, title, created_at, updated_at, folder_path)
+             VALUES ('old', 'Old', '2026-09-27T10:00:00Z', '2026-09-27T10:00:00Z', '/rec/shared')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(folder_owned_by_other_meeting(&pool, "/rec/shared", "new").await);
+        assert!(!folder_owned_by_other_meeting(&pool, "/rec/shared", "old").await);
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("metadata.json"), r#"{"meeting_id":"someone-else"}"#).unwrap();
+        let folder = dir.path().to_str().unwrap();
+        assert!(folder_owned_by_other_meeting(&pool, folder, "new").await);
+        assert!(!folder_owned_by_other_meeting(&pool, folder, "someone-else").await);
     }
 }
