@@ -4,6 +4,9 @@ import { Transcript, TranscriptSegmentData } from '@/types';
 import { TranscriptView } from '@/components/TranscriptView';
 import { VirtualizedTranscriptView } from '@/components/VirtualizedTranscriptView';
 import { TranscriptButtonGroup } from './TranscriptButtonGroup';
+import { useTranscriptPaneControls } from './MeetingDetailsSplitView';
+import { Button } from '@/components/ui/button';
+import { PanelLeftClose } from 'lucide-react';
 import { useMemo } from 'react';
 
 interface TranscriptPanelProps {
@@ -49,6 +52,8 @@ export function TranscriptPanel({
   meetingFolderPath,
   onRefetchTranscripts,
 }: TranscriptPanelProps) {
+  const paneControls = useTranscriptPaneControls();
+
   // Convert transcripts to segments if pagination is not used but we want virtualization
   const convertedSegments = useMemo(() => {
     if (usePagination && segments) {
@@ -67,7 +72,19 @@ export function TranscriptPanel({
   return (
     <div className="flex h-full min-w-0 w-full bg-white flex-col relative @container">
       {/* Title area */}
-      <div className="p-4 border-b border-gray-200">
+      <div className="p-4 border-b border-gray-200 flex items-center gap-2">
+        {paneControls && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 shrink-0 text-muted-foreground"
+            onClick={paneControls.collapse}
+            aria-label="Hide transcript"
+            title="Hide transcript"
+          >
+            <PanelLeftClose />
+          </Button>
+        )}
         <TranscriptButtonGroup
           transcriptCount={usePagination ? (totalCount ?? convertedSegments.length) : (transcripts?.length || 0)}
           onCopyTranscript={onCopyTranscript}

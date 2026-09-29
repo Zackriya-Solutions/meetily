@@ -6,6 +6,13 @@ import Analytics from '@/lib/analytics';
 import { invoke } from '@tauri-apps/api/core';
 import { useRecordingState } from '@/contexts/RecordingStateContext';
 import type { SummaryProcessResponse } from '@/types';
+import { usePaneResize } from '@/hooks/usePaneResize';
+
+export const SIDEBAR_COLLAPSED_WIDTH = 64;
+export const SIDEBAR_DEFAULT_WIDTH = 256;
+export const SIDEBAR_MIN_WIDTH = 200;
+export const SIDEBAR_MAX_WIDTH = 480;
+const SIDEBAR_WIDTH_STORAGE_KEY = 'meetily.sidebar.width';
 
 
 
@@ -41,6 +48,10 @@ interface SidebarContextType {
   sidebarItems: SidebarItem[];
   isCollapsed: boolean;
   toggleCollapse: () => void;
+  // Rendered sidebar width in px (the collapsed rail width while collapsed)
+  sidebarWidth: number;
+  // Resize handle state for the expanded sidebar; its value is the expanded width
+  sidebarResize: ReturnType<typeof usePaneResize>;
   meetings: CurrentMeeting[];
   setMeetings: (meetings: CurrentMeeting[]) => void;
   isMeetingActive: boolean;
@@ -78,6 +89,16 @@ export const useSidebar = () => {
 export function SidebarProvider({ children }: { children: React.ReactNode }) {
   const [currentMeeting, setCurrentMeeting] = useState<CurrentMeeting | null>({ id: 'intro-call', title: '+ New Call' });
   const [isCollapsed, setIsCollapsed] = useState(true);
+  const sidebarResize = usePaneResize({
+    storageKey: SIDEBAR_WIDTH_STORAGE_KEY,
+    defaultValue: SIDEBAR_DEFAULT_WIDTH,
+    min: SIDEBAR_MIN_WIDTH,
+    max: SIDEBAR_MAX_WIDTH,
+    step: 16,
+    // The sidebar is fixed to the left edge of the window.
+    valueFromPointer: (clientX) => clientX,
+  });
+  const sidebarWidth = isCollapsed ? SIDEBAR_COLLAPSED_WIDTH : sidebarResize.value;
   const [meetings, setMeetings] = useState<CurrentMeeting[]>([]);
   const [sidebarItems, setSidebarItems] = useState<SidebarItem[]>([]);
   const [isMeetingActive, setIsMeetingActive] = useState(false);
@@ -301,6 +322,8 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
       sidebarItems,
       isCollapsed,
       toggleCollapse,
+      sidebarWidth,
+      sidebarResize,
       meetings,
       setMeetings,
       isMeetingActive,
