@@ -323,7 +323,7 @@ fn build_menu<R: Runtime>(
     // If recording is not allowed (during onboarding, no transcription model), show disabled message
     if !can_record {
         builder = builder.item(
-            &MenuItemBuilder::new("⏳ Downloading transcription model...")
+            &MenuItemBuilder::new(crate::ui_language::text("⏳ Downloading transcription model...", "⏳ 正在下载转录模型…"))
                 .enabled(false)
                 .build(app)?,
         );
@@ -331,49 +331,49 @@ fn build_menu<R: Runtime>(
         match state {
             RecordingState::Stopped => {
                 builder = builder
-                    .item(&MenuItemBuilder::with_id("toggle_recording", "Start Recording").build(app)?);
+                    .item(&MenuItemBuilder::with_id("toggle_recording", crate::ui_language::text("Start Recording", "开始录制")).build(app)?);
             }
             RecordingState::Starting => {
                 builder = builder.item(
-                    &MenuItemBuilder::new("🔄 Starting Recording...")
+                    &MenuItemBuilder::new(crate::ui_language::text("🔄 Starting Recording...", "🔄 正在开始录制…"))
                         .enabled(false)
                         .build(app)?,
                 );
             }
             RecordingState::Recording => {
                 builder = builder
-                    .item(&MenuItemBuilder::with_id("pause_recording", "⏸ Pause Recording").build(app)?)
-                    .item(&MenuItemBuilder::with_id("stop_recording", "⏹ Stop Recording").build(app)?);
+                    .item(&MenuItemBuilder::with_id("pause_recording", crate::ui_language::text("⏸ Pause Recording", "⏸ 暂停录制")).build(app)?)
+                    .item(&MenuItemBuilder::with_id("stop_recording", crate::ui_language::text("⏹ Stop Recording", "⏹ 停止录制")).build(app)?);
             }
             RecordingState::Pausing => {
                 builder = builder
                     .item(
-                        &MenuItemBuilder::new("⏸ Pausing...")
+                        &MenuItemBuilder::new(crate::ui_language::text("⏸ Pausing...", "⏸ 正在暂停…"))
                             .enabled(false)
                             .build(app)?,
                     )
-                    .item(&MenuItemBuilder::with_id("stop_recording", "⏹ Stop Recording").build(app)?);
+                    .item(&MenuItemBuilder::with_id("stop_recording", crate::ui_language::text("⏹ Stop Recording", "⏹ 停止录制")).build(app)?);
             }
             RecordingState::Paused => {
                 builder = builder
                     .item(
-                        &MenuItemBuilder::with_id("resume_recording", "▶ Resume Recording")
+                        &MenuItemBuilder::with_id("resume_recording", crate::ui_language::text("▶ Resume Recording", "▶ 继续录制"))
                             .build(app)?,
                     )
-                    .item(&MenuItemBuilder::with_id("stop_recording", "⏹ Stop Recording").build(app)?);
+                    .item(&MenuItemBuilder::with_id("stop_recording", crate::ui_language::text("⏹ Stop Recording", "⏹ 停止录制")).build(app)?);
             }
             RecordingState::Resuming => {
                 builder = builder
                     .item(
-                        &MenuItemBuilder::new("▶ Resuming...")
+                        &MenuItemBuilder::new(crate::ui_language::text("▶ Resuming...", "▶ 正在继续…"))
                             .enabled(false)
                             .build(app)?,
                     )
-                    .item(&MenuItemBuilder::with_id("stop_recording", "⏹ Stop Recording").build(app)?);
+                    .item(&MenuItemBuilder::with_id("stop_recording", crate::ui_language::text("⏹ Stop Recording", "⏹ 停止录制")).build(app)?);
             }
             RecordingState::Stopping => {
                 builder = builder.item(
-                    &MenuItemBuilder::new("⏹ Stopping...")
+                    &MenuItemBuilder::new(crate::ui_language::text("⏹ Stopping...", "⏹ 正在停止…"))
                         .enabled(false)
                         .build(app)?,
                 );
@@ -383,11 +383,11 @@ fn build_menu<R: Runtime>(
 
     builder
         .item(&PredefinedMenuItem::separator(app)?)
-        .item(&MenuItemBuilder::with_id("open_window", "Open Main Window").build(app)?)
-        .item(&MenuItemBuilder::with_id("settings", "Settings").build(app)?)
-        .item(&MenuItemBuilder::with_id("check_updates", "Check for Updates").build(app)?)
+        .item(&MenuItemBuilder::with_id("open_window", crate::ui_language::text("Open Main Window", "打开主窗口")).build(app)?)
+        .item(&MenuItemBuilder::with_id("settings", crate::ui_language::text("Settings", "设置")).build(app)?)
+        .item(&MenuItemBuilder::with_id("check_updates", crate::ui_language::text("Check for Updates", "检查更新")).build(app)?)
         .item(&PredefinedMenuItem::separator(app)?)
-        .item(&MenuItemBuilder::with_id("quit", "Quit").build(app)?)
+        .item(&MenuItemBuilder::with_id("quit", crate::ui_language::text("Quit", "退出")).build(app)?)
         .build()
 }
 
