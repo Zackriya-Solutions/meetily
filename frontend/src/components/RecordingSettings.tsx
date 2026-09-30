@@ -207,7 +207,7 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
               <strong>File Format:</strong> {preferences.file_format.toUpperCase()} files
             </div>
             <div className="text-xs text-blue-600 mt-1">
-              Recordings are saved with timestamp: recording_YYYYMMDD_HHMMSS.{preferences.file_format}
+              Each meeting is saved in its own folder, named after the meeting and its start time.
             </div>
           </div>
         </div>

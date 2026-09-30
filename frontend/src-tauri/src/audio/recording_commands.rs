@@ -303,6 +303,15 @@ pub async fn start_recording<R: Runtime>(app: AppHandle<R>) -> Result<(), String
     start_recording_with_meeting_name(app, None).await
 }
 
+/// Title for a recording started without a meeting name. Same format as
+/// `formatMeetingTitle` in the frontend, e.g. `Meeting 03_10_25_08_25_23`.
+fn default_meeting_name<Tz: chrono::TimeZone>(now: chrono::DateTime<Tz>) -> String
+where
+    Tz::Offset: std::fmt::Display,
+{
+    format!("Meeting {}", now.format("%d_%m_%y_%H_%M_%S"))
+}
+
 /// Start recording with default devices and optional meeting name
 pub async fn start_recording_with_meeting_name<R: Runtime>(
     app: AppHandle<R>,
@@ -384,14 +393,9 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
     let mut manager = RecordingManager::new();
 
     // Always ensure a meeting name is set so incremental saver initializes
-    let effective_meeting_name = meeting_name.clone().unwrap_or_else(|| {
-        // Example: Meeting 2025-10-03_08-25-23
-        let now = chrono::Local::now();
-        format!(
-            "Meeting {}",
-            now.format("%Y-%m-%d_%H-%M-%S")
-        )
-    });
+    let effective_meeting_name = meeting_name
+        .clone()
+        .unwrap_or_else(|| default_meeting_name(chrono::Local::now()));
     manager.set_meeting_name(Some(effective_meeting_name));
 
     // Set up error callback
@@ -574,13 +578,9 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
     };
 
     // Always ensure a meeting name is set so incremental saver initializes
-    let effective_meeting_name = meeting_name.clone().unwrap_or_else(|| {
-        let now = chrono::Local::now();
-        format!(
-            "Meeting {}",
-            now.format("%Y-%m-%d_%H-%M-%S")
-        )
-    });
+    let effective_meeting_name = meeting_name
+        .clone()
+        .unwrap_or_else(|| default_meeting_name(chrono::Local::now()));
     manager.set_meeting_name(Some(effective_meeting_name));
 
     // Set up error callback
@@ -1694,5 +1694,17 @@ async fn trigger_mic_fallback_to_default<R: Runtime>(
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::default_meeting_name;
+    use chrono::{TimeZone, Utc};
+
+    #[test]
+    fn default_meeting_name_matches_frontend_format() {
+        let now = Utc.with_ymd_and_hms(2025, 10, 3, 8, 5, 9).unwrap();
+        assert_eq!(default_meeting_name(now), "Meeting 03_10_25_08_05_09");
     }
 }
