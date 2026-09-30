@@ -102,6 +102,15 @@ pub(crate) fn write_transcripts_json(folder: &Path, segments: &[TranscriptSegmen
     Ok(())
 }
 
+/// Longest audio (16 kHz samples) handed to a single Whisper call: 25 seconds.
+///
+/// Whisper decodes in 30-second windows and the initial prompt (the
+/// meeting-domain vocabulary) only conditions the first window of a call;
+/// later windows are conditioned on Whisper's own output instead. Parts from
+/// [`split_segment_at_silence`] may grow by up to 3 s (silence search) plus
+/// 1 s (fallback overlap), so they stay under 29 s: one window, full prompt.
+pub(crate) const MAX_WHISPER_SEGMENT_SAMPLES: usize = 25 * 16000;
+
 /// Split a long speech segment at the lowest-energy (silence) point near the target size.
 ///
 /// Scans for 100ms windows with minimal RMS energy within +/-3 seconds of each target

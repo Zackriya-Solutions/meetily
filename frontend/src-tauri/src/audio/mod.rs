@@ -51,6 +51,10 @@ pub mod retranscription;
 // Import module (import external audio files as new meetings)
 pub mod import;
 
+// Opt-in check that the meeting-domain prompt reaches every part of a long clip
+#[cfg(test)]
+mod prompt_effect_tests;
+
 pub use devices::{
     default_input_device, default_output_device, get_device_and_config, list_audio_devices,
     parse_audio_device, trigger_audio_permission,

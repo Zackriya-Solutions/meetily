@@ -4,8 +4,10 @@
 
 use super::engine::TranscriptionEngine;
 use super::provider::TranscriptionError;
+use crate::audio::common::{split_segment_at_silence, MAX_WHISPER_SEGMENT_SAMPLES};
+use crate::audio::vad::SpeechSegment;
 use crate::audio::AudioChunk;
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -320,18 +322,51 @@ pub fn start_transcription_task<R: Runtime>(
             worker_handles.push(worker_handle);
         }
 
+        // Whisper only applies the meeting-domain prompt to the first 30 s of a
+        // call, so long live chunks are split first (Parakeet has no prompt).
+        let split_long_chunks = matches!(transcription_engine, TranscriptionEngine::Whisper(_));
+
         // Main dispatcher: receive chunks and distribute to workers
         let mut receiver = transcription_receiver;
-        while let Some(chunk) = receiver.recv().await {
-            let queued = chunks_queued.fetch_add(1, Ordering::SeqCst) + 1;
-            info!(
-                "📥 Dispatching chunk {} to workers (total queued: {})",
-                chunk.chunk_id, queued
-            );
+        'dispatch: while let Some(chunk) = receiver.recv().await {
+            let parts = if split_long_chunks {
+                let chunk_id = chunk.chunk_id;
+                let seconds = chunk.data.len() as f64 / chunk.sample_rate.max(1) as f64;
+                let parts = split_long_chunk(chunk);
+                if parts.len() > 1 {
+                    info!(
+                        "✂️ Split live chunk {} ({:.1}s) into {} parts ≤{}s so every part gets the meeting-domain prompt",
+                        chunk_id,
+                        seconds,
+                        parts.len(),
+                        MAX_WHISPER_SEGMENT_SAMPLES / 16000
+                    );
+                    for (i, part) in parts.iter().enumerate() {
+                        debug!(
+                            "   part {}/{}: {:.1}s at {:.1}s",
+                            i + 1,
+                            parts.len(),
+                            part.data.len() as f64 / part.sample_rate as f64,
+                            part.timestamp
+                        );
+                    }
+                }
+                parts
+            } else {
+                vec![chunk]
+            };
 
-            if let Err(_) = work_sender.send(chunk) {
-                error!("❌ Failed to send chunk to workers - this should not happen!");
-                break;
+            for part in parts {
+                let queued = chunks_queued.fetch_add(1, Ordering::SeqCst) + 1;
+                info!(
+                    "📥 Dispatching chunk {} to workers (total queued: {})",
+                    part.chunk_id, queued
+                );
+
+                if let Err(_) = work_sender.send(part) {
+                    error!("❌ Failed to send chunk to workers - this should not happen!");
+                    break 'dispatch;
+                }
             }
         }
 
@@ -448,6 +483,16 @@ async fn transcribe_chunk_with_provider<R: Runtime>(
             // Get language preference from global state
             let language = crate::get_language_preference_internal();
             let initial_prompt = crate::current_meeting_domain_prompt();
+            info!(
+                "Whisper chunk {} ({:.1}s at {:.1}s): meeting-domain prompt {}",
+                chunk.chunk_id,
+                speech_samples.len() as f64 / 16000.0,
+                chunk.timestamp,
+                match &initial_prompt {
+                    Some(p) => format!("applied ({} chars)", p.chars().count()),
+                    None => "none".to_string(),
+                }
+            );
 
             match whisper_engine
                 .transcribe_audio_with_confidence(speech_samples, language, initial_prompt)
@@ -573,6 +618,49 @@ async fn transcribe_chunk_with_provider<R: Runtime>(
     }
 }
 
+/// Split a live VAD chunk longer than [`MAX_WHISPER_SEGMENT_SAMPLES`] at
+/// silence, the same way import and retranscription do. Whisper's initial
+/// prompt (the meeting-domain vocabulary) only conditions the first 30 s
+/// window of a call; VAD chunks of over two minutes occur in practice, and
+/// without this they lose the vocabulary after 30 s.
+///
+/// Parts are 16 kHz, keep the chunk id and get their own recording-relative
+/// timestamp, so each becomes its own transcript segment.
+pub(crate) fn split_long_chunk(chunk: AudioChunk) -> Vec<AudioChunk> {
+    const SAMPLE_RATE: u32 = 16000;
+
+    let data = if chunk.sample_rate != SAMPLE_RATE {
+        crate::audio::audio_processing::resample_audio(&chunk.data, chunk.sample_rate, SAMPLE_RATE)
+    } else {
+        chunk.data
+    };
+    if data.len() <= MAX_WHISPER_SEGMENT_SAMPLES {
+        return vec![AudioChunk {
+            data,
+            sample_rate: SAMPLE_RATE,
+            ..chunk
+        }];
+    }
+
+    let start_ms = chunk.timestamp * 1000.0;
+    let segment = SpeechSegment {
+        start_timestamp_ms: start_ms,
+        end_timestamp_ms: start_ms + data.len() as f64 * 1000.0 / SAMPLE_RATE as f64,
+        samples: data,
+        confidence: 1.0,
+    };
+    split_segment_at_silence(&segment, MAX_WHISPER_SEGMENT_SAMPLES)
+        .into_iter()
+        .map(|part| AudioChunk {
+            data: part.samples,
+            sample_rate: SAMPLE_RATE,
+            timestamp: part.start_timestamp_ms / 1000.0,
+            chunk_id: chunk.chunk_id,
+            device_type: chunk.device_type.clone(),
+        })
+        .collect()
+}
+
 /// Format current timestamp (wall-clock time)
 fn format_current_timestamp() -> String {
     let now = std::time::SystemTime::now()
@@ -594,4 +682,74 @@ fn format_recording_time(seconds: f64) -> String {
     let secs = total_seconds % 60;
 
     format!("[{:02}:{:02}]", minutes, secs)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::audio::recording_state::DeviceType;
+
+    /// Speech-like noise with 300 ms of silence every `gap_every` seconds.
+    fn speech(seconds: f64, rate: u32, gap_every: f64) -> Vec<f32> {
+        let n = (seconds * rate as f64) as usize;
+        (0..n)
+            .map(|i| {
+                let t = i as f64 / rate as f64;
+                if t % gap_every < 0.3 && t > 1.0 {
+                    0.0
+                } else {
+                    0.5 * ((i * 7919) % 1000) as f32 / 1000.0 - 0.25
+                }
+            })
+            .collect()
+    }
+
+    fn chunk(data: Vec<f32>, rate: u32, timestamp: f64) -> AudioChunk {
+        AudioChunk {
+            data,
+            sample_rate: rate,
+            timestamp,
+            chunk_id: 42,
+            device_type: DeviceType::Microphone,
+        }
+    }
+
+    #[test]
+    fn long_live_chunk_is_split_into_contiguous_parts() {
+        let data = speech(70.0, 16000, 24.0);
+        let total = data.len();
+        let parts = split_long_chunk(chunk(data, 16000, 100.0));
+
+        assert_eq!(parts.len(), 3);
+        assert_eq!(parts.iter().map(|p| p.data.len()).sum::<usize>(), total);
+        assert!((parts[0].timestamp - 100.0).abs() < 1e-9);
+        for part in &parts {
+            assert_eq!(part.chunk_id, 42);
+            assert_eq!(part.sample_rate, 16000);
+            // One Whisper window each, so each part gets the whole prompt.
+            assert!(part.data.len() < 29 * 16000, "part is {} samples", part.data.len());
+        }
+        for pair in parts.windows(2) {
+            let end = pair[0].timestamp + pair[0].data.len() as f64 / 16000.0;
+            assert!((pair[1].timestamp - end).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn short_live_chunk_is_untouched() {
+        let data = speech(20.0, 16000, 24.0);
+        let parts = split_long_chunk(chunk(data.clone(), 16000, 5.0));
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0].data, data);
+        assert_eq!(parts[0].timestamp, 5.0);
+    }
+
+    #[test]
+    fn non_16k_live_chunk_is_resampled_before_splitting() {
+        let parts = split_long_chunk(chunk(speech(40.0, 48000, 24.0), 48000, 0.0));
+        assert_eq!(parts.len(), 2);
+        assert!(parts.iter().all(|p| p.sample_rate == 16000));
+        let seconds: f64 = parts.iter().map(|p| p.data.len() as f64 / 16000.0).sum();
+        assert!((seconds - 40.0).abs() < 0.1, "{seconds}");
+    }
 }
