@@ -53,6 +53,7 @@ pub mod parakeet_engine;
 pub mod state;
 pub mod summary;
 pub mod tray;
+pub mod ui_language;
 pub mod utils;
 pub mod whisper_engine;
 
@@ -734,6 +735,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            ui_language::set_ui_language,
             start_recording,
             stop_recording,
             is_recording,

@@ -1,3 +1,4 @@
+import { uiText } from '@/i18n/ui';
 import { useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 
@@ -30,12 +31,12 @@ export const useAudioPlayer = (audioPath: string | null) => {
         await audioRef.current.resume();
         console.log('AudioContext resumed:', audioRef.current.state);
       }
-      
+
       setError(null);
       return true;
     } catch (error) {
       console.error('Error initializing AudioContext:', error);
-      setError('Failed to initialize audio');
+      setError(uiText("messages.failedToInitializeAudio"));
       return false;
     }
   };
@@ -71,23 +72,23 @@ export const useAudioPlayer = (audioPath: string | null) => {
       }
 
       console.log('Loading audio from:', audioPath);
-      
+
       // Read the file using Tauri command
-      const result = await invoke<number[]>('read_audio_file', { 
-        filePath: audioPath 
+      const result = await invoke<number[]>('read_audio_file', {
+        filePath: audioPath
       });
-      
+
       if (!result || result.length === 0) {
-        throw new Error('Empty audio data received');
+        throw new Error(uiText("messages.emptyAudioDataReceived"));
       }
-      
+
       console.log('Audio file read, size:', result.length, 'bytes');
-      
+
       // Create a copy of the audio data
       const audioData = new Uint8Array(result).buffer;
-      
+
       console.log('Created audio buffer, size:', audioData.byteLength, 'bytes');
-      
+
       // Decode the audio data
       const audioBuffer = await new Promise<AudioBuffer>((resolve, reject) => {
         audioRef.current!.decodeAudioData(
@@ -103,11 +104,11 @@ export const useAudioPlayer = (audioPath: string | null) => {
           },
           error => {
             console.error('Audio decoding failed:', error);
-            reject(new Error('Failed to decode audio data: ' + error));
+            reject(new Error(uiText("messages.failedToDecodeAudioData") + error));
           }
         );
       });
-      
+
       audioBufferRef.current = audioBuffer;
       setDuration(audioBuffer.duration);
       setCurrentTime(0);
@@ -122,7 +123,7 @@ export const useAudioPlayer = (audioPath: string | null) => {
           stack: error.stack,
         });
       }
-      setError('Failed to load audio file');
+      setError(uiText("messages.failedToLoadAudioFile"));
     }
   };
 
@@ -154,21 +155,21 @@ export const useAudioPlayer = (audioPath: string | null) => {
 
   const play = async () => {
     console.log('Play requested');
-    
+
     try {
       // Initialize context if needed
       const initialized = await initAudioContext();
       if (!initialized) {
-        throw new Error('Audio context initialization failed');
+        throw new Error(uiText("messages.audioContextInitializationFailed"));
       }
       if (!audioRef.current) {
-        throw new Error('Audio context is null after initialization');
+        throw new Error(uiText("messages.audioContextIsNullAfterInitialization"));
       }
       if (!audioBufferRef.current) {
-        throw new Error('No audio buffer loaded - try loading the audio file first');
+        throw new Error(uiText("messages.noAudioBufferLoadedTryLoadingTheAudioFile"));
       }
       if (audioRef.current.state !== 'running') {
-        throw new Error(`Audio context is in invalid state: ${audioRef.current.state}`);
+        throw new Error(uiText("messages.audioContextIsInInvalidState", { value0: audioRef.current.state }));
       }
 
       // Stop any existing playback
@@ -178,23 +179,23 @@ export const useAudioPlayer = (audioPath: string | null) => {
       console.log('Creating new audio source');
       sourceRef.current = audioRef.current.createBufferSource();
       sourceRef.current.buffer = audioBufferRef.current;
-      
+
       console.log('Audio buffer details:', {
         duration: audioBufferRef.current.duration,
         sampleRate: audioBufferRef.current.sampleRate,
         numberOfChannels: audioBufferRef.current.numberOfChannels,
         length: audioBufferRef.current.length
       });
-      
+
       sourceRef.current.connect(audioRef.current.destination);
-      
+
       // Setup ended callback
       sourceRef.current.onended = () => {
         console.log('Playback ended naturally');
         stopPlayback();
         setCurrentTime(0);
       };
-      
+
       // Start playback from the seek time
       const startTime = seekTimeRef.current;
       startTimeRef.current = audioRef.current.currentTime - startTime;
@@ -203,7 +204,7 @@ export const useAudioPlayer = (audioPath: string | null) => {
         contextTime: audioRef.current.currentTime,
         seekTime: seekTimeRef.current
       });
-      
+
       sourceRef.current.start(0, startTime);
       setIsPlaying(true);
       setError(null);
@@ -214,9 +215,9 @@ export const useAudioPlayer = (audioPath: string | null) => {
           console.log('Update cancelled - context or source is null');
           return;
         }
-        
+
         const newTime = audioRef.current.currentTime - startTimeRef.current;
-        
+
         if (newTime >= duration) {
           console.log('Playback finished');
           stopPlayback();
@@ -228,11 +229,11 @@ export const useAudioPlayer = (audioPath: string | null) => {
           rafRef.current = requestAnimationFrame(updateTime);
         }
       };
-      
+
       rafRef.current = requestAnimationFrame(updateTime);
     } catch (error) {
       console.error('Error during playback:', error);
-      setError('Failed to play audio');
+      setError(uiText("messages.failedToPlayAudio"));
       stopPlayback();
     }
   };
@@ -241,16 +242,16 @@ export const useAudioPlayer = (audioPath: string | null) => {
     console.log('Seek requested:', time);
     if (time < 0) time = 0;
     if (time > duration) time = duration;
-    
+
     const wasPlaying = isPlaying;
-    
+
     // Stop current playback
     stopPlayback();
-    
+
     // Update both current time and seek time reference
     seekTimeRef.current = time;
     setCurrentTime(time);
-    
+
     // If it was playing before, restart playback at new position
     if (wasPlaying) {
       console.log('Restarting playback at:', time);

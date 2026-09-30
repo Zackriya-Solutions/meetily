@@ -1,4 +1,5 @@
 "use client"
+import { uiText, useUiTranslation } from '@/i18n/ui';
 import { useSidebar } from "@/components/Sidebar/SidebarProvider";
 import { useState, useEffect, useCallback, Suspense } from "react";
 import { MeetingSummary, SummaryProcessResponse, Transcript } from "@/types";
@@ -21,6 +22,7 @@ interface MeetingDetailsResponse {
 }
 
 function MeetingDetailsContent() {
+  useUiTranslation();
   const searchParams = useSearchParams();
   const meetingId = searchParams.get('id');
   const source = searchParams.get('source'); // Check if navigated from recording
@@ -179,7 +181,7 @@ function MeetingDetailsContent() {
 
     if (!meetingId || meetingId === 'intro-call') {
       console.warn('No valid meeting ID in URL - meetingId:', meetingId);
-      setError("No meeting selected");
+      setError(uiText("messages.noMeetingSelected"));
       setIsLoading(false);
       Analytics.trackPageView('meeting_details');
       return;
@@ -256,8 +258,7 @@ function MeetingDetailsContent() {
             onClick={() => router.push('/')}
             className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
           >
-            Go Back
-          </button>
+             {uiText("messages.goBack")} </button>
         </div>
       </div>
     );
@@ -295,6 +296,7 @@ function MeetingDetailsContent() {
 }
 
 export default function MeetingDetails() {
+  useUiTranslation();
   return (
     <Suspense fallback={
       <div className="flex items-center justify-center h-screen">

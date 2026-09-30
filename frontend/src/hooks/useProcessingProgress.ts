@@ -65,7 +65,7 @@ export function useProcessingProgress() {
       processing_chunks: prev.processing_chunks + 1,
       chunks: prev.chunks.map(chunk =>
         chunk.chunk_id === chunkId
-          ? { ...chunk, status: 'processing', start_time: Date.now() }
+          ? { ...chunk, status: "processing", start_time: Date.now() }
           : chunk
       )
     }));

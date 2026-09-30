@@ -1,4 +1,5 @@
 'use client';
+import { uiText, useUiTranslation } from '@/i18n/ui';
 
 import { Section as SectionType, Block } from '@/types';
 import { BlockComponent } from './Block';
@@ -41,6 +42,7 @@ export const Section: React.FC<SectionProps> = ({
   onBlockNavigate,
   onCreateNewBlock,
 }) => {
+  useUiTranslation();
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const titleInputRef = useRef<HTMLInputElement>(null);
 
@@ -77,8 +79,7 @@ export const Section: React.FC<SectionProps> = ({
             onClick={() => onSectionDelete(sectionKey)}
             className="text-gray-400 hover:text-gray-600"
           >
-            Delete
-          </button>
+             {uiText("messages.delete")} </button>
         )}
       </div>
       <motion.div
@@ -111,7 +112,7 @@ export const Section: React.FC<SectionProps> = ({
                 onBlockDelete(block.id, mergeContent);
               }}
               onContextMenu={onContextMenu}
-              onNavigate={onBlockNavigate ? 
+              onNavigate={onBlockNavigate ?
                 (direction, cursorPosition) => onBlockNavigate(block.id, direction, cursorPosition)
                 : undefined}
               onCreateNewBlock={onCreateNewBlock}

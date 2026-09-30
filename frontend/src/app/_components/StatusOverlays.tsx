@@ -1,3 +1,4 @@
+import { uiText, useUiTranslation } from '@/i18n/ui';
 interface StatusOverlaysProps {
   // Status flags
   isProcessing: boolean;      // Processing transcription after recording stops
@@ -47,14 +48,14 @@ export function StatusOverlays({
       {/* Processing status overlay - shown after recording stops while finalizing transcription */}
       <StatusOverlay
         show={isProcessing}
-        message="Finalizing transcription..."
+        message={uiText("messages.finalizingTranscription")}
         sidebarCollapsed={sidebarCollapsed}
       />
 
       {/* Saving status overlay - shown while saving transcript to database */}
       <StatusOverlay
         show={isSaving}
-        message="Saving transcript..."
+        message={uiText("messages.savingTranscript")}
         sidebarCollapsed={sidebarCollapsed}
       />
     </>

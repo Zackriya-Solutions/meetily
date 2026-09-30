@@ -1,4 +1,6 @@
 "use client";
+import { useUiTranslation } from '@/i18n/ui';
+import { editorDictionary } from '@/i18n/editor';
 
 import { useEffect } from "react";
 import type { PartialBlock, Block } from "@blocknote/core";
@@ -14,6 +16,7 @@ interface EditorProps {
 }
 
 export default function Editor({ initialContent, onChange, editable = true }: EditorProps) {
+  useUiTranslation();
   console.log('📝 EDITOR: Initializing BlockNote editor with blocks:', {
     hasContent: !!initialContent,
     blocksCount: initialContent?.length || 0,
@@ -21,6 +24,7 @@ export default function Editor({ initialContent, onChange, editable = true }: Ed
   });
 
   const editor = useCreateBlockNote({
+    dictionary: editorDictionary,
     initialContent: initialContent as PartialBlock[] | undefined,
   });
 

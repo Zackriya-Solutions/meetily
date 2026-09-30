@@ -1,3 +1,5 @@
+import { editorDictionary } from '@/i18n/editor';
+import { uiText, useUiTranslation } from '@/i18n/ui';
 import "@blocknote/core/fonts/inter.css";
 import { useCreateBlockNote } from "@blocknote/react";
 import { BlockNoteView } from "@blocknote/shadcn";
@@ -7,8 +9,10 @@ import { ChangeEvent, useCallback, useEffect } from "react";
 const initialMarkdown = "Hello, **world!**";
 
 export default function BasicBlockNoteTest() {
+  useUiTranslation();
   // Creates a new editor instance.
-  const editor = useCreateBlockNote({});
+  const editor = useCreateBlockNote({
+    dictionary: editorDictionary,});
 
   const markdownInputChanged = useCallback(
     async (e: ChangeEvent<HTMLTextAreaElement>) => {
@@ -33,7 +37,7 @@ export default function BasicBlockNoteTest() {
   return (
     <div className="views">
       <div className="view-wrapper">
-        <div className="view-label">Markdown Input</div>
+        <div className="view-label">{uiText("messages.markdownInput")}</div>
         <div className="view">
           <code>
             <textarea
@@ -44,7 +48,7 @@ export default function BasicBlockNoteTest() {
         </div>
       </div>
       <div className="view-wrapper">
-        <div className="view-label">Editor Output</div>
+        <div className="view-label">{uiText("messages.editorOutput")}</div>
         <div className="view">
           <BlockNoteView editor={editor} editable={true} />
         </div>

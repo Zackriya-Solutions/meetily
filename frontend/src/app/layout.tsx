@@ -1,6 +1,9 @@
 'use client'
+import { uiText, useUiTranslation } from '@/i18n/ui';
 
 import './globals.css'
+import '@/i18n'
+import {LanguageInitializer} from '@/components/LanguageInitializer'
 import { Source_Sans_3 } from 'next/font/google'
 import Sidebar from '@/components/Sidebar'
 import { SidebarProvider } from '@/components/Sidebar/SidebarProvider'
@@ -45,6 +48,7 @@ function ConditionalImportDialog({
   handleImportDialogClose: (open: boolean) => void;
   importFilePath: string | null;
 }) {
+  useUiTranslation();
   const { betaFeatures } = useConfig();
 
   // Only mount ImportAudioDialog (and its hooks/listeners) when feature is enabled
@@ -68,6 +72,7 @@ export default function RootLayout({
 }: {
   children: React.ReactNode
 }) {
+  useUiTranslation();
   const [showOnboarding, setShowOnboarding] = useState(false)
   const [onboardingCompleted, setOnboardingCompleted] = useState(false)
 
@@ -112,8 +117,8 @@ export default function RootLayout({
       console.log('[Layout] Received request-recording-toggle from tray');
 
       if (showOnboarding) {
-        toast.error("Please complete setup first", {
-          description: "You need to finish onboarding before you can start recording."
+        toast.error(uiText("messages.pleaseCompleteSetupFirst"), {
+          description: uiText("messages.finishOnboardingFirst")
         });
       } else {
         // If in main app, forward to useRecordingStart via window event
@@ -133,8 +138,8 @@ export default function RootLayout({
     const betaFeatures = loadBetaFeatures();
 
     if (!betaFeatures.importAndRetranscribe) {
-      toast.error('Beta feature disabled', {
-        description: 'Enable "Import Audio & Retranscribe" in Settings > Beta to use this feature.'
+      toast.error(uiText("messages.betaFeatureDisabled"), {
+        description: uiText("messages.enableImportAudioRetranscribeInSettingsBetaToUse")
       });
       return;
     }
@@ -150,8 +155,8 @@ export default function RootLayout({
       setImportFilePath(audioFile);
       setShowImportDialog(true);
     } else if (paths.length > 0) {
-      toast.error('Please drop an audio file', {
-        description: `Supported formats: ${getAudioFormatsDisplayList()}`
+      toast.error(uiText("messages.pleaseDropAnAudioFile"), {
+        description: uiText("messages.supportedFormats", { value0: getAudioFormatsDisplayList() })
       });
     }
   }, []);
@@ -231,8 +236,10 @@ export default function RootLayout({
   }
 
   return (
-    <html lang="en">
+    <html lang="en-US">
       <body className={`${sourceSans3.variable} font-sans antialiased`}>
+        <LanguageInitializer />
+
         <AnalyticsProvider>
           <RecordingStateProvider>
             <TranscriptProvider>

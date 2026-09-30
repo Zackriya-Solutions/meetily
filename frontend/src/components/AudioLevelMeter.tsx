@@ -1,3 +1,4 @@
+import { uiText, useUiTranslation } from '@/i18n/ui';
 import React from 'react';
 
 interface AudioLevelMeterProps {
@@ -17,6 +18,7 @@ export function AudioLevelMeter({
   className = '',
   size = 'medium'
 }: AudioLevelMeterProps) {
+  useUiTranslation();
   // Normalize levels to 0-1 range and apply log scaling for better visual representation
   const normalizedRms = Math.max(0, Math.min(1, rmsLevel));
   const normalizedPeak = Math.max(0, Math.min(1, peakLevel));
@@ -65,7 +67,7 @@ export function AudioLevelMeter({
       {/* Device activity indicator */}
       <div className={`w-2 h-2 rounded-full ${
         isActive ? 'bg-green-400 animate-pulse' : 'bg-gray-300'
-      }`} title={`${deviceName} - ${isActive ? 'Active' : 'Inactive'}`} />
+      }`} title={`${deviceName} - ${isActive ? uiText("messages.active") : uiText("messages.inactive")}`} />
 
       {/* Level meter container */}
       <div className={`flex-1 ${sizes.container} relative`}>
@@ -119,6 +121,7 @@ export function CompactAudioLevelMeter({
   isActive,
   className = ''
 }: CompactAudioLevelMeterProps) {
+  useUiTranslation();
   const normalizedRms = Math.max(0, Math.min(1, rmsLevel));
   const logRms = normalizedRms > 0 ? Math.log10(normalizedRms * 9 + 1) : 0;
   const rmsPercent = Math.round(logRms * 100);

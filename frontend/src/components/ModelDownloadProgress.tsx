@@ -1,3 +1,4 @@
+import { uiText, useUiTranslation } from '@/i18n/ui';
 import React from 'react';
 import { ModelStatus } from '../lib/whisper';
 import { Button } from './ui/button';
@@ -9,6 +10,7 @@ interface ModelDownloadProgressProps {
 }
 
 export function ModelDownloadProgress({ status, modelName, onCancel }: ModelDownloadProgressProps) {
+  useUiTranslation();
   if (typeof status !== 'object' || !('Downloading' in status)) {
     return null;
   }
@@ -22,30 +24,29 @@ export function ModelDownloadProgress({ status, modelName, onCancel }: ModelDown
         <div className="flex items-center space-x-2">
           <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
           <span className="text-sm font-medium text-blue-900">
-            {isCompleted ? 'Finalizing...' : `Downloading ${modelName}`}
+            {isCompleted ? uiText("messages.finalizing") : uiText("messages.downloading2", { value0: modelName })}
           </span>
         </div>
       </div>
-      
+
       <div className="relative">
         <div className="w-full bg-blue-200 rounded-full h-2">
-          <div 
+          <div
             className="bg-blue-600 h-2 rounded-full transition-all duration-300 ease-out"
             style={{ width: `${Math.min(progress, 100)}%` }}
           />
         </div>
         <div className="flex justify-between text-xs text-blue-700 mt-1">
-          <span>{Math.round(progress)}% complete</span>
+          <span>{Math.round(progress)}{uiText("messages.complete")}</span>
           {!isCompleted && (
-            <span className="animate-pulse">Downloading...</span>
+            <span className="animate-pulse">{uiText("messages.downloading")}</span>
           )}
         </div>
       </div>
-      
+
       {isCompleted && (
         <div className="mt-2 text-xs text-green-700">
-          ✓ Download completed, loading model...
-        </div>
+           {uiText("messages.downloadCompletedLoadingModel")} </div>
       )}
     </div>
   );
@@ -58,6 +59,7 @@ interface ProgressRingProps {
 }
 
 export function ProgressRing({ progress, size = 40, strokeWidth = 3 }: ProgressRingProps) {
+  useUiTranslation();
   const radius = (size - strokeWidth) / 2;
   const circumference = radius * 2 * Math.PI;
   const strokeDasharray = circumference;
@@ -105,6 +107,7 @@ interface DownloadSummaryProps {
 }
 
 export function DownloadSummary({ totalModels, downloadedModels, totalSizeMb }: DownloadSummaryProps) {
+  useUiTranslation();
   const formatSize = (mb: number) => {
     if (mb >= 1000) return `${(mb / 1000).toFixed(1)}GB`;
     return `${mb}MB`;
@@ -114,16 +117,13 @@ export function DownloadSummary({ totalModels, downloadedModels, totalSizeMb }: 
     <div className="bg-gray-50 rounded-lg p-3 text-sm">
       <div className="flex items-center justify-between">
         <span className="text-gray-700">
-          📦 {downloadedModels} of {totalModels} models available
-        </span>
+          📦 {downloadedModels}  {uiText("messages.of")} {totalModels}  {uiText("messages.modelsAvailable")} </span>
         <span className="text-gray-600">
-          💾 {formatSize(totalSizeMb)} total
-        </span>
+          💾 {formatSize(totalSizeMb)}  {uiText("messages.total")} </span>
       </div>
       {downloadedModels > 0 && (
         <div className="mt-1 text-xs text-green-600">
-          ✓ Models run locally - no internet required for transcription
-        </div>
+           {uiText("messages.modelsRunLocallyNoInternetRequiredForTranscription")} </div>
       )}
     </div>
   );

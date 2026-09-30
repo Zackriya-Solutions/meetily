@@ -1,3 +1,4 @@
+import { uiText, useUiTranslation } from '@/i18n/ui';
 import { VirtualizedTranscriptView } from '@/components/VirtualizedTranscriptView';
 import { PermissionWarning } from '@/components/PermissionWarning';
 import { Button } from '@/components/ui/button';
@@ -30,6 +31,7 @@ export function TranscriptPanel({
   isStopping,
   showModal
 }: TranscriptPanelProps) {
+  useUiTranslation();
   // Contexts
   const { transcripts, transcriptContainerRef, copyTranscript } = useTranscripts();
   const { transcriptModelConfig } = useConfig();
@@ -62,12 +64,11 @@ export function TranscriptPanel({
                     variant="outline"
                     size="sm"
                     onClick={copyTranscript}
-                    title="Copy Transcript"
+                    title={uiText("messages.copyTranscript")}
                   >
                     <Copy />
                     <span className='hidden md:inline'>
-                      Copy
-                    </span>
+                       {uiText("messages.copy")} </span>
                   </Button>
                 )}
                 {transcriptModelConfig.provider === "localWhisper" &&
@@ -75,12 +76,11 @@ export function TranscriptPanel({
                     variant="outline"
                     size="sm"
                     onClick={() => showModal('languageSettings')}
-                    title="Language"
+                    title={uiText("messages.language")}
                   >
                     <GlobeIcon />
                     <span className='hidden md:inline'>
-                      Language
-                    </span>
+                       {uiText("messages.language")} </span>
                   </Button>
                 }
               </ButtonGroup>

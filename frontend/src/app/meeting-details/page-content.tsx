@@ -1,4 +1,5 @@
 "use client";
+import { uiText, useUiTranslation } from '@/i18n/ui';
 import { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { MeetingSummary, SummaryProcessResponse } from '@/types';
@@ -50,6 +51,7 @@ export default function PageContent({
   loadedCount?: number;
   onLoadMore?: () => void;
 }) {
+  useUiTranslation();
   console.log('📄 PAGE CONTENT: Initializing with data:', {
     meetingId: meeting.id,
     summaryDataKeys: summaryData ? Object.keys(summaryData) : null,
@@ -59,7 +61,7 @@ export default function PageContent({
   // State
   const [customPrompt, setCustomPrompt] = useState<string>('');
   const isRecording = false;
-  const [activeTab, setActiveTab] = useState<MeetingDetailsTab>('transcript');
+  const [activeTab, setActiveTab] = useState<MeetingDetailsTab>("transcript");
 
   // Ref to store the modal open function from SummaryGeneratorButtonGroup
   const openModelSettingsRef = useRef<(() => void) | null>(null);
@@ -109,10 +111,10 @@ export default function PageContent({
       const { emit } = await import('@tauri-apps/api/event');
       await emit('model-config-updated', config);
 
-      toast.success('Model settings saved successfully');
+      toast.success(uiText("messages.modelSettingsSavedSuccessfully"));
     } catch (error) {
       console.error('Failed to save model config:', error);
-      toast.error('Failed to save model settings');
+      toast.error(uiText("messages.failedToSaveModelSettings"));
     }
   };
 

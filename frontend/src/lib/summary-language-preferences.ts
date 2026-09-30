@@ -1,3 +1,4 @@
+import { uiText } from '@/i18n/ui';
 import { invoke } from '@tauri-apps/api/core';
 import { normaliseLanguageCode } from '@/lib/summary-languages';
 
@@ -130,7 +131,7 @@ export async function saveMeetingSummaryLanguage(
 
   if (response.storage === 'local_fallback') {
     if (!writeLanguageFallback(SUMMARY_LANGUAGE_FALLBACK_PREFIX, meetingId, normalised)) {
-      throw new Error('Failed to save summary language on this device');
+      throw new Error(uiText("messages.failedToSaveSummaryLanguageOnThisDevice"));
     }
     return {
       language: normalised,

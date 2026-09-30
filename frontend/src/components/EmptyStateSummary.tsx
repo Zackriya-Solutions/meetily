@@ -1,4 +1,5 @@
 'use client';
+import { uiText, useUiTranslation } from '@/i18n/ui';
 
 import { motion } from 'framer-motion';
 import { FileQuestion, Sparkles } from 'lucide-react';
@@ -23,6 +24,7 @@ export function EmptyStateSummary({
   isGenerating = false,
   error = null,
 }: EmptyStateSummaryProps) {
+  useUiTranslation();
   return (
     <motion.div
       initial={{ opacity: 0, scale: 0.95 }}
@@ -32,11 +34,9 @@ export function EmptyStateSummary({
     >
       <FileQuestion className="w-16 h-16 text-gray-300 mb-4" />
       <h3 className="text-lg font-semibold text-gray-900 mb-2">
-        No Summary Generated Yet
-      </h3>
+         {uiText("messages.noSummaryGeneratedYet")} </h3>
       <p className="text-sm text-gray-500 mb-6 max-w-md">
-        Generate an AI-powered summary of your meeting transcript to get key points, action items, and decisions.
-      </p>
+         {uiText("messages.generateAnAIPoweredSummaryOfYourMeetingTranscript")} </p>
 
       {error && (
         <p role="alert" className="mb-4 max-w-md rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
@@ -54,13 +54,13 @@ export function EmptyStateSummary({
                 className="gap-2"
               >
                 <Sparkles className="w-4 h-4" />
-                {isGenerating ? 'Generating...' : error ? 'Retry summary' : 'Generate Summary'}
+                {isGenerating ? uiText("messages.generating") : error ? uiText("messages.retrySummary") : uiText("messages.generateSummary")}
               </Button>
             </div>
           </TooltipTrigger>
           {!hasModel && (
             <TooltipContent>
-              <p>Please select a model in Settings first</p>
+              <p>{uiText("messages.pleaseSelectAModelInSettingsFirst")}</p>
             </TooltipContent>
           )}
         </Tooltip>
@@ -68,8 +68,7 @@ export function EmptyStateSummary({
 
       {!hasModel && (
         <p className="text-xs text-amber-600 mt-3">
-          Please select a model in Settings first
-        </p>
+           {uiText("messages.pleaseSelectAModelInSettingsFirst")} </p>
       )}
     </motion.div>
   );

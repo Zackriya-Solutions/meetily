@@ -1,3 +1,4 @@
+import { uiText } from '@/i18n/ui';
 /**
  * Beta Features Type System
  *
@@ -33,14 +34,14 @@ export const DEFAULT_BETA_FEATURES: BetaFeatures = {
  * Human-readable feature names for UI display
  */
 export const BETA_FEATURE_NAMES: Record<keyof BetaFeatures, string> = {
-  importAndRetranscribe: 'Import Audio & Retranscribe',
+  get importAndRetranscribe() { return uiText("messages.importAudioRetranscribe"); },
 };
 
 /**
  * Feature descriptions for UI tooltips/help text
  */
 export const BETA_FEATURE_DESCRIPTIONS: Record<keyof BetaFeatures, string> = {
-  importAndRetranscribe: 'Import audio files to transcribe or retranscribe existing meetings with different language settings.',
+  get importAndRetranscribe() { return uiText("messages.importAudioFilesToTranscribeOrRetranscribeExistingMeetings"); },
 };
 
 /**

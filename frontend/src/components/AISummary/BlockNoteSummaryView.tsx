@@ -1,4 +1,6 @@
 "use client";
+import { useUiTranslation } from '@/i18n/ui';
+import { editorDictionary } from '@/i18n/editor';
 
 import { useState, useEffect, useCallback, useRef, forwardRef, useImperativeHandle } from 'react';
 import dynamic from 'next/dynamic';
@@ -75,6 +77,7 @@ export const BlockNoteSummaryView = forwardRef<BlockNoteSummaryViewRef, BlockNot
   meeting,
   onDirtyChange
 }, ref) => {
+  useUiTranslation();
   const { format, data } = detectSummaryFormat(summaryData);
   const [isDirty, setIsDirty] = useState(false);
   const [currentBlocks, setCurrentBlocks] = useState<Block[]>([]);
@@ -83,6 +86,7 @@ export const BlockNoteSummaryView = forwardRef<BlockNoteSummaryViewRef, BlockNot
 
   // Create BlockNote editor for markdown parsing
   const editor = useCreateBlockNote({
+    dictionary: editorDictionary,
     initialContent: undefined
   });
 

@@ -1,3 +1,4 @@
+import { uiText, useUiTranslation } from '@/i18n/ui';
 import React from 'react';
 import { Lock, Sparkles, Cpu } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -5,27 +6,28 @@ import { OnboardingContainer } from '../OnboardingContainer';
 import { useOnboarding } from '@/contexts/OnboardingContext';
 
 export function WelcomeStep() {
+  useUiTranslation();
   const { goNext } = useOnboarding();
 
   const features = [
     {
       icon: Lock,
-      title: 'Your data never leaves your device',
+      title: uiText("messages.yourDataNeverLeavesYourDevice"),
     },
     {
       icon: Sparkles,
-      title: 'Intelligent summaries & insights',
+      title: uiText("messages.intelligentSummariesInsights"),
     },
     {
       icon: Cpu,
-      title: 'Works offline, no cloud required',
+      title: uiText("messages.worksOfflineNoCloudRequired"),
     },
   ];
 
   return (
     <OnboardingContainer
-      title="Welcome to Meetily"
-      description="Record. Transcribe. Summarize. All on your device."
+      title={uiText("messages.welcomeToMeetily3")}
+      description={uiText("messages.recordTranscribeSummarizeAllOnYourDevice")}
       step={1}
       hideProgress={true}
     >
@@ -56,9 +58,8 @@ export function WelcomeStep() {
             onClick={goNext}
             className="w-full h-11 bg-gray-900 hover:bg-gray-800 text-white"
           >
-            Get Started
-          </Button>
-          <p className="text-xs text-center text-gray-500">Takes less than 3 minutes</p>
+             {uiText("messages.getStarted")} </Button>
+          <p className="text-xs text-center text-gray-500">{uiText("messages.takesLessThan3Minutes")}</p>
         </div>
       </div>
     </OnboardingContainer>

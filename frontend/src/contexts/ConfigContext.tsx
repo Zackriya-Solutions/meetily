@@ -1,4 +1,5 @@
 'use client';
+import { uiText, useUiTranslation } from '@/i18n/ui';
 
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, ReactNode, useRef } from 'react';
 import { TranscriptModelProps } from '@/components/TranscriptSettings';
@@ -98,6 +99,7 @@ const ConfigContext = createContext<ConfigContextType | undefined>(undefined);
 
 
 export function ConfigProvider({ children }: { children: ReactNode }) {
+  useUiTranslation();
   // Model configuration state
   const [modelConfig, setModelConfig] = useState<ModelConfig>({
     provider: 'ollama',
@@ -187,7 +189,7 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
         setModels(modelList);
         setError('');
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to load Ollama models');
+        setError(err instanceof Error ? err.message : uiText("messages.failedToLoadOllamaModels"));
         console.error('Error loading models:', err);
       }
     };
@@ -225,7 +227,7 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
           console.error('[ConfigContext] Failed to sync language preference to Rust on startup:', err);
         });
     }
-  }, []); 
+  }, []);
 
   // Load model configuration on mount
   useEffect(() => {

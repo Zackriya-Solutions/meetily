@@ -1,4 +1,5 @@
 'use client';
+import { uiLabel, uiText, useUiTranslation } from '@/i18n/ui';
 
 import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
@@ -40,6 +41,7 @@ export function BuiltInModelManager({
   onModelSelect,
   layout = 'inline',
 }: BuiltInModelManagerProps) {
+  useUiTranslation();
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [hasFetched, setHasFetched] = useState<boolean>(false);
@@ -62,7 +64,7 @@ export function BuiltInModelManager({
       }
     } catch (error) {
       console.error('Failed to fetch built-in AI models:', error);
-      toast.error('Failed to load models');
+      toast.error(uiText("messages.failedToLoadModels"));
     } finally {
       setIsLoading(false);
       setHasFetched(true);
@@ -216,7 +218,7 @@ export function BuiltInModelManager({
       }
 
       // For real errors, show toast and remove from downloading
-      toast.error(`Failed to download ${modelName}`);
+      toast.error(uiText("messages.failedToDownload", { value0: modelName }));
 
       setDownloadingModels((prev) => {
         const newSet = new Set(prev);
@@ -232,7 +234,7 @@ export function BuiltInModelManager({
   const cancelDownload = async (modelName: string) => {
     try {
       await invoke('builtin_ai_cancel_download', { modelName });
-      toast.info(`Download of ${modelName} cancelled`);
+      toast.info(uiText("messages.downloadOfCancelled", { value0: modelName }));
       setDownloadingModels((prev) => {
         const newSet = new Set(prev);
         newSet.delete(modelName);
@@ -246,11 +248,11 @@ export function BuiltInModelManager({
   const deleteModel = async (modelName: string) => {
     try {
       await invoke('builtin_ai_delete_model', { modelName });
-      toast.success(`Model ${modelName} deleted`);
+      toast.success(uiText("messages.modelDeleted", { value0: modelName }));
       fetchModels();
     } catch (error) {
       console.error('Failed to delete model:', error);
-      toast.error(`Failed to delete ${modelName}`);
+      toast.error(uiText("messages.failedToDelete", { value0: modelName }));
     }
   };
 
@@ -259,8 +261,7 @@ export function BuiltInModelManager({
     return (
       <div className="text-center py-8 text-muted-foreground">
         <RefreshCw className="mx-auto h-8 w-8 animate-spin mb-2" />
-        Loading models...
-      </div>
+         {uiText("messages.loadingModels")} </div>
     );
   }
 
@@ -269,8 +270,7 @@ export function BuiltInModelManager({
     return (
       <Alert>
         <AlertDescription>
-          No models found. Download a model to get started with Built-in AI.
-        </AlertDescription>
+           {uiText("messages.noModelsFoundDownloadAModelToGetStarted")} </AlertDescription>
       </Alert>
     );
   }
@@ -278,7 +278,7 @@ export function BuiltInModelManager({
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
-        <h4 className="text-sm font-bold">Built-in AI Models</h4>
+        <h4 className="text-sm font-bold">{uiText("messages.builtInAIModels")}</h4>
       </div>
 
       <div
@@ -319,30 +319,26 @@ export function BuiltInModelManager({
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div className="min-w-0 flex-1">
                   <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-                    <span className="min-w-0 break-words text-base font-bold leading-snug text-gray-900">{model.display_name || model.name}</span>
+                    <span className="min-w-0 break-words text-base font-bold leading-snug text-gray-900">{uiLabel(model.display_name || model.name)}</span>
                     {isAvailable && (
                       <>
                         <span className="flex shrink-0 items-center gap-1 text-xs font-medium text-green-600">
                           <span className="h-2 w-2 rounded-full bg-green-600"></span>
-                          Ready
-                        </span>
+                           {uiText("messages.ready")} </span>
                         {selectedModel === model.name && (
                           <span className="shrink-0 rounded bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700">
-                            Selected
-                          </span>
+                             {uiText("messages.selected")} </span>
                         )}
                       </>
                     )}
                     {isCorrupted && (
                       <span className="flex shrink-0 items-center gap-1 rounded bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">
                         <BadgeAlert className="h-3 w-3" />
-                        Corrupted
-                      </span>
+                         {uiText("messages.corrupted")} </span>
                     )}
                     {isError && (
                       <span className="shrink-0 rounded bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">
-                        Error
-                      </span>
+                         {uiText("messages.error")} </span>
                     )}
                   </div>
                 </div>
@@ -359,8 +355,7 @@ export function BuiltInModelManager({
                       }}
                     >
                       <Download className="mr-2 h-4 w-4" />
-                      Download
-                    </Button>
+                       {uiText("messages.download")} </Button>
                   )}
                   {/* Downloading - Show Cancel button */}
                   {modelIsDownloading && (
@@ -373,8 +368,7 @@ export function BuiltInModelManager({
                         cancelDownload(model.name);
                       }}
                     >
-                      Cancel
-                    </Button>
+                       {uiText("messages.cancel")} </Button>
                   )}
                   {/* Error - Show Retry button */}
                   {isError && !modelIsDownloading && (
@@ -388,8 +382,7 @@ export function BuiltInModelManager({
                       }}
                     >
                       <RefreshCw className="mr-2 h-4 w-4" />
-                      Retry
-                    </Button>
+                       {uiText("messages.retry")} </Button>
                   )}
                   {/* Corrupted - Show both Retry and Delete buttons */}
                   {isCorrupted && !modelIsDownloading && (
@@ -403,8 +396,7 @@ export function BuiltInModelManager({
                         }}
                       >
                         <RefreshCw className="mr-2 h-4 w-4" />
-                        Retry
-                      </Button>
+                         {uiText("messages.retry")} </Button>
                       <Button
                         variant="outline"
                         size="sm"
@@ -414,8 +406,7 @@ export function BuiltInModelManager({
                         }}
                       >
                         <Trash2 className="mr-2 h-4 w-4" />
-                        Delete
-                      </Button>
+                         {uiText("messages.delete")} </Button>
                     </>
                   )}
                   {/* Available - Show small trash icon (only if not currently selected) */}
@@ -426,7 +417,7 @@ export function BuiltInModelManager({
                         e.stopPropagation();
                         deleteModel(model.name);
                       }}
-                      title="Delete model"
+                      title={uiText("messages.deleteModel")}
                     >
                       <Trash2 className="h-4 w-4" />
                     </button>
@@ -435,19 +426,19 @@ export function BuiltInModelManager({
               </div>
               <div className="text-sm text-gray-600">
                 {model.description && (
-                  <p className="mb-1">{model.description}</p>
+                  <p className="mb-1">{uiLabel(model.description)}</p>
                 )}
                 {(isError || isCorrupted) && (
                   <p className="mb-1 text-xs text-red-600">
-                    {isError && typeof model.status === 'object' && 'Error' in model.status
+                    {isError && typeof model.status === 'object' && "Error" in model.status
                       ? (model.status as any).Error
                       : isCorrupted
-                      ? 'File is corrupted. Retry download or delete.'
-                      : 'An error occurred'}
+                      ? uiText("messages.fileIsCorruptedRetryDownloadOrDelete")
+                      : uiText("messages.anErrorOccurred")}
                   </p>
                 )}
                 <div className="text-xs text-gray-500">
-                  <span>{formatSummaryModelSizeLabelFromMb(model.size_mb)} • {model.context_size} tokens</span>
+                  <span>{formatSummaryModelSizeLabelFromMb(model.size_mb)} • {model.context_size}  {uiText("messages.tokens")}</span>
                 </div>
                 </div>
               </div>
@@ -456,7 +447,7 @@ export function BuiltInModelManager({
               {modelIsDownloading && progress !== undefined && (
                 <div className="mt-3 pt-3 border-t border-gray-200">
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-sm font-medium text-gray-900">Downloading...</span>
+                    <span className="text-sm font-medium text-gray-900">{uiText("messages.downloading")}</span>
                     <span className="text-sm font-semibold text-gray-900">
                       {Math.round(progress)}%
                     </span>

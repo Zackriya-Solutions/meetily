@@ -1,3 +1,4 @@
+import { uiText } from '@/i18n/ui';
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { MeetingSummary, Summary, Transcript } from '@/types';
 import { BlockNoteSummaryViewRef } from '@/components/AISummary/BlockNoteSummaryView';
@@ -16,7 +17,7 @@ export function useMeetingData({ meeting, summaryData, onMeetingUpdated }: UseMe
   // State
   // Use prop directly since summary generation fetches transcripts independently
   const transcripts = meeting.transcripts;
-  const [meetingTitle, setMeetingTitle] = useState(meeting.title || '+ New Call');
+  const [meetingTitle, setMeetingTitle] = useState(meeting.title || uiText("messages.newCall"));
   const [aiSummary, setAiSummary] = useState<MeetingSummary | null>(summaryData);
   const [isSaving, setIsSaving] = useState(false);
   const [isSummaryDirty, setIsSummaryDirty] = useState(false);
@@ -41,7 +42,7 @@ export function useMeetingData({ meeting, summaryData, onMeetingUpdated }: UseMe
 
   const handleSaveSummary = useCallback(async (summary: MeetingSummary) => {
     if (!hasVisibleSummaryContent(summary)) {
-      throw new Error('Summary contains no visible content to save.');
+      throw new Error(uiText("messages.summaryContainsNoVisibleContentToSave"));
     }
 
     const formattedSummary = 'markdown' in summary || 'summary_json' in summary
@@ -64,10 +65,10 @@ export function useMeetingData({ meeting, summaryData, onMeetingUpdated }: UseMe
         await handleSaveSummary(aiSummary);
       }
 
-      toast.success("Changes saved successfully");
+      toast.success(uiText("messages.changesSavedSuccessfully"));
     } catch (error) {
       console.error('Failed to save changes:', error);
-      toast.error("Failed to save changes", { description: String(error) });
+      toast.error(uiText("messages.failedToSaveChanges"), { description: String(error) });
     } finally {
       setIsSaving(false);
     }

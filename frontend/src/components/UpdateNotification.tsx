@@ -1,3 +1,4 @@
+import { uiText } from '@/i18n/ui';
 import React from 'react';
 import { Download } from 'lucide-react';
 import { toast } from 'sonner';
@@ -23,10 +24,9 @@ export function showUpdateNotification(updateInfo: UpdateInfo, onUpdateClick?: (
       <div className="flex items-center gap-2">
         <Download className="h-4 w-4" />
         <div>
-          <p className="font-medium">Update Available</p>
+          <p className="font-medium">{uiText("messages.updateAvailable")}</p>
           <p className="text-sm text-muted-foreground">
-            Version {updateInfo.version} is now available
-          </p>
+             {uiText("messages.version")} {updateInfo.version}  {uiText("messages.isNowAvailable")} </p>
         </div>
       </div>
       <button
@@ -36,8 +36,7 @@ export function showUpdateNotification(updateInfo: UpdateInfo, onUpdateClick?: (
         }}
         className="text-sm font-medium text-blue-600 hover:text-blue-700 underline"
       >
-        View Details
-      </button>
+         {uiText("messages.viewDetails")} </button>
     </div>,
     {
       duration: 10000,
