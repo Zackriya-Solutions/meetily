@@ -28,8 +28,16 @@ const NONE_VALUE = '__none__';
 
 type Mode = 'list' | 'edit';
 
+/** Mirrors `meeting_domain::tokens::PromptTokenCount` in Rust. */
+interface PromptTokenCount {
+  tokens: number;
+  limit: number;
+  model: string;
+  dropped_text: string | null;
+}
+
 export function MeetingDomainSettings() {
-  const { selectedDomain, setSelectedDomain } = useConfig();
+  const { selectedDomain, setSelectedDomain, transcriptModelConfig } = useConfig();
   const [domains, setDomains] = useState<string[]>([]);
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState<Mode>('list');
@@ -38,6 +46,39 @@ export function MeetingDomainSettings() {
   const [editingContent, setEditingContent] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [tokenCount, setTokenCount] = useState<PromptTokenCount | null>(null);
+  const [tokenCountError, setTokenCountError] = useState(false);
+
+  // Count the prompt in Whisper tokens while editing. The model's vocabulary
+  // is read from its file header, so this works without a loaded model.
+  const whisperModel =
+    transcriptModelConfig.provider === 'localWhisper' ? transcriptModelConfig.model : null;
+  useEffect(() => {
+    if (mode !== 'edit') return;
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      try {
+        const count = await invoke<PromptTokenCount>('count_meeting_domain_tokens', {
+          content: editingContent,
+          model: whisperModel,
+        });
+        if (!cancelled) {
+          setTokenCount(count);
+          setTokenCountError(false);
+        }
+      } catch (err) {
+        console.error('Failed to count meeting domain tokens:', err);
+        if (!cancelled) {
+          setTokenCount(null);
+          setTokenCountError(true);
+        }
+      }
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [mode, editingContent, whisperModel]);
 
   const refresh = useCallback(async () => {
     try {
@@ -61,6 +102,7 @@ export function MeetingDomainSettings() {
     setEditingOriginal(null);
     setEditingName('');
     setEditingContent('');
+    setTokenCount(null);
     setError(null);
   };
 
@@ -68,6 +110,7 @@ export function MeetingDomainSettings() {
     setMode('edit');
     setEditingOriginal(name);
     setEditingName(name);
+    setTokenCount(null);
     setError(null);
     try {
       const content = await invoke<string | null>('get_meeting_domain_content', { name });
@@ -191,8 +234,9 @@ export function MeetingDomainSettings() {
             <DialogTitle>Manage Meeting Domains</DialogTitle>
             <DialogDescription>
               Each domain is a plain-text vocabulary hint sent to Whisper as
-              <code className="mx-1">initial_prompt</code>. Keep it short — the
-              file is truncated at ~1000 characters.
+              <code className="mx-1">initial_prompt</code>. Whisper uses at most
+              the last 224 tokens (Norwegian names often cost 2–3 tokens each),
+              so put the most important terms last.
             </DialogDescription>
           </DialogHeader>
 
@@ -281,8 +325,41 @@ export function MeetingDomainSettings() {
                   className="mt-1 font-mono text-sm"
                 />
                 <p className="text-xs text-gray-500 mt-1">
-                  {editingContent.length} / ~1000 chars (longer is truncated when sent to Whisper)
+                  {tokenCount ? (
+                    <>
+                      <span
+                        className={
+                          tokenCount.tokens > tokenCount.limit
+                            ? 'font-medium text-red-600'
+                            : 'font-medium text-gray-700'
+                        }
+                      >
+                        {tokenCount.tokens} / {tokenCount.limit} tokens
+                      </span>
+                      {' · '}
+                      {editingContent.trim().length} chars
+                    </>
+                  ) : (
+                    <>
+                      {editingContent.trim().length} chars
+                      {tokenCountError && ' — token count unavailable (no Whisper model found)'}
+                    </>
+                  )}
                 </p>
+                {tokenCount && tokenCount.tokens > tokenCount.limit && (
+                  <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded p-2 mt-2">
+                    Over the limit by {tokenCount.tokens - tokenCount.limit} tokens. Whisper
+                    only uses the last {tokenCount.limit}, so this start has no effect:
+                    {tokenCount.dropped_text && (
+                      <span className="block mt-1 font-mono break-words">
+                        “{tokenCount.dropped_text}”
+                      </span>
+                    )}
+                    <span className="block mt-1">
+                      Shorten the list or move the most important terms to the end.
+                    </span>
+                  </div>
+                )}
               </div>
               <DialogFooter>
                 <Button
