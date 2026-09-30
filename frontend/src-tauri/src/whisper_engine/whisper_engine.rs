@@ -11,7 +11,13 @@ use reqwest::Client;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 use crate::config::WHISPER_MODEL_CATALOG;
+use crate::meeting_domain::tokens::{prompt_token_limit, PromptFit};
 use super::acceleration::{whisper_context_acceleration_for, WhisperCompiledBackend};
+
+/// Hash of the last over-limit meeting-domain prompt we warned about. Live
+/// transcription calls Whisper once per VAD chunk, so without this the same
+/// warning would repeat every few seconds.
+static LAST_PROMPT_OVERFLOW_WARNING: std::sync::Mutex<Option<u64>> = std::sync::Mutex::new(None);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ModelStatus {
@@ -512,11 +518,68 @@ impl WhisperEngine {
         repeated_words as f32 / total_words
     }
     
+    /// Tokenize the meeting-domain prompt with the loaded model's own tokenizer
+    /// and keep what whisper.cpp actually uses: at most `n_text_ctx / 2` tokens
+    /// (224), counted from the END. Over the limit the START is dropped, as
+    /// whisper.cpp itself would, because domain files put the most important
+    /// terms last. Passing tokens instead of `set_initial_prompt` also avoids
+    /// whisper-rs leaking a CString per call and panicking on NUL bytes.
+    fn domain_prompt_tokens(ctx: &WhisperContext, prompt: Option<&str>) -> Option<Vec<whisper_rs::WhisperToken>> {
+        let prompt = prompt.map(str::trim).filter(|p| !p.is_empty())?;
+
+        // whisper_tokenize returns -needed when the buffer is too small, but
+        // whisper-rs only treats -1 as an error and would use any other negative
+        // value as the Vec length. Every token consumes at least one byte, so a
+        // buffer of the byte length always suffices.
+        let tokens = match ctx.tokenize(prompt, prompt.len() + 1) {
+            Ok(tokens) if !tokens.is_empty() => tokens,
+            Ok(_) => return None,
+            Err(e) => {
+                log::warn!("Could not tokenize meeting-domain prompt ({}); transcribing without it", e);
+                return None;
+            }
+        };
+
+        let fit = PromptFit::new(tokens.len(), prompt_token_limit(ctx.n_text_ctx()));
+        if fit.is_over() {
+            let hash = {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                prompt.hash(&mut h);
+                fit.limit.hash(&mut h);
+                h.finish()
+            };
+            let mut last = LAST_PROMPT_OVERFLOW_WARNING.lock().unwrap_or_else(|e| e.into_inner());
+            if *last != Some(hash) {
+                *last = Some(hash);
+                let dropped: Vec<u8> = tokens[..fit.keep_from]
+                    .iter()
+                    .filter_map(|&t| ctx.token_to_cstr(t).ok())
+                    .flat_map(|s| s.to_bytes().iter().copied())
+                    .collect();
+                log::warn!(
+                    "Meeting-domain prompt is {} tokens, over Whisper's limit of {}; \
+                     the first {} tokens are dropped and have no effect: \"{}\"",
+                    fit.total,
+                    fit.limit,
+                    fit.dropped(),
+                    String::from_utf8_lossy(&dropped).trim()
+                );
+            }
+        }
+        log::debug!("Whisper initial prompt: {} tokens (limit {})", fit.kept(), fit.limit);
+
+        Some(tokens[fit.keep_from..].to_vec())
+    }
+
     /// Transcribe audio with streaming support for partial results and adaptive quality
     pub async fn transcribe_audio_with_confidence(&self, audio_data: Vec<f32>, language: Option<String>, initial_prompt: Option<String>) -> Result<(String, f32, bool)> {
         let ctx_lock = self.current_context.read().await;
         let ctx = ctx_lock.as_ref()
             .ok_or_else(|| anyhow!("No model loaded. Please load a model first."))?;
+
+        // Must outlive `params`, which borrows it.
+        let prompt_tokens = Self::domain_prompt_tokens(ctx, initial_prompt.as_deref());
 
         // Get adaptive configuration based on hardware
         let hardware_profile = crate::audio::HardwareProfile::detect();
@@ -542,8 +605,8 @@ impl WhisperEngine {
 
         // Domain-specific vocabulary hint to bias decoding (e.g. proper nouns,
         // client names). Skipped when None/empty so behavior is unchanged.
-        if let Some(prompt) = initial_prompt.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
-            params.set_initial_prompt(prompt);
+        if let Some(tokens) = prompt_tokens.as_deref() {
+            params.set_tokens(tokens);
         }
 
         // CRITICAL: Disable timestamp tokens to prevent whisper.cpp chunking heuristics
@@ -641,6 +704,9 @@ impl WhisperEngine {
         let ctx = ctx_lock.as_ref()
             .ok_or_else(|| anyhow!("No model loaded. Please load a model first."))?;
 
+        // Must outlive `params`, which borrows it.
+        let prompt_tokens = Self::domain_prompt_tokens(ctx, initial_prompt.as_deref());
+
         // Get adaptive configuration based on hardware
         let hardware_profile = crate::audio::HardwareProfile::detect();
         let adaptive_config = hardware_profile.get_whisper_config();
@@ -663,8 +729,8 @@ impl WhisperEngine {
         params.set_language(language_code);
         params.set_translate(should_translate);
 
-        if let Some(prompt) = initial_prompt.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
-            params.set_initial_prompt(prompt);
+        if let Some(tokens) = prompt_tokens.as_deref() {
+            params.set_tokens(tokens);
         }
 
         // CRITICAL: Disable timestamp tokens to prevent whisper.cpp chunking heuristics

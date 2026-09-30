@@ -10,9 +10,16 @@
 // 2. Secondary: `~/.meetily/domains/` — convenient manual edit location
 //    (also supported via a symlink to the primary directory).
 //
-// Whisper's `initial_prompt` is capped around 224 tokens; we truncate
-// prompts at ~1000 characters as a conservative char-based approximation
-// and log a warning when truncation kicks in.
+// Whisper uses at most `n_text_ctx / 2` = 224 prompt TOKENS and keeps the
+// LAST ones when a prompt is longer; the start of an over-long list has no
+// effect. Characters are the wrong unit: Norwegian words and names cost 2–3
+// tokens each (a 958-character list was 368 tokens). The limit is therefore
+// applied token-exactly, with the loaded model's own tokenizer, where the
+// prompt is handed to Whisper (`WhisperEngine::domain_prompt_tokens`); the
+// domain editor counts with [`tokens`]. Domain files should put the most
+// important terms last.
+
+pub mod tokens;
 
 use anyhow::{Context, Result};
 use std::collections::BTreeSet;
@@ -20,9 +27,11 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager, Runtime};
 
-/// Approximate cap for `initial_prompt`. Whisper itself enforces ~224 tokens;
-/// 1000 chars is a safe overestimate for Latin scripts including Scandinavian.
-pub const MAX_PROMPT_CHARS: usize = 1000;
+/// Emergency brake against pathologically large domain files, NOT the prompt
+/// limit (that is 224 tokens, see the module docs). 4000 characters is roughly
+/// 1500 Norwegian tokens, far more than Whisper uses, and like Whisper the
+/// brake keeps the END of the text.
+pub const MAX_PROMPT_CHARS: usize = 4000;
 
 const DOMAINS_SUBDIR: &str = "domains";
 const SECONDARY_HOME_SUBDIR: &str = ".meetily/domains";
@@ -190,8 +199,8 @@ pub fn delete_domain(name: &str) -> Result<()> {
 
 /// Load and prepare the prompt text for `domain`. Returns:
 /// - `Ok(None)` if no file exists or the file is empty/whitespace-only.
-/// - `Ok(Some(text))` truncated to [`MAX_PROMPT_CHARS`] with a warning logged
-///   when the original was longer.
+/// - `Ok(Some(text))`, untouched unless it exceeds the [`MAX_PROMPT_CHARS`]
+///   emergency brake, in which case only its last characters are kept.
 ///
 /// Resolution order: primary directory first, then secondary.
 pub fn load_prompt(domain: &str) -> Result<Option<String>> {
@@ -223,12 +232,13 @@ pub fn load_prompt(domain: &str) -> Result<Option<String>> {
     let char_count = trimmed.chars().count();
     let prompt = if char_count > MAX_PROMPT_CHARS {
         log::warn!(
-            "Meeting domain '{}' prompt is {} chars (>{} cap); truncating",
+            "Meeting domain '{}' prompt is {} chars; keeping only the last {} \
+             (emergency brake; Whisper itself uses at most the last 224 tokens)",
             domain,
             char_count,
             MAX_PROMPT_CHARS
         );
-        trimmed.chars().take(MAX_PROMPT_CHARS).collect::<String>()
+        trimmed.chars().skip(char_count - MAX_PROMPT_CHARS).collect::<String>()
     } else {
         trimmed.to_string()
     };
@@ -279,15 +289,29 @@ mod tests {
     }
 
     #[test]
-    fn load_prompt_truncates_long_content() {
+    fn load_prompt_brake_keeps_the_end() {
         let _guard = TEST_LOCK.lock().unwrap();
         let tmp = TempDir::new().unwrap();
-        let long_text = "a".repeat(MAX_PROMPT_CHARS + 500);
+        let long_text = format!("{}END", "å".repeat(MAX_PROMPT_CHARS + 500));
         fs::write(tmp.path().join("big.txt"), &long_text).unwrap();
         set_primary_for_test(tmp.path().to_path_buf());
 
         let result = load_prompt("big").unwrap().unwrap();
         assert_eq!(result.chars().count(), MAX_PROMPT_CHARS);
+        assert!(result.ends_with("END"));
+        clear_primary_for_test();
+    }
+
+    #[test]
+    fn load_prompt_passes_normal_list_unchanged() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        let tmp = TempDir::new().unwrap();
+        let list = "styremøte, årsbudsjett, prosjektråd, ".repeat(20);
+        fs::write(tmp.path().join("list.txt"), format!("  {list}\n")).unwrap();
+        set_primary_for_test(tmp.path().to_path_buf());
+
+        let result = load_prompt("list").unwrap().unwrap();
+        assert_eq!(result, list.trim());
         clear_primary_for_test();
     }
 

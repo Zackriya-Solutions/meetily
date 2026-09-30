@@ -453,6 +453,26 @@ async fn delete_meeting_domain(name: String) -> Result<(), String> {
     meeting_domain::delete_domain(&name).map_err(|e| e.to_string())
 }
 
+/// Count a domain prompt in Whisper tokens for the domain editor. `model` is
+/// the configured Whisper model; the vocabulary is read from the model file's
+/// header, so no model has to be loaded.
+#[tauri::command]
+async fn count_meeting_domain_tokens(
+    content: String,
+    model: Option<String>,
+) -> Result<meeting_domain::tokens::PromptTokenCount, String> {
+    let models_dir = whisper_engine::commands::get_models_directory()
+        .ok_or_else(|| "models directory not initialized".to_string())?;
+    let (model, path) = meeting_domain::tokens::resolve_tokenizer_model(&models_dir, model.as_deref())
+        .ok_or_else(|| "no Whisper model found to count tokens with".to_string())?;
+    tokio::task::spawn_blocking(move || {
+        meeting_domain::tokens::count_prompt_tokens(&model, &path, content.trim())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 async fn open_meeting_domains_folder() -> Result<(), String> {
     let dir = meeting_domain::primary_dir()
@@ -803,6 +823,7 @@ pub fn run() {
             get_meeting_domain_content,
             save_meeting_domain,
             delete_meeting_domain,
+            count_meeting_domain_tokens,
             open_meeting_domains_folder,
             // Notification system commands
             notifications::commands::get_notification_settings,
