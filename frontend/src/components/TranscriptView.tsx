@@ -1,4 +1,5 @@
 'use client';
+import { uiText, useUiTranslation } from '@/i18n/ui';
 
 import { Transcript } from '@/types';
 import { useEffect, useRef, useState } from 'react';
@@ -105,6 +106,7 @@ function cleanStopWords(text: string): string {
 }
 
 export const TranscriptView: React.FC<TranscriptViewProps> = ({ transcripts, isRecording = false, isPaused = false, isProcessing = false, isStopping = false, enableStreaming = false }) => {
+  useUiTranslation();
   const [speechDetected, setSpeechDetected] = useState(false);
 
   // Debug: Log the props to understand what's happening
@@ -293,8 +295,7 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({ transcripts, isR
                 <TooltipContent>
                   {transcript.duration !== undefined && (
                     <span className="text-xs text-gray-400">
-                      {transcript.duration.toFixed(1)}s
-                      {transcript.confidence !== undefined && (
+                      {transcript.duration.toFixed(1)}{uiText("messages.s")} {transcript.confidence !== undefined && (
                         <ConfidenceIndicator
                           confidence={transcript.confidence}
                           showIndicator={showConfidence}
@@ -343,7 +344,7 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({ transcripts, isR
           className="flex items-center gap-2 mt-4 text-gray-500"
         >
           <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
-          <span className="text-sm">Listening...</span>
+          <span className="text-sm">{uiText("messages.listening")}</span>
         </motion.div>
       )}
 
@@ -360,18 +361,18 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({ transcripts, isR
                 <div className={`w-3 h-3 rounded-full ${isPaused ? 'bg-orange-500' : 'bg-blue-500 animate-pulse'}`}></div>
               </div>
               <p className="text-sm text-gray-600">
-                {isPaused ? 'Recording paused' : 'Listening for speech...'}
+                {isPaused ? uiText("messages.recordingPaused") : uiText("messages.listeningForSpeech")}
               </p>
               <p className="text-xs mt-1 text-gray-400">
                 {isPaused
-                  ? 'Click resume to continue recording'
-                  : 'Speak to see live transcription'}
+                  ? uiText("messages.clickResumeToContinueRecording")
+                  : uiText("messages.speakToSeeLiveTranscription")}
               </p>
             </>
           ) : (
             <>
-              <p className="text-lg font-semibold">Welcome to meetily!</p>
-              <p className="text-xs mt-1">Start recording to see live transcription</p>
+              <p className="text-lg font-semibold">{uiText("messages.welcomeToMeetily2")}</p>
+              <p className="text-xs mt-1">{uiText("messages.startRecordingToSeeLiveTranscription")}</p>
             </>
           )}
         </motion.div>

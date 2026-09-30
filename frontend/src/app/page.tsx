@@ -1,4 +1,5 @@
 'use client';
+import { uiText, useUiTranslation } from '@/i18n/ui';
 
 import { useState, useEffect } from 'react';
 import { RecordingControls } from '@/components/RecordingControls';
@@ -22,6 +23,7 @@ import { toast } from 'sonner';
 import { useRouter } from 'next/navigation';
 
 export default function Home() {
+  useUiTranslation();
   // Local page state (not moved to contexts)
   const [isRecording, setIsRecordingState] = useState(false);
   const [barHeights, setBarHeights] = useState(['58%', '76%', '58%']);
@@ -123,12 +125,12 @@ export default function Home() {
       const result = await recoverMeeting(meetingId);
 
       if (result.success) {
-        toast.success('Meeting recovered successfully!', {
+        toast.success(uiText("messages.meetingRecoveredSuccessfully"), {
           description: result.audioRecoveryStatus?.status === 'success'
-            ? 'Transcripts and audio recovered'
-            : 'Transcripts recovered (no audio available)',
+            ? uiText("messages.transcriptsAndAudioRecovered")
+            : uiText("messages.transcriptsRecoveredNoAudioAvailable"),
           action: result.meetingId ? {
-            label: 'View Meeting',
+            label: uiText("messages.viewMeeting"),
             onClick: () => {
               router.push(`/meeting-details?id=${result.meetingId}`);
             }
@@ -152,8 +154,8 @@ export default function Home() {
         }
       }
     } catch (error) {
-      toast.error('Failed to recover meeting', {
-        description: error instanceof Error ? error.message : 'Unknown error occurred',
+      toast.error(uiText("messages.failedToRecoverMeeting"), {
+        description: error instanceof Error ? error.message : uiText("messages.unknownErrorOccurred"),
       });
       throw error;
     }

@@ -1,4 +1,5 @@
 'use client';
+import { uiText, useUiTranslation } from '@/i18n/ui';
 
 import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
@@ -17,6 +18,7 @@ const HOMEBREW_PATHS = [
 ];
 
 export function HomebrewDatabaseDetector({ onImportSuccess, onDecline }: HomebrewDatabaseDetectorProps) {
+  useUiTranslation();
   const [isChecking, setIsChecking] = useState(true);
   const [isImporting, setIsImporting] = useState(false);
   const [homebrewDbExists, setHomebrewDbExists] = useState(false);
@@ -61,7 +63,7 @@ export function HomebrewDatabaseDetector({ onImportSuccess, onDecline }: Homebre
         legacyDbPath: detectedPath,
       });
 
-      toast.success('Database imported successfully! Reloading...');
+      toast.success(uiText("messages.databaseImportedSuccessfullyReloading"));
 
       // Wait 1 second for user to see success, then reload window to refresh all data
       setTimeout(() => {
@@ -69,7 +71,7 @@ export function HomebrewDatabaseDetector({ onImportSuccess, onDecline }: Homebre
       }, 1000);
     } catch (error) {
       console.error('Error importing database:', error);
-      toast.error(`Import failed: ${error}`);
+      toast.error(uiText("messages.importFailed2", { value0: error }));
       setIsImporting(false);
     }
   };
@@ -97,24 +99,21 @@ export function HomebrewDatabaseDetector({ onImportSuccess, onDecline }: Homebre
           <div className="flex items-center gap-2 mb-1">
             <AlertCircle className="h-4 w-4 text-blue-600" />
             <h3 className="text-sm font-semibold text-blue-900">
-              Previous Meetily Installation Detected!
-            </h3>
+               {uiText("messages.previousMeetilyInstallationDetected")} </h3>
           </div>
           <p className="text-sm text-blue-800 mb-2">
-            We found an existing database from your previous Meetily installation (Python backend version).
-          </p>
+             {uiText("messages.weFoundAnExistingDatabaseFromYourPreviousMeetily")} </p>
           <div className="bg-white/50 rounded p-2 mb-3">
             <p className="text-xs text-blue-700 font-mono break-all">
               {detectedPath}
             </p>
             <p className="text-xs text-blue-600 mt-1">
-              Size: {formatFileSize(dbSize)}
+               {uiText("messages.size")} {formatFileSize(dbSize)}
             </p>
           </div>
           <p className="text-sm text-blue-800 mb-3">
-            Would you like to import your previous meetings, transcripts, and summaries?
-          </p>
-          
+             {uiText("messages.wouldYouLikeToImportYourPreviousMeetingsTranscripts")} </p>
+
           {/* Yes/No Buttons */}
           <div className="flex gap-2">
             <button
@@ -125,23 +124,22 @@ export function HomebrewDatabaseDetector({ onImportSuccess, onDecline }: Homebre
               {isImporting ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  <span>Importing...</span>
+                  <span>{uiText("messages.importing")}</span>
                 </>
               ) : (
                 <>
                   <CheckCircle2 className="h-4 w-4" />
-                  <span>Yes, Import</span>
+                  <span>{uiText("messages.yesImport")}</span>
                 </>
               )}
             </button>
-            
+
             <button
               onClick={handleNo}
               disabled={isImporting}
               className="flex-1 px-4 py-2 border-2 border-blue-400 text-blue-700 rounded-lg hover:bg-blue-100 disabled:bg-gray-100 disabled:cursor-not-allowed transition-colors"
             >
-              No, Browse Manually
-            </button>
+               {uiText("messages.noBrowseManually")} </button>
           </div>
         </div>
       </div>

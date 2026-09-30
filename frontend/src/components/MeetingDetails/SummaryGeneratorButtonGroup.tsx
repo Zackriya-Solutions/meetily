@@ -1,4 +1,5 @@
 "use client";
+import { uiLabel, uiText, useUiTranslation } from '@/i18n/ui';
 
 import { ModelConfig, ModelSettingsModal } from '@/components/ModelSettingsModal';
 import {
@@ -55,6 +56,7 @@ export function SummaryGeneratorButtonGroup({
   onOpenModelSettings,
   languageSlot
 }: SummaryGeneratorButtonGroupProps) {
+  useUiTranslation();
   const [settingsDialogOpen, setSettingsDialogOpen] = useState(false);
 
   // Expose the function to open the modal via callback registration
@@ -92,10 +94,10 @@ export function SummaryGeneratorButtonGroup({
             Analytics.trackButtonClick('stop_summary_generation', 'meeting_details');
             onStopGeneration();
           }}
-          title="Stop summary generation"
+          title={uiText("messages.stopSummaryGeneration")}
         >
           <Square size={18} fill="currentColor" />
-          <span className="hidden @[24rem]:inline">Stop</span>
+          <span className="hidden @[24rem]:inline">{uiText("messages.stop")}</span>
         </Button>
       ) : (
         <Button
@@ -109,19 +111,19 @@ export function SummaryGeneratorButtonGroup({
           disabled={isModelConfigLoading}
           title={
             isModelConfigLoading
-              ? 'Loading model configuration...'
-              : hasSummary ? 'Regenerate AI Summary' : 'Generate AI Summary'
+              ? uiText("messages.loadingModelConfiguration")
+              : hasSummary ? uiText("messages.regenerateAISummary") : uiText("messages.generateAISummary")
           }
         >
           {isModelConfigLoading ? (
             <>
               <Loader2 className="animate-spin" size={18} />
-              <span className="hidden @[24rem]:inline">Processing...</span>
+              <span className="hidden @[24rem]:inline">{uiText("messages.processing3")}</span>
             </>
           ) : (
             <>
               <Sparkles size={18} />
-              <span className="hidden @[24rem]:inline">{hasSummary ? 'Regenerate Summary' : 'Generate Summary'}</span>
+              <span className="hidden @[24rem]:inline">{hasSummary ? uiText("messages.regenerateSummary") : uiText("messages.generateSummary")}</span>
             </>
           )}
         </Button>
@@ -135,17 +137,17 @@ export function SummaryGeneratorButtonGroup({
           <Button
             variant="outline"
             size="sm"
-            title="Summary Settings"
+            title={uiText("messages.summarySettings")}
           >
             <Settings />
-            <span className="hidden @[40rem]:inline">AI Model</span>
+            <span className="hidden @[40rem]:inline">{uiText("messages.aIModel")}</span>
           </Button>
         </DialogTrigger>
         <DialogContent
           aria-describedby={undefined}
         >
           <VisuallyHidden>
-            <DialogTitle>Model Settings</DialogTitle>
+            <DialogTitle>{uiText("messages.modelSettings")}</DialogTitle>
           </VisuallyHidden>
           <ModelSettingsModal
             onSave={async (config) => {
@@ -167,10 +169,10 @@ export function SummaryGeneratorButtonGroup({
             <Button
               variant="outline"
               size="sm"
-              title="Select summary template"
+              title={uiText("messages.selectSummaryTemplate")}
             >
               <FileText />
-              <span className="hidden @[40rem]:inline">Template</span>
+              <span className="hidden @[40rem]:inline">{uiText("messages.template")}</span>
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
@@ -178,10 +180,10 @@ export function SummaryGeneratorButtonGroup({
               <DropdownMenuItem
                 key={template.id}
                 onClick={() => onTemplateSelect(template.id, template.name)}
-                title={template.description}
+                title={uiLabel(template.description)}
                 className="flex items-center justify-between gap-2"
               >
-                <span>{template.name}</span>
+                <span>{uiLabel(template.name)}</span>
                 {selectedTemplate === template.id && (
                   <Check className="h-4 w-4 text-green-600" />
                 )}

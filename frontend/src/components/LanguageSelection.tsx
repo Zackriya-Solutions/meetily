@@ -1,3 +1,4 @@
+import { uiText, useUiTranslation, languageLabel } from '@/i18n/ui';
 import React, { useState, useEffect } from 'react';
 import { Globe } from 'lucide-react';
 import Analytics from '@/lib/analytics';
@@ -127,6 +128,7 @@ export function LanguageSelection({
   disabled = false,
   provider = 'localWhisper'
 }: LanguageSelectionProps) {
+  useUiTranslation();
   const [saving, setSaving] = useState(false);
   const { setSelectedLanguage } = useConfig();
 
@@ -154,13 +156,13 @@ export function LanguageSelection({
       });
 
       // Show success toast
-      const languageName = selectedLang?.name || languageCode;
-      toast.success("Language preference saved", {
-        description: `Transcription language set to ${languageName}`
+      const languageName = languageLabel(languageCode, selectedLang?.name || languageCode);
+      toast.success(uiText("messages.languagePreferenceSaved"), {
+        description: uiText("messages.transcriptionLanguageSetTo", { value0: languageName })
       });
     } catch (error) {
       console.error('Failed to save language preference:', error);
-      toast.error("Failed to save language preference", {
+      toast.error(uiText("messages.failedToSaveLanguagePreference"), {
         description: error instanceof Error ? error.message : String(error)
       });
     } finally {
@@ -169,16 +171,16 @@ export function LanguageSelection({
   };
 
   // Find the selected language name for display
-  const selectedLanguageName = LANGUAGES.find(
+  const selectedLanguageName = languageLabel(selectedLanguage, LANGUAGES.find(
     lang => lang.code === selectedLanguage
-  )?.name || 'Auto Detect (Original Language)';
+  )?.name || 'Auto Detect (Original Language)');
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Globe className="h-4 w-4 text-gray-600" />
-          <h4 className="text-sm font-medium text-gray-900">Transcription Language</h4>
+          <h4 className="text-sm font-medium text-gray-900">{uiText("messages.transcriptionLanguage")}</h4>
         </div>
       </div>
 
@@ -191,7 +193,7 @@ export function LanguageSelection({
         >
           {availableLanguages.map((language) => (
             <option key={language.code} value={language.code}>
-              {language.name}
+              {languageLabel(language.code, language.name)}
               {language.code !== 'auto' && language.code !== 'auto-translate' && ` (${language.code})`}
             </option>
           ))}
@@ -200,31 +202,31 @@ export function LanguageSelection({
         {/* Parakeet language limitation warning */}
         {isParakeet && (
           <div className="p-2 bg-amber-50 border border-amber-200 rounded text-amber-800">
-            <p className="font-medium">ℹ️ Parakeet Language Support</p>
-            <p className="mt-1 text-xs">Parakeet currently only supports automatic language detection. Manual language selection is not available. Use Whisper if you need to specify a particular language.</p>
+            <p className="font-medium">{uiText("messages.parakeetLanguageSupport")}</p>
+            <p className="mt-1 text-xs">{uiText("messages.parakeetCurrentlyOnlySupportsAutomaticLanguageDetectionManualLanguage")}</p>
           </div>
         )}
 
         {/* Info text */}
         <div className="text-xs space-y-2 pt-2">
           <p className="text-gray-600">
-            <strong>Current:</strong> {selectedLanguageName}
+            <strong>{uiText("messages.current")}</strong> {selectedLanguageName}
           </p>
           {selectedLanguage === 'auto' && (
             <div className="p-2 bg-yellow-50 border border-yellow-200 rounded text-yellow-800">
-              <p className="font-medium">⚠️ Auto Detect may produce incorrect results</p>
-              <p className="mt-1">For best accuracy, select your specific language (e.g., English, Spanish, etc.)</p>
+              <p className="font-medium">{uiText("messages.autoDetectMayProduceIncorrectResults")}</p>
+              <p className="mt-1">{uiText("messages.forBestAccuracySelectYourSpecificLanguageEG")}</p>
             </div>
           )}
           {selectedLanguage === 'auto-translate' && (
             <div className="p-2 bg-blue-50 border border-blue-200 rounded text-blue-800">
-              <p className="font-medium">🌐 Translation Mode Active</p>
-              <p className="mt-1">All audio will be automatically translated to English. Best for multilingual meetings where you need English output.</p>
+              <p className="font-medium">{uiText("messages.translationModeActive")}</p>
+              <p className="mt-1">{uiText("messages.allAudioWillBeAutomaticallyTranslatedToEnglishBest")}</p>
             </div>
           )}
           {selectedLanguage !== 'auto' && selectedLanguage !== 'auto-translate' && (
             <p className="text-gray-600">
-              Transcription will be optimized for <strong>{selectedLanguageName}</strong>
+               {uiText("messages.transcriptionWillBeOptimizedFor")} <strong>{selectedLanguageName}</strong>
             </p>
           )}
         </div>

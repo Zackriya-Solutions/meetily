@@ -1,3 +1,4 @@
+import { uiText } from '@/i18n/ui';
 // Types for Parakeet (NVIDIA NeMo) integration
 export interface ParakeetModelInfo {
   name: string;
@@ -53,22 +54,22 @@ export interface ModelDisplayInfo {
 
 export const MODEL_DISPLAY_CONFIG: Record<string, ModelDisplayInfo> = {
   'parakeet-tdt-0.6b-v3-int8': {
-    friendlyName: 'Lightning',
+    get friendlyName() { return uiText("messages.lightning"); },
     icon: '⚡',
-    tagline: 'Real time • Best for speed, great accuracy',
+    get tagline() { return uiText("messages.realTimeBestForSpeedGreatAccuracy"); },
     recommended: true,
     tier: 'fastest'
   },
   'parakeet-tdt-0.6b-v2-int8': {
-    friendlyName: 'Compact',
+    get friendlyName() { return uiText("messages.compact"); },
     icon: '📦',
-    tagline: 'Real time • Smaller size',
+    get tagline() { return uiText("messages.realTimeSmallerSize"); },
     tier: 'balanced'
   },
   'parakeet-tdt-0.6b-v3-fp32': {
-    friendlyName: 'Precise',
+    get friendlyName() { return uiText("messages.precise"); },
     icon: '🎯',
-    tagline: '20x real-time • Higher accuracy',
+    get tagline() { return uiText("messages.20xRealTimeHigherAccuracy"); },
     tier: 'precise'
   }
 };
@@ -78,24 +79,24 @@ export const MODEL_DISPLAY_CONFIG: Record<string, ModelDisplayInfo> = {
 // Source: https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx
 export const PARAKEET_MODEL_CONFIGS: Record<string, Partial<ParakeetModelInfo>> = {
   'parakeet-tdt-0.6b-v3-int8': {
-    description: 'Real time on M4 Max, optimized for speed',
+    get description() { return uiText("messages.realTimeOnM4MaxOptimizedForSpeed"); },
     size_mb: 670, // Actual download: 652MB encoder + 18.2MB decoder + 0.2MB extras
     accuracy: 'High',
-    speed: 'Ultra Fast',
+    speed: "Ultra Fast",
     quantization: 'Int8'
   },
   'parakeet-tdt-0.6b-v2-int8': {
-    description: '25x real-time, smaller size with good accuracy',
+    get description() { return uiText("messages.25xRealTimeSmallerSizeWithGoodAccuracy"); },
     size_mb: 661, // Actual download: 652MB encoder + 9MB decoder + 0.15MB extras
     accuracy: 'High',
-    speed: 'Very Fast',
+    speed: "Very Fast",
     quantization: 'Int8'
   },
   'parakeet-tdt-0.6b-v3-fp32': {
-    description: '20x real-time on M4 Max, higher precision',
+    get description() { return uiText("messages.20xRealTimeOnM4MaxHigherPrecision"); },
     size_mb: 2554, // Actual download: 2.44GB + 41.8MB encoder + 72.5MB decoder + 0.2MB extras
     accuracy: 'High',
-    speed: 'Fast',
+    speed: "Fast",
     quantization: 'FP32'
   }
 };
@@ -125,7 +126,7 @@ export function getStatusColor(status: ModelStatus): string {
   if (status === 'Available') return 'green';
   if (status === 'Missing') return 'gray';
   if (typeof status === 'object' && 'Downloading' in status) return 'blue';
-  if (typeof status === 'object' && 'Error' in status) return 'red';
+  if (typeof status === 'object' && "Error" in status) return 'red';
   return 'gray';
 }
 
@@ -145,11 +146,11 @@ export function isQuantizedModel(modelName: string): boolean {
 export function getModelPerformanceBadge(quantization: QuantizationType): { label: string; color: string } {
   switch (quantization) {
     case 'FP32':
-      return { label: 'Full Precision', color: 'blue' };
+      return { label: "Full Precision", color: 'blue' };
     case 'Int8':
-      return { label: 'Int8 Quantized', color: 'green' };
+      return { label: "Int8 Quantized", color: 'green' };
     default:
-      return { label: 'Standard', color: 'gray' };
+      return { label: uiText("messages.standard"), color: 'gray' };
   }
 }
 

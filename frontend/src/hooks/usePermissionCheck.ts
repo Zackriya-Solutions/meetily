@@ -1,3 +1,4 @@
+import { uiText } from '@/i18n/ui';
 import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 
@@ -53,7 +54,7 @@ export function usePermissionCheck() {
         hasMicrophone: false,
         hasSystemAudio: false,
         isChecking: false,
-        error: error instanceof Error ? error.message : 'Failed to check permissions',
+        error: error instanceof Error ? error.message : uiText("messages.failedToCheckPermissions"),
       });
       return { hasMicrophone: false, hasSystemAudio: false };
     }

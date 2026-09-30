@@ -1,5 +1,7 @@
 "use client"
 
+import {useTranslation} from 'react-i18next';
+import { setUiLanguage, UI_LOCALES,type UiLanguage, } from '@/i18n'
 import { useEffect, useState, useRef } from "react"
 import { Switch } from "./ui/switch"
 import { FolderOpen } from "lucide-react"
@@ -9,6 +11,13 @@ import AnalyticsConsentSwitch from "./AnalyticsConsentSwitch"
 import { useConfig, NotificationSettings } from "@/contexts/ConfigContext"
 
 export function PreferenceSettings() {
+  const {t, i18n} = useTranslation();
+
+  const currentUiLanguage: UiLanguage =
+    i18n.resolvedLanguage === 'zh-CN'
+      ? 'zh-CN'
+      : 'en-US'
+
   const {
     notificationSettings,
     storageLocations,
@@ -135,12 +144,12 @@ export function PreferenceSettings() {
 
   // Show loading only if we're actually loading and don't have cached data
   if (isLoadingPreferences && !notificationSettings && !storageLocations) {
-    return <div className="max-w-2xl mx-auto p-6">Loading Preferences...</div>
+    return <div className="max-w-2xl mx-auto p-6">{t('settings.preferences.loading')}</div>
   }
 
   // Show loading if notificationsEnabled hasn't been determined yet
   if (notificationsEnabled === null && !isLoadingPreferences) {
-    return <div className="max-w-2xl mx-auto p-6">Loading Preferences...</div>
+    return <div className="max-w-2xl mx-auto p-6">{t('settings.preferences.loading')}</div>
   }
 
   // Ensure we have a boolean value for the Switch component
@@ -148,12 +157,44 @@ export function PreferenceSettings() {
 
   return (
     <div className="space-y-6">
+      {/* Interface Language */}
+      <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm">
+        <div className="flex items-center justify-between gap-6">
+          <div>
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">
+              {t('settings.language.title')}
+            </h3>
+
+            <p className="text-sm text-gray-600">
+              {t('settings.language.description')}
+            </p>
+          </div>
+
+         <select
+          value={currentUiLanguage}
+          onChange={event => {
+            void setUiLanguage(
+              event.target.value as UiLanguage,
+            );
+          }}
+        >
+          {Object.entries(UI_LOCALES).map(
+            ([code, config]) => (
+              <option key={code} value={code}>
+                {config.nativeName}
+              </option>
+            ),
+          )}
+        </select>
+        </div>
+      </div>
+
       {/* Notifications Section */}
       <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm">
         <div className="flex items-center justify-between">
           <div>
-            <h3 className="text-lg font-semibold text-gray-900 mb-2">Notifications</h3>
-            <p className="text-sm text-gray-600">Enable or disable notifications of start and end of meeting</p>
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">{t('settings.preferences.notifications.title')}</h3>
+            <p className="text-sm text-gray-600">{t('settings.preferences.notifications.description')}</p>
           </div>
           <Switch checked={notificationsEnabledValue} onCheckedChange={setNotificationsEnabled} />
         </div>
@@ -161,9 +202,9 @@ export function PreferenceSettings() {
 
       {/* Data Storage Locations Section */}
       <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm">
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">Data Storage Locations</h3>
+        <h3 className="text-lg font-semibold text-gray-900 mb-4">{t('settings.preferences.storage.title')}</h3>
         <p className="text-sm text-gray-600 mb-6">
-          View and access where Meetily stores your data
+          {t('settings.preferences.storage.description')}
         </p>
 
         <div className="space-y-4">
@@ -199,23 +240,23 @@ export function PreferenceSettings() {
 
           {/* Recordings Location */}
           <div className="p-4 border rounded-lg bg-gray-50">
-            <div className="font-medium mb-2">Meeting Recordings</div>
+            <div className="font-medium mb-2">{t('settings.preferences.storage.recordings')}</div>
             <div className="text-sm text-gray-600 mb-3 break-all font-mono text-xs">
-              {storageLocations?.recordings || 'Loading...'}
+              {storageLocations?.recordings || t('common.loading')}
             </div>
             <button
               onClick={() => handleOpenFolder('recordings')}
               className="flex items-center gap-2 px-3 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-100 transition-colors"
             >
               <FolderOpen className="w-4 h-4" />
-              Open Folder
+              {t('common.openFolder')}
             </button>
           </div>
         </div>
 
         <div className="mt-4 p-3 bg-blue-50 rounded-md">
           <p className="text-xs text-blue-800">
-            <strong>Note:</strong> Database and models are stored together in your application data directory for unified management.
+            <strong>{t('common.note')}:</strong>{' '}{t('settings.preferences.storage.note')}
           </p>
         </div>
       </div>

@@ -1,3 +1,4 @@
+import { uiText } from '@/i18n/ui';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
@@ -175,7 +176,7 @@ export function useImportAudio({
       }
     } catch (err: any) {
       setStatus('error');
-      const errorMsg = typeof err === 'string' ? err : (err?.message || String(err) || 'Failed to validate file');
+      const errorMsg = typeof err === 'string' ? err : (err?.message || String(err) || uiText("messages.failedToValidateFile"));
       setError(errorMsg);
       onErrorRef.current?.(errorMsg);
       return null;
@@ -194,7 +195,7 @@ export function useImportAudio({
       return result;
     } catch (err: any) {
       setStatus('error');
-      const errorMsg = typeof err === 'string' ? err : (err?.message || String(err) || 'Failed to validate file');
+      const errorMsg = typeof err === 'string' ? err : (err?.message || String(err) || uiText("messages.failedToValidateFile"));
       setError(errorMsg);
       onErrorRef.current?.(errorMsg);
       return null;
@@ -211,7 +212,7 @@ export function useImportAudio({
       provider?: string | null
     ) => {
       isCancelledRef.current = false;
-      setStatus('processing');
+      setStatus("processing");
       setError(null);
       setProgress(null);
 
@@ -235,7 +236,7 @@ export function useImportAudio({
         });
       } catch (err: any) {
         setStatus('error');
-        const errorMsg = typeof err === 'string' ? err : (err?.message || String(err) || 'Failed to start import');
+        const errorMsg = typeof err === 'string' ? err : (err?.message || String(err) || uiText("messages.failedToStartImport"));
         setError(errorMsg);
 
         await Analytics.trackError('import_audio_failed', errorMsg);

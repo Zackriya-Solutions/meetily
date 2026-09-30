@@ -1,3 +1,4 @@
+import { uiText } from '@/i18n/ui';
 import { useCallback, RefObject } from 'react';
 import { MeetingSummary, Transcript } from '@/types';
 import { BlockNoteSummaryViewRef } from '@/components/AISummary/BlockNoteSummaryView';
@@ -52,7 +53,7 @@ export function useCopyOperations({
       return allData.transcripts;
     } catch (error) {
       console.error('❌ Error fetching all transcripts:', error);
-      toast.error('Failed to fetch transcripts for copying');
+      toast.error(uiText("messages.failedToFetchTranscriptsForCopying"));
       return [];
     }
   }, []);
@@ -64,7 +65,7 @@ export function useCopyOperations({
     const allTranscripts = await fetchAllTranscripts(meeting.id);
 
     if (!allTranscripts.length) {
-      const error_msg = 'No transcripts available to copy';
+      const error_msg = uiText("messages.noTranscriptsAvailableToCopy");
       console.log(error_msg);
       toast.error(error_msg);
       return;
@@ -84,14 +85,14 @@ export function useCopyOperations({
       return `[${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}]`;
     };
 
-    const header = `# Transcript of the Meeting: ${meeting.id} - ${meetingTitle ?? meeting.title}\n\n`;
-    const date = `## Date: ${new Date(meeting.created_at).toLocaleDateString()}\n\n`;
+    const header = `# ${uiText("messages.transcriptHeading")}: ${meeting.id} - ${meetingTitle ?? meeting.title}\n\n`;
+    const date = `## ${uiText("messages.dateLabel")}: ${new Date(meeting.created_at).toLocaleDateString()}\n\n`;
     const fullTranscript = allTranscripts
       .map(t => `${formatTime(t.audio_start_time, t.timestamp)} ${t.text}  `)
       .join('\n');
 
     await navigator.clipboard.writeText(header + date + fullTranscript);
-    toast.success("Transcript copied to clipboard");
+    toast.success(uiText("messages.transcriptCopiedToClipboard"));
 
     // Track copy analytics
     const wordCount = allTranscripts
@@ -108,7 +109,7 @@ export function useCopyOperations({
   // Copy summary to clipboard
   const handleCopySummary = useCallback(async () => {
     if (!hasVisibleSummaryContent(aiSummary)) {
-      toast.error('No summary content available to copy');
+      toast.error(uiText("messages.noSummaryContentAvailableToCopy"));
       return;
     }
     try {
@@ -157,19 +158,19 @@ export function useCopyOperations({
       // If still no summary content, show message
       if (!summaryMarkdown.trim()) {
         console.error('❌ No summary content available to copy');
-        toast.error('No summary content available to copy');
+        toast.error(uiText("messages.noSummaryContentAvailableToCopy"));
         return;
       }
 
       // Build metadata header
-      const header = `# Meeting Summary: ${meetingTitle}\n\n`;
-      const metadata = `**Meeting ID:** ${meeting.id}\n**Date:** ${new Date(meeting.created_at).toLocaleDateString('en-US', {
+      const header = `# ${uiText("messages.meetingSummaryHeading")}: ${meetingTitle}\n\n`;
+      const metadata = `**${uiText("messages.meetingIdLabel")}:** ${meeting.id}\n**${uiText("messages.dateLabel")}:** ${new Date(meeting.created_at).toLocaleDateString('en-US', {
         year: 'numeric',
         month: 'long',
         day: 'numeric',
         hour: '2-digit',
         minute: '2-digit'
-      })}\n**Copied on:** ${new Date().toLocaleDateString('en-US', {
+      })}\n**${uiText("messages.copiedOnLabel")}:** ${new Date().toLocaleDateString('en-US', {
         year: 'numeric',
         month: 'long',
         day: 'numeric',
@@ -181,7 +182,7 @@ export function useCopyOperations({
       await navigator.clipboard.writeText(fullMarkdown);
 
       console.log('✅ Successfully copied to clipboard!');
-      toast.success("Summary copied to clipboard");
+      toast.success(uiText("messages.summaryCopiedToClipboard"));
 
       // Track copy analytics
       await Analytics.trackCopy('summary', {
@@ -190,7 +191,7 @@ export function useCopyOperations({
       });
     } catch (error) {
       console.error('❌ Failed to copy summary:', error);
-      toast.error("Failed to copy summary");
+      toast.error(uiText("messages.failedToCopySummary"));
     }
   }, [aiSummary, meetingTitle, meeting, blockNoteSummaryRef]);
 

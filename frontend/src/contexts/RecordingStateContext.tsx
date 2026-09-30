@@ -1,4 +1,5 @@
 'use client';
+import { uiText, useUiTranslation } from '@/i18n/ui';
 
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { recordingService } from '@/services/recordingService';
@@ -19,7 +20,7 @@ export enum RecordingStatus {
   STARTING = 'starting',                  // Initiating recording
   RECORDING = 'recording',                // Active recording
   STOPPING = 'stopping',                  // Stop initiated, waiting for backend
-  PROCESSING_TRANSCRIPTS = 'processing',  // Transcription completion wait
+  PROCESSING_TRANSCRIPTS = "processing",  // Transcription completion wait
   SAVING = 'saving',                      // Saving to database
   COMPLETED = 'completed',                // Successfully saved
   ERROR = 'error'                         // Error occurred
@@ -59,6 +60,7 @@ export const useRecordingState = () => {
 };
 
 export function RecordingStateProvider({ children }: { children: React.ReactNode }) {
+  useUiTranslation();
   const [state, setState] = useState<RecordingState>({
     isRecording: false,
     isPaused: false,
@@ -157,7 +159,7 @@ export function RecordingStateProvider({ children }: { children: React.ReactNode
           console.log('[RecordingStateContext] Recording starting event');
           setState(prev => prev.status === RecordingStatus.RECORDING
             ? prev
-            : { ...prev, status: RecordingStatus.STARTING, statusMessage: 'Starting recording...' });
+            : { ...prev, status: RecordingStatus.STARTING, statusMessage: uiText("messages.startingRecording") });
         });
         unsubscribers.push(unlistenStarting);
 
@@ -178,7 +180,7 @@ export function RecordingStateProvider({ children }: { children: React.ReactNode
             return {
               ...prev,
               status: newStatus,
-              statusMessage: newStatus === RecordingStatus.STOPPING ? 'Stopping recording...' : prev.statusMessage,
+              statusMessage: newStatus === RecordingStatus.STOPPING ? uiText("messages.stoppingRecording") : prev.statusMessage,
               isRecording: false,
               isPaused: false,
               isActive: false,
@@ -265,7 +267,7 @@ export function RecordingStateProvider({ children }: { children: React.ReactNode
           // selected mic that wasn't available at start (backend fell back to
           // the default). Copy is worded to be accurate for both.
           toast.info(
-            `Microphone switched to ${device_name} for this meeting.`,
+            uiText("messages.microphoneSwitchedToForThisMeeting", { value0: device_name }),
             { duration: 6000 }
           );
         });
@@ -279,7 +281,7 @@ export function RecordingStateProvider({ children }: { children: React.ReactNode
           // available" — expected, not an error worth a toast.
           if (isRecordingRef.current) {
             toast.error(
-              `Microphone fallback failed for ${device_name}: ${error}`,
+              uiText("messages.microphoneFallbackFailedFor", { value0: device_name, value1: error }),
               { duration: 8000 }
             );
           }
@@ -292,7 +294,7 @@ export function RecordingStateProvider({ children }: { children: React.ReactNode
           // Fires at recording start, before isRecording flips true, so this
           // is intentionally NOT gated by isRecordingRef.
           toast.error(
-            'No microphone available — recording system audio only.',
+            uiText("messages.noMicrophoneAvailableRecordingSystemAudioOnly"),
             { duration: 8000 }
           );
         });
@@ -305,7 +307,7 @@ export function RecordingStateProvider({ children }: { children: React.ReactNode
           // mic-swap-failed so a stale event after Stop doesn't alarm the user.
           if (isRecordingRef.current) {
             toast.error(
-              `Microphone '${device_name}' could not be recovered — recording continues without a microphone. Stop and restart to fix.`,
+              uiText("messages.microphoneCouldNotBeRecoveredRecordingContinuesWithoutA", { value0: device_name }),
               { duration: 10000 }
             );
           }

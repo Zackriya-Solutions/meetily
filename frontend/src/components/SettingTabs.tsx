@@ -1,3 +1,4 @@
+import { uiText, useUiTranslation } from '@/i18n/ui';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ModelConfig, ModelSettingsModal } from "./ModelSettingsModal"
 import { TranscriptModelProps, TranscriptSettings } from "./TranscriptSettings"
@@ -15,16 +16,17 @@ interface SettingTabsProps {
     defaultTab?: string;
 }
 
-export function SettingTabs({ 
-    modelConfig, 
-    setModelConfig, 
-    onSave, 
+export function SettingTabs({
+    modelConfig,
+    setModelConfig,
+    onSave,
     setSaveSuccess,
     defaultTab = "transcriptSettings",
     transcriptModelConfig,
     setTranscriptModelConfig,
     onSaveTranscript,
 }: SettingTabsProps) {
+  useUiTranslation();
 
     const handleTabChange = () => {
         setSaveSuccess(null); // Reset save success when tab changes
@@ -33,10 +35,10 @@ export function SettingTabs({
     return (
         <Tabs defaultValue={defaultTab} className="w-full max-h-[calc(100vh-10rem)] overflow-y-auto" onValueChange={handleTabChange}>
   <TabsList>
-    <TabsTrigger value="transcriptSettings">Transcript</TabsTrigger>
-    <TabsTrigger value="modelSettings">Ai Summary</TabsTrigger>
-    <TabsTrigger value="recordingSettings">Preferences</TabsTrigger>
-    <TabsTrigger value="about">About</TabsTrigger>
+    <TabsTrigger value="transcriptSettings">{uiText("messages.transcript")}</TabsTrigger>
+    <TabsTrigger value="modelSettings">{uiText("messages.aiSummary")}</TabsTrigger>
+    <TabsTrigger value="recordingSettings">{uiText("messages.preferences")}</TabsTrigger>
+    <TabsTrigger value="about">{uiText("messages.about")}</TabsTrigger>
   </TabsList>
   <TabsContent value="modelSettings">
     <ModelSettingsModal

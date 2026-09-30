@@ -1,3 +1,4 @@
+import { uiText } from '@/i18n/ui';
 // Types for whisper-rs integration
 export interface ModelInfo {
   name: string;
@@ -54,80 +55,80 @@ export interface TranscribeAudioRequest {
 export const MODEL_CONFIGS: Record<string, Partial<ModelInfo>> = {
   // Standard f16 models (full precision)
   'large-v3': {
-    description: 'Highest accuracy, best for important meetings. Slower processing.',
+    get description() { return uiText("messages.highestAccuracyBestForImportantMeetingsSlowerProcessing"); },
     size_mb: 2951,
     accuracy: 'High',
-    speed: 'Slow'
+    speed: "Slow"
   },
   'large-v3-turbo': {
-    description: 'Best accuracy with improved speed.',
+    get description() { return uiText("messages.bestAccuracyWithImprovedSpeed"); },
     size_mb: 1549,
     accuracy: 'High',
-    speed: 'Medium'
+    speed: "Medium"
   },
   'medium': {
-    description: 'Balanced accuracy and speed. Good for most use cases.',
+    get description() { return uiText("messages.balancedAccuracyAndSpeedGoodForMostUseCases"); },
     size_mb: 1463,
     accuracy: 'High',
-    speed: 'Slow'
+    speed: "Slow"
   },
   'small': {
-    description: 'Fast processing with good quality. Great for quick transcription.',
+    get description() { return uiText("messages.fastProcessingWithGoodQualityGreatForQuickTranscription"); },
     size_mb: 466,
     accuracy: 'Good',
-    speed: 'Medium'
+    speed: "Medium"
   },
   'base': {
-    description: 'Good balance of speed and accuracy.',
+    get description() { return uiText("messages.goodBalanceOfSpeedAndAccuracy"); },
     size_mb: 142,
     accuracy: 'Good',
-    speed: 'Fast'
+    speed: "Fast"
   },
   'tiny': {
-    description: 'Fastest processing, good for real-time use.',
+    get description() { return uiText("messages.fastestProcessingGoodForRealTimeUse"); },
     size_mb: 39,
     accuracy: 'Decent',
-    speed: 'Very Fast'
+    speed: "Very Fast"
   },
 
   // Q5_1 quantized models (balanced speed/accuracy, slightly better quality than Q5_0)
   'tiny-q5_1': {
-    description: 'Quantized tiny model, ~50% faster processing.',
+    get description() { return uiText("messages.quantizedTinyModel50FasterProcessing"); },
     size_mb: 31,
     accuracy: 'Decent',
-    speed: 'Very Fast'
+    speed: "Very Fast"
   },
   'base-q5_1': {
-    description: 'Quantized base model, good speed/accuracy balance.',
+    get description() { return uiText("messages.quantizedBaseModelGoodSpeedAccuracyBalance"); },
     size_mb: 57,
     accuracy: 'Good',
-    speed: 'Fast'
+    speed: "Fast"
   },
   'small-q5_1': {
-    description: 'Quantized small model, faster than f16 version.',
+    get description() { return uiText("messages.quantizedSmallModelFasterThanF16Version"); },
     size_mb: 181,
     accuracy: 'Good',
-    speed: 'Fast'
+    speed: "Fast"
   },
 
   // Q5_0 quantized models (balanced speed/accuracy)
   'medium-q5_0': {
-    description: 'Quantized medium model, professional quality with better speed.',
+    get description() { return uiText("messages.quantizedMediumModelProfessionalQualityWithBetterSpeed"); },
     size_mb: 514,
     accuracy: 'High',
-    speed: 'Medium'
+    speed: "Medium"
   },
   'large-v3-turbo-q5_0': {
-    description: 'Quantized large turbo model, best balance.',
+    get description() { return uiText("messages.quantizedLargeTurboModelBestBalance"); },
     size_mb: 547,
     accuracy: 'High',
-    speed: 'Medium'
+    speed: "Medium"
   },
   'large-v3-q5_0': {
-    description: 'Quantized large model, best balance of speed and accuracy.',
+    get description() { return uiText("messages.quantizedLargeModelBestBalanceOfSpeedAndAccuracy"); },
     size_mb: 1031,
     accuracy: 'High',
-    speed: 'Slow'
+    speed: "Slow"
   }
 };
 
@@ -145,7 +146,7 @@ export function getStatusColor(status: ModelStatus): string {
   if (status === 'Available') return 'green';
   if (status === 'Missing') return 'gray';
   if (typeof status === 'object' && 'Downloading' in status) return 'blue';
-  if (typeof status === 'object' && 'Error' in status) return 'red';
+  if (typeof status === 'object' && "Error" in status) return 'red';
   return 'gray';
 }
 
@@ -179,15 +180,15 @@ export function getModelPerformanceBadge(modelName: string): { label: string; co
   const type = getModelType(modelName);
   switch (type) {
     case 'f16':
-      return { label: 'Full Precision', color: 'blue' };
+      return { label: uiText("messages.fullPrecision"), color: 'blue' };
     case 'q5_1':
-      return { label: 'Balanced+', color: 'green' };
+      return { label: uiText("messages.balanced"), color: 'green' };
     case 'q5_0':
-      return { label: 'Balanced', color: 'green' };
+      return { label: uiText("messages.balanced2"), color: 'green' };
     case 'q4_0':
-      return { label: 'Fast', color: 'orange' };
+      return { label: uiText("messages.fast"), color: 'orange' };
     default:
-      return { label: 'Standard', color: 'gray' };
+      return { label: uiText("messages.standard"), color: 'gray' };
   }
 }
 
@@ -199,43 +200,43 @@ export function getModelTagline(modelName: string, speed: ProcessingSpeed, accur
   // Speed prefix
   let speedText = '';
   switch (speed) {
-    case 'Very Fast':
-      speedText = 'Real time';
+    case "Very Fast":
+      speedText = uiText("messages.realTime");
       break;
-    case 'Fast':
-      speedText = 'Fast processing';
+    case "Fast":
+      speedText = uiText("messages.fastProcessing");
       break;
-    case 'Medium':
-      speedText = 'Moderate speed';
+    case "Medium":
+      speedText = uiText("messages.moderateSpeed");
       break;
-    case 'Slow':
-      speedText = 'Slower processing';
+    case "Slow":
+      speedText = uiText("messages.slowerProcessing");
       break;
   }
 
   // Key feature based on model and accuracy
   let featureText = '';
   if (baseName === 'large-v3') {
-    featureText = 'Most accurate';
+    featureText = uiText("messages.mostAccurate");
   } else if (baseName === 'large-v3-turbo') {
-    featureText = 'Best accuracy with speed';
+    featureText = uiText("messages.bestAccuracyWithSpeed");
   } else if (baseName === 'medium') {
-    featureText = accuracy === 'High' ? 'Professional quality' : 'Balanced quality';
+    featureText = accuracy === 'High' ? uiText("messages.professionalQuality") : uiText("messages.balancedQuality");
   } else if (baseName === 'small') {
-    featureText = 'Good accuracy';
+    featureText = uiText("messages.goodAccuracy");
   } else if (baseName === 'base') {
-    featureText = 'Balanced quality';
+    featureText = uiText("messages.balancedQuality");
   } else if (baseName === 'tiny') {
-    featureText = 'Fastest option';
+    featureText = uiText("messages.fastestOption");
   }
 
   // Add quantization note if applicable
   if (isQuantized) {
     const quantType = getModelType(modelName);
     if (quantType === 'q5_0') {
-      featureText += ', optimized';
+      featureText += uiText("messages.optimized");
     } else if (quantType === 'q4_0') {
-      featureText += ', ultra fast';
+      featureText += uiText("messages.ultraFast2");
     }
   }
 

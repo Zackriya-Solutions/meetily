@@ -1,4 +1,5 @@
 'use client';
+import { uiText, useUiTranslation } from '@/i18n/ui';
 
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { FileText, Sparkles } from 'lucide-react';
@@ -9,8 +10,8 @@ const MIN_RATIO = 0.3;
 const MAX_RATIO = 0.5;
 
 const TABS = [
-  { value: 'transcript' as const, label: 'Transcript', icon: FileText },
-  { value: 'summary' as const, label: 'Summary', icon: Sparkles },
+  { value: 'transcript' as const, get label() { return uiText("messages.transcript"); }, icon: FileText },
+  { value: 'summary' as const, get label() { return uiText("messages.summary"); }, icon: Sparkles },
 ];
 
 function readStoredRatio(): number {
@@ -47,6 +48,7 @@ export function MeetingDetailsSplitView({
   activeTab,
   onTabChange,
 }: MeetingDetailsSplitViewProps) {
+  useUiTranslation();
   const containerRef = useRef<HTMLDivElement>(null);
   const [ratio, setRatio] = useState(DEFAULT_RATIO);
   const [isDesktop, setIsDesktop] = useState(true);
@@ -101,10 +103,10 @@ export function MeetingDetailsSplitView({
   }, [ratio]);
 
   const transcriptPanelProps = isDesktop
-    ? { role: 'region' as const, 'aria-label': 'Transcript', tabIndex: -1 }
+    ? { role: 'region' as const, 'aria-label': uiText("messages.transcript"), tabIndex: -1 }
     : {};
   const summaryPanelProps = isDesktop
-    ? { role: 'region' as const, 'aria-label': 'Summary', tabIndex: -1 }
+    ? { role: 'region' as const, 'aria-label': uiText("messages.summary"), tabIndex: -1 }
     : {};
 
   return (
@@ -139,7 +141,7 @@ export function MeetingDetailsSplitView({
         onPointerCancel={onPointerUp}
       >
         <TabsContent
-          value="transcript"
+          value={"transcript"}
           forceMount
           className="mt-0 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden data-[state=inactive]:hidden md:w-[var(--transcript-pane-width)] md:flex-none md:data-[state=inactive]:flex"
           {...transcriptPanelProps}
@@ -152,8 +154,8 @@ export function MeetingDetailsSplitView({
           aria-valuenow={Math.round(ratio * 100)}
           aria-valuemin={Math.round(MIN_RATIO * 100)}
           aria-valuemax={Math.round(MAX_RATIO * 100)}
-          aria-valuetext={`Transcript panel ${Math.round(ratio * 100)} percent`}
-          aria-label="Resize transcript and summary"
+          aria-valuetext={uiText("messages.transcriptPanelPercent", { value0: Math.round(ratio * 100) })}
+          aria-label={uiText("messages.resizeTranscriptAndSummary")}
           tabIndex={0}
           className="group relative z-10 hidden w-2 flex-shrink-0 cursor-col-resize items-stretch justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-inset md:flex"
           onPointerDown={onPointerDown}

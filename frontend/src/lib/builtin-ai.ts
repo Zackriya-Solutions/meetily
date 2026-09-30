@@ -1,3 +1,4 @@
+import { uiText } from '@/i18n/ui';
 // Types for Built-in AI (Summary Models) integration
 export interface BuiltInModelInfo {
   name: string;
@@ -51,12 +52,12 @@ export function getStatusColor(status: BuiltInModelStatus): string {
 
 export function getStatusLabel(status: BuiltInModelStatus): string {
   switch (status.type) {
-    case 'available': return 'Available';
-    case 'downloading': return `Downloading ${status.progress}%`;
-    case 'not_downloaded': return 'Not Downloaded';
-    case 'corrupted': return 'Corrupted';
-    case 'error': return 'Error';
-    default: return 'Unknown';
+    case 'available': return uiText("messages.available");
+    case 'downloading': return uiText("messages.downloadPercentage", { progress: status.progress });
+    case 'not_downloaded': return uiText("messages.notDownloaded");
+    case 'corrupted': return uiText("messages.corrupted");
+    case 'error': return uiText("messages.error");
+    default: return uiText("messages.unknown");
   }
 }
 

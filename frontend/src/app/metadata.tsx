@@ -1,6 +1,7 @@
+import { uiText } from '@/i18n/ui';
 import { Metadata } from 'next';
 
 export const metadata: Metadata = {
   title: 'Meetily',
-  description: 'AI-powered meeting assistant',
+  get description() { return uiText("messages.aIPoweredMeetingAssistant"); },
 };

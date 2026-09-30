@@ -1,3 +1,4 @@
+import { uiLabel, uiText, useUiTranslation } from '@/i18n/ui';
 import React, { useEffect, useState, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -24,6 +25,7 @@ interface DownloadState {
 }
 
 export function DownloadProgressStep() {
+  useUiTranslation();
   const {
     goNext,
     selectedSummaryModel,
@@ -89,11 +91,11 @@ export function DownloadProgressStep() {
       setParakeetState((prev) => ({
         ...prev,
         status: 'error',
-        error: error instanceof Error ? error.message : 'Retry failed',
+        error: error instanceof Error ? error.message : uiText("messages.retryFailed"),
       }));
 
-      toast.error('Download retry failed', {
-        description: 'Please check your connection and try again.',
+      toast.error(uiText("messages.downloadRetryFailed"), {
+        description: uiText("messages.pleaseCheckYourConnectionAndTryAgain"),
       });
     } finally {
       // Allow retry again after 2 seconds
@@ -129,7 +131,7 @@ export function DownloadProgressStep() {
       // Call download command directly (no retry command exists for built-in AI)
       const modelName = selectedSummaryModel;
       if (!modelName) {
-        throw new Error('Summary model recommendation is not ready yet');
+        throw new Error(uiText("messages.summaryModelRecommendationIsNotReadyYet"));
       }
       await invoke('builtin_ai_download_model', { modelName });
     } catch (error) {
@@ -137,11 +139,11 @@ export function DownloadProgressStep() {
       setSummaryState((prev) => ({
         ...prev,
         status: 'error',
-        error: error instanceof Error ? error.message : 'Retry failed',
+        error: error instanceof Error ? error.message : uiText("messages.retryFailed"),
       }));
 
-      toast.error('Summary model download retry failed', {
-        description: 'Please check your connection and try again.',
+      toast.error(uiText("messages.summaryModelDownloadRetryFailed"), {
+        description: uiText("messages.pleaseCheckYourConnectionAndTryAgain"),
       });
     } finally {
       // Allow retry again after 2 seconds
@@ -355,8 +357,8 @@ export function DownloadProgressStep() {
         !actuallyAvailable &&
         (parakeetState.status === 'error' || parakeetState.status === 'cancelled')
       ) {
-        toast.error('Transcription engine required', {
-          description: 'Please retry the download before continuing.',
+        toast.error(uiText("messages.transcriptionEngineRequired"), {
+          description: uiText("messages.pleaseRetryTheDownloadBeforeContinuing"),
         });
         return;
       }
@@ -370,8 +372,8 @@ export function DownloadProgressStep() {
 
     // Show toast if downloads still in progress
     if (!downloadsComplete) {
-      toast.info('Downloads will continue in the background', {
-        description: 'You can start using the app. Recording will be available once speech recognition is ready.',
+      toast.info(uiText("messages.downloadsWillContinueInTheBackground"), {
+        description: uiText("messages.youCanStartUsingTheAppRecordingWillBe"),
         duration: 5000,
       });
     }
@@ -391,8 +393,8 @@ export function DownloadProgressStep() {
         window.location.reload();
       } catch (error) {
         console.error('Failed to complete onboarding:', error);
-        toast.error('Failed to complete setup', {
-          description: 'Please try again.',
+        toast.error(uiText("messages.failedToCompleteSetup"), {
+          description: uiText("messages.pleaseTryAgain"),
         });
         setIsCompleting(false);
       }
@@ -413,13 +415,13 @@ export function DownloadProgressStep() {
             {icon}
           </div>
           <div>
-            <h3 className="font-medium text-gray-900">{title}</h3>
+            <h3 className="font-medium text-gray-900">{uiLabel(title)}</h3>
             <p className="text-sm text-gray-500">{modelSize}</p>
           </div>
         </div>
         <div>
           {state.status === 'waiting' && (
-            <span className="text-sm text-gray-500">Waiting...</span>
+            <span className="text-sm text-gray-500">{uiText("messages.waiting")}</span>
           )}
           {state.status === 'downloading' && (
             <Loader2 className="w-5 h-5 text-gray-700 animate-spin" />
@@ -430,10 +432,10 @@ export function DownloadProgressStep() {
             </div>
           )}
           {state.status === 'error' && (
-            <span className="text-sm text-red-500">Failed</span>
+            <span className="text-sm text-red-500">{uiText("messages.failed")}</span>
           )}
           {state.status === 'cancelled' && (
-            <span className="text-sm text-gray-500">Cancelled</span>
+            <span className="text-sm text-gray-500">{uiText("messages.cancelled")}</span>
           )}
         </div>
       </div>
@@ -454,8 +456,7 @@ export function DownloadProgressStep() {
             <div className="flex items-center gap-2">
               {state.speedMbps > 0 && (
                 <span className="text-gray-500">
-                  {state.speedMbps.toFixed(1)} {sizeUnit}/s
-                </span>
+                  {state.speedMbps.toFixed(1)} {sizeUnit}{`/s`} </span>
               )}
               <span className="font-semibold text-gray-900">
                 {Math.round(state.progress)}%
@@ -468,7 +469,7 @@ export function DownloadProgressStep() {
       {(state.status === 'error' || state.status === 'cancelled') && (
         <div className="mt-2 p-3 bg-red-50 border border-red-200 rounded-md">
           <p className="text-sm text-red-600 font-medium">
-            {state.status === 'cancelled' ? 'Download cancelled' : 'Download Error'}
+            {state.status === 'cancelled' ? uiText("messages.downloadCancelled") : uiText("messages.downloadError")}
           </p>
           {state.error && <p className="text-xs text-red-500 mt-1">{state.error}</p>}
           {(title === 'Transcription Engine' || title === 'Summary Engine') && (
@@ -480,8 +481,7 @@ export function DownloadProgressStep() {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                       d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
               </svg>
-              Try Again
-            </button>
+               {uiText("messages.tryAgain")} </button>
           )}
         </div>
       )}
@@ -490,8 +490,8 @@ export function DownloadProgressStep() {
 
   return (
     <OnboardingContainer
-      title="Getting things ready"
-      description="You can start using Meetily after downloading the Transcription Engine."
+      title={uiText("messages.gettingThingsReady")}
+      description={uiText("messages.youCanStartUsingMeetilyAfterDownloadingTheTranscription")}
       step={3}
       totalSteps={isMac ? 4 : 3}
     >
@@ -527,10 +527,9 @@ export function DownloadProgressStep() {
               <div className="flex items-start gap-3">
                 <Download className="w-5 h-5 text-gray-600 flex-shrink-0 mt-0.5" />
                 <div>
-                  <p className="font-medium">You can continue while this finishes</p>
+                  <p className="font-medium">{uiText("messages.youCanContinueWhileThisFinishes")}</p>
                   <p className="text-gray-700 mt-1">
-                    Download will continue in the background.
-                  </p>
+                     {uiText("messages.downloadWillContinueInTheBackground")} </p>
                 </div>
               </div>
             </motion.div>

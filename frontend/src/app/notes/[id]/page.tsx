@@ -1,3 +1,4 @@
+import { uiText, useUiTranslation } from '@/i18n/ui';
 import React from 'react';
 import { Clock, Users, Calendar, Tag } from 'lucide-react';
 
@@ -27,6 +28,7 @@ export function generateStaticParams() {
 }
 
 const NotePage = ({ params }: PageProps) => {
+  useUiTranslation();
   // This would normally come from your database
   const sampleData: Record<string, Note> = {
     'team-sync-dec-26': {
@@ -129,14 +131,14 @@ Quarterly product review session with stakeholders.
   const note = sampleData[params.id as keyof typeof sampleData];
 
   if (!note) {
-    return <div className="p-8">Note not found</div>;
+    return <div className="p-8">{uiText("messages.noteNotFound")}</div>;
   }
 
   return (
     <div className="p-8 max-w-4xl mx-auto">
       <div className="mb-8">
         <h1 className="text-3xl font-bold mb-4">{note.title}</h1>
-        
+
         <div className="flex flex-wrap gap-4 text-gray-600">
           {note.date && (
             <div className="flex items-center gap-1">
@@ -144,14 +146,14 @@ Quarterly product review session with stakeholders.
               <span>{note.date}</span>
             </div>
           )}
-          
+
           {note.time && (
             <div className="flex items-center gap-1">
               <Clock className="w-4 h-4" />
               <span>{note.time}</span>
             </div>
           )}
-          
+
           {note.attendees && (
             <div className="flex items-center gap-1">
               <Users className="w-4 h-4" />
