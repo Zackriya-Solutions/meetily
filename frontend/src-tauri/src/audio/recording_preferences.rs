@@ -385,3 +385,14 @@ pub async fn get_audio_backend_info() -> Result<Vec<BackendInfo>, String> {
     }
 }
 
+
+// SOTTOLY: ni audio ni transcripción se guardan por defecto (SPEC §7).
+#[cfg(test)]
+mod sottoly_privacy_tests {
+    use super::*;
+
+    #[test]
+    fn audio_is_not_saved_by_default() {
+        assert!(!RecordingPreferences::default().auto_save);
+    }
+}
