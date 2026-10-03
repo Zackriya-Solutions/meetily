@@ -62,7 +62,7 @@ Todo se construye reutilizando el código de Meetily ([ADR-0001](docs/adr/0001-f
 | Auto Summary y Summary Language | Base para el resumen automático al cerrar la Reunión y para fijar el español como idioma por defecto. |
 | Import Audio & Retranscribe (beta) | Evals: grabaciones reales con consentimiento → transcripciones → fixtures etiquetados en `sottoly-evals`. Demo de respaldo: reproducir una Reunión grabada por el pipeline completo. Pendiente: verificar si la retranscripción conserva Usuario / Contraparte o lo mezcla. |
 
-Privacidad: Meetily guarda por defecto el audio (`auto_save: true`) y las transcripciones (SQLite). Sottoly no guarda ninguno de los dos por defecto (§7); el audio se apaga en el MVP y se activa a mano solo para evals con consentimiento.
+Privacidad: Meetily guarda por defecto el audio (`auto_save: true`) y las transcripciones (SQLite). Sottoly no guarda ninguno de los dos por defecto (§7). El audio se apaga en el MVP; las transcripciones se quedan hasta después del Build Day (§11).
 
 ---
 
@@ -349,6 +349,11 @@ No construir antes del Build Day:
 | v1 | Roles CTO, CMO, Abogado y Due diligence (datos públicos de gobierno por MCP); Notas por MCP en solo lectura; Memoria y login en Cloud; `counterpart_id` con diarización; Compuerta local con modelos abiertos tipo Jev (Laya, Open-Jev); Intel |
 | v1.1 | Transcripción en la nube opcional (Deepgram) implementando `TranscriptionProvider` |
 | v2 | Bot en Meet y Teams, voz con toggle explícito, Roles compartibles |
+
+**Privacidad (primera tarea después del Build Day):**
+
+- Apagar por defecto el guardado de transcripciones en SQLite que hereda Meetily; activarlo a mano solo para evals con consentimiento.
+- Un comando o botón para borrar las transcripciones de prueba guardadas durante el Build Day.
 
 **Criterio para pasar de fase:** el Usuario usa una Sugerencia en al menos 1 de cada 3 Reuniones. Con pilotos: al menos 3 de 5 usan Sottoly en más de una Reunión real.
 
