@@ -345,7 +345,7 @@ No construir antes del Build Day:
 
 No implementar nada de esta sección sin una decisión explícita.
 
-- ¿La API de Jev acepta versiones fijas (`jev-1.13.0`)? Si no, usar `jev-latest` y anotar el riesgo.
+- Línea base de la Compuerta (2026-10-02, `jev-1.13.0`, 5 fixtures sintéticos, 25 Turnos): precisión 0,60, recall 0,55, acierto de Rol 1,00, latencia p50 231 ms / p90 286 ms. El CEO adversarial no supera su umbral en ningún cierre apresurado, y el CFO repite en Turnos posteriores porque la ventana de 90 s conserva la cifra. ¿La Compuerta debe evaluar sobre todo el último Turno? Se decide con evals antes de tocar prompts.
 - Límites de uso del early access de Jev (peticiones por minuto), keys separadas por piloto, y si sus términos permiten publicar comparativas.
 - ¿El VAD de Meetily cierra chunks en los silencios con la latencia suficiente para no necesitar el latido `clock`? Se responde con la medición del sábado.
 - Entitlements exactos de hardened runtime para el binario de Bun.

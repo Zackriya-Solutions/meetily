@@ -1,0 +1,68 @@
+{
+  "id": "inversionista-cierre-apresurado",
+  "description": "Reunión con un inversionista: el Usuario acepta una valoración sin datos.",
+  "roles": [
+    "cfo",
+    "ceo"
+  ],
+  "segments": [
+    {
+      "speaker": "counterpart",
+      "text": "Estamos dispuestos a invertir con una valoración de cuatro millones de dólares.",
+      "t0": 0.0,
+      "t1": 5.1
+    },
+    {
+      "speaker": "user",
+      "text": "Me parece bien, no quiero perder la oportunidad.",
+      "t0": 5.4,
+      "t1": 9.3
+    },
+    {
+      "speaker": "counterpart",
+      "text": "Perfecto, también pediríamos un asiento en la junta.",
+      "t0": 9.6,
+      "t1": 13.5
+    },
+    {
+      "speaker": "user",
+      "text": "Listo, cerramos así.",
+      "t0": 13.8,
+      "t1": 16.2
+    }
+  ],
+  "labels": [
+    {
+      "turn": 0,
+      "speaker": "counterpart",
+      "text": "Estamos dispuestos a invertir con una valoración de cuatro millones de dólares.",
+      "should_intervene": true,
+      "expected_role": "cfo",
+      "reason": "cifra de valoración sin contexto de dilución"
+    },
+    {
+      "turn": 1,
+      "speaker": "user",
+      "text": "Me parece bien, no quiero perder la oportunidad.",
+      "should_intervene": true,
+      "expected_role": "ceo",
+      "reason": "acepta sin comparar alternativas ni datos"
+    },
+    {
+      "turn": 2,
+      "speaker": "counterpart",
+      "text": "Perfecto, también pediríamos un asiento en la junta.",
+      "should_intervene": true,
+      "expected_role": "ceo",
+      "reason": "condición nueva aceptada sin discutir control"
+    },
+    {
+      "turn": 3,
+      "speaker": "user",
+      "text": "Listo, cerramos así.",
+      "should_intervene": true,
+      "expected_role": "ceo",
+      "reason": "cierre apresurado sin revisar términos"
+    }
+  ]
+}

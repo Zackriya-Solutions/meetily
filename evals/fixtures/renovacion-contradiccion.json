@@ -1,0 +1,82 @@
+{
+  "id": "renovacion-contradiccion",
+  "description": "Renovación de contrato: la Contraparte contradice lo acordado antes.",
+  "roles": [
+    "cfo",
+    "ceo"
+  ],
+  "segments": [
+    {
+      "speaker": "counterpart",
+      "text": "Como acordamos, el contrato sería por veinticuatro meses.",
+      "t0": 0.0,
+      "t1": 3.9
+    },
+    {
+      "speaker": "user",
+      "text": "Pensé que habíamos hablado de doce.",
+      "t0": 4.2,
+      "t1": 7.5
+    },
+    {
+      "speaker": "counterpart",
+      "text": "Sí, pero con veinticuatro meses les sostenemos la tarifa.",
+      "t0": 7.8,
+      "t1": 12.0
+    },
+    {
+      "speaker": "counterpart",
+      "text": "La tarifa sube un ocho por ciento a partir de enero.",
+      "t0": 13.3,
+      "t1": 18.1
+    },
+    {
+      "speaker": "user",
+      "text": "Ok, creo que podemos aceptar.",
+      "t0": 18.4,
+      "t1": 21.4
+    }
+  ],
+  "labels": [
+    {
+      "turn": 0,
+      "speaker": "counterpart",
+      "text": "Como acordamos, el contrato sería por veinticuatro meses.",
+      "should_intervene": true,
+      "expected_role": "ceo",
+      "reason": "contradice un acuerdo previo de doce meses"
+    },
+    {
+      "turn": 1,
+      "speaker": "user",
+      "text": "Pensé que habíamos hablado de doce.",
+      "should_intervene": false,
+      "expected_role": null,
+      "reason": "el Usuario ya lo señala"
+    },
+    {
+      "turn": 2,
+      "speaker": "counterpart",
+      "text": "Sí, pero con veinticuatro meses les sostenemos la tarifa.",
+      "should_intervene": false,
+      "expected_role": null,
+      "reason": "explicación"
+    },
+    {
+      "turn": 3,
+      "speaker": "counterpart",
+      "text": "La tarifa sube un ocho por ciento a partir de enero.",
+      "should_intervene": true,
+      "expected_role": "cfo",
+      "reason": "aumento de precio no discutido"
+    },
+    {
+      "turn": 4,
+      "speaker": "user",
+      "text": "Ok, creo que podemos aceptar.",
+      "should_intervene": true,
+      "expected_role": "ceo",
+      "reason": "acepta sin comparar escenarios"
+    }
+  ]
+}
