@@ -42,6 +42,8 @@ pub struct TranscriptUpdate {
     pub audio_start_time: f64, // Seconds from recording start (e.g., 125.3)
     pub audio_end_time: f64,   // Seconds from recording start (e.g., 128.6)
     pub duration: f64,          // Segment duration in seconds (e.g., 3.3)
+    // SOTTOLY: quién habló (user | counterpart | mixed)
+    pub speaker: crate::audio::speaker::Speaker,
 }
 
 // NOTE: get_transcript_history and get_recording_meeting_name functions
@@ -148,6 +150,11 @@ pub fn start_transcription_task<R: Runtime>(
                             }
 
                             let chunk_timestamp = chunk.timestamp;
+                            // SOTTOLY: el hablante se decide antes de mover el chunk al proveedor
+                            let speaker = crate::audio::speaker::transcript_speaker(
+                                &chunk.device_type,
+                                crate::audio::speaker::separation_enabled(),
+                            );
                             let chunk_duration = chunk.data.len() as f64 / chunk.sample_rate as f64;
 
                             // Transcribe with provider-agnostic approach
@@ -215,6 +222,7 @@ pub fn start_transcription_task<R: Runtime>(
                                             audio_start_time,
                                             audio_end_time,
                                             duration: chunk_duration,
+                                            speaker, // SOTTOLY
                                         };
 
                                         if let Err(e) = app_clone.emit("transcript-update", &update)

@@ -2,6 +2,8 @@
 // Cada flujo pasa por su propio VAD; los fragmentos salen etiquetados con su DeviceType.
 // Diarización gratis por canal (SPEC §10, Fase 1). Archivo nuevo para no tocar Meetily (ADR-0001).
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
@@ -27,8 +29,23 @@ impl Speaker {
 }
 
 /// Hablante que va en el TranscriptUpdate: si los flujos no se separaron, todo es "mixed".
-pub fn transcript_speaker(_device: &DeviceType, _separated: bool) -> Speaker {
-    Speaker::Mixed
+pub fn transcript_speaker(device: &DeviceType, separated: bool) -> Speaker {
+    if separated {
+        Speaker::from_device(device)
+    } else {
+        Speaker::Mixed
+    }
+}
+
+/// El pipeline lo enciende cuando transcribe los flujos por separado (Fase 1C).
+static SEPARATION_ENABLED: AtomicBool = AtomicBool::new(false);
+
+pub fn set_separation_enabled(enabled: bool) {
+    SEPARATION_ENABLED.store(enabled, Ordering::SeqCst);
+}
+
+pub fn separation_enabled() -> bool {
+    SEPARATION_ENABLED.load(Ordering::SeqCst)
 }
 
 /// Mínimo de muestras para mandar un fragmento a transcribir (50 ms a 16 kHz), igual que pipeline.rs.
