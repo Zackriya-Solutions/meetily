@@ -12,6 +12,8 @@ use super::devices::AudioDevice;
 use super::recording_state::{AudioChunk, AudioError, RecordingState, DeviceType};
 use super::audio_processing::{audio_to_mono, LoudnessNormalizer, NoiseSuppressionProcessor, HighPassFilter};
 use super::vad::{ContinuousVadProcessor};
+// SOTTOLY: separación Usuario / Contraparte
+use super::speaker::{set_separation_enabled, SpeakerSplitter};
 
 /// How long a silence must last before the VAD closes a speech segment, and
 /// therefore how long the audio clips handed to the ASR engine are.
@@ -707,6 +709,8 @@ pub struct AudioPipeline {
     mixer: ProfessionalAudioMixer,
     // Recording sender for pre-mixed audio
     recording_sender_for_mixed: Option<mpsc::UnboundedSender<AudioChunk>>,
+    // SOTTOLY: un VAD por flujo; None = camino mezclado de Meetily (speaker "mixed")
+    speaker_splitter: Option<SpeakerSplitter<ContinuousVadProcessor>>,
 }
 
 impl AudioPipeline {
@@ -762,6 +766,21 @@ impl AudioPipeline {
             VAD_REDEMPTION_TIME_MS
         );
 
+        // SOTTOLY: SOTTOLY_SPEAKER_SEPARATION=0 vuelve al camino mezclado (corte de la Fase 1).
+        let separate = std::env::var("SOTTOLY_SPEAKER_SEPARATION").map(|v| v != "0").unwrap_or(true);
+        let speaker_splitter = if separate {
+            Some(SpeakerSplitter::new(
+                ContinuousVadProcessor::new(sample_rate, VAD_REDEMPTION_TIME_MS)?,
+                ContinuousVadProcessor::new(sample_rate, VAD_REDEMPTION_TIME_MS)?,
+                0,
+            ))
+        } else {
+            None
+        };
+        set_separation_enabled(separate);
+        super::speaker::mark_pipeline_start();
+        info!("SOTTOLY: separación Usuario / Contraparte {}", if separate { "activa" } else { "apagada (mixed)" });
+
         // Initialize professional audio mixing components
         let ring_buffer = AudioMixerRingBuffer::new(sample_rate);
         let mixer = ProfessionalAudioMixer::new(sample_rate);
@@ -785,6 +804,7 @@ impl AudioPipeline {
             ring_buffer,
             mixer,
             recording_sender_for_mixed: None,  // Will be set by manager
+            speaker_splitter,
         })
     }
 
@@ -856,6 +876,20 @@ impl AudioPipeline {
                             // Previous 2x gain was causing excessive limiting/distortion
                             let mixed_with_gain = mixed_clean;
 
+                            // SOTTOLY: con separación, cada flujo pasa por su VAD y se etiqueta.
+                            if let Some(splitter) = self.speaker_splitter.as_mut() {
+                                match splitter.process(&mic_window, &sys_window) {
+                                    Ok(chunks) => {
+                                        for chunk in chunks {
+                                            if let Err(e) = self.transcription_sender.send(chunk) {
+                                                warn!("Failed to send VAD segment: {}", e);
+                                            }
+                                        }
+                                    }
+                                    Err(e) => warn!("⚠️ VAD error: {}", e),
+                                }
+                                self.chunk_id_counter = splitter.next_chunk_id();
+                            } else {
                             // STEP 3: Send mixed audio for transcription (VAD + Whisper)
                             match self.vad_processor.process_audio(&mixed_with_gain) {
                                 Ok(speech_segments) => {
@@ -889,6 +923,8 @@ impl AudioPipeline {
                                     warn!("⚠️ VAD error: {}", e);
                                 }
                             }
+
+                            } // SOTTOLY: fin del camino mezclado
 
                             // STEP 4: Send mixed audio for recording (WAV file)
                             if let Some(ref sender) = self.recording_sender_for_mixed {
@@ -924,6 +960,22 @@ impl AudioPipeline {
 
     fn flush_remaining_audio(&mut self) -> Result<()> {
         info!("Flushing remaining audio from pipeline (processed {} chunks)", self.processed_chunks);
+
+        // SOTTOLY: con separación, vaciar los dos VAD
+        if let Some(splitter) = self.speaker_splitter.as_mut() {
+            match splitter.flush() {
+                Ok(chunks) => {
+                    for chunk in chunks {
+                        if let Err(e) = self.transcription_sender.send(chunk) {
+                            warn!("Failed to send final VAD segment: {}", e);
+                        }
+                    }
+                }
+                Err(e) => warn!("Failed to flush VAD processors: {}", e),
+            }
+            self.chunk_id_counter = splitter.next_chunk_id();
+            return Ok(());
+        }
 
         // Flush any remaining audio from VAD processor and send segments to transcription
         match self.vad_processor.flush() {
@@ -1105,6 +1157,71 @@ impl Default for AudioPipelineManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // SOTTOLY: la voz que entra por un flujo se transcribe etiquetada con ese flujo.
+    fn synthetic_voice() -> Vec<f32> {
+        let bytes = include_bytes!("../../tests/fixtures/sottoly/voz-sintetica-16k.s16le");
+        bytes
+            .chunks_exact(2)
+            .map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / i16::MAX as f32)
+            .collect()
+    }
+
+    /// Corre el pipeline completo con `voice` por un flujo y silencio por el otro;
+    /// devuelve el DeviceType de cada fragmento enviado a transcribir.
+    async fn transcribed_sources(voice_on: DeviceType) -> Vec<DeviceType> {
+        let (audio_tx, audio_rx) = mpsc::unbounded_channel();
+        let (transcription_tx, mut transcription_rx) = mpsc::unbounded_channel();
+        let pipeline = AudioPipeline::new(
+            audio_rx,
+            transcription_tx,
+            RecordingState::new(),
+            0,
+            16000,
+            "mic".to_string(),
+            super::super::device_detection::InputDeviceKind::Wired,
+            "system".to_string(),
+            super::super::device_detection::InputDeviceKind::Wired,
+        )
+        .unwrap();
+        let handle = tokio::spawn(pipeline.run());
+
+        let voice = synthetic_voice();
+        let silence = vec![0.0f32; 800];
+        for (i, piece) in voice.chunks(800).enumerate() {
+            let (mic, sys) = match voice_on {
+                DeviceType::Microphone => (piece.to_vec(), silence.clone()),
+                DeviceType::System => (silence.clone(), piece.to_vec()),
+            };
+            for (device_type, data) in [(DeviceType::Microphone, mic), (DeviceType::System, sys)] {
+                audio_tx
+                    .send(AudioChunk { data, sample_rate: 16000, timestamp: i as f64 * 0.05, chunk_id: i as u64, device_type })
+                    .unwrap();
+            }
+        }
+        drop(audio_tx);
+        handle.await.unwrap().unwrap();
+
+        let mut sources = Vec::new();
+        while let Ok(chunk) = transcription_rx.try_recv() {
+            sources.push(chunk.device_type);
+        }
+        sources
+    }
+
+    #[tokio::test]
+    async fn sottoly_voice_on_the_microphone_is_transcribed_as_microphone() {
+        let sources = transcribed_sources(DeviceType::Microphone).await;
+        assert!(!sources.is_empty(), "no se transcribió nada");
+        assert!(sources.iter().all(|d| matches!(d, DeviceType::Microphone)), "{:?}", sources);
+    }
+
+    #[tokio::test]
+    async fn sottoly_voice_on_the_system_is_transcribed_as_system() {
+        let sources = transcribed_sources(DeviceType::System).await;
+        assert!(!sources.is_empty(), "no se transcribió nada");
+        assert!(sources.iter().all(|d| matches!(d, DeviceType::System)), "{:?}", sources);
+    }
 
     #[test]
     fn test_live_vad_redemption_matches_pro_policy() {

@@ -48,8 +48,31 @@ pub fn separation_enabled() -> bool {
     SEPARATION_ENABLED.load(Ordering::SeqCst)
 }
 
+/// Latencia de un Segmento (Q31): tiempo de reloj desde que terminó el audio
+/// (`audio_end_s`, relativo al inicio del pipeline) hasta `now`.
+pub fn segment_latency_ms(pipeline_start: std::time::Instant, now: std::time::Instant, audio_end_s: f64) -> f64 {
+    now.duration_since(pipeline_start).as_secs_f64() * 1000.0 - audio_end_s * 1000.0
+}
+
+static PIPELINE_START: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+
+/// El pipeline marca su inicio; los tiempos de audio de los Segmentos son relativos a él.
+pub fn mark_pipeline_start() {
+    *PIPELINE_START.lock().unwrap() = Some(std::time::Instant::now());
+}
+
+/// Latencia del Segmento que termina en `audio_end_s`, si el pipeline ya marcó su inicio.
+pub fn current_segment_latency_ms(audio_end_s: f64) -> Option<f64> {
+    let start = (*PIPELINE_START.lock().unwrap())?;
+    Some(segment_latency_ms(start, std::time::Instant::now(), audio_end_s))
+}
+
 /// Mínimo de muestras para mandar un fragmento a transcribir (50 ms a 16 kHz), igual que pipeline.rs.
 pub const MIN_SEGMENT_SAMPLES: usize = 800;
+
+fn clamp_to_vad_range(samples: &[f32]) -> Vec<f32> {
+    samples.iter().map(|s| s.clamp(-1.0, 1.0)).collect()
+}
 
 pub trait SpeechSegmenter {
     fn process(&mut self, samples: &[f32]) -> Result<Vec<SpeechSegment>>;
@@ -79,8 +102,9 @@ impl<S: SpeechSegmenter> SpeakerSplitter<S> {
 
     /// Procesa una ventana de cada flujo y devuelve los fragmentos listos para transcribir.
     pub fn process(&mut self, mic_window: &[f32], system_window: &[f32]) -> Result<Vec<AudioChunk>> {
-        let mic = self.mic.process(mic_window)?;
-        let system = self.system.process(system_window)?;
+        // Sin el mezclador de Meetily nadie recorta el audio, y Silero rechaza muestras fuera de [-1, 1].
+        let mic = self.mic.process(&clamp_to_vad_range(mic_window))?;
+        let system = self.system.process(&clamp_to_vad_range(system_window))?;
         Ok(self.tag_segments(mic, system))
     }
 
@@ -226,6 +250,43 @@ mod tests {
     fn transcript_speaker_follows_the_device_when_separated() {
         assert_eq!(transcript_speaker(&DeviceType::Microphone, true), Speaker::User);
         assert_eq!(transcript_speaker(&DeviceType::System, true), Speaker::Counterpart);
+    }
+
+    // Bug visto en la App real: el micrófono normalizado y el audio del sistema pasan de 1.0
+    // y Silero rechaza la ventana entera ("Float sample must be in the range -1.0 to 1.0").
+    #[test]
+    fn samples_outside_the_vad_range_are_clamped_before_segmenting() {
+        let mut splitter = SpeakerSplitter::new(FakeSegmenter::default(), FakeSegmenter::default(), 0);
+        splitter.process(&[1.7, -2.0, 0.5], &[3.0]).unwrap();
+        assert_eq!(splitter.mic.seen, vec![vec![1.0, -1.0, 0.5]]);
+        assert_eq!(splitter.system.seen, vec![vec![1.0]]);
+    }
+
+    #[test]
+    fn real_vad_accepts_loud_audio_on_both_streams() {
+        let bytes = include_bytes!("../../tests/fixtures/sottoly/voz-sintetica-16k.s16le");
+        let loud: Vec<f32> = bytes
+            .chunks_exact(2)
+            .map(|b| 3.0 * i16::from_le_bytes([b[0], b[1]]) as f32 / i16::MAX as f32)
+            .collect();
+        let new_vad = || ContinuousVadProcessor::new(16000, 500).unwrap();
+        let mut splitter = SpeakerSplitter::new(new_vad(), new_vad(), 0);
+        let mut chunks = Vec::new();
+        for (mic, sys) in loud.chunks(800).zip(loud.chunks(800)) {
+            chunks.extend(splitter.process(mic, sys).expect("el VAD rechazó audio fuera de rango"));
+        }
+        chunks.extend(splitter.flush().unwrap());
+        assert!(chunks.iter().any(|c| matches!(c.device_type, DeviceType::Microphone)));
+        assert!(chunks.iter().any(|c| matches!(c.device_type, DeviceType::System)));
+    }
+
+    #[test]
+    fn segment_latency_is_wall_clock_minus_audio_end() {
+        let start = std::time::Instant::now();
+        let now = start + std::time::Duration::from_millis(5_400);
+        // El Segmento terminó en el segundo 4.6 del audio y llegó en el 5.4 del reloj.
+        let latency = segment_latency_ms(start, now, 4.6);
+        assert!((latency - 800.0).abs() < 0.001, "latency = {latency}");
     }
 
     /// Con el VAD real (Silero): voz sintética solo por el micrófono → solo fragmentos del Usuario.

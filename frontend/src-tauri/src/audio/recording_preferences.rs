@@ -29,7 +29,8 @@ impl Default for RecordingPreferences {
     fn default() -> Self {
         Self {
             save_folder: get_default_recordings_folder(),
-            auto_save: true,
+            // SOTTOLY: el audio no se guarda por defecto; se activa a mano solo para evals con consentimiento.
+            auto_save: false,
             file_format: "mp4".to_string(),
             preferred_mic_device: None,
             preferred_system_device: None,
@@ -385,3 +386,14 @@ pub async fn get_audio_backend_info() -> Result<Vec<BackendInfo>, String> {
     }
 }
 
+
+// SOTTOLY: ni audio ni transcripción se guardan por defecto (SPEC §7).
+#[cfg(test)]
+mod sottoly_privacy_tests {
+    use super::*;
+
+    #[test]
+    fn audio_is_not_saved_by_default() {
+        assert!(!RecordingPreferences::default().auto_save);
+    }
+}
