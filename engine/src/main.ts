@@ -1,40 +1,27 @@
-// Motor (sidecar): lee mensajes por stdin y escribe por stdout, una línea JSON por mensaje.
-// Hola Jev: por cada Segmento de la Contraparte evalúa la Compuerta y reporta la decisión por stderr.
-// La Redacción todavía no existe, así que stdout no emite Sugerencias aún.
-import { experimental_evaluate } from "ai";
-import { createTypeSafeAi } from "@ai-sdk/typesafe-ai";
+// Motor (sidecar): lee mensajes por stdin y escribe Sugerencias por stdout, una línea JSON por mensaje.
+// Los registros (decisiones de la Compuerta, errores) van por stderr para no ensuciar el protocolo.
+import { join } from "node:path";
 import config from "../config.json";
-import { evaluateGate, slideWindow, type ChoiceEvaluator, type GateRole, type WindowSegment } from "./gate";
-import { parseInbound } from "./protocol";
+import { Engine } from "./engine";
+import { encodeOutbound, parseInbound } from "./protocol";
+import { anthropicDrafter, jevEvaluator } from "./providers";
+import { loadRoles } from "./roles";
 
-// Rol de prueba hasta que exista el cargador de roles/ (Fase 3).
-const HELLO_ROLES: GateRole[] = [
-  {
-    id: "cfo",
-    gate_option: "cfo",
-    gate_definition: "Interviene cuando se mencionan cifras, precios, impuestos o condiciones de pago sin aclarar.",
-    threshold: 0.75,
-  },
-];
+// En el binario compilado no hay carpeta de fuentes: la App pasa la ruta de roles/.
+const ROLES_DIR = process.env.SOTTOLY_ROLES_DIR ?? join(import.meta.dir, "../../roles");
 
-function jevEvaluator(): ChoiceEvaluator {
-  const provider = createTypeSafeAi(); // lee TYPESAFE_AI_API_KEY
-  const model = provider.evaluationModel(config.gate.model);
-  return async (state, question) => {
-    const { answers } = await experimental_evaluate({ model, state, questions: { gate: question } });
-    const a = answers.gate;
-    if (a.type !== "choice") throw new Error(`unexpected answer type ${a.type}`);
-    return { choice: a.choice, probabilities: a.probabilities };
-  };
-}
-
-function log(event: Record<string, unknown>) {
-  process.stderr.write(JSON.stringify({ ...event, at: new Date().toISOString() }) + "\n");
+function log(entry: Record<string, unknown>) {
+  process.stderr.write(JSON.stringify({ ...entry, at: new Date().toISOString() }) + "\n");
 }
 
 async function main() {
-  const evaluate = jevEvaluator();
-  const segments: WindowSegment[] = [];
+  const engine = new Engine({
+    roles: loadRoles(ROLES_DIR),
+    evaluate: jevEvaluator(config.gate.model),
+    draft: anthropicDrafter(config.draft.model, config.draft.max_tokens),
+    config,
+    log,
+  });
 
   for await (const line of console) {
     if (!line.trim()) continue;
@@ -43,19 +30,12 @@ async function main() {
       log({ level: "warn", event: "invalid_message", error: parsed.error });
       continue;
     }
-    const msg = parsed.message;
-    if (msg.type !== "segment") continue;
-
-    segments.push(msg);
-    if (msg.speaker !== "counterpart") continue;
-
-    const started = performance.now();
-    try {
-      const decision = await evaluateGate(slideWindow(segments, config.window_seconds), HELLO_ROLES, evaluate);
-      log({ event: "gate_decision", ...decision, latency_ms: Math.round(performance.now() - started) });
-    } catch (error) {
-      log({ level: "error", event: "gate_failed", error: String(error) });
+    for (const suggestion of await engine.handle(parsed.message)) {
+      process.stdout.write(encodeOutbound(suggestion));
     }
+  }
+  for (const suggestion of await engine.handle({ type: "session", event: "end" })) {
+    process.stdout.write(encodeOutbound(suggestion));
   }
 }
 

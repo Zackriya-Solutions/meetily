@@ -2,5 +2,7 @@
   "gate":          { "provider": "jev",       "model": "jev-1.13.0" },
   "draft":         { "provider": "anthropic", "model": "claude-sonnet-5-5", "max_tokens": 80 },
   "gate_fallback": { "provider": "anthropic", "model": "claude-haiku-4-5-20251001" },
-  "window_seconds": 90
+  "window_seconds": 90,
+  "turns": { "gapSeconds": 0.7, "continuousSeconds": 10 },
+  "antinoise": { "min_seconds_between_same_role": 30, "max_suggestions_per_meeting": 20 }
 }

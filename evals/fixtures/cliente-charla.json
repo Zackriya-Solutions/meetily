@@ -1,0 +1,82 @@
+{
+  "id": "cliente-charla",
+  "description": "Charla con un cliente sin decisiones: la Junta no debe hablar.",
+  "roles": [
+    "cfo",
+    "ceo"
+  ],
+  "segments": [
+    {
+      "speaker": "counterpart",
+      "text": "¿Qué tal el viaje a Medellín?",
+      "t0": 0.0,
+      "t1": 3.3
+    },
+    {
+      "speaker": "user",
+      "text": "Muy bien, aunque llovió casi todo el tiempo.",
+      "t0": 3.6,
+      "t1": 7.5
+    },
+    {
+      "speaker": "counterpart",
+      "text": "Acá en Bogotá también, toda la semana.",
+      "t0": 7.8,
+      "t1": 11.4
+    },
+    {
+      "speaker": "user",
+      "text": "Bueno, te comparto pantalla para ver el avance.",
+      "t0": 11.7,
+      "t1": 15.6
+    },
+    {
+      "speaker": "counterpart",
+      "text": "Dale, ya la veo.",
+      "t0": 15.9,
+      "t1": 18.6
+    }
+  ],
+  "labels": [
+    {
+      "turn": 0,
+      "speaker": "counterpart",
+      "text": "¿Qué tal el viaje a Medellín?",
+      "should_intervene": false,
+      "expected_role": null,
+      "reason": "charla"
+    },
+    {
+      "turn": 1,
+      "speaker": "user",
+      "text": "Muy bien, aunque llovió casi todo el tiempo.",
+      "should_intervene": false,
+      "expected_role": null,
+      "reason": "charla"
+    },
+    {
+      "turn": 2,
+      "speaker": "counterpart",
+      "text": "Acá en Bogotá también, toda la semana.",
+      "should_intervene": false,
+      "expected_role": null,
+      "reason": "charla"
+    },
+    {
+      "turn": 3,
+      "speaker": "user",
+      "text": "Bueno, te comparto pantalla para ver el avance.",
+      "should_intervene": false,
+      "expected_role": null,
+      "reason": "logística"
+    },
+    {
+      "turn": 4,
+      "speaker": "counterpart",
+      "text": "Dale, ya la veo.",
+      "should_intervene": false,
+      "expected_role": null,
+      "reason": "logística"
+    }
+  ]
+}

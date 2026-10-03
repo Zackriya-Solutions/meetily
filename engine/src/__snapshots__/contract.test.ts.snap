@@ -1,0 +1,66 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`contrato de la Compuerta con respuestas grabadas cliente-charla 1`] = `
+{
+  "decisions": [
+    "none",
+    "none",
+    "none",
+    "none",
+    "none",
+  ],
+  "suggestions": 0,
+}
+`;
+
+exports[`contrato de la Compuerta con respuestas grabadas contador-iva 1`] = `
+{
+  "decisions": [
+    "none",
+    "none",
+    "cfo",
+    "cfo",
+    "cfo",
+    "cfo",
+  ],
+  "suggestions": 1,
+}
+`;
+
+exports[`contrato de la Compuerta con respuestas grabadas inversionista-cierre-apresurado 1`] = `
+{
+  "decisions": [
+    "cfo",
+    "none",
+    "none",
+    "none",
+  ],
+  "suggestions": 1,
+}
+`;
+
+exports[`contrato de la Compuerta con respuestas grabadas proveedor-plazo-pago 1`] = `
+{
+  "decisions": [
+    "none",
+    "cfo",
+    "cfo",
+    "cfo",
+    "cfo",
+  ],
+  "suggestions": 1,
+}
+`;
+
+exports[`contrato de la Compuerta con respuestas grabadas renovacion-contradiccion 1`] = `
+{
+  "decisions": [
+    "none",
+    "none",
+    "none",
+    "cfo",
+    "none",
+  ],
+  "suggestions": 1,
+}
+`;

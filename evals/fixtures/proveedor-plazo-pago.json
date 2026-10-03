@@ -1,0 +1,82 @@
+{
+  "id": "proveedor-plazo-pago",
+  "description": "Reunión con un proveedor de software: pago a 90 días y renovación automática.",
+  "roles": [
+    "cfo",
+    "ceo"
+  ],
+  "segments": [
+    {
+      "speaker": "counterpart",
+      "text": "Hola, gracias por el espacio.",
+      "t0": 0.0,
+      "t1": 3.0
+    },
+    {
+      "speaker": "counterpart",
+      "text": "La licencia cuesta tres mil dólares al mes por equipo.",
+      "t0": 4.3,
+      "t1": 8.8
+    },
+    {
+      "speaker": "user",
+      "text": "¿Y cómo sería el pago?",
+      "t0": 9.1,
+      "t1": 12.1
+    },
+    {
+      "speaker": "counterpart",
+      "text": "Facturamos anual por adelantado y el contrato se renueva automáticamente.",
+      "t0": 12.4,
+      "t1": 16.9
+    },
+    {
+      "speaker": "user",
+      "text": "Entiendo, lo reviso con el equipo.",
+      "t0": 17.2,
+      "t1": 20.5
+    }
+  ],
+  "labels": [
+    {
+      "turn": 0,
+      "speaker": "counterpart",
+      "text": "Hola, gracias por el espacio.",
+      "should_intervene": false,
+      "expected_role": null,
+      "reason": "saludo"
+    },
+    {
+      "turn": 1,
+      "speaker": "counterpart",
+      "text": "La licencia cuesta tres mil dólares al mes por equipo.",
+      "should_intervene": true,
+      "expected_role": "cfo",
+      "reason": "precio en dólares sin aclarar impuestos ni tasa"
+    },
+    {
+      "turn": 2,
+      "speaker": "user",
+      "text": "¿Y cómo sería el pago?",
+      "should_intervene": false,
+      "expected_role": null,
+      "reason": "el Usuario ya pregunta"
+    },
+    {
+      "turn": 3,
+      "speaker": "counterpart",
+      "text": "Facturamos anual por adelantado y el contrato se renueva automáticamente.",
+      "should_intervene": true,
+      "expected_role": "cfo",
+      "reason": "pago anticipado y renovación automática"
+    },
+    {
+      "turn": 4,
+      "speaker": "user",
+      "text": "Entiendo, lo reviso con el equipo.",
+      "should_intervene": false,
+      "expected_role": null,
+      "reason": "cierre prudente"
+    }
+  ]
+}

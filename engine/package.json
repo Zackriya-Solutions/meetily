@@ -9,6 +9,7 @@
     "build:sidecar": "bun build src/main.ts --compile --target=bun-darwin-arm64 --outfile ../frontend/src-tauri/binaries/sottoly-engine-aarch64-apple-darwin"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.71",
     "@ai-sdk/typesafe-ai": "^3.0.12",
     "ai": "^7.0.127",
     "zod": "^4"
