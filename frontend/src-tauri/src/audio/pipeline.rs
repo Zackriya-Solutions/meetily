@@ -12,6 +12,8 @@ use super::devices::AudioDevice;
 use super::recording_state::{AudioChunk, AudioError, RecordingState, DeviceType};
 use super::audio_processing::{audio_to_mono, LoudnessNormalizer, NoiseSuppressionProcessor, HighPassFilter};
 use super::vad::{ContinuousVadProcessor};
+// SOTTOLY: separación Usuario / Contraparte
+use super::speaker::{set_separation_enabled, SpeakerSplitter};
 
 /// How long a silence must last before the VAD closes a speech segment, and
 /// therefore how long the audio clips handed to the ASR engine are.
@@ -707,6 +709,8 @@ pub struct AudioPipeline {
     mixer: ProfessionalAudioMixer,
     // Recording sender for pre-mixed audio
     recording_sender_for_mixed: Option<mpsc::UnboundedSender<AudioChunk>>,
+    // SOTTOLY: un VAD por flujo; None = camino mezclado de Meetily (speaker "mixed")
+    speaker_splitter: Option<SpeakerSplitter<ContinuousVadProcessor>>,
 }
 
 impl AudioPipeline {
@@ -762,6 +766,20 @@ impl AudioPipeline {
             VAD_REDEMPTION_TIME_MS
         );
 
+        // SOTTOLY: SOTTOLY_SPEAKER_SEPARATION=0 vuelve al camino mezclado (corte de la Fase 1).
+        let separate = std::env::var("SOTTOLY_SPEAKER_SEPARATION").map(|v| v != "0").unwrap_or(true);
+        let speaker_splitter = if separate {
+            Some(SpeakerSplitter::new(
+                ContinuousVadProcessor::new(sample_rate, VAD_REDEMPTION_TIME_MS)?,
+                ContinuousVadProcessor::new(sample_rate, VAD_REDEMPTION_TIME_MS)?,
+                0,
+            ))
+        } else {
+            None
+        };
+        set_separation_enabled(separate);
+        info!("SOTTOLY: separación Usuario / Contraparte {}", if separate { "activa" } else { "apagada (mixed)" });
+
         // Initialize professional audio mixing components
         let ring_buffer = AudioMixerRingBuffer::new(sample_rate);
         let mixer = ProfessionalAudioMixer::new(sample_rate);
@@ -785,6 +803,7 @@ impl AudioPipeline {
             ring_buffer,
             mixer,
             recording_sender_for_mixed: None,  // Will be set by manager
+            speaker_splitter,
         })
     }
 
@@ -856,6 +875,20 @@ impl AudioPipeline {
                             // Previous 2x gain was causing excessive limiting/distortion
                             let mixed_with_gain = mixed_clean;
 
+                            // SOTTOLY: con separación, cada flujo pasa por su VAD y se etiqueta.
+                            if let Some(splitter) = self.speaker_splitter.as_mut() {
+                                match splitter.process(&mic_window, &sys_window) {
+                                    Ok(chunks) => {
+                                        for chunk in chunks {
+                                            if let Err(e) = self.transcription_sender.send(chunk) {
+                                                warn!("Failed to send VAD segment: {}", e);
+                                            }
+                                        }
+                                    }
+                                    Err(e) => warn!("⚠️ VAD error: {}", e),
+                                }
+                                self.chunk_id_counter = splitter.next_chunk_id();
+                            } else {
                             // STEP 3: Send mixed audio for transcription (VAD + Whisper)
                             match self.vad_processor.process_audio(&mixed_with_gain) {
                                 Ok(speech_segments) => {
@@ -889,6 +922,8 @@ impl AudioPipeline {
                                     warn!("⚠️ VAD error: {}", e);
                                 }
                             }
+
+                            } // SOTTOLY: fin del camino mezclado
 
                             // STEP 4: Send mixed audio for recording (WAV file)
                             if let Some(ref sender) = self.recording_sender_for_mixed {
@@ -924,6 +959,22 @@ impl AudioPipeline {
 
     fn flush_remaining_audio(&mut self) -> Result<()> {
         info!("Flushing remaining audio from pipeline (processed {} chunks)", self.processed_chunks);
+
+        // SOTTOLY: con separación, vaciar los dos VAD
+        if let Some(splitter) = self.speaker_splitter.as_mut() {
+            match splitter.flush() {
+                Ok(chunks) => {
+                    for chunk in chunks {
+                        if let Err(e) = self.transcription_sender.send(chunk) {
+                            warn!("Failed to send final VAD segment: {}", e);
+                        }
+                    }
+                }
+                Err(e) => warn!("Failed to flush VAD processors: {}", e),
+            }
+            self.chunk_id_counter = splitter.next_chunk_id();
+            return Ok(());
+        }
 
         // Flush any remaining audio from VAD processor and send segments to transcription
         match self.vad_processor.flush() {
