@@ -70,6 +70,9 @@ pub fn current_segment_latency_ms(audio_end_s: f64) -> Option<f64> {
 /// Mínimo de muestras para mandar un fragmento a transcribir (50 ms a 16 kHz), igual que pipeline.rs.
 pub const MIN_SEGMENT_SAMPLES: usize = 800;
 
+/// Duración máxima de un Segmento en vivo (issue #756 de Meetily).
+pub const MAX_SEGMENT_SECONDS: f64 = 10.0;
+
 fn clamp_to_vad_range(samples: &[f32]) -> Vec<f32> {
     samples.iter().map(|s| s.clamp(-1.0, 1.0)).collect()
 }
@@ -278,6 +281,74 @@ mod tests {
         chunks.extend(splitter.flush().unwrap());
         assert!(chunks.iter().any(|c| matches!(c.device_type, DeviceType::Microphone)));
         assert!(chunks.iter().any(|c| matches!(c.device_type, DeviceType::System)));
+    }
+
+    fn fixture_voice() -> Vec<f32> {
+        let bytes = include_bytes!("../../tests/fixtures/sottoly/voz-sintetica-16k.s16le");
+        bytes
+            .chunks_exact(2)
+            .map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / i16::MAX as f32)
+            .collect()
+    }
+
+    fn duration_s(chunk: &AudioChunk) -> f64 {
+        chunk.data.len() as f64 / chunk.sample_rate as f64
+    }
+
+    /// Issue #756 de Meetily: con habla continua el VAD no cierra nunca y entregó un Segmento
+    /// de 41 s en la App real. El Motor queda ciego todo ese tiempo.
+    #[test]
+    fn continuous_speech_is_cut_into_segments_of_at_most_10_seconds() {
+        // El fixture no tiene pausas de más de ~200 ms: repetido, son ~31 s de habla sin un
+        // silencio que el VAD (redención de 500 ms) acepte como cierre.
+        let voice = fixture_voice();
+        let continuous: Vec<f32> = voice.iter().copied().cycle().take(voice.len() * 8).collect();
+        let silence = vec![0.0f32; continuous.len()];
+
+        let new_vad = || ContinuousVadProcessor::new(16000, 500).unwrap();
+        let mut splitter = SpeakerSplitter::new(new_vad(), new_vad(), 0);
+        let mut chunks = Vec::new();
+        for (mic, sys) in silence.chunks(800).zip(continuous.chunks(800)) {
+            chunks.extend(splitter.process(mic, sys).unwrap());
+        }
+        chunks.extend(splitter.flush().unwrap());
+
+        let durations: Vec<f64> = chunks.iter().map(duration_s).collect();
+        let total: f64 = durations.iter().sum();
+        assert!(total > 25.0, "se perdió habla: {durations:?}");
+        assert!(
+            durations.iter().all(|d| *d <= MAX_SEGMENT_SECONDS),
+            "Segmentos de más de {MAX_SEGMENT_SECONDS} s: {durations:?}"
+        );
+        // Los Segmentos acotados llegan mientras se habla, no todos al final.
+        assert!(chunks.len() >= 3, "{durations:?}");
+    }
+
+    /// Los cortes no pierden ni duplican audio, y cada Segmento conserva su hora de inicio.
+    #[test]
+    fn cut_segments_are_contiguous_and_keep_their_start_time() {
+        let voice = fixture_voice();
+        let continuous: Vec<f32> = voice.iter().copied().cycle().take(voice.len() * 8).collect();
+
+        let new_vad = || ContinuousVadProcessor::new(16000, 500).unwrap();
+        let mut splitter = SpeakerSplitter::new(new_vad(), new_vad(), 0);
+        let mut chunks = Vec::new();
+        for (mic, sys) in continuous.chunks(800).zip(vec![0.0f32; continuous.len()].chunks(800)) {
+            chunks.extend(splitter.process(mic, sys).unwrap());
+        }
+        chunks.extend(splitter.flush().unwrap());
+
+        assert!(chunks.len() >= 3);
+        for pair in chunks.windows(2) {
+            let expected_start = pair[0].timestamp + duration_s(&pair[0]);
+            assert!(
+                (pair[1].timestamp - expected_start).abs() < 0.001,
+                "hueco o solape entre Segmentos: {} + {} != {}",
+                pair[0].timestamp,
+                duration_s(&pair[0]),
+                pair[1].timestamp
+            );
+        }
     }
 
     #[test]
