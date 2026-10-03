@@ -228,6 +228,34 @@ mod tests {
         assert_eq!(transcript_speaker(&DeviceType::System, true), Speaker::Counterpart);
     }
 
+    // Bug visto en la App real: el micrófono normalizado y el audio del sistema pasan de 1.0
+    // y Silero rechaza la ventana entera ("Float sample must be in the range -1.0 to 1.0").
+    #[test]
+    fn samples_outside_the_vad_range_are_clamped_before_segmenting() {
+        let mut splitter = SpeakerSplitter::new(FakeSegmenter::default(), FakeSegmenter::default(), 0);
+        splitter.process(&[1.7, -2.0, 0.5], &[3.0]).unwrap();
+        assert_eq!(splitter.mic.seen, vec![vec![1.0, -1.0, 0.5]]);
+        assert_eq!(splitter.system.seen, vec![vec![1.0]]);
+    }
+
+    #[test]
+    fn real_vad_accepts_loud_audio_on_both_streams() {
+        let bytes = include_bytes!("../../tests/fixtures/sottoly/voz-sintetica-16k.s16le");
+        let loud: Vec<f32> = bytes
+            .chunks_exact(2)
+            .map(|b| 3.0 * i16::from_le_bytes([b[0], b[1]]) as f32 / i16::MAX as f32)
+            .collect();
+        let new_vad = || ContinuousVadProcessor::new(16000, 500).unwrap();
+        let mut splitter = SpeakerSplitter::new(new_vad(), new_vad(), 0);
+        let mut chunks = Vec::new();
+        for (mic, sys) in loud.chunks(800).zip(loud.chunks(800)) {
+            chunks.extend(splitter.process(mic, sys).expect("el VAD rechazó audio fuera de rango"));
+        }
+        chunks.extend(splitter.flush().unwrap());
+        assert!(chunks.iter().any(|c| matches!(c.device_type, DeviceType::Microphone)));
+        assert!(chunks.iter().any(|c| matches!(c.device_type, DeviceType::System)));
+    }
+
     /// Con el VAD real (Silero): voz sintética solo por el micrófono → solo fragmentos del Usuario.
     #[test]
     fn real_vad_attributes_speech_to_the_stream_that_carries_it() {
