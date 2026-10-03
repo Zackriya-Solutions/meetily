@@ -80,6 +80,10 @@ fn clamp_to_vad_range(samples: &[f32]) -> Vec<f32> {
 pub trait SpeechSegmenter {
     fn process(&mut self, samples: &[f32]) -> Result<Vec<SpeechSegment>>;
     fn flush(&mut self) -> Result<Vec<SpeechSegment>>;
+    /// Habla aún sin cerrar: inicio en ms y muestras a 16 kHz desde ese inicio.
+    fn active_speech(&self) -> Option<(f64, &[f32])> {
+        None
+    }
 }
 
 impl SpeechSegmenter for ContinuousVadProcessor {
@@ -90,17 +94,76 @@ impl SpeechSegmenter for ContinuousVadProcessor {
     fn flush(&mut self) -> Result<Vec<SpeechSegment>> {
         ContinuousVadProcessor::flush(self)
     }
+
+    fn active_speech(&self) -> Option<(f64, &[f32])> {
+        ContinuousVadProcessor::active_speech(self)
+    }
+}
+
+const MAX_SEGMENT_SAMPLES: usize = (MAX_SEGMENT_SECONDS * 16000.0) as usize;
+
+/// Corta la habla en curso cada `MAX_SEGMENT_SECONDS` sin tocar el estado del VAD:
+/// recuerda cuántas muestras de la habla actual ya salió y las quita del Segmento que cierra.
+struct BoundedSegmenter<S: SpeechSegmenter> {
+    inner: S,
+    emitted: usize,
+}
+
+impl<S: SpeechSegmenter> BoundedSegmenter<S> {
+    fn new(inner: S) -> Self {
+        Self { inner, emitted: 0 }
+    }
+
+    fn process(&mut self, samples: &[f32]) -> Result<Vec<SpeechSegment>> {
+        let closed = self.inner.process(samples)?;
+        let mut out = self.trim_closed(closed);
+        out.extend(self.cut_active());
+        Ok(out)
+    }
+
+    fn flush(&mut self) -> Result<Vec<SpeechSegment>> {
+        let closed = self.inner.flush()?;
+        Ok(self.trim_closed(closed))
+    }
+
+    /// El primer Segmento que cierra es la habla que ya se fue cortando: sale solo lo que falta.
+    fn trim_closed(&mut self, mut closed: Vec<SpeechSegment>) -> Vec<SpeechSegment> {
+        if let Some(first) = closed.first_mut() {
+            let skip = std::mem::take(&mut self.emitted).min(first.samples.len());
+            first.samples.drain(..skip);
+            first.start_timestamp_ms += skip as f64 / 16.0;
+        }
+        closed
+    }
+
+    fn cut_active(&mut self) -> Vec<SpeechSegment> {
+        let mut out = Vec::new();
+        if let Some((start_ms, speech)) = self.inner.active_speech() {
+            while speech.len() - self.emitted.min(speech.len()) >= MAX_SEGMENT_SAMPLES {
+                let from = self.emitted;
+                let to = from + MAX_SEGMENT_SAMPLES;
+                out.push(SpeechSegment {
+                    samples: speech[from..to].to_vec(),
+                    start_timestamp_ms: start_ms + from as f64 / 16.0,
+                    end_timestamp_ms: start_ms + to as f64 / 16.0,
+                    confidence: 0.9,
+                });
+                self.emitted = to;
+            }
+        }
+        out
+    }
 }
 
 pub struct SpeakerSplitter<S: SpeechSegmenter> {
-    mic: S,
-    system: S,
+    mic: BoundedSegmenter<S>,
+    system: BoundedSegmenter<S>,
     next_chunk_id: u64,
 }
 
 impl<S: SpeechSegmenter> SpeakerSplitter<S> {
     pub fn new(mic: S, system: S, first_chunk_id: u64) -> Self {
-        Self { mic, system, next_chunk_id: first_chunk_id }
+        Self { mic: BoundedSegmenter::new(mic), system: BoundedSegmenter::new(system), next_chunk_id: first_chunk_id }
     }
 
     /// Procesa una ventana de cada flujo y devuelve los fragmentos listos para transcribir.
@@ -194,8 +257,8 @@ mod tests {
     fn each_stream_goes_to_its_own_segmenter() {
         let mut splitter = SpeakerSplitter::new(FakeSegmenter::default(), FakeSegmenter::default(), 0);
         splitter.process(&[0.1, 0.2], &[0.3]).unwrap();
-        assert_eq!(splitter.mic.seen, vec![vec![0.1, 0.2]]);
-        assert_eq!(splitter.system.seen, vec![vec![0.3]]);
+        assert_eq!(splitter.mic.inner.seen, vec![vec![0.1, 0.2]]);
+        assert_eq!(splitter.system.inner.seen, vec![vec![0.3]]);
     }
 
     #[test]
@@ -261,8 +324,8 @@ mod tests {
     fn samples_outside_the_vad_range_are_clamped_before_segmenting() {
         let mut splitter = SpeakerSplitter::new(FakeSegmenter::default(), FakeSegmenter::default(), 0);
         splitter.process(&[1.7, -2.0, 0.5], &[3.0]).unwrap();
-        assert_eq!(splitter.mic.seen, vec![vec![1.0, -1.0, 0.5]]);
-        assert_eq!(splitter.system.seen, vec![vec![1.0]]);
+        assert_eq!(splitter.mic.inner.seen, vec![vec![1.0, -1.0, 0.5]]);
+        assert_eq!(splitter.system.inner.seen, vec![vec![1.0]]);
     }
 
     #[test]
@@ -315,7 +378,7 @@ mod tests {
 
         let durations: Vec<f64> = chunks.iter().map(duration_s).collect();
         let total: f64 = durations.iter().sum();
-        assert!(total > 25.0, "se perdió habla: {durations:?}");
+        assert!(total > 25.0 && total < 32.0, "se perdió o se duplicó habla: {durations:?}");
         assert!(
             durations.iter().all(|d| *d <= MAX_SEGMENT_SECONDS),
             "Segmentos de más de {MAX_SEGMENT_SECONDS} s: {durations:?}"

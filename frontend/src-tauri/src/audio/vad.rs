@@ -164,6 +164,15 @@ impl ContinuousVadProcessor {
         Ok(resampled)
     }
 
+    // SOTTOLY: habla en curso (inicio en ms y muestras a 16 kHz) para acotar Segmentos en vivo (#756).
+    pub fn active_speech(&self) -> Option<(f64, &[f32])> {
+        if !self.in_speech {
+            return None;
+        }
+        let start_ms = (self.speech_start_sample as f64 / VAD_SAMPLE_RATE as f64) * 1000.0;
+        Some((start_ms, self.session.get_current_speech()))
+    }
+
     /// Flush any remaining audio and return final speech segments
     pub fn flush(&mut self) -> Result<Vec<SpeechSegment>> {
         debug!("VAD flush: in_speech={}, current_speech_len={}, buffer_len={}, speech_segments_queued={}",
