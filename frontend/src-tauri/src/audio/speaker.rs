@@ -2,6 +2,8 @@
 // Cada flujo pasa por su propio VAD; los fragmentos salen etiquetados con su DeviceType.
 // Diarización gratis por canal (SPEC §10, Fase 1). Archivo nuevo para no tocar Meetily (ADR-0001).
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
@@ -24,6 +26,26 @@ impl Speaker {
             DeviceType::System => Speaker::Counterpart,
         }
     }
+}
+
+/// Hablante que va en el TranscriptUpdate: si los flujos no se separaron, todo es "mixed".
+pub fn transcript_speaker(device: &DeviceType, separated: bool) -> Speaker {
+    if separated {
+        Speaker::from_device(device)
+    } else {
+        Speaker::Mixed
+    }
+}
+
+/// El pipeline lo enciende cuando transcribe los flujos por separado (Fase 1C).
+static SEPARATION_ENABLED: AtomicBool = AtomicBool::new(false);
+
+pub fn set_separation_enabled(enabled: bool) {
+    SEPARATION_ENABLED.store(enabled, Ordering::SeqCst);
+}
+
+pub fn separation_enabled() -> bool {
+    SEPARATION_ENABLED.load(Ordering::SeqCst)
 }
 
 /// Mínimo de muestras para mandar un fragmento a transcribir (50 ms a 16 kHz), igual que pipeline.rs.
@@ -192,6 +214,18 @@ mod tests {
 
         let sources: Vec<Speaker> = chunks.iter().map(|c| Speaker::from_device(&c.device_type)).collect();
         assert_eq!(sources, vec![Speaker::User, Speaker::Counterpart]);
+    }
+
+    #[test]
+    fn transcript_speaker_is_mixed_when_streams_are_not_separated() {
+        assert_eq!(transcript_speaker(&DeviceType::Microphone, false), Speaker::Mixed);
+        assert_eq!(transcript_speaker(&DeviceType::System, false), Speaker::Mixed);
+    }
+
+    #[test]
+    fn transcript_speaker_follows_the_device_when_separated() {
+        assert_eq!(transcript_speaker(&DeviceType::Microphone, true), Speaker::User);
+        assert_eq!(transcript_speaker(&DeviceType::System, true), Speaker::Counterpart);
     }
 
     /// Con el VAD real (Silero): voz sintética solo por el micrófono → solo fragmentos del Usuario.
