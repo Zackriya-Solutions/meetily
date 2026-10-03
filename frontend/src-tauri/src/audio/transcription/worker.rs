@@ -225,6 +225,16 @@ pub fn start_transcription_task<R: Runtime>(
                                             speaker, // SOTTOLY
                                         };
 
+                                        // SOTTOLY: latencia de Segmentos (Q31), solo para Segmentos finales
+                                        if !update.is_partial {
+                                            if let Some(latency) = crate::audio::speaker::current_segment_latency_ms(update.audio_end_time) {
+                                                info!(
+                                                    "SOTTOLY_LATENCY speaker={:?} audio_end_s={:.2} latency_ms={:.0}",
+                                                    update.speaker, update.audio_end_time, latency
+                                                );
+                                            }
+                                        }
+
                                         if let Err(e) = app_clone.emit("transcript-update", &update)
                                         {
                                             error!(

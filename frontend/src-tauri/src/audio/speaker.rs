@@ -50,8 +50,21 @@ pub fn separation_enabled() -> bool {
 
 /// Latencia de un Segmento (Q31): tiempo de reloj desde que terminó el audio
 /// (`audio_end_s`, relativo al inicio del pipeline) hasta `now`.
-pub fn segment_latency_ms(_pipeline_start: std::time::Instant, _now: std::time::Instant, _audio_end_s: f64) -> f64 {
-    0.0
+pub fn segment_latency_ms(pipeline_start: std::time::Instant, now: std::time::Instant, audio_end_s: f64) -> f64 {
+    now.duration_since(pipeline_start).as_secs_f64() * 1000.0 - audio_end_s * 1000.0
+}
+
+static PIPELINE_START: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+
+/// El pipeline marca su inicio; los tiempos de audio de los Segmentos son relativos a él.
+pub fn mark_pipeline_start() {
+    *PIPELINE_START.lock().unwrap() = Some(std::time::Instant::now());
+}
+
+/// Latencia del Segmento que termina en `audio_end_s`, si el pipeline ya marcó su inicio.
+pub fn current_segment_latency_ms(audio_end_s: f64) -> Option<f64> {
+    let start = (*PIPELINE_START.lock().unwrap())?;
+    Some(segment_latency_ms(start, std::time::Instant::now(), audio_end_s))
 }
 
 /// Mínimo de muestras para mandar un fragmento a transcribir (50 ms a 16 kHz), igual que pipeline.rs.

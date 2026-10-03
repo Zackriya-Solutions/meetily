@@ -778,6 +778,7 @@ impl AudioPipeline {
             None
         };
         set_separation_enabled(separate);
+        super::speaker::mark_pipeline_start();
         info!("SOTTOLY: separación Usuario / Contraparte {}", if separate { "activa" } else { "apagada (mixed)" });
 
         // Initialize professional audio mixing components
