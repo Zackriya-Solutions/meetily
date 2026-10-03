@@ -59,16 +59,16 @@ impl<S: SpeechSegmenter> SpeakerSplitter<S> {
     pub fn process(&mut self, mic_window: &[f32], system_window: &[f32]) -> Result<Vec<AudioChunk>> {
         let mic = self.mic.process(mic_window)?;
         let system = self.system.process(system_window)?;
-        Ok(self.to_chunks(mic, system))
+        Ok(self.tag_segments(mic, system))
     }
 
     pub fn flush(&mut self) -> Result<Vec<AudioChunk>> {
         let mic = self.mic.flush()?;
         let system = self.system.flush()?;
-        Ok(self.to_chunks(mic, system))
+        Ok(self.tag_segments(mic, system))
     }
 
-    fn to_chunks(&mut self, mic: Vec<SpeechSegment>, system: Vec<SpeechSegment>) -> Vec<AudioChunk> {
+    fn tag_segments(&mut self, mic: Vec<SpeechSegment>, system: Vec<SpeechSegment>) -> Vec<AudioChunk> {
         let tagged = mic
             .into_iter()
             .map(|s| (DeviceType::Microphone, s))
