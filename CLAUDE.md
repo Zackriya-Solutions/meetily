@@ -1,3 +1,34 @@
+<!-- SOTTOLY: inicio. Esta sección es de Sottoly; lo que sigue después es la guía original de Meetily. -->
+# Sottoly — reglas para Claude Code
+
+Lee antes de trabajar:
+
+1. [GLOSSARY.md](GLOSSARY.md): usa siempre estos términos en código, UI y docs. Si encuentras un término de "No usar", corrígelo.
+2. [SPEC.md](SPEC.md): decisiones, alcance y plan. Si algo no está ahí, no lo construyas. No implementes nada de "Preguntas abiertas" ni de "Fuera de alcance del MVP".
+3. [docs/adr/](docs/adr/): antes de cambiar algo cubierto por un ADR, léelo. Si la decisión cambia, escribe un ADR nuevo que reemplace al anterior; no edites el viejo.
+
+## Reglas
+
+- **Fork fiel de Meetily (ADR-0001):** no muevas ni borres carpetas ni proveedores de Meetily. El código de Sottoly va en `engine/`, `roles/`, `evals/`, `docs/` o en archivos nuevos (`engine_bridge.rs`, `overlay/`). Las ediciones inevitables a archivos de Meetily van marcadas con `// SOTTOLY:`. No hagas merge de `upstream` antes del Build Day.
+- **Repo público (ADR-0002):** nunca escribas en archivos versionados rutas personales, nombres de personas reales, datos de clientes, referencias a otras empresas del autor, precios o estrategia comercial, keys, tokens ni `.env`. El contexto privado vive en `CLAUDE.local.md` (ignorado por git).
+- **Identificadores en inglés:** claves, enums, tipos, archivos y eventos en inglés. El contenido humano (transcripción, Sugerencia, motivo, instrucciones de Rol) va en el idioma de la Reunión. La UI del MVP va en español.
+- **Compuerta:** elige Roles (`gate_option`), nunca Personas. La Persona no entra al prompt de la Compuerta. Cambiar `gate_option` o `gate_definition` exige recalibrar y actualizar `calibrated_with`.
+- **Modelos:** los IDs viven en `engine/config.json`, nunca en el código ni en los Roles. IDs exactos, sin alias. Cambiar un ID es una decisión explícita.
+- **Pruebas:** ninguna tarea está terminada sin prueba. Escribe o actualiza la prueba, implementa, corre, itera hasta verde y abre el PR. No desactives, borres ni marques como skip una prueba para que pase; si una prueba está mal, explícalo en el PR.
+- **PRs:** `main` está protegida. Todo cambio entra por PR con los checks en verde.
+- **Privacidad:** no guardes audio. No guardes transcripciones por defecto. Las keys van en el Keychain. Sin telemetría.
+
+## Comandos
+
+```bash
+# App (Meetily/Tauri)
+cd frontend && pnpm install && pnpm run tauri:dev
+
+# Motor
+cd engine && bun install && bun test
+```
+<!-- SOTTOLY: fin -->
+
 # CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.

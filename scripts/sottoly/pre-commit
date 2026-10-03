@@ -1,0 +1,26 @@
+#!/bin/sh
+# Sottoly pre-commit: secretos (gitleaks) + palabras bloqueadas.
+# La lista de palabras vive fuera del repo: ~/.sottoly/blocked-words.txt (una por línea, # comenta).
+# Instalar: ln -sf ../../scripts/sottoly/pre-commit .git/hooks/pre-commit
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "pre-commit: falta gitleaks (brew install gitleaks)" >&2
+  exit 1
+fi
+gitleaks git --pre-commit --staged --redact --no-banner || exit 1
+
+LIST="$HOME/.sottoly/blocked-words.txt"
+if [ -f "$LIST" ]; then
+  PATTERNS=$(mktemp)
+  grep -v -e '^[[:space:]]*$' -e '^#' "$LIST" > "$PATTERNS"
+  if [ -s "$PATTERNS" ]; then
+    HITS=$(git diff --cached -U0 --no-color | grep '^+' | grep -v '^+++' | grep -n -i -F -f "$PATTERNS")
+    if [ -n "$HITS" ]; then
+      echo "pre-commit: el diff contiene palabras bloqueadas:" >&2
+      echo "$HITS" >&2
+      rm -f "$PATTERNS"
+      exit 1
+    fi
+  fi
+  rm -f "$PATTERNS"
+fi
