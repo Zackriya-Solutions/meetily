@@ -51,6 +51,25 @@ Este repo es un fork fiel de Meetily ([ADR-0001](docs/adr/0001-fork-fiel-de-meet
 
 ---
 
+### Aprovechar Meetily
+
+Todo se construye reutilizando el código de Meetily ([ADR-0001](docs/adr/0001-fork-fiel-de-meetily.md)), sin duplicar pipelines.
+
+| Feature de Meetily | Uso en Sottoly |
+|---|---|
+| Parakeet "Lightning" (tiempo real) | STT predeterminado del MVP. La latencia de Segmentos (Q31) se mide con Lightning. "Compact" queda como opción para Macs con menos recursos. |
+| Modelos locales de resumen (Qwen 3.5 4B/2B, Gemma 3 4B/1B, offline) | Decisiones al cierre (§6): reutilizar el pipeline de resumen de Meetily con un prompt de Sottoly que devuelva `decision` y `commitment`. Modo privado y plan sin keys: proveedor local en `ModelProvider`. Experimento: Gemma 3 1B como Compuerta local de respaldo, comparada con Jev sobre los mismos fixtures. |
+| Auto Summary y Summary Language | Base para el resumen automático al cerrar la Reunión y para fijar el español como idioma por defecto. |
+| Import Audio & Retranscribe (beta) | Evals: grabaciones reales con consentimiento → transcripciones → fixtures etiquetados en `sottoly-evals`. Demo de respaldo: reproducir una Reunión grabada por el pipeline completo. Pendiente: verificar si la retranscripción conserva Usuario / Contraparte o lo mezcla. |
+
+Convivencia con otras capturas: el módulo en vivo de plaude (ffmpeg grabando un dispositivo de audio en trozos de 5 s) no debe correr junto con Sottoly; compite por los dispositivos y contamina la medición. Pausar `com.jair.plaude` mientras se usa Sottoly.
+
+El tap de audio del sistema de Meetily es **global**: captura el audio de cualquier proceso, salga por el dispositivo que salga, aunque el Usuario no lo oiga (una pestaña del navegador sonando hacia BlackHole entró como Contraparte en las mediciones del 2026-10-02). Antes de una Reunión hay que silenciar todo lo demás; ver Preguntas abiertas.
+
+Privacidad: Meetily guarda por defecto el audio (`auto_save: true`) y las transcripciones (SQLite). Sottoly no guarda ninguno de los dos por defecto (§7). El audio se apaga en el MVP; las transcripciones se quedan hasta después del Build Day (§11).
+
+---
+
 ## 4. Arquitectura
 
 ```
@@ -335,6 +354,11 @@ No construir antes del Build Day:
 | v1.1 | Transcripción en la nube opcional (Deepgram) implementando `TranscriptionProvider` |
 | v2 | Bot en Meet y Teams, voz con toggle explícito, Roles compartibles |
 
+**Privacidad (primera tarea después del Build Day):**
+
+- Apagar por defecto el guardado de transcripciones en SQLite que hereda Meetily; activarlo a mano solo para evals con consentimiento.
+- Un comando o botón para borrar las transcripciones de prueba guardadas durante el Build Day.
+
 **Criterio para pasar de fase:** el Usuario usa una Sugerencia en al menos 1 de cada 3 Reuniones. Con pilotos: al menos 3 de 5 usan Sottoly en más de una Reunión real.
 
 **Agent SDK:** solo para Roles con herramientas (Due diligence, Notas), fuera de la ruta caliente. Alternativa a evaluar: herramientas MCP desde el AI SDK.
@@ -350,6 +374,7 @@ No implementar nada de esta sección sin una decisión explícita.
 - ¿El VAD de Meetily cierra chunks en los silencios con la latencia suficiente para no necesitar el latido `clock`? Se responde con la medición del sábado.
 - Entitlements exactos de hardened runtime para el binario de Bun.
 - Login de la App contra Cloud con PKCE y deep link `sottoly://auth/callback` en Tauri: no hay guía oficial; probar antes de v1.
+- ¿El tap debe capturar solo los procesos de la Reunión (Zoom, Meet en el navegador, Teams) en vez de todo el sistema? Hoy cualquier audio del Mac (otra pestaña, notificaciones, música) entra como Contraparte.
 - Validación legal del consentimiento (Ley 1581 de 2012).
 
 ---
