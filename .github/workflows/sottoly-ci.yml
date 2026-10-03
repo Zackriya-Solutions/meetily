@@ -41,3 +41,22 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bunx tsc --noEmit
       - run: bun test
+
+  rust:
+    name: cargo test
+    runs-on: macos-latest   # captura de audio (cidre) y Metal solo compilan en macOS
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cmake (whisper.cpp)
+        run: command -v cmake || brew install cmake
+      - name: Sidecar llama-helper (Tauri lo exige como externalBin)
+        run: |
+          cargo build -p llama-helper --features metal
+          mkdir -p frontend/src-tauri/binaries
+          cp target/debug/llama-helper frontend/src-tauri/binaries/llama-helper-aarch64-apple-darwin
+      - name: cargo test
+        working-directory: frontend/src-tauri
+        run: cargo test --no-fail-fast

@@ -483,7 +483,11 @@ mod tests {
             3840,
             48000,
         );
-        assert_eq!(timeout, Duration::from_millis(160));
+        // SOTTOLY: `mul_f32` deja 159.999996ms; se compara con tolerancia de punto flotante.
+        // Propuesta upstream pendiente (después del Build Day).
+        let expected = Duration::from_millis(160);
+        let diff = if timeout > expected { timeout - expected } else { expected - timeout };
+        assert!(diff < Duration::from_millis(1), "timeout {:?} no está a ±1ms de {:?}", timeout, expected);
     }
 
     #[test]
