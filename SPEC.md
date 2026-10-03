@@ -62,6 +62,10 @@ Todo se construye reutilizando el código de Meetily ([ADR-0001](docs/adr/0001-f
 | Auto Summary y Summary Language | Base para el resumen automático al cerrar la Reunión y para fijar el español como idioma por defecto. |
 | Import Audio & Retranscribe (beta) | Evals: grabaciones reales con consentimiento → transcripciones → fixtures etiquetados en `sottoly-evals`. Demo de respaldo: reproducir una Reunión grabada por el pipeline completo. Pendiente: verificar si la retranscripción conserva Usuario / Contraparte o lo mezcla. |
 
+Convivencia con otras capturas: el módulo en vivo de plaude (ffmpeg grabando un dispositivo de audio en trozos de 5 s) no debe correr junto con Sottoly; compite por los dispositivos y contamina la medición. Pausar `com.jair.plaude` mientras se usa Sottoly.
+
+El tap de audio del sistema de Meetily es **global**: captura el audio de cualquier proceso, salga por el dispositivo que salga, aunque el Usuario no lo oiga (una pestaña del navegador sonando hacia BlackHole entró como Contraparte en las mediciones del 2026-10-02). Antes de una Reunión hay que silenciar todo lo demás; ver Preguntas abiertas.
+
 Privacidad: Meetily guarda por defecto el audio (`auto_save: true`) y las transcripciones (SQLite). Sottoly no guarda ninguno de los dos por defecto (§7). El audio se apaga en el MVP; las transcripciones se quedan hasta después del Build Day (§11).
 
 ---
@@ -370,6 +374,7 @@ No implementar nada de esta sección sin una decisión explícita.
 - ¿El VAD de Meetily cierra chunks en los silencios con la latencia suficiente para no necesitar el latido `clock`? Se responde con la medición del sábado.
 - Entitlements exactos de hardened runtime para el binario de Bun.
 - Login de la App contra Cloud con PKCE y deep link `sottoly://auth/callback` en Tauri: no hay guía oficial; probar antes de v1.
+- ¿El tap debe capturar solo los procesos de la Reunión (Zoom, Meet en el navegador, Teams) en vez de todo el sistema? Hoy cualquier audio del Mac (otra pestaña, notificaciones, música) entra como Contraparte.
 - Validación legal del consentimiento (Ley 1581 de 2012).
 
 ---
