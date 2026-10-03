@@ -48,6 +48,12 @@ pub fn separation_enabled() -> bool {
     SEPARATION_ENABLED.load(Ordering::SeqCst)
 }
 
+/// Latencia de un Segmento (Q31): tiempo de reloj desde que terminó el audio
+/// (`audio_end_s`, relativo al inicio del pipeline) hasta `now`.
+pub fn segment_latency_ms(_pipeline_start: std::time::Instant, _now: std::time::Instant, _audio_end_s: f64) -> f64 {
+    0.0
+}
+
 /// Mínimo de muestras para mandar un fragmento a transcribir (50 ms a 16 kHz), igual que pipeline.rs.
 pub const MIN_SEGMENT_SAMPLES: usize = 800;
 
@@ -259,6 +265,15 @@ mod tests {
         chunks.extend(splitter.flush().unwrap());
         assert!(chunks.iter().any(|c| matches!(c.device_type, DeviceType::Microphone)));
         assert!(chunks.iter().any(|c| matches!(c.device_type, DeviceType::System)));
+    }
+
+    #[test]
+    fn segment_latency_is_wall_clock_minus_audio_end() {
+        let start = std::time::Instant::now();
+        let now = start + std::time::Duration::from_millis(5_400);
+        // El Segmento terminó en el segundo 4.6 del audio y llegó en el 5.4 del reloj.
+        let latency = segment_latency_ms(start, now, 4.6);
+        assert!((latency - 800.0).abs() < 0.001, "latency = {latency}");
     }
 
     /// Con el VAD real (Silero): voz sintética solo por el micrófono → solo fragmentos del Usuario.
