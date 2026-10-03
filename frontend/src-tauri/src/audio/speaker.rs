@@ -51,6 +51,10 @@ pub fn separation_enabled() -> bool {
 /// Mínimo de muestras para mandar un fragmento a transcribir (50 ms a 16 kHz), igual que pipeline.rs.
 pub const MIN_SEGMENT_SAMPLES: usize = 800;
 
+fn clamp_to_vad_range(samples: &[f32]) -> Vec<f32> {
+    samples.iter().map(|s| s.clamp(-1.0, 1.0)).collect()
+}
+
 pub trait SpeechSegmenter {
     fn process(&mut self, samples: &[f32]) -> Result<Vec<SpeechSegment>>;
     fn flush(&mut self) -> Result<Vec<SpeechSegment>>;
@@ -79,8 +83,9 @@ impl<S: SpeechSegmenter> SpeakerSplitter<S> {
 
     /// Procesa una ventana de cada flujo y devuelve los fragmentos listos para transcribir.
     pub fn process(&mut self, mic_window: &[f32], system_window: &[f32]) -> Result<Vec<AudioChunk>> {
-        let mic = self.mic.process(mic_window)?;
-        let system = self.system.process(system_window)?;
+        // Sin el mezclador de Meetily nadie recorta el audio, y Silero rechaza muestras fuera de [-1, 1].
+        let mic = self.mic.process(&clamp_to_vad_range(mic_window))?;
+        let system = self.system.process(&clamp_to_vad_range(system_window))?;
         Ok(self.tag_segments(mic, system))
     }
 
