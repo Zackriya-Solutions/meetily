@@ -42,6 +42,8 @@ pub struct TranscriptUpdate {
     pub audio_start_time: f64, // Seconds from recording start (e.g., 125.3)
     pub audio_end_time: f64,   // Seconds from recording start (e.g., 128.6)
     pub duration: f64,          // Segment duration in seconds (e.g., 3.3)
+    // SOTTOLY: quién habló (user | counterpart | mixed)
+    pub speaker: crate::audio::speaker::Speaker,
 }
 
 // NOTE: get_transcript_history and get_recording_meeting_name functions
@@ -148,6 +150,11 @@ pub fn start_transcription_task<R: Runtime>(
                             }
 
                             let chunk_timestamp = chunk.timestamp;
+                            // SOTTOLY: el hablante se decide antes de mover el chunk al proveedor
+                            let speaker = crate::audio::speaker::transcript_speaker(
+                                &chunk.device_type,
+                                crate::audio::speaker::separation_enabled(),
+                            );
                             let chunk_duration = chunk.data.len() as f64 / chunk.sample_rate as f64;
 
                             // Transcribe with provider-agnostic approach
@@ -215,7 +222,18 @@ pub fn start_transcription_task<R: Runtime>(
                                             audio_start_time,
                                             audio_end_time,
                                             duration: chunk_duration,
+                                            speaker, // SOTTOLY
                                         };
+
+                                        // SOTTOLY: latencia de Segmentos (Q31), solo para Segmentos finales
+                                        if !update.is_partial {
+                                            if let Some(latency) = crate::audio::speaker::current_segment_latency_ms(update.audio_end_time) {
+                                                info!(
+                                                    "SOTTOLY_LATENCY speaker={:?} audio_end_s={:.2} latency_ms={:.0}",
+                                                    update.speaker, update.audio_end_time, latency
+                                                );
+                                            }
+                                        }
 
                                         if let Err(e) = app_clone.emit("transcript-update", &update)
                                         {
@@ -598,6 +616,26 @@ fn format_recording_time(seconds: f64) -> String {
         fn keeps_short_acknowledgements() {
             assert!(should_emit_transcript("Yes"));
             assert!(should_emit_transcript("ok"));
+        }
+
+        // SOTTOLY: el Motor necesita saber quién habló en cada Segmento.
+        #[test]
+        fn transcript_update_serializes_the_speaker() {
+            let update = TranscriptUpdate {
+                text: "Son dos millones".to_string(),
+                timestamp: "14:30:05".to_string(),
+                source: "Audio".to_string(),
+                sequence_id: 1,
+                chunk_start_time: 0.0,
+                is_partial: false,
+                confidence: 0.9,
+                audio_start_time: 1.0,
+                audio_end_time: 2.0,
+                duration: 1.0,
+                speaker: crate::audio::speaker::Speaker::Counterpart,
+            };
+            let json = serde_json::to_value(&update).unwrap();
+            assert_eq!(json["speaker"], "counterpart");
         }
 
         #[test]
