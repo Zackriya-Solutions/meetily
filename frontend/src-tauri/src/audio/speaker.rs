@@ -26,6 +26,11 @@ impl Speaker {
     }
 }
 
+/// Hablante que va en el TranscriptUpdate: si los flujos no se separaron, todo es "mixed".
+pub fn transcript_speaker(_device: &DeviceType, _separated: bool) -> Speaker {
+    Speaker::Mixed
+}
+
 /// Mínimo de muestras para mandar un fragmento a transcribir (50 ms a 16 kHz), igual que pipeline.rs.
 pub const MIN_SEGMENT_SAMPLES: usize = 800;
 
@@ -192,6 +197,18 @@ mod tests {
 
         let sources: Vec<Speaker> = chunks.iter().map(|c| Speaker::from_device(&c.device_type)).collect();
         assert_eq!(sources, vec![Speaker::User, Speaker::Counterpart]);
+    }
+
+    #[test]
+    fn transcript_speaker_is_mixed_when_streams_are_not_separated() {
+        assert_eq!(transcript_speaker(&DeviceType::Microphone, false), Speaker::Mixed);
+        assert_eq!(transcript_speaker(&DeviceType::System, false), Speaker::Mixed);
+    }
+
+    #[test]
+    fn transcript_speaker_follows_the_device_when_separated() {
+        assert_eq!(transcript_speaker(&DeviceType::Microphone, true), Speaker::User);
+        assert_eq!(transcript_speaker(&DeviceType::System, true), Speaker::Counterpart);
     }
 
     /// Con el VAD real (Silero): voz sintética solo por el micrófono → solo fragmentos del Usuario.
