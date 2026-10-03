@@ -51,6 +51,21 @@ Este repo es un fork fiel de Meetily ([ADR-0001](docs/adr/0001-fork-fiel-de-meet
 
 ---
 
+### Aprovechar Meetily
+
+Todo se construye reutilizando el código de Meetily ([ADR-0001](docs/adr/0001-fork-fiel-de-meetily.md)), sin duplicar pipelines.
+
+| Feature de Meetily | Uso en Sottoly |
+|---|---|
+| Parakeet "Lightning" (tiempo real) | STT predeterminado del MVP. La latencia de Segmentos (Q31) se mide con Lightning. "Compact" queda como opción para Macs con menos recursos. |
+| Modelos locales de resumen (Qwen 3.5 4B/2B, Gemma 3 4B/1B, offline) | Decisiones al cierre (§6): reutilizar el pipeline de resumen de Meetily con un prompt de Sottoly que devuelva `decision` y `commitment`. Modo privado y plan sin keys: proveedor local en `ModelProvider`. Experimento: Gemma 3 1B como Compuerta local de respaldo, comparada con Jev sobre los mismos fixtures. |
+| Auto Summary y Summary Language | Base para el resumen automático al cerrar la Reunión y para fijar el español como idioma por defecto. |
+| Import Audio & Retranscribe (beta) | Evals: grabaciones reales con consentimiento → transcripciones → fixtures etiquetados en `sottoly-evals`. Demo de respaldo: reproducir una Reunión grabada por el pipeline completo. Pendiente: verificar si la retranscripción conserva Usuario / Contraparte o lo mezcla. |
+
+Privacidad: Meetily guarda por defecto el audio (`auto_save: true`) y las transcripciones (SQLite). Sottoly no guarda ninguno de los dos por defecto (§7); el audio se apaga en el MVP y se activa a mano solo para evals con consentimiento.
+
+---
+
 ## 4. Arquitectura
 
 ```
