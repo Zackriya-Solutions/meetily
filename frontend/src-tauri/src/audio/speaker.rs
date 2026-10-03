@@ -18,8 +18,11 @@ pub enum Speaker {
 }
 
 impl Speaker {
-    pub fn from_device(_device: &DeviceType) -> Self {
-        Speaker::Mixed
+    pub fn from_device(device: &DeviceType) -> Self {
+        match device {
+            DeviceType::Microphone => Speaker::User,
+            DeviceType::System => Speaker::Counterpart,
+        }
     }
 }
 
@@ -53,12 +56,39 @@ impl<S: SpeechSegmenter> SpeakerSplitter<S> {
     }
 
     /// Procesa una ventana de cada flujo y devuelve los fragmentos listos para transcribir.
-    pub fn process(&mut self, _mic_window: &[f32], _system_window: &[f32]) -> Result<Vec<AudioChunk>> {
-        Ok(Vec::new())
+    pub fn process(&mut self, mic_window: &[f32], system_window: &[f32]) -> Result<Vec<AudioChunk>> {
+        let mic = self.mic.process(mic_window)?;
+        let system = self.system.process(system_window)?;
+        Ok(self.to_chunks(mic, system))
     }
 
     pub fn flush(&mut self) -> Result<Vec<AudioChunk>> {
-        Ok(Vec::new())
+        let mic = self.mic.flush()?;
+        let system = self.system.flush()?;
+        Ok(self.to_chunks(mic, system))
+    }
+
+    fn to_chunks(&mut self, mic: Vec<SpeechSegment>, system: Vec<SpeechSegment>) -> Vec<AudioChunk> {
+        let tagged = mic
+            .into_iter()
+            .map(|s| (DeviceType::Microphone, s))
+            .chain(system.into_iter().map(|s| (DeviceType::System, s)));
+
+        let mut chunks = Vec::new();
+        for (device_type, segment) in tagged {
+            if segment.samples.len() < MIN_SEGMENT_SAMPLES {
+                continue;
+            }
+            chunks.push(AudioChunk {
+                data: segment.samples,
+                sample_rate: 16000,
+                timestamp: segment.start_timestamp_ms / 1000.0,
+                chunk_id: self.next_chunk_id,
+                device_type,
+            });
+            self.next_chunk_id += 1;
+        }
+        chunks
     }
 
     pub fn next_chunk_id(&self) -> u64 {
