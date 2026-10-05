@@ -20,6 +20,11 @@ pub struct RecordingPreferences {
     pub preferred_mic_device: Option<String>,
     #[serde(default)]
     pub preferred_system_device: Option<String>,
+    /// Additionally save an unmixed stereo file (`audio_stereo.mp4`) with the
+    /// microphone on the left channel and system audio on the right, so
+    /// downstream tools can tell "me" from "everyone else" (#241).
+    #[serde(default)]
+    pub save_separate_channels: bool,
     #[cfg(target_os = "macos")]
     #[serde(default)]
     pub system_audio_backend: Option<String>,
@@ -33,6 +38,7 @@ impl Default for RecordingPreferences {
             file_format: "mp4".to_string(),
             preferred_mic_device: None,
             preferred_system_device: None,
+            save_separate_channels: false,
             #[cfg(target_os = "macos")]
             system_audio_backend: Some("coreaudio".to_string()),
         }
