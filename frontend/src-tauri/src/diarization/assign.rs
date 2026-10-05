@@ -111,6 +111,79 @@ pub fn fold_short_pieces(pieces: Vec<Turn>, min_s: f64) -> Vec<Turn> {
 }
 
 /// Label each row (None = row has no audio timing) by majority overlap.
+/// How far (in seconds of the row's average speaking rate) a text cut may move from the
+/// estimated speaker change to land on a sentence end, or on a clause mark.
+const SENTENCE_CUT_TOLERANCE_S: f64 = 2.0;
+const CLAUSE_CUT_TOLERANCE_S: f64 = 1.0;
+
+fn ends_sentence(c: char) -> bool {
+    matches!(c, '.' | '?' | '!' | '…' | '。' | '？' | '！')
+}
+
+fn ends_clause(c: char) -> bool {
+    matches!(c, ',' | ';' | ':' | '，' | '、' | '；' | '：')
+}
+
+fn is_wide_punctuation(c: char) -> bool {
+    matches!(c, '。' | '？' | '！' | '，' | '、' | '；' | '：')
+}
+
+/// Chinese and Japanese characters, which are written without spaces between words.
+fn is_cjk(c: char) -> bool {
+    matches!(c, '\u{3040}'..='\u{30ff}' | '\u{3400}'..='\u{4dbf}' | '\u{4e00}'..='\u{9fff}' | '\u{f900}'..='\u{faff}')
+}
+
+/// Splits a row's existing text among its pieces without re-transcribing. Each cut goes where
+/// the speaker changes, estimated from the row's average speaking rate, moved to the nearest
+/// sentence end within SENTENCE_CUT_TOLERANCE_S, else the nearest clause mark within
+/// CLAUSE_CUT_TOLERANCE_S, else the nearest word gap. Chinese and Japanese text, which has no
+/// word gaps, may also be cut next to any of its characters. None when a piece would be empty.
+pub fn split_text_at_turns(text: &str, span: RowSpan, pieces: &[Turn]) -> Option<Vec<String>> {
+    let chars: Vec<char> = text.trim().chars().collect();
+    let len = chars.len();
+    let duration = span.end_s - span.start_s;
+    if pieces.len() < 2 || len == 0 || duration <= 0.0 {
+        return None;
+    }
+    // A cut at p puts chars[..p] in one piece and chars[p..] in the next.
+    let after_mark = |p: usize, mark: fn(char) -> bool| {
+        mark(chars[p - 1]) && (chars[p].is_whitespace() || is_wide_punctuation(chars[p - 1]))
+    };
+    let word_start = |p: usize| {
+        (chars[p - 1].is_whitespace() && !chars[p].is_whitespace()) || is_cjk(chars[p - 1]) || is_cjk(chars[p])
+    };
+    let rate = len as f64 / duration;
+
+    let mut cuts = Vec::with_capacity(pieces.len() - 1);
+    let mut prev = 0usize;
+    for piece in &pieces[..pieces.len() - 1] {
+        let target = ((piece.end_s - span.start_s) / duration * len as f64).clamp(0.0, len as f64);
+        let nearest = |ok: &dyn Fn(usize) -> bool, tolerance: f64| {
+            (prev + 1..len)
+                .filter(|&p| ok(p) && (p as f64 - target).abs() <= tolerance)
+                .min_by(|&a, &b| (a as f64 - target).abs().total_cmp(&(b as f64 - target).abs()))
+        };
+        let cut = nearest(&|p| after_mark(p, ends_sentence), SENTENCE_CUT_TOLERANCE_S * rate)
+            .or_else(|| nearest(&|p| after_mark(p, ends_clause), CLAUSE_CUT_TOLERANCE_S * rate))
+            .or_else(|| nearest(&word_start, f64::INFINITY))?;
+        cuts.push(cut);
+        prev = cut;
+    }
+    cuts.push(len);
+
+    let mut start = 0;
+    let mut out = Vec::with_capacity(cuts.len());
+    for cut in cuts {
+        let piece: String = chars[start..cut].iter().collect::<String>().trim().to_string();
+        if piece.is_empty() {
+            return None;
+        }
+        out.push(piece);
+        start = cut;
+    }
+    Some(out)
+}
+
 pub fn label_rows(rows: &[Option<RowSpan>], turns: &[Turn]) -> Vec<RowLabel> {
     rows.iter()
         .map(|row| {
@@ -229,6 +302,56 @@ mod tests {
     }
     fn span(s: f64, e: f64) -> Option<RowSpan> {
         Some(RowSpan { start_s: s, end_s: e })
+    }
+
+    fn split(text: &str, end_s: f64, changes: &[f64]) -> Option<Vec<String>> {
+        let mut bounds = vec![0.0];
+        bounds.extend_from_slice(changes);
+        bounds.push(end_s);
+        let pieces: Vec<Turn> = bounds.windows(2).enumerate().map(|(i, w)| turn(w[0], w[1], &format!("spk_{}", i % 2))).collect();
+        split_text_at_turns(text, RowSpan { start_s: 0.0, end_s }, &pieces)
+    }
+
+    #[test]
+    fn text_split_cuts_at_the_sentence_nearest_the_change() {
+        let text = "Hello there, how are you doing today? I am fine thanks for asking.";
+        assert_eq!(
+            split(text, 10.0, &[5.0]).unwrap(),
+            vec!["Hello there, how are you doing today?", "I am fine thanks for asking."]
+        );
+    }
+
+    #[test]
+    fn text_split_prefers_a_sentence_end_over_a_closer_comma() {
+        let text = "We should ship it, I think. Sure, let's do it.";
+        assert_eq!(split(text, 10.0, &[4.5]).unwrap(), vec!["We should ship it, I think.", "Sure, let's do it."]);
+    }
+
+    #[test]
+    fn text_split_falls_back_to_the_nearest_word_gap() {
+        let text = "one two three four five six seven eight";
+        assert_eq!(split(text, 10.0, &[5.0]).unwrap(), vec!["one two three four", "five six seven eight"]);
+    }
+
+    #[test]
+    fn text_split_handles_several_changes() {
+        let text = "First one here. Second one here. Third one here.";
+        assert_eq!(
+            split(text, 10.0, &[3.3, 6.7]).unwrap(),
+            vec!["First one here.", "Second one here.", "Third one here."]
+        );
+    }
+
+    #[test]
+    fn text_split_cuts_text_without_word_gaps_at_its_punctuation() {
+        assert_eq!(split("你好吗？我很好。", 4.0, &[2.0]).unwrap(), vec!["你好吗？", "我很好。"]);
+    }
+
+    #[test]
+    fn text_split_refuses_text_it_cannot_cut() {
+        assert_eq!(split("Yes.", 4.0, &[2.0]), None);
+        assert_eq!(split("", 4.0, &[2.0]), None);
+        assert_eq!(split("Only one piece.", 4.0, &[]), None);
     }
 
     #[test]

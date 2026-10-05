@@ -1,7 +1,7 @@
 //! Speaker identification jobs: one at a time, queued, cancellable.
 use super::assign::{
-    carry_over_names, fold_short_pieces, label_rows, RowLabel, RowSpan, CARRY_OVER_MIN_SIMILARITY,
-    MIN_TRANSCRIBED_PIECE_S,
+    carry_over_names, fold_short_pieces, label_rows, split_text_at_turns, RowLabel, RowSpan,
+    CARRY_OVER_MIN_SIMILARITY, MIN_TRANSCRIBED_PIECE_S,
 };
 use super::diarizer::{Diarization, DiarizeOptions, Diarizer};
 use super::models::{self, DownloadProgress};
@@ -15,6 +15,7 @@ use crate::audio::decoder::decode_audio_file;
 use crate::database::repositories::meeting::MeetingsRepository;
 use crate::database::repositories::speaker::{NewSpeaker, SpeakerWrite, SpeakersRepository, SplitRow};
 use crate::state::AppState;
+use crate::whisper_engine::WhisperCompiledBackend;
 use anyhow::{anyhow, Result};
 use once_cell::sync::Lazy;
 use serde::Serialize;
@@ -529,6 +530,7 @@ async fn transcripts_json_folder(pool: &SqlitePool, meeting_id: &str, fallback: 
 
 struct StoredRow {
     id: String,
+    text: String,
     span: Option<RowSpan>,
 }
 
@@ -537,7 +539,9 @@ struct RowUpdates {
     row_labels: Vec<(String, Option<String>)>,
     row_splits: Vec<(String, Vec<SplitRow>)>,
     pieces_done: usize,
-    /// Rows with a speaker change that kept their majority label because a piece failed.
+    /// Rows with a speaker change whose existing text was split.
+    text_splits: usize,
+    /// Rows with a speaker change that kept their majority label because they could not be cut.
     kept_whole: usize,
     warning: Option<String>,
 }
@@ -585,6 +589,31 @@ fn decide_row_update(majority: String, pieces: &[Turn], texts: &[String]) -> Row
     )
 }
 
+/// Re-transcribing the pieces of rows with a speaker change costs one engine call per piece, which
+/// is only quick on Parakeet or on Whisper with a GPU backend. Otherwise the existing text is split.
+fn engine_is_fast(provider: Option<&str>, whisper_backend: WhisperCompiledBackend) -> bool {
+    provider == Some("parakeet") || whisper_backend != WhisperCompiledBackend::Cpu
+}
+
+/// Splits a row's existing text among its pieces, after folding pieces too short to hold words.
+fn split_row_text(majority: String, text: &str, span: RowSpan, pieces: Vec<Turn>) -> RowDecision {
+    let pieces = fold_short_pieces(pieces, MIN_TRANSCRIBED_PIECE_S);
+    match split_text_at_turns(text, span, &pieces) {
+        Some(texts) => decide_row_update(majority, &pieces, &texts),
+        None => RowDecision::Whole(majority),
+    }
+}
+
+/// How rows with a speaker change are split.
+enum Splitter<'a> {
+    /// The recording's timing does not match the transcript: keep rows whole.
+    KeepWhole,
+    /// Split each row's existing text.
+    Text,
+    /// Re-transcribe each piece; rows whose pieces fail fall back to splitting their text.
+    Engine(&'a BatchEngine),
+}
+
 async fn meeting_exists(conn: &mut SqliteConnection, meeting_id: &str) -> Result<bool> {
     let found: Option<i64> = sqlx::query_scalar("SELECT 1 FROM meetings WHERE id = ?")
         .bind(meeting_id)
@@ -625,7 +654,7 @@ async fn run_identify<R: Runtime>(app: &AppHandle<R>, req: &IdentifyRequest) -> 
     let time_map = recording_time_map(read_metadata(&req.folder_path).as_ref(), decoded.native_rate, decoded.native_frames);
 
     let rows: Vec<StoredRow> = sqlx::query(
-        "SELECT id, audio_start_time, audio_end_time FROM transcripts WHERE meeting_id = ? ORDER BY audio_start_time",
+        "SELECT id, transcript, audio_start_time, audio_end_time FROM transcripts WHERE meeting_id = ? ORDER BY audio_start_time",
     )
     .bind(&meeting_id)
     .fetch_all(&pool)
@@ -635,6 +664,7 @@ async fn run_identify<R: Runtime>(app: &AppHandle<R>, req: &IdentifyRequest) -> 
         let (a, b): (Option<f64>, Option<f64>) = (r.get("audio_start_time"), r.get("audio_end_time"));
         StoredRow {
             id: r.get("id"),
+            text: r.get("transcript"),
             span: match (a, b) {
                 (Some(a), Some(b)) if b > a => Some(RowSpan { start_s: a, end_s: b }),
                 _ => None,
@@ -692,7 +722,15 @@ async fn run_identify<R: Runtime>(app: &AppHandle<R>, req: &IdentifyRequest) -> 
 
     let load_started = Instant::now();
     let mut batch_guard: Option<tokio::sync::OwnedMutexGuard<()>> = None;
-    let engine = if mixed_count > 0 && timing_ok {
+    let provider: Option<String> = sqlx::query_scalar("SELECT provider FROM transcript_settings WHERE id = '1'")
+        .fetch_optional(&pool)
+        .await
+        .unwrap_or_else(|e| {
+            log::warn!("Failed to read the transcription provider: {}", e);
+            None
+        });
+    let use_engine = engine_is_fast(provider.as_deref(), WhisperCompiledBackend::current());
+    let engine = if mixed_count > 0 && timing_ok && use_engine {
         yield_to_recording(app, req, 86).await?;
         if batch_engine_busy() {
             emit_progress(app, &meeting_id, "waiting", 86, "Waiting for another transcription to finish…");
@@ -710,26 +748,30 @@ async fn run_identify<R: Runtime>(app: &AppHandle<R>, req: &IdentifyRequest) -> 
         match crate::audio::retranscription::load_configured_engine(app).await {
             Ok(engine) => Some(engine),
             Err(e) => {
-                log::warn!("Cannot split rows with speaker changes, keeping majority labels: {:#}", e);
-                split_warning = Some("Lines with two speakers were kept whole: the transcription engine could not load".into());
+                log::warn!("Cannot re-transcribe rows with speaker changes, splitting their text instead: {:#}", e);
                 None
             }
         }
     } else {
         None
     };
+    let splitter = match &engine {
+        _ if !timing_ok => Splitter::KeepWhole,
+        Some(engine) => Splitter::Engine(engine),
+        None => Splitter::Text,
+    };
     let t_load = load_started.elapsed();
 
     let split_started = Instant::now();
     // Same language and translate setting as live transcription, so split text matches its rows.
     let language = crate::get_language_preference_internal();
-    let updates = build_row_updates(app, &meeting_id, &rows, labels, &samples, time_map, engine.as_ref(), mixed_count, language).await;
+    let updates = build_row_updates(app, &meeting_id, &rows, labels, &samples, time_map, splitter, mixed_count, language).await;
     // Unload on every exit from the split phase (success, piece failure or cancel).
     if let Some(engine) = &engine {
         unload_engine_after_batch(engine.is_parakeet()).await;
     }
     drop(batch_guard);
-    let RowUpdates { row_labels, row_splits, pieces_done, kept_whole, warning: piece_warning } = updates?;
+    let RowUpdates { row_labels, row_splits, pieces_done, text_splits, kept_whole, warning: piece_warning } = updates?;
     let t_split = split_started.elapsed();
     if is_cancelled() {
         return Err(Cancelled.into());
@@ -757,13 +799,14 @@ async fn run_identify<R: Runtime>(app: &AppHandle<R>, req: &IdentifyRequest) -> 
 
     let total = started.elapsed();
     log::info!(
-        "Identify job {}: {:.1}s audio | decode {:?} | diarize {:?} | engine load {:?} | split {} rows/{} pieces ({} kept whole) {:?} | save {:?} | total {:?} ({:.2}% of audio)",
+        "Identify job {}: {:.1}s audio | decode {:?} | diarize {:?} | engine load {:?} | split {} rows ({} by text)/{} pieces ({} kept whole) {:?} | save {:?} | total {:?} ({:.2}% of audio)",
         meeting_id,
         decoded_s,
         t_decode,
         t_diarize,
         t_load,
         mixed_count,
+        text_splits,
         pieces_done,
         kept_whole,
         t_split,
@@ -775,8 +818,8 @@ async fn run_identify<R: Runtime>(app: &AppHandle<R>, req: &IdentifyRequest) -> 
     Ok(IdentifyOutcome { speaker_count, warning: split_warning.or(piece_warning) })
 }
 
-/// Label every row and re-transcribe the pieces of rows with a clear speaker change. A piece
-/// that fails to transcribe or comes back empty leaves its row whole with the majority label.
+/// Label every row and split rows with a clear speaker change (see `Splitter`). A row that cannot
+/// be cut keeps its text and the majority label.
 #[allow(clippy::too_many_arguments)]
 async fn build_row_updates<R: Runtime>(
     app: &AppHandle<R>,
@@ -785,12 +828,18 @@ async fn build_row_updates<R: Runtime>(
     labels: Vec<RowLabel>,
     samples: &[f32],
     time_map: TimeMap,
-    engine: Option<&BatchEngine>,
+    splitter: Splitter<'_>,
     mixed_count: usize,
     language: Option<String>,
 ) -> Result<RowUpdates> {
-    let mut out =
-        RowUpdates { row_labels: Vec::new(), row_splits: Vec::new(), pieces_done: 0, kept_whole: 0, warning: None };
+    let mut out = RowUpdates {
+        row_labels: Vec::new(),
+        row_splits: Vec::new(),
+        pieces_done: 0,
+        text_splits: 0,
+        kept_whole: 0,
+        warning: None,
+    };
     let mut done_mixed = 0usize;
     for (row, label) in rows.iter().zip(labels) {
         if is_cancelled() {
@@ -808,31 +857,34 @@ async fn build_row_updates<R: Runtime>(
                     86 + (done_mixed * 10 / mixed_count.max(1)) as u32,
                     "Splitting lines with speaker changes…",
                 );
-                let Some(engine) = engine else {
+                let Some(span) = row.span.filter(|_| !matches!(splitter, Splitter::KeepWhole)) else {
                     out.row_labels.push((row.id.clone(), Some(majority)));
                     continue;
                 };
-                let Some(plan) = plan_row_pieces(pieces, time_map, samples.len()) else {
-                    out.row_labels.push((row.id.clone(), Some(majority)));
-                    continue;
+                let transcribed = match splitter {
+                    Splitter::Engine(engine) => Some(
+                        transcribe_row_pieces(
+                            engine,
+                            &row.id,
+                            majority.clone(),
+                            pieces.clone(),
+                            time_map,
+                            samples,
+                            &language,
+                            &mut out.pieces_done,
+                        )
+                        .await,
+                    ),
+                    _ => None,
                 };
-                let mut texts = Vec::with_capacity(plan.len());
-                for (_, range) in &plan {
-                    match engine.transcribe(samples[range.clone()].to_vec(), language.clone()).await {
-                        Ok(t) => texts.push(t),
-                        Err(e) => {
-                            log::warn!("Piece transcription failed for row {}, keeping majority label: {:#}", row.id, e);
-                            break;
-                        }
+                let decision = match transcribed {
+                    Some(split @ RowDecision::Split(_)) => split,
+                    _ => {
+                        out.text_splits += 1;
+                        split_row_text(majority, &row.text, span, pieces)
                     }
-                    out.pieces_done += 1;
-                    if texts.last().is_some_and(|t| t.trim().is_empty()) {
-                        log::warn!("A piece of row {} transcribed to no text, keeping majority label", row.id);
-                        break;
-                    }
-                }
-                let pieces: Vec<Turn> = plan.into_iter().map(|(p, _)| p).collect();
-                match decide_row_update(majority, &pieces, &texts) {
+                };
+                match decision {
                     RowDecision::Whole(label) => {
                         out.kept_whole += 1;
                         out.warning.get_or_insert_with(|| "Some lines with two speakers were kept whole".into());
@@ -844,6 +896,41 @@ async fn build_row_updates<R: Runtime>(
         }
     }
     Ok(out)
+}
+
+/// Re-transcribes each piece of a row with a speaker change. Whole when the row cannot be cut into
+/// pieces with audio, or a piece fails or comes back empty.
+#[allow(clippy::too_many_arguments)]
+async fn transcribe_row_pieces(
+    engine: &BatchEngine,
+    row_id: &str,
+    majority: String,
+    pieces: Vec<Turn>,
+    time_map: TimeMap,
+    samples: &[f32],
+    language: &Option<String>,
+    pieces_done: &mut usize,
+) -> RowDecision {
+    let Some(plan) = plan_row_pieces(pieces, time_map, samples.len()) else {
+        return RowDecision::Whole(majority);
+    };
+    let mut texts = Vec::with_capacity(plan.len());
+    for (_, range) in &plan {
+        match engine.transcribe(samples[range.clone()].to_vec(), language.clone()).await {
+            Ok(t) => texts.push(t),
+            Err(e) => {
+                log::warn!("Piece transcription failed for row {}, splitting its text instead: {:#}", row_id, e);
+                break;
+            }
+        }
+        *pieces_done += 1;
+        if texts.last().is_some_and(|t| t.trim().is_empty()) {
+            log::warn!("A piece of row {} transcribed to no text, splitting its text instead", row_id);
+            break;
+        }
+    }
+    let pieces: Vec<Turn> = plan.into_iter().map(|(p, _)| p).collect();
+    decide_row_update(majority, &pieces, &texts)
 }
 
 #[cfg(test)]
@@ -982,6 +1069,42 @@ mod tests {
             assert!(t.duration() >= MIN_TRANSCRIBED_PIECE_S);
             assert!(r.len() >= 16_000);
         }
+    }
+
+    #[test]
+    fn only_a_fast_engine_retranscribes_pieces() {
+        use crate::whisper_engine::WhisperCompiledBackend as B;
+        assert!(engine_is_fast(Some("parakeet"), B::Cpu));
+        assert!(!engine_is_fast(Some("localWhisper"), B::Cpu));
+        assert!(!engine_is_fast(None, B::Cpu));
+        assert!(engine_is_fast(Some("localWhisper"), B::Cuda));
+        assert!(engine_is_fast(None, B::Metal));
+    }
+
+    #[test]
+    fn row_text_is_split_at_the_speaker_change() {
+        let span = RowSpan { start_s: 10.0, end_s: 20.0 };
+        let pieces = vec![turn(10.0, 15.0, "spk_0"), turn(15.0, 20.0, "spk_1")];
+        let text = "Hello there, how are you doing today? I am fine thanks for asking.";
+        assert_eq!(
+            split_row_text("spk_0".into(), text, span, pieces),
+            RowDecision::Split(vec![
+                split_row("Hello there, how are you doing today?", 10.0, 15.0, "spk_0"),
+                split_row("I am fine thanks for asking.", 15.0, 20.0, "spk_1"),
+            ])
+        );
+    }
+
+    #[test]
+    fn row_text_split_folds_short_pieces_and_keeps_uncuttable_rows_whole() {
+        let span = RowSpan { start_s: 0.0, end_s: 10.0 };
+        let pieces = vec![turn(0.0, 5.0, "spk_0"), turn(5.0, 5.5, "spk_2"), turn(5.5, 10.0, "spk_1")];
+        let text = "Hello there, how are you doing today? I am fine thanks for asking.";
+        let RowDecision::Split(rows) = split_row_text("spk_0".into(), text, span, pieces.clone()) else {
+            panic!("expected a split");
+        };
+        assert_eq!(rows.iter().map(|r| r.speaker.as_str()).collect::<Vec<_>>(), vec!["spk_0", "spk_1"]);
+        assert_eq!(split_row_text("spk_1".into(), "Yes.", span, pieces), RowDecision::Whole("spk_1".into()));
     }
 
     #[test]

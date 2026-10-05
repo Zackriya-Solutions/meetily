@@ -46,7 +46,7 @@ recordings and on existing meetings.
 | Corrections | Merge a speaker into another; reassign a single row. |
 | Speaker count | Chosen per run (Auto or N) in the dialog. The automatic post-recording run uses Auto. |
 | Models | Downloaded on first need. Setting "Identify speakers after recording" defaults on. Not bundled. |
-| Mixed rows on Identify | Majority label. Rows with a clear mid-row change are split and only those pieces are re-transcribed. |
+| Mixed rows on Identify | Majority label. Rows with a clear mid-row change are split: only those pieces are re-transcribed on a fast engine (Parakeet or a GPU); otherwise the row's existing text is cut at the change (§5.2). |
 | Engine | pyannote segmentation-3.0 + CAM++ embeddings + agglomerative clustering, in Rust on the existing `ort`. |
 | Gate | New beta flag `speakerIdentification`, default on. |
 
@@ -189,11 +189,20 @@ running diarization job on the same meeting (cap 120 s), then proceeds either wa
 ### 5.2 Identify speakers (manual)
 
 1. Decode audio → `diarize` → assign rows.
-2. For mixed rows: cut the row's audio at the split points and re-transcribe each piece with the
-   configured local engine (Whisper or Parakeet, via the existing `get_or_init_*` helpers). If the
-   engine cannot load, fall back to majority labels with a warning. Pieces under 1 s join a
-   neighbour first (whisper.cpp returns no text for shorter input). If any piece fails or comes
-   back empty, the row stays whole with its majority label and counts toward the warning.
+2. For mixed rows (pieces under 1 s join a neighbour first):
+   - **Fast engine** (Parakeet, or Whisper built with a GPU backend): cut the row's audio at the
+     split points and re-transcribe each piece with the configured local engine (via the existing
+     `get_or_init_*` helpers). whisper.cpp returns no text for input under 1 s, hence the 1 s
+     floor.
+   - **Otherwise, or when the engine cannot load or a piece fails or comes back empty**: split the
+     row's existing text. Each cut goes where the speaker changes, estimated from the row's average
+     speaking rate, moved to the nearest sentence end within 2 s, else the nearest clause mark
+     within 1 s, else the nearest word gap (Chinese and Japanese text may be cut between
+     characters). Whisper large-v3 on CPU pays a full 30 s window per piece: a 62-minute meeting
+     with 26 mixed rows (85 pieces) would take tens of minutes, against milliseconds for the text
+     split.
+   - A row whose text cannot be cut into non-empty pieces stays whole with its majority label and
+     counts toward the warning.
 3. One transaction: update row speakers, replace split rows with their pieces, replace
    `meeting_speakers` (names carried over).
 4. Rewrite `transcripts.json`, emit `diarization-complete`. The frontend refetches.
