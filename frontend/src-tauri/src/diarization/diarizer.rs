@@ -1,5 +1,5 @@
 //! End-to-end diarization: segmentation → embeddings → clustering → turns.
-use super::cluster::{agglomerative, weighted_centroid, ClusterStop};
+use super::cluster::{cluster_speakers, weighted_centroid};
 use super::embedding::EmbeddingModel;
 use super::models::{EMBEDDING, SEGMENTATION};
 use super::reconstruct::{powerset_to_multilabel, reconstruct, smooth_turns, RawTurn, WindowActivity, NUM_LOCAL};
@@ -186,11 +186,8 @@ impl Diarizer {
             return Err(Cancelled.into());
         }
         let embeddings: Vec<Vec<f32>> = members_raw.iter().map(|m| m.2.clone()).collect();
-        let stop = match opts.num_speakers {
-            Some(n) => ClusterStop::Count(n.max(1)),
-            None => ClusterStop::Threshold(opts.threshold),
-        };
-        let labels = agglomerative(&embeddings, stop);
+        let weights: Vec<f64> = members_raw.iter().map(|m| m.3).collect();
+        let labels = cluster_speakers(&embeddings, &weights, opts.num_speakers, opts.threshold);
         let num_clusters = labels.iter().max().map(|m| m + 1).unwrap_or(0);
 
         let mut local_to_global = vec![[None; NUM_LOCAL]; activities.len()];

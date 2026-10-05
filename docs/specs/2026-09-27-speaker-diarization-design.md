@@ -89,8 +89,13 @@ speech_seconds }`.
    skipped for clustering and resolved in reconstruction.
 4. **Clustering** (`cluster.rs`): agglomerative, average linkage, cosine distance over
    L2-normalised embeddings. Auto: stop merging when the closest pair's cosine similarity drops
-   below τ (constant, starts at 0.5, tuned on the reference set). Given N: merge until N clusters
-   remain.
+   below τ (constant, starts at 0.5, tuned on the reference set). Clusters carrying less than
+   20 s of speech (summed over the overlapping windows, so roughly 5 s of actual speech) are
+   crosstalk or noise: their embeddings join the nearest larger cluster's centroid. Given N: tighten
+   τ in 0.05 steps (up to 0.95) until at least N clusters survive that folding, then merge the most
+   similar centroids down to N. Without the folding, a real 62-minute meeting with 7 people
+   produced 110 clusters at τ = 0.5 (71 of them single embeddings), and "N = 7" produced one
+   giant cluster plus crumbs.
 5. **Reconstruction** (`reconstruct.rs`): map each window's local speakers to global clusters,
    average per-frame activations across overlapping windows, pick the dominant speaker per frame,
    then merge into turns. Turns shorter than 0.3 s are absorbed into neighbours; gaps under 0.5 s

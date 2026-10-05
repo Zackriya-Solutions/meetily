@@ -136,6 +136,94 @@ pub fn agglomerative(embeddings: &[Vec<f32>], stop: ClusterStop) -> Vec<usize> {
         .collect()
 }
 
+/// A cluster carrying less speech than this (summed over the overlapping windows its embeddings
+/// come from, roughly four times the speech itself) is crosstalk or noise rather than a speaker.
+pub const MIN_SPEAKER_WEIGHT_S: f64 = 20.0;
+/// How far `cluster_speakers` tightens the threshold, step by step, to find more speakers.
+const MAX_COUNT_THRESHOLD: f32 = 0.95;
+const COUNT_THRESHOLD_STEP: f32 = 0.05;
+
+/// Groups speaker embeddings, each carrying `weights[i]` seconds of speech, into speakers.
+/// Average-linkage clusters below MIN_SPEAKER_WEIGHT_S join the nearest larger cluster. With
+/// `num_speakers`, the threshold is tightened until at least that many speakers emerge, and the
+/// most similar speakers are then merged down to the count. Labels are numbered 0.. in order of
+/// first occurrence.
+pub fn cluster_speakers(embeddings: &[Vec<f32>], weights: &[f64], num_speakers: Option<usize>, threshold: f32) -> Vec<usize> {
+    let Some(n) = num_speakers.map(|n| n.max(1)) else {
+        return fold_small_clusters(embeddings, weights, agglomerative(embeddings, ClusterStop::Threshold(threshold)));
+    };
+    let mut t = threshold;
+    let mut labels = fold_small_clusters(embeddings, weights, agglomerative(embeddings, ClusterStop::Threshold(t)));
+    while cluster_count(&labels) < n && t < MAX_COUNT_THRESHOLD {
+        t += COUNT_THRESHOLD_STEP;
+        labels = fold_small_clusters(embeddings, weights, agglomerative(embeddings, ClusterStop::Threshold(t)));
+    }
+    let k = cluster_count(&labels);
+    if k <= n {
+        return labels;
+    }
+    let centroids = cluster_centroids(embeddings, weights, &labels, k);
+    let merged = agglomerative(&centroids, ClusterStop::Count(n));
+    renumber(labels.into_iter().map(|l| merged[l]))
+}
+
+fn cluster_count(labels: &[usize]) -> usize {
+    labels.iter().max().map_or(0, |m| m + 1)
+}
+
+fn cluster_centroids(embeddings: &[Vec<f32>], weights: &[f64], labels: &[usize], k: usize) -> Vec<Vec<f32>> {
+    (0..k)
+        .map(|c| {
+            let (vs, ws): (Vec<&[f32]>, Vec<f64>) = labels
+                .iter()
+                .zip(embeddings.iter().zip(weights))
+                .filter(|(&l, _)| l == c)
+                .map(|(_, (e, &w))| (e.as_slice(), w))
+                .unzip();
+            weighted_centroid(&vs, &ws)
+        })
+        .collect()
+}
+
+/// Moves the members of clusters below MIN_SPEAKER_WEIGHT_S to the nearest larger cluster.
+/// When no cluster is large enough (very short audio), the clusters are kept as they are.
+fn fold_small_clusters(embeddings: &[Vec<f32>], weights: &[f64], labels: Vec<usize>) -> Vec<usize> {
+    let k = cluster_count(&labels);
+    let mut weight = vec![0f64; k];
+    for (&l, &w) in labels.iter().zip(weights) {
+        weight[l] += w;
+    }
+    let large: Vec<usize> = (0..k).filter(|&c| weight[c] >= MIN_SPEAKER_WEIGHT_S).collect();
+    if large.is_empty() || large.len() == k {
+        return labels;
+    }
+    let centroids = cluster_centroids(embeddings, weights, &labels, k);
+    let folded = labels.iter().enumerate().map(|(i, &l)| {
+        if weight[l] >= MIN_SPEAKER_WEIGHT_S {
+            return l;
+        }
+        *large
+            .iter()
+            .max_by(|&&a, &&b| {
+                cosine(&embeddings[i], &centroids[a])
+                    .partial_cmp(&cosine(&embeddings[i], &centroids[b]))
+                    .unwrap_or(Ordering::Equal)
+            })
+            .expect("at least one large cluster")
+    });
+    renumber(folded)
+}
+
+fn renumber(labels: impl Iterator<Item = usize>) -> Vec<usize> {
+    let mut relabel: HashMap<usize, usize> = HashMap::new();
+    labels
+        .map(|c| {
+            let next = relabel.len();
+            *relabel.entry(c).or_insert(next)
+        })
+        .collect()
+}
+
 /// Nearest-neighbour chain (O(n²) time and memory); used for up to MAX_CLUSTER_POINTS inputs.
 fn agglomerative_dense(embeddings: &[Vec<f32>], stop: ClusterStop) -> Vec<usize> {
     let n = embeddings.len();
@@ -313,6 +401,71 @@ mod tests {
         assert_eq!(labels, vec![0, 1, 1], "the NaN point stays in its own cluster");
         let c = weighted_centroid(&[&[f32::NAN, 0.0], &[1.0, 0.0]], &[1.0, 1.0]);
         assert!(c.iter().all(|x| x.is_finite()));
+    }
+
+    /// Three speakers with plenty of speech plus two stray snippets (crosstalk, noise) that
+    /// resemble nobody. Each speaker point carries 10 s of speech, each stray 1 s.
+    fn speakers_with_strays() -> (Vec<Vec<f32>>, Vec<f64>) {
+        let mut points = three_groups();
+        let mut weights = vec![10.0; points.len()];
+        points.push(vec![0.0, 0.0, 0.0, 1.0]);
+        points.push(vec![0.1, 0.0, 0.05, -1.0]);
+        weights.extend([1.0, 1.0]);
+        (points, weights)
+    }
+
+    #[test]
+    fn stray_snippets_join_the_nearest_speaker() {
+        let (points, weights) = speakers_with_strays();
+        let labels = cluster_speakers(&points, &weights, None, 0.5);
+        assert_eq!(labels.iter().max(), Some(&2), "{labels:?}");
+        assert_eq!(&labels[..12], &three_groups_labels());
+        assert_eq!(labels[13], labels[0], "the second stray leans towards the first speaker");
+    }
+
+    #[test]
+    fn exact_count_ignores_stray_snippets() {
+        let (points, weights) = speakers_with_strays();
+        let labels = cluster_speakers(&points, &weights, Some(3), 0.5);
+        assert_eq!(labels.iter().max(), Some(&2), "{labels:?}");
+        assert_eq!(&labels[..12], &three_groups_labels());
+    }
+
+    #[test]
+    fn exact_count_merges_the_closest_speakers() {
+        let (points, weights) = speakers_with_strays();
+        let labels = cluster_speakers(&points, &weights, Some(2), 0.5);
+        assert_eq!(labels.iter().max(), Some(&1), "{labels:?}");
+        let one = cluster_speakers(&points, &weights, Some(1), 0.5);
+        assert!(one.iter().all(|&l| l == 0));
+    }
+
+    #[test]
+    fn exact_count_splits_voices_the_threshold_would_join() {
+        // Two speakers whose voices are similar (cosine about 0.6) merge at threshold 0.5,
+        // but asking for two speakers keeps them apart.
+        let a = [1.0, 0.0, 0.0, 0.0];
+        let b = [0.6, 0.8, 0.0, 0.0];
+        let points: Vec<Vec<f32>> = (0..8).map(|i| around(if i % 2 == 0 { &a } else { &b }, 0.02, i)).collect();
+        let weights = vec![10.0; points.len()];
+        assert!(cluster_speakers(&points, &weights, None, 0.5).iter().all(|&l| l == 0));
+        let labels = cluster_speakers(&points, &weights, Some(2), 0.5);
+        for (i, &l) in labels.iter().enumerate() {
+            assert_eq!(l, i % 2, "{labels:?}");
+        }
+    }
+
+    #[test]
+    fn short_audio_with_only_small_clusters_keeps_them() {
+        let points = three_groups();
+        let weights = vec![1.0; points.len()];
+        assert_eq!(cluster_speakers(&points, &weights, None, 0.5), three_groups_labels());
+        assert!(cluster_speakers(&[], &[], None, 0.5).is_empty());
+        assert!(cluster_speakers(&[], &[], Some(2), 0.5).is_empty());
+    }
+
+    fn three_groups_labels() -> Vec<usize> {
+        (0..12).map(|i| i % 3).collect()
     }
 
     #[test]
