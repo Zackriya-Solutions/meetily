@@ -20,6 +20,9 @@ sudo dnf install gcc-c++ cmake git
 
 # Arch Linux
 sudo pacman -S base-devel cmake git
+
+# NixOS
+nix develop # or: nix-shell
 ```
 
 ### 2. Build and Run
@@ -177,6 +180,66 @@ hipcc --version     # Shows ROCm version
 
 # Build
 ./build-gpu.sh
+```
+
+---
+
+## ❄️ NixOS & Nix Flakes
+
+Meetily provides first-class Nix and NixOS support via Flakes and classic derivations.
+
+### Running with Nix Flakes
+
+Run Meetily without installing:
+
+```bash
+nix run github:Zackriya-Solutions/meetily
+```
+
+Or build the package locally:
+
+```bash
+nix build
+./result/bin/meetily
+```
+
+### Development Environment
+
+Enter a shell with all required toolchains and dependencies (Rust, Node.js, pnpm, WebKitGTK, GTK3, ALSA, OpenSSL, CMake, FFmpeg, etc.):
+
+```bash
+# Using Flakes
+nix develop
+
+# Or using classic nix-shell
+nix-shell
+```
+
+Once inside the shell, you can use `./dev-gpu.sh`, `./build-gpu.sh`, or `pnpm run tauri:dev` as usual.
+
+### NixOS Module Configuration
+
+Add Meetily to your NixOS configuration via Flake inputs:
+
+```nix
+{
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    meetily.url = "github:Zackriya-Solutions/meetily";
+  };
+
+  outputs = { self, nixpkgs, meetily, ... }: {
+    nixosConfigurations.myhostname = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        meetily.nixosModules.default
+        {
+          programs.meetily.enable = true;
+        }
+      ];
+    };
+  };
+}
 ```
 
 ---
