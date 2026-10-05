@@ -133,6 +133,19 @@ pnpm install --frozen-lockfile
 ./build-gpu.sh
 ```
 
+**Nix / NixOS:**
+
+```bash
+# Run directly with Flakes
+nix run github:Zackriya-Solutions/meetily
+
+# Or build locally
+nix build
+./result/bin/meetily
+```
+
+For more details, see [Building on Linux](docs/building_in_linux.md).
+
 ## Key Features in Action
 
 ### 🎯 Local Transcription
