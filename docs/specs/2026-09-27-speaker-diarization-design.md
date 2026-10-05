@@ -111,8 +111,11 @@ unit-testable.
 
 - **Row labels**: each transcript row gets the speaker with the largest time overlap. A row with
   no overlap takes the nearest turn within 1 s, otherwise NULL.
-- **Mixed-row detection**: a row is "mixed" when its second-largest speaker covers ≥ 1.5 s **and**
-  ≥ 30 % of the row. Its split points are the turn boundaries inside it.
+- **Mixed-row detection**: the row's turns are folded so fragments under 1.5 s join a neighbour.
+  The row is "mixed" when more than one speaker still has a turn in it; those turns are its pieces.
+  An earlier rule also required the second speaker to cover ≥ 30 % of the row: on a real meeting
+  with ~23 s rows it skipped 56 of 70 rows with a clear second speaker (a 5–8 s reply is under
+  30 %).
 - **Carry-over**: greedy one-to-one matching of new centroids to the meeting's previous centroids
   by cosine similarity, highest first, accepting pairs ≥ 0.6. Matched speakers inherit
   `display_name`.

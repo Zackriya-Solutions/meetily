@@ -5,8 +5,9 @@ use crate::api::TranscriptSegment;
 use crate::audio::vad::SpeechSegment;
 use std::collections::HashMap;
 
+/// Shortest turn that counts as another speaker inside a row; shorter fragments are usually
+/// diarization noise and join a neighbour.
 pub const MIXED_MIN_SECONDS: f64 = 1.5;
-pub const MIXED_MIN_FRACTION: f64 = 0.3;
 pub const NEAREST_TURN_MAX_GAP_S: f64 = 1.0;
 pub const MIN_PIECE_S: f64 = 0.3;
 /// Shortest piece sent to a transcription engine when a row or segment is cut at speaker
@@ -110,7 +111,6 @@ pub fn fold_short_pieces(pieces: Vec<Turn>, min_s: f64) -> Vec<Turn> {
     merged
 }
 
-/// Label each row (None = row has no audio timing) by majority overlap.
 /// How far (in seconds of the row's average speaking rate) a text cut may move from the
 /// estimated speaker change to land on a sentence end, or on a clause mark.
 const SENTENCE_CUT_TOLERANCE_S: f64 = 2.0;
@@ -184,6 +184,9 @@ pub fn split_text_at_turns(text: &str, span: RowSpan, pieces: &[Turn]) -> Option
     Some(out)
 }
 
+/// Label each row (None = row has no audio timing) by majority overlap. A row is mixed when, after
+/// folding fragments shorter than MIXED_MIN_SECONDS into their neighbours, more than one speaker
+/// still has a turn in it; those turns are its pieces.
 pub fn label_rows(rows: &[Option<RowSpan>], turns: &[Turn]) -> Vec<RowLabel> {
     rows.iter()
         .map(|row| {
@@ -194,16 +197,9 @@ pub fn label_rows(rows: &[Option<RowSpan>], turns: &[Turn]) -> Vec<RowLabel> {
                     .map(|t| RowLabel::Single(t.key.clone()))
                     .unwrap_or(RowLabel::Unlabeled);
             };
-            let row_len = (span.end_s - span.start_s).max(f64::EPSILON);
-            let mixed = totals
-                .get(1)
-                .map(|(_, s)| *s >= MIXED_MIN_SECONDS && *s / row_len >= MIXED_MIN_FRACTION)
-                .unwrap_or(false);
-            if mixed {
-                let pieces = pieces_for_span(span, turns);
-                if pieces.len() > 1 {
-                    return RowLabel::Mixed { majority: majority.clone(), pieces };
-                }
+            let pieces = fold_short_pieces(pieces_for_span(span, turns), MIXED_MIN_SECONDS);
+            if pieces.len() > 1 {
+                return RowLabel::Mixed { majority: majority.clone(), pieces };
             }
             RowLabel::Single(majority.clone())
         })
@@ -379,9 +375,38 @@ mod tests {
     }
 
     #[test]
-    fn second_speaker_must_be_long_and_a_large_share() {
-        // 2 s of spk_1 inside a 10 s row: ≥ 1.5 s but only 20 % → single.
-        let turns = vec![turn(0.0, 8.0, "spk_0"), turn(8.0, 10.0, "spk_1")];
+    fn a_short_reply_in_a_long_row_marks_it_mixed() {
+        // 5.7 s of spk_3 at the end of a 24 s row (24 %) is a real turn.
+        let turns = vec![turn(70.0, 88.8, "spk_0"), turn(88.8, 94.5, "spk_3")];
+        match &label_rows(&[span(70.7, 94.5)], &turns)[0] {
+            RowLabel::Mixed { majority, pieces } => {
+                assert_eq!(majority, "spk_0");
+                assert_eq!(pieces.iter().map(|p| p.key.as_str()).collect::<Vec<_>>(), vec!["spk_0", "spk_3"]);
+            }
+            other => panic!("expected mixed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn every_turn_of_a_busy_row_becomes_a_piece() {
+        let turns = vec![turn(20.4, 22.3, "spk_1"), turn(22.3, 24.7, "spk_2"), turn(24.7, 32.9, "spk_3"), turn(32.9, 47.8, "spk_0")];
+        let RowLabel::Mixed { majority, pieces } = &label_rows(&[span(20.4, 47.8)], &turns)[0] else {
+            panic!("expected mixed");
+        };
+        assert_eq!(majority, "spk_0");
+        assert_eq!(pieces.iter().map(|p| p.key.as_str()).collect::<Vec<_>>(), vec!["spk_1", "spk_2", "spk_3", "spk_0"]);
+    }
+
+    #[test]
+    fn scattered_blips_of_another_voice_do_not_mark_a_row_mixed() {
+        // spk_1 totals 2 s, but in 1 s fragments: no turn of its own.
+        let turns = vec![
+            turn(0.0, 3.0, "spk_0"),
+            turn(3.0, 4.0, "spk_1"),
+            turn(4.0, 7.0, "spk_0"),
+            turn(7.0, 8.0, "spk_1"),
+            turn(8.0, 10.0, "spk_0"),
+        ];
         assert_eq!(label_rows(&[span(0.0, 10.0)], &turns), vec![RowLabel::Single("spk_0".into())]);
     }
 
