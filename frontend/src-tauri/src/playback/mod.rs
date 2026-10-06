@@ -21,7 +21,7 @@ pub struct PlaybackSource {
 
 const NO_RECORDING: &str = "This meeting has no recording";
 
-/// The meeting's audio file, found in the folder stored for it.
+/// The meeting's audio file, found in the folder stored for it, with symlinks resolved.
 pub(crate) async fn meeting_audio_path(pool: &SqlitePool, meeting_id: &str) -> Result<PathBuf, String> {
     let folder: Option<Option<String>> = sqlx::query_scalar("SELECT folder_path FROM meetings WHERE id = ?")
         .bind(meeting_id)
@@ -32,7 +32,10 @@ pub(crate) async fn meeting_audio_path(pool: &SqlitePool, meeting_id: &str) -> R
         .ok_or_else(|| "Meeting not found".to_string())?
         .filter(|f| !f.trim().is_empty())
         .ok_or_else(|| NO_RECORDING.to_string())?;
-    crate::audio::retranscription::find_audio_file(Path::new(&folder)).map_err(|_| NO_RECORDING.to_string())
+    let audio =
+        crate::audio::retranscription::find_audio_file(Path::new(&folder)).map_err(|_| NO_RECORDING.to_string())?;
+    // The asset protocol checks its scope against the resolved path, so grant and serve that one.
+    std::fs::canonicalize(&audio).map_err(|_| NO_RECORDING.to_string())
 }
 
 /// `encodeURIComponent`: everything except A-Z a-z 0-9 - _ . ! ~ * ' ( ) as %XX of its UTF-8 bytes.
@@ -135,6 +138,21 @@ mod tests {
         seed_meeting(&pool, "m", &[]).await;
         set_folder(&pool, "m", dir.path()).await;
         assert_eq!(meeting_audio_path(&pool, "m").await.unwrap(), dir.path().join("audio.wav"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn audio_path_is_resolved_through_symlinks() {
+        let real = tempfile::tempdir().unwrap();
+        write_wav(&real.path().join("audio.wav"), 16_000, 1, &[0.0; 1600]);
+        let links = tempfile::tempdir().unwrap();
+        let link = links.path().join("link");
+        std::os::unix::fs::symlink(real.path(), &link).unwrap();
+        let pool = migrated_pool().await;
+        seed_meeting(&pool, "m", &[]).await;
+        set_folder(&pool, "m", &link).await;
+        let expected = std::fs::canonicalize(real.path().join("audio.wav")).unwrap();
+        assert_eq!(meeting_audio_path(&pool, "m").await.unwrap(), expected);
     }
 
     #[tokio::test]
