@@ -1,5 +1,5 @@
 //! End-to-end diarization: segmentation → embeddings → clustering → turns.
-use super::cluster::{cluster_centroids, cluster_speakers};
+use super::cluster::{cluster_centroids, cluster_speakers, nearest_centroid};
 use super::embedding::EmbeddingModel;
 use super::models::{EMBEDDING, SEGMENTATION};
 use super::reconstruct::{powerset_to_multilabel, reconstruct, smooth_turns, RawTurn, WindowActivity, NUM_LOCAL};
@@ -16,8 +16,8 @@ pub const WINDOW_STEP_S: f64 = 2.5;
 pub const MIN_EMBED_S: f64 = 0.5;
 /// A pause this long inside one local speaker's speech starts a new stretch, embedded on its own.
 pub const SPLIT_GAP_S: f64 = 0.5;
-/// Clean speech a stretch needs to be embedded on its own; shorter ones join a neighbour. Shorter
-/// stretches give off-centre embeddings that can add up to a speaker who does not exist.
+/// Clean speech a stretch needs to be embedded on its own; shorter ones join a neighbour, whose
+/// speaker they take. Shorter stretches give off-centre embeddings and cost more time.
 pub const MIN_STRETCH_S: f64 = 1.5;
 pub const MIN_TURN_S: f64 = 0.3;
 pub const MAX_GAP_S: f64 = 0.5;
@@ -178,11 +178,39 @@ impl Diarizer {
         }
         let seg_done = started.elapsed();
 
-        // 2. One embedding per stretch of a local speaker with enough clean speech (40–90 %).
+        // 2. Embeddings (40–90 %). Speakers are found from one embedding per (window, local
+        // speaker) with enough clean speech. segmentation-3.0 can give one local speaker to two
+        // people either side of a pause, so a local speaker split at pauses also gets one embedding
+        // per stretch, and each stretch goes to the nearest speaker found. Stretches never add
+        // speakers: short ones give off-centre embeddings that would.
         // Each frame's slice is centred on the frame, where `reconstruct` places it.
         let half_gap = geo.frame_size.saturating_sub(geo.frame_shift) / 2;
         let frames_for = |seconds: f64| (seconds * geo.sample_rate as f64 / geo.frame_shift as f64).ceil() as usize;
-        let mut members_raw: Vec<(usize, usize, usize, Vec<f32>, f64)> = Vec::new();
+        let seconds = |frames: usize| frames as f64 * geo.frame_shift as f64 / geo.sample_rate as f64;
+        let mut embed = |w: usize, clean: &[usize]| -> Result<Option<Vec<f32>>> {
+            let mut audio = Vec::with_capacity(clean.len() * geo.frame_shift);
+            for &i in clean {
+                let a = starts[w] + i * geo.frame_shift + half_gap;
+                if a >= samples.len() {
+                    break;
+                }
+                audio.extend_from_slice(&samples[a..(a + geo.frame_shift).min(samples.len())]);
+            }
+            if audio.len() < (MIN_EMBED_S * geo.sample_rate as f64) as usize {
+                return Ok(None);
+            }
+            let emb = self.embedding.embed(&audio)?;
+            // The embedding model can emit NaN on odd input; such vectors would poison clustering.
+            if emb.is_empty() || !emb.iter().all(|x| x.is_finite()) || emb.iter().all(|&x| x == 0.0) {
+                log::debug!("Skipping non-finite or empty speaker embedding (window {w})");
+                return Ok(None);
+            }
+            Ok(Some(emb))
+        };
+        // (window, local speaker, embedding, clean seconds), clustered into speakers.
+        let mut members_raw: Vec<(usize, usize, Vec<f32>, f64)> = Vec::new();
+        // (member, first frame, the stretch's own embedding when its local speaker was split).
+        let mut stretches_raw: Vec<(usize, usize, Option<Vec<f32>>)> = Vec::new();
         for (w, activity) in activities.iter().enumerate() {
             if cancelled() {
                 return Err(Cancelled.into());
@@ -194,31 +222,22 @@ impl Diarizer {
                     .filter(|(_, f)| f[local] > 0.5)
                     .map(|(i, f)| (i, f.iter().sum::<f32>() < 1.5))
                     .collect();
-                for stretch in speaker_stretches(&frames, frames_for(SPLIT_GAP_S), frames_for(MIN_STRETCH_S)) {
+                let clean: Vec<usize> = frames.iter().filter(|&&(_, c)| c).map(|&(i, _)| i).collect();
+                if seconds(clean.len()) < MIN_EMBED_S {
+                    continue;
+                }
+                let Some(emb) = embed(w, &clean)? else { continue };
+                let member = members_raw.len();
+                members_raw.push((w, local, emb, seconds(clean.len())));
+                let stretches = speaker_stretches(&frames, frames_for(SPLIT_GAP_S), frames_for(MIN_STRETCH_S));
+                if let [only] = stretches.as_slice() {
+                    stretches_raw.push((member, only.start, None));
+                    continue;
+                }
+                for stretch in stretches {
                     let clean: Vec<usize> =
                         frames.iter().filter(|&&(i, c)| c && stretch.contains(&i)).map(|&(i, _)| i).collect();
-                    let clean_s = clean.len() as f64 * geo.frame_shift as f64 / geo.sample_rate as f64;
-                    if clean_s < MIN_EMBED_S {
-                        continue;
-                    }
-                    let mut audio = Vec::with_capacity(clean.len() * geo.frame_shift);
-                    for i in clean {
-                        let a = starts[w] + i * geo.frame_shift + half_gap;
-                        if a >= samples.len() {
-                            break;
-                        }
-                        audio.extend_from_slice(&samples[a..(a + geo.frame_shift).min(samples.len())]);
-                    }
-                    if audio.len() < (MIN_EMBED_S * geo.sample_rate as f64) as usize {
-                        continue;
-                    }
-                    let emb = self.embedding.embed(&audio)?;
-                    // The embedding model can emit NaN on odd input; such vectors would poison clustering.
-                    if emb.is_empty() || !emb.iter().all(|x| x.is_finite()) || emb.iter().all(|&x| x == 0.0) {
-                        log::debug!("Skipping non-finite or empty speaker embedding (window {w}, local {local})");
-                        continue;
-                    }
-                    members_raw.push((w, local, stretch.start, emb, clean_s));
+                    stretches_raw.push((member, stretch.start, embed(w, &clean)?));
                 }
             }
             progress(40 + ((w + 1) * 50 / activities.len()) as u32);
@@ -233,12 +252,15 @@ impl Diarizer {
         if cancelled() {
             return Err(Cancelled.into());
         }
-        let embeddings: Vec<Vec<f32>> = members_raw.iter().map(|m| m.3.clone()).collect();
-        let weights: Vec<f64> = members_raw.iter().map(|m| m.4).collect();
+        let embeddings: Vec<Vec<f32>> = members_raw.iter().map(|m| m.2.clone()).collect();
+        let weights: Vec<f64> = members_raw.iter().map(|m| m.3).collect();
         let labels = cluster_speakers(&embeddings, &weights, opts.num_speakers, opts.threshold);
+        let centroids = cluster_centroids(&embeddings, &weights, &labels, labels.iter().max().map_or(0, |m| m + 1));
 
         let mut local_to_global: Vec<[Vec<(usize, usize)>; NUM_LOCAL]> = vec![Default::default(); activities.len()];
-        for ((w, local, first, _, _), &label) in members_raw.iter().zip(&labels) {
+        for (member, first, emb) in &stretches_raw {
+            let (w, local, _, _) = &members_raw[*member];
+            let label = emb.as_ref().map_or(labels[*member], |e| nearest_centroid(e, &centroids));
             local_to_global[*w][*local].push((*first, label));
         }
         let windows: Vec<WindowActivity> = activities

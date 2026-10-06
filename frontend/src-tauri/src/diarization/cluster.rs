@@ -196,6 +196,15 @@ pub(crate) fn cluster_centroids(embeddings: &[Vec<f32>], weights: &[f64], labels
         .collect()
 }
 
+/// Index of the centroid most similar to `embedding`.
+pub fn nearest_centroid(embedding: &[f32], centroids: &[Vec<f32>]) -> usize {
+    (0..centroids.len())
+        .max_by(|&a, &b| {
+            cosine(embedding, &centroids[a]).partial_cmp(&cosine(embedding, &centroids[b])).unwrap_or(Ordering::Equal)
+        })
+        .unwrap_or(0)
+}
+
 /// Moves the members of clusters below MIN_SPEAKER_WEIGHT_S to the nearest larger cluster.
 /// When no cluster is large enough (very short audio), the clusters are kept as they are.
 fn fold_small_clusters(embeddings: &[Vec<f32>], weights: &[f64], labels: Vec<usize>) -> Vec<usize> {
@@ -347,6 +356,13 @@ mod tests {
             v.push(around(&c, 0.05, i));
         }
         v
+    }
+
+    #[test]
+    fn nearest_centroid_picks_the_most_similar() {
+        let centroids = vec![vec![1.0, 0.0, 0.0], vec![0.0, 1.0, 0.0], vec![0.0, 0.0, 1.0]];
+        assert_eq!(nearest_centroid(&[0.1, 0.2, 0.9], &centroids), 2);
+        assert_eq!(nearest_centroid(&[0.8, 0.3, 0.0], &centroids), 0);
     }
 
     #[test]
