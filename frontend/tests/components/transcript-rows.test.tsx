@@ -52,3 +52,48 @@ describe('transcript rows', () => {
     expect(calls).toHaveLength(4);
   });
 });
+
+describe('play from a line', () => {
+  test('clicking timestamp plays from row start', async () => {
+    const onPlayFrom = mock((_startS: number) => {});
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<VirtualizedTranscriptView segments={segments} onPlayFrom={onPlayFrom} disableAutoScroll totalCount={4} />);
+    });
+    const play = renderer.root.find((n) => n.type === 'button' && n.props['aria-label'] === 'Play from 00:02');
+    await act(async () => { play.props.onClick(); });
+    expect(onPlayFrom).toHaveBeenCalledWith(2);
+  });
+
+  test('only rows whose active state changes rerender', async () => {
+    const calls: string[] = [];
+    const renderSpeaker: RenderSpeaker = (_key, id) => {
+      calls.push(id);
+      return null;
+    };
+    const onPlayFrom = () => {};
+    const view = (activeSegmentId: string) => (
+      <VirtualizedTranscriptView segments={segments} renderSpeaker={renderSpeaker} onPlayFrom={onPlayFrom}
+        activeSegmentId={activeSegmentId} disableAutoScroll totalCount={4} />
+    );
+    let renderer!: ReactTestRenderer;
+    const activeRows = () => renderer.root
+      .findAll((n) => n.type === 'div' && n.props['aria-current'] === 'true')
+      .map((n) => n.props.id);
+    await act(async () => { renderer = create(view('t1')); });
+    expect(activeRows()).toEqual(['segment-t1']);
+    calls.length = 0;
+    await act(async () => { renderer.update(view('t2')); });
+    expect(calls.sort()).toEqual(['t1', 't2']);
+    expect(activeRows()).toEqual(['segment-t2']);
+  });
+
+  test('rows without onPlayFrom render plain timestamps', async () => {
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<VirtualizedTranscriptView segments={segments} disableAutoScroll totalCount={4} />);
+    });
+    expect(renderer.root.findAll((n) => n.type === 'button' && String(n.props['aria-label']).startsWith('Play from'))).toHaveLength(0);
+    expect(renderer.root.findAll((n) => n.type === 'span' && n.props.children === '[00:02]')).toHaveLength(1);
+  });
+});

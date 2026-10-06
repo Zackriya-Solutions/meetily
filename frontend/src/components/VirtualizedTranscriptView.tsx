@@ -39,6 +39,12 @@ export interface VirtualizedTranscriptViewProps {
      *  a hover-only compact control on the other rows of a run so any single row can be reassigned.
      *  Keep it stable: rows re-render when it changes. */
     renderSpeaker?: RenderSpeaker;
+    /** Row playing now: highlighted and kept in view. Null when playback is not followed. */
+    activeSegmentId?: string | null;
+    /** Plays the recording from a row's start; rows then show their timestamp as a play button. Keep it stable. */
+    onPlayFrom?: (startS: number) => void;
+    /** Called when the user scrolls the transcript. */
+    onManualScroll?: () => void;
 }
 
 export type RenderSpeaker = (speakerKey: string | null, transcriptId: string, isRunStart: boolean) => React.ReactNode;
@@ -81,6 +87,8 @@ const TranscriptSegment = memo(function TranscriptSegment({
     speakerKey = null,
     speakerRunStart = false,
     renderSpeaker,
+    isActive = false,
+    onPlayFrom,
 }: {
     id: string;
     timestamp: number;
@@ -91,20 +99,41 @@ const TranscriptSegment = memo(function TranscriptSegment({
     speakerKey?: string | null;
     speakerRunStart?: boolean;
     renderSpeaker?: RenderSpeaker;
+    /** Only the rows whose value flips re-render while playback moves. */
+    isActive?: boolean;
+    onPlayFrom?: (startS: number) => void;
 }) {
     const displayText = cleanStopWords(text) || (text.trim() === '' ? '[Silence]' : text);
     // Speaker chip (run start) or compact speaker control (other rows of a run); null when there is none
     const speakerSlot = renderSpeaker?.(speakerKey, id, speakerRunStart) ?? null;
+    const time = formatRecordingTime(timestamp);
 
     return (
-        <div id={`segment-${id}`} className="mb-3 group">
+        <div
+            id={`segment-${id}`}
+            aria-current={isActive ? 'true' : undefined}
+            className={`mb-3 group rounded ${isActive ? 'bg-blue-50 ring-1 ring-blue-100' : ''}`}
+        >
             <div className="flex items-start gap-2">
                 <Tooltip>
-                    <TooltipTrigger>
-                        <span className="text-xs text-gray-400 mt-1 flex-shrink-0 min-w-[50px]">
-                            {formatRecordingTime(timestamp)}
-                        </span>
-                    </TooltipTrigger>
+                    {onPlayFrom ? (
+                        <TooltipTrigger asChild>
+                            <button
+                                type="button"
+                                aria-label={`Play from ${time.slice(1, -1)}`}
+                                className="text-xs text-gray-400 hover:text-blue-600 mt-1 flex-shrink-0 min-w-[50px] text-left"
+                                onClick={() => onPlayFrom(timestamp)}
+                            >
+                                {time}
+                            </button>
+                        </TooltipTrigger>
+                    ) : (
+                        <TooltipTrigger>
+                            <span className="text-xs text-gray-400 mt-1 flex-shrink-0 min-w-[50px]">
+                                {time}
+                            </span>
+                        </TooltipTrigger>
+                    )}
                     <TooltipContent>
                         {confidence !== undefined && showConfidence && (
                             <ConfidenceIndicator confidence={confidence} showIndicator={showConfidence} />
@@ -145,6 +174,9 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
     loadedCount = 0,
     onLoadMore,
     renderSpeaker,
+    activeSegmentId = null,
+    onPlayFrom,
+    onManualScroll,
 }) => {
     // Create scroll ref first - shared between virtualizer and auto-scroll hook
     const scrollRef = useRef<HTMLDivElement>(null);
@@ -173,9 +205,11 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
         segments,
         isRecording,
         isPaused,
+        activeSegmentId: activeSegmentId ?? undefined,
         virtualizer,
         virtualizationThreshold: VIRTUALIZATION_THRESHOLD,
         disableAutoScroll,
+        onManualScroll,
     });
 
     // Streaming text effect hook (typewriter animation for new transcripts)
@@ -320,6 +354,8 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                         speakerKey={segment.speaker ?? null}
                                         speakerRunStart={isSpeakerRunStart(segments, virtualRow.index)}
                                         renderSpeaker={renderSpeaker}
+                                        isActive={segment.id === activeSegmentId}
+                                        onPlayFrom={onPlayFrom}
                                     />
                                 </div>
                             );
@@ -379,6 +415,8 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                         speakerKey={segment.speaker ?? null}
                                         speakerRunStart={isSpeakerRunStart(segments, index)}
                                         renderSpeaker={renderSpeaker}
+                                        isActive={segment.id === activeSegmentId}
+                                        onPlayFrom={onPlayFrom}
                                     />
                                 </motion.div>
                             );

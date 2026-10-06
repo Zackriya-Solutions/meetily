@@ -3,13 +3,14 @@
 import { TranscriptView } from '@/components/TranscriptView';
 import { MeetingSpeaker, Person, SpeakerJobStatus, Transcript, TranscriptSegmentData } from '@/types';
 import { rowSpeakerControl } from '@/lib/speakers';
+import { followAlong, needsMoreRows, rowIndexAtTime, type FollowState } from '@/lib/playback';
 import { convertTranscriptsToSegments } from '@/hooks/usePaginatedTranscripts';
 import { SpeakerChip } from '@/components/Speakers/SpeakerChip';
 import { SpeakerBar } from '@/components/Speakers/SpeakerBar';
 import { SpeakerJobBanner } from '@/components/Speakers/SpeakerJobBanner';
 import { usePlayback } from '@/hooks/usePlayback';
 import { PlayerBar } from './PlayerBar';
-import { useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { VirtualizedTranscriptView, type RenderSpeaker } from '@/components/VirtualizedTranscriptView';
 import { TranscriptButtonGroup } from './TranscriptButtonGroup';
 
@@ -94,8 +95,33 @@ export function TranscriptPanel({
   // The recording plays in the panel; meetings without a folder have no audio.
   const playback = usePlayback(meetingId ?? null, !isRecording && !!meetingId && !!meetingFolderPath);
 
-  // Stable for a given speakerTools (which leaves out the job), so the memoised rows skip
-  // re-rendering while the list scrolls or a speaker job reports progress.
+  // Handlers read the latest controls through this ref, so they keep their identity while the
+  // clock moves and the memoised rows do not re-render.
+  const playbackRef = useRef(playback);
+  playbackRef.current = playback;
+
+  // Follow along: the row playing now is highlighted and kept in view until the user scrolls away.
+  const [follow, setFollow] = useState<FollowState>({ following: true, showBack: false });
+  useEffect(() => {
+    if (!playback.playing) setFollow((state) => followAlong(state, 'paused'));
+  }, [playback.playing]);
+  const activeIndex = playback.playing ? rowIndexAtTime(convertedSegments, playback.clockS) : -1;
+  const activeSegmentId = follow.following && activeIndex >= 0 ? convertedSegments[activeIndex].id : null;
+  const onPlayFrom = useCallback((startS: number) => {
+    setFollow((state) => followAlong(state, 'play-from-row'));
+    playbackRef.current.playFrom(startS);
+  }, []);
+  const onManualScroll = useCallback(() => {
+    if (playbackRef.current.playing) setFollow((state) => followAlong(state, 'manual-scroll'));
+  }, []);
+  // Playback past the last loaded row loads the next page.
+  const needsMore = playback.playing && needsMoreRows(convertedSegments, playback.clockS, !!hasMore);
+  useEffect(() => {
+    if (needsMore && !isLoadingMore) onLoadMore?.();
+  }, [needsMore, isLoadingMore, onLoadMore, convertedSegments.length]);
+
+  // Stable for a given speakerTools (which leaves out the job and the clock), so the memoised
+  // rows skip re-rendering while the list scrolls, a job reports progress or playback moves.
   const renderSpeaker = useCallback<RenderSpeaker>((speakerKey, transcriptId, isRunStart) => {
     if (!speakerTools) return null;
     const control = rowSpeakerControl(speakerKey, isRunStart, speakerTools.editable);
@@ -152,7 +178,7 @@ export function TranscriptPanel({
       )}
 
       {/* Transcript content - use virtualized view for better performance */}
-      <div className="flex-1 overflow-hidden pb-4">
+      <div className="relative flex-1 overflow-hidden pb-4">
         <VirtualizedTranscriptView
           segments={convertedSegments}
           isRecording={isRecording}
@@ -168,7 +194,19 @@ export function TranscriptPanel({
           loadedCount={loadedCount}
           onLoadMore={onLoadMore}
           renderSpeaker={speakerTools ? renderSpeaker : undefined}
+          activeSegmentId={activeSegmentId}
+          onPlayFrom={playback.ready ? onPlayFrom : undefined}
+          onManualScroll={onManualScroll}
         />
+        {follow.showBack && playback.playing && (
+          <button
+            type="button"
+            className="absolute bottom-6 left-1/2 -translate-x-1/2 rounded-full bg-blue-600 px-3 py-1 text-xs font-medium text-white shadow hover:bg-blue-700"
+            onClick={() => setFollow((state) => followAlong(state, 'back'))}
+          >
+            Back to playback
+          </button>
+        )}
       </div>
 
       <PlayerBar playback={playback} />

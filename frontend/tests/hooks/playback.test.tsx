@@ -236,6 +236,7 @@ describe('usePlayback', () => {
     let release!: () => void;
     renderGate = new Promise<void>((resolve) => { release = resolve; });
     audio.ended = true;
+    audio.paused = true;
     await act(async () => { audio.emit('ended'); });
     await act(async () => { controls.seek(70); });
     renderResult = () => new ArrayBuffer(44); // past the end of the file
@@ -243,6 +244,35 @@ describe('usePlayback', () => {
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, CLIP_SEEK_DELAY_MS + 50)); });
     await settle();
     expect(controls.playing).toBe(false);
+  });
+
+  test('the first toggle after a clip render error starts playback', async () => {
+    FakeAudio.canPlay = '';
+    const audio = await mount();
+    renderResult = () => { throw new Error('render failed'); };
+    await act(async () => { controls.playFrom(0); });
+    await settle();
+    expect(controls.error).not.toBeNull();
+    expect(controls.playing).toBe(false);
+    renderResult = fullClip;
+    await act(async () => { controls.toggle(); });
+    await settle();
+    expect(audio.paused).toBe(false);
+    expect(controls.playing).toBe(true);
+  });
+
+  test('a seek after a media error does not start playback', async () => {
+    FakeAudio.canPlay = '';
+    const audio = await mount();
+    await act(async () => { controls.playFrom(0); });
+    await settle();
+    expect(clipStarts()).toHaveLength(1);
+    audio.error = { code: 3 };
+    await act(async () => { audio.emit('error'); });
+    expect(controls.error).not.toBeNull();
+    await act(async () => { controls.seek(20); });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, CLIP_SEEK_DELAY_MS + 50)); });
+    expect(clipStarts()).toHaveLength(1);
   });
 
   test('play from with stop pauses at the end', async () => {

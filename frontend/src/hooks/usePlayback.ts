@@ -151,6 +151,7 @@ export function usePlayback(meetingId: string | null, enabled: boolean): Playbac
     } catch (e) {
       if (id !== loadIdRef.current) return;
       loadingRef.current = false;
+      wantPlayRef.current = false;
       setError(errorMessage(e, 'Failed to play the recording'));
       setPlaying(false);
     }
@@ -317,6 +318,7 @@ export function usePlayback(meetingId: string | null, enabled: boolean): Playbac
         if (wantPlayRef.current && src) void loadClipAt(clockToFile(src.time_table, clockRef.current), true);
         return;
       }
+      wantPlayRef.current = false;
       setError('The recording could not be played');
       setPlaying(false);
     };
