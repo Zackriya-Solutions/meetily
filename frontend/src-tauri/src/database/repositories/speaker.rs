@@ -479,7 +479,11 @@ impl SpeakersRepository {
         let (name, link) = if b.display_name.is_some() { (&b.display_name, &b.link) } else { (&a.display_name, &a.link) };
         let suggestion = if b.link.has_suggestion() { &b.link } else { &a.link };
         let own_person = suggestion.suggested_person_id.is_some() && suggestion.suggested_person_id == link.person_id;
-        let suggestion = if link.name_source == Some(NameSource::User) || own_person {
+        let rejections = PeopleRepository::rejections_conn(&mut tx, meeting_id).await?;
+        let rejected_by_either = suggestion.suggested_person_id.as_ref().is_some_and(|p| {
+            [from, into].iter().any(|k| rejections.contains(&((*k).to_string(), p.clone())))
+        });
+        let suggestion = if link.name_source == Some(NameSource::User) || own_person || rejected_by_either {
             SpeakerLink::default()
         } else {
             suggestion.clone()
@@ -1009,6 +1013,40 @@ mod tests {
         assert_eq!(s.link.name_source, Some(NameSource::Voice));
         assert!(!s.link.has_suggestion(), "a suggestion of its own person says nothing");
         assert!(rejected(&pool).await.is_empty(), "spk_0 is Noah, so it cannot reject Noah");
+    }
+
+    #[tokio::test]
+    async fn merge_drops_a_suggestion_the_target_rejected() {
+        let pool = seeded().await;
+        seed_person(&pool, "person-noah", "Noah").await;
+        write(
+            &pool,
+            vec![
+                NewSpeaker { key: "spk_0".into(), embedding: vec![1.0, 0.0], speech_seconds: 3.0, ..Default::default() },
+                NewSpeaker {
+                    key: "spk_1".into(),
+                    embedding: vec![0.0, 1.0],
+                    speech_seconds: 1.0,
+                    link: SpeakerLink {
+                        suggested_person_id: Some("person-noah".into()),
+                        suggested_name: Some("Noah".into()),
+                        suggestion_source: Some(SuggestionSource::Voice),
+                        suggestion_reason: Some("voice match 0.68".into()),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            ],
+        )
+        .await;
+        let mut conn = pool.acquire().await.unwrap();
+        PeopleRepository::add_rejection_conn(&mut conn, M, "spk_0", "person-noah").await.unwrap();
+        drop(conn);
+
+        SpeakersRepository::merge(&pool, M, "spk_1", "spk_0").await.unwrap();
+
+        assert!(!one(&pool, "spk_0").await.link.has_suggestion());
+        assert_eq!(rejected(&pool).await, HashSet::from([("spk_0".to_string(), "person-noah".to_string())]));
     }
 
     #[tokio::test]
