@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
-import type { MeetingMetadata, PaginatedTranscriptsResponse } from '../../src/types';
+import type { MeetingMetadata, PaginatedTranscriptsResponse, Transcript } from '../../src/types';
 
 const originalCore = { ...await import('@tauri-apps/api/core') };
 type Request = {
@@ -14,7 +14,7 @@ const invoke = mock((command: string, args: Record<string, unknown>) => new Prom
   requests.push({ command, args, resolve, reject });
 }));
 mock.module('@tauri-apps/api/core', () => ({ ...originalCore, invoke }));
-const { usePaginatedTranscripts } = await import('../../src/hooks/usePaginatedTranscripts');
+const { convertTranscriptsToSegments, usePaginatedTranscripts } = await import('../../src/hooks/usePaginatedTranscripts');
 afterAll(() => mock.module('@tauri-apps/api/core', () => originalCore));
 
 let state: ReturnType<typeof usePaginatedTranscripts>;
@@ -154,5 +154,18 @@ describe('paginated transcript request ownership', () => {
     renderer = undefined;
     await resolve(stale, metadata('A'));
     expect(requests).toHaveLength(1);
+  });
+});
+
+describe('rows for the transcript view', () => {
+  test('a row that kept two speakers is marked mixed', () => {
+    const rows: Transcript[] = [
+      { id: 'a', text: 'hi', timestamp: '10:00:00', audio_start_time: 1, audio_end_time: 2, speaker: 'spk_0' },
+      { id: 'b', text: 'yes and so', timestamp: '10:00:02', audio_start_time: 2, audio_end_time: 9, speaker: 'spk_1', speaker_mixed: true },
+    ];
+    const [plain, mixed] = convertTranscriptsToSegments(rows);
+    expect('speakerMixed' in plain).toBe(false);
+    expect(mixed.speakerMixed).toBe(true);
+    expect(mixed.speaker).toBe('spk_1');
   });
 });

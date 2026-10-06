@@ -162,6 +162,8 @@ pub struct SpeakerWrite {
     pub speakers: Vec<NewSpeaker>,
     /// (transcript id, new speaker key or NULL)
     pub row_labels: Vec<(String, Option<String>)>,
+    /// Ids from `row_labels` whose row kept two speakers (marked `speaker_mixed`).
+    pub mixed_rows: Vec<String>,
     /// (transcript id, replacement rows)
     pub row_splits: Vec<(String, Vec<SplitRow>)>,
 }
@@ -688,8 +690,9 @@ impl SpeakersRepository {
             .await?;
         }
         for (id, key) in &write.row_labels {
-            sqlx::query("UPDATE transcripts SET speaker = ? WHERE meeting_id = ? AND id = ?")
+            sqlx::query("UPDATE transcripts SET speaker = ?, speaker_mixed = ? WHERE meeting_id = ? AND id = ?")
                 .bind(key)
+                .bind(write.mixed_rows.iter().any(|m| m == id))
                 .bind(meeting_id)
                 .bind(id)
                 .execute(&mut *conn)
@@ -1205,6 +1208,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rows_kept_whole_are_marked_mixed() {
+        use crate::database::repositories::meeting::MeetingsRepository;
+        let pool = seeded().await;
+        let mut conn = pool.acquire().await.unwrap();
+        SpeakersRepository::replace_for_meeting(
+            &mut conn,
+            M,
+            &SpeakerWrite {
+                row_labels: vec![("t1".into(), Some("spk_0".into())), ("t2".into(), Some("spk_1".into()))],
+                mixed_rows: vec!["t2".into()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        drop(conn);
+        let (rows, _) = MeetingsRepository::get_meeting_transcripts_paginated(&pool, M, 10, 0).await.unwrap();
+        let flags: Vec<(String, bool)> = rows.iter().map(|t| (t.id.clone(), t.speaker_mixed)).collect();
+        assert_eq!(flags, vec![("t1".to_string(), false), ("t2".to_string(), true), ("t3".to_string(), false)]);
+
+        // A later run that labels the row without a speaker change clears the mark.
+        let mut conn = pool.acquire().await.unwrap();
+        SpeakersRepository::replace_for_meeting(
+            &mut conn,
+            M,
+            &SpeakerWrite { row_labels: vec![("t2".into(), Some("spk_1".into()))], ..Default::default() },
+        )
+        .await
+        .unwrap();
+        drop(conn);
+        let (rows, _) = MeetingsRepository::get_meeting_transcripts_paginated(&pool, M, 10, 0).await.unwrap();
+        assert!(!rows[1].speaker_mixed);
+    }
+
+    #[tokio::test]
     async fn replace_updates_labels_and_splits_rows() {
         let pool = seeded().await;
         let mut conn = pool.acquire().await.unwrap();
@@ -1221,6 +1259,7 @@ mod tests {
                         SplitRow { text: "e".into(), start_s: 5.0, end_s: 6.0, speaker: "spk_0".into() },
                     ],
                 )],
+                ..Default::default()
             },
         )
         .await

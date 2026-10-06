@@ -17,6 +17,8 @@ export interface Transcript {
   audio_end_time?: number;   // Seconds from recording start (e.g., 128.6)
   duration?: number;          // Segment duration in seconds (e.g., 3.3)
   speaker?: string | null;
+  /** Identify kept this row whole although it holds a speaker change */
+  speaker_mixed?: boolean;
 }
 
 export interface TranscriptUpdate {
@@ -143,6 +145,8 @@ export interface TranscriptSegmentData {
   text: string;
   confidence?: number;
   speaker?: string | null;
+  /** The row holds two speakers under its majority label; speaker samples skip it */
+  speakerMixed?: boolean;
 }
 
 export type NameSource = 'user' | 'voice' | 'conversation';

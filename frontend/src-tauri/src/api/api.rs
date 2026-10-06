@@ -140,6 +140,8 @@ pub struct MeetingTranscript {
     pub duration: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speaker: Option<String>,
+    #[serde(default)]
+    pub speaker_mixed: bool,
 }
 
 /// Meeting metadata without transcripts (for pagination)
@@ -911,6 +913,7 @@ pub async fn api_get_meeting_transcripts<R: Runtime>(
                     audio_end_time: t.audio_end_time,
                     duration: t.duration,
                     speaker: t.speaker,
+                    speaker_mixed: t.speaker_mixed,
                 })
                 .collect::<Vec<_>>();
 

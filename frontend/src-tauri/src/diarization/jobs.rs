@@ -783,6 +783,7 @@ struct StoredRow {
 }
 
 /// Labels and splits produced for the stored rows.
+#[derive(Default)]
 struct RowUpdates {
     row_labels: Vec<(String, Option<String>)>,
     row_splits: Vec<(String, Vec<SplitRow>)>,
@@ -791,6 +792,16 @@ struct RowUpdates {
     text_splits: usize,
     /// Rows with a speaker change that kept their majority label because they could not be cut.
     kept_whole: usize,
+    /// Every row labelled whole although it holds a speaker change.
+    mixed_rows: Vec<String>,
+}
+
+impl RowUpdates {
+    /// A row with a speaker change that stays one row: majority label, marked mixed.
+    fn label_mixed_row(&mut self, row_id: &str, majority: String) {
+        self.row_labels.push((row_id.to_string(), Some(majority)));
+        self.mixed_rows.push(row_id.to_string());
+    }
 }
 
 /// The 16 kHz sample range of each piece of a row with a speaker change. Pieces come from
@@ -990,7 +1001,7 @@ async fn run_identify<R: Runtime>(app: &AppHandle<R>, req: &IdentifyRequest) -> 
         unload_engine_after_batch(engine.is_parakeet()).await;
     }
     drop(batch_guard);
-    let RowUpdates { row_labels, row_splits, pieces_done, text_splits, kept_whole } = updates?;
+    let RowUpdates { row_labels, row_splits, pieces_done, text_splits, kept_whole, mixed_rows } = updates?;
     let t_split = split_started.elapsed();
     if is_cancelled() {
         return Err(Cancelled.into());
@@ -1009,7 +1020,7 @@ async fn run_identify<R: Runtime>(app: &AppHandle<R>, req: &IdentifyRequest) -> 
     // Previous names are read inside the transaction, so a rename committed meanwhile is kept.
     let speakers = speaker_write_names(&mut tx, &meeting_id, &diarization, remember_voices).await?;
     let speaker_count = speakers.len();
-    SpeakersRepository::replace_for_meeting(&mut tx, &meeting_id, &SpeakerWrite { speakers, row_labels, row_splits }).await?;
+    SpeakersRepository::replace_for_meeting(&mut tx, &meeting_id, &SpeakerWrite { speakers, row_labels, row_splits, mixed_rows }).await?;
     tx.commit().await?;
     drop(conn);
     rewrite_transcripts_json(&pool, &meeting_id, Some(&req.folder_path)).await;
@@ -1051,7 +1062,7 @@ async fn build_row_updates<R: Runtime>(
     mixed_count: usize,
     language: Option<String>,
 ) -> Result<RowUpdates> {
-    let mut out = RowUpdates { row_labels: Vec::new(), row_splits: Vec::new(), pieces_done: 0, text_splits: 0, kept_whole: 0 };
+    let mut out = RowUpdates::default();
     let mut done_mixed = 0usize;
     for (row, label) in rows.iter().zip(labels) {
         if is_cancelled() {
@@ -1070,7 +1081,7 @@ async fn build_row_updates<R: Runtime>(
                     "Splitting lines with speaker changes…",
                 );
                 let Some(span) = row.span.filter(|_| !matches!(splitter, Splitter::KeepWhole)) else {
-                    out.row_labels.push((row.id.clone(), Some(majority)));
+                    out.label_mixed_row(&row.id, majority);
                     continue;
                 };
                 let transcribed = match splitter {
@@ -1087,7 +1098,7 @@ async fn build_row_updates<R: Runtime>(
                     Some(split) => out.row_splits.push((row.id.clone(), split)),
                     None => {
                         out.kept_whole += 1;
-                        out.row_labels.push((row.id.clone(), Some(majority)));
+                        out.label_mixed_row(&row.id, majority);
                     }
                 }
             }
@@ -1241,6 +1252,15 @@ mod tests {
         assert_eq!(split_rows(&pieces, &texts), None);
         let texts = vec![String::new(), "general kenobi".to_string()];
         assert_eq!(split_rows(&pieces, &texts), None);
+    }
+
+    #[test]
+    fn rows_kept_whole_keep_the_majority_and_are_marked_mixed() {
+        let mut out = RowUpdates::default();
+        out.label_mixed_row("r1", "spk_0".to_string());
+        assert_eq!(out.row_labels, vec![("r1".to_string(), Some("spk_0".to_string()))]);
+        assert_eq!(out.mixed_rows, vec!["r1".to_string()]);
+        assert!(out.row_splits.is_empty());
     }
 
     #[test]
