@@ -83,6 +83,12 @@ describe('speaker samples', () => {
     expect(chooseSpeakerSample([row('x', 'spk_3', 5)], 'spk_3')).toBeNull();
     expect(chooseSpeakerSample(rows, 'spk_2')).toBeNull();
   });
+
+  test('rows that kept two speakers are never sampled', () => {
+    const mixed: TranscriptSegmentData = { ...row('m', 'spk_0', 50, 80), speakerMixed: true };
+    expect(chooseSpeakerSample([...rows, mixed], 'spk_0')).toEqual({ startS: 20, endS: 26 });
+    expect(chooseSpeakerSample([mixed], 'spk_0')).toBeNull();
+  });
 });
 
 describe('clip fallback', () => {

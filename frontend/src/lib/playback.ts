@@ -64,14 +64,17 @@ export function needsMoreRows(rows: ReadonlyArray<{ timestamp: number; endTime?:
 
 export const SAMPLE_SECONDS = 8;
 
-/** Up to SAMPLE_SECONDS from the start of the speaker's longest row. */
+/**
+ * Up to SAMPLE_SECONDS from the start of the speaker's longest row with a single speaker: rows
+ * that kept two speakers under the majority label are skipped.
+ */
 export function chooseSpeakerSample(
   rows: ReadonlyArray<TranscriptSegmentData>,
   speakerKey: string,
 ): { startS: number; endS: number } | null {
   let best: { startS: number; endS: number } | null = null;
   for (const row of rows) {
-    if (row.speaker !== speakerKey || row.endTime === undefined || row.endTime <= row.timestamp) continue;
+    if (row.speaker !== speakerKey || row.speakerMixed || row.endTime === undefined || row.endTime <= row.timestamp) continue;
     if (!best || row.endTime - row.timestamp > best.endS - best.startS) {
       best = { startS: row.timestamp, endS: row.endTime };
     }

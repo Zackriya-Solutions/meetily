@@ -23,6 +23,8 @@ interface SpeakerChipProps {
   onReassign: (transcriptId: string, key: string | null) => Promise<void>;
   onConfirm: (key: string) => Promise<void>;
   onReject: (key: string) => Promise<void>;
+  /** Plays a sample of the speaker; only full chips show the button. Stable. */
+  onPlaySample?: (key: string) => void;
 }
 
 function SpeakerOptionButtons({ speakers, names, ariaPrefix, onPick }: {
@@ -64,6 +66,7 @@ function SpeakerChipImpl({
   onReassign,
   onConfirm,
   onReject,
+  onPlaySample,
 }: SpeakerChipProps) {
   const [open, setOpen] = useState(false);
   const label = speakerLabel(speakerKey, names);
@@ -89,6 +92,7 @@ function SpeakerChipImpl({
       editable={editable}
       onConfirm={() => void run(() => onConfirm(speakerKey), 'Failed to confirm the name')}
       onReject={() => void run(() => onReject(speakerKey), 'Failed to reject the name')}
+      onPlaySample={onPlaySample ? () => onPlaySample(speakerKey) : undefined}
     />
   );
   if (!editable) return compact ? chip : <span className="inline-flex items-center gap-1">{chip}{badge}</span>;

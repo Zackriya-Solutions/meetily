@@ -19,6 +19,7 @@ import {
 } from '@/lib/summary-language-preferences';
 import { parseSummaryContent, readSummaryMetadata } from '@/lib/summary-content';
 import { fetchSpeakerNames, formatTranscriptLine } from '@/lib/speakers';
+import { fetchAllMeetingTranscripts } from '@/lib/transcripts';
 
 async function resolveSummaryLanguage(
   meetingId: string,
@@ -402,34 +403,10 @@ export function useSummaryGeneration({
     updateMeetingTitle,
   ]);
 
-  // Helper function to fetch ALL transcripts for summary generation
+  // Every row for summary generation, not only the loaded pages
   const fetchAllTranscripts = useCallback(async (meetingId: string): Promise<Transcript[]> => {
     try {
-      console.log('📊 Fetching all transcripts for meeting:', meetingId);
-
-      // First, get total count by fetching first page
-      const firstPage = await invokeTauri('api_get_meeting_transcripts', {
-        meetingId,
-        limit: 1,
-        offset: 0,
-      }) as { transcripts: Transcript[]; total_count: number; has_more: boolean };
-
-      const totalCount = firstPage.total_count;
-      console.log(`📊 Total transcripts in database: ${totalCount}`);
-
-      if (totalCount === 0) {
-        return [];
-      }
-
-      // Fetch all transcripts in one call
-      const allData = await invokeTauri('api_get_meeting_transcripts', {
-        meetingId,
-        limit: totalCount,
-        offset: 0,
-      }) as { transcripts: Transcript[]; total_count: number; has_more: boolean };
-
-      console.log(`✅ Fetched ${allData.transcripts.length} transcripts from database`);
-      return allData.transcripts;
+      return await fetchAllMeetingTranscripts(meetingId);
     } catch (error) {
       console.error('❌ Error fetching all transcripts:', error);
       toast.error('Failed to fetch transcripts for summary generation');

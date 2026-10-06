@@ -118,3 +118,21 @@ describe('chip name states', () => {
     expect(renderer.root.findAll((n) => n.type === 'button')).toHaveLength(0);
   });
 });
+
+describe('speaker samples', () => {
+  test('sample button plays the speaker', async () => {
+    const onPlaySample = mock((_key: string) => {});
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<SpeakerChip {...base} speakerKey="spk_1" speakers={speakers} names={{ spk_1: 'Ana' }} onPlaySample={onPlaySample} />);
+    });
+    await act(async () => { button(renderer, 'Play a sample of Ana').props.onClick(); });
+    expect(onPlaySample).toHaveBeenCalledWith('spk_1');
+
+    // The compact dot inside a run has no sample button.
+    await act(async () => {
+      renderer.update(<SpeakerChip {...base} compact speakerKey="spk_1" speakers={speakers} names={{ spk_1: 'Ana' }} onPlaySample={onPlaySample} />);
+    });
+    expect(buttons(renderer, 'Play a sample of Ana')).toHaveLength(0);
+  });
+});

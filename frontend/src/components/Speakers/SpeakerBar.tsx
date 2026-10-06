@@ -20,6 +20,7 @@ interface SpeakerBarProps {
   onReject: (key: string) => Promise<void>;
   /** Asks the summary model for names said in the conversation. */
   onGuessNames?: () => Promise<void>;
+  onPlaySample?: (key: string) => void;
 }
 
 function RenameButton({ speaker, names, people, onRename }: { speaker: MeetingSpeaker; names: Record<string, string>; people: Person[]; onRename: SpeakerBarProps['onRename'] }) {
@@ -54,7 +55,7 @@ async function attempt(action: () => Promise<void>, failure: string) {
   }
 }
 
-export function SpeakerBar({ speakers, names, editable, people, onRename, onConfirm, onReject, onGuessNames }: SpeakerBarProps) {
+export function SpeakerBar({ speakers, names, editable, people, onRename, onConfirm, onReject, onGuessNames, onPlaySample }: SpeakerBarProps) {
   // Shares come from the rows each speaker has now, so reassignments show up; speakers left
   // without rows are hidden.
   const present = speakers.filter((s) => s.row_count > 0);
@@ -74,6 +75,7 @@ export function SpeakerBar({ speakers, names, editable, people, onRename, onConf
               editable={editable}
               onConfirm={() => void attempt(() => onConfirm(s.speaker_key), 'Failed to confirm the name')}
               onReject={() => void attempt(() => onReject(s.speaker_key), 'Failed to reject the name')}
+              onPlaySample={onPlaySample ? () => onPlaySample(s.speaker_key) : undefined}
             />
             <span className="text-gray-400">{Math.round((s.row_seconds / total) * 100)}%</span>
           </span>

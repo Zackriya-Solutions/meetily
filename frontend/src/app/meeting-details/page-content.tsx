@@ -6,7 +6,7 @@ import { useSidebar } from '@/components/Sidebar/SidebarProvider';
 import Analytics from '@/lib/analytics';
 import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
-import { TranscriptPanel, type SpeakerTools } from '@/components/MeetingDetails/TranscriptPanel';
+import { TranscriptPanel, type SpeakerToolsInput } from '@/components/MeetingDetails/TranscriptPanel';
 import { useMeetingSpeakers } from '@/hooks/useMeetingSpeakers';
 import { usePeople } from '@/hooks/usePeople';
 import { decideAutoGuessNames, isWaitingForSpeakers } from '@/lib/speakerNaming';
@@ -194,7 +194,7 @@ export default function PageContent({
   );
   // Stable references let the memoised transcript rows skip re-rendering while the list scrolls;
   // the job stays out because it changes on every progress event.
-  const speakerTools = useMemo<SpeakerTools>(() => ({
+  const speakerTools = useMemo<SpeakerToolsInput>(() => ({
     speakers,
     names: speakerNames,
     people,

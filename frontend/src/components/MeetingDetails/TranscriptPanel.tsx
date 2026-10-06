@@ -1,9 +1,9 @@
 "use client";
 
-import { TranscriptView } from '@/components/TranscriptView';
 import { MeetingSpeaker, Person, SpeakerJobStatus, Transcript, TranscriptSegmentData } from '@/types';
 import { rowSpeakerControl } from '@/lib/speakers';
-import { followAlong, needsMoreRows, rowIndexAtTime, type FollowState } from '@/lib/playback';
+import { chooseSpeakerSample, followAlong, needsMoreRows, rowIndexAtTime, type FollowState } from '@/lib/playback';
+import { fetchAllMeetingTranscripts } from '@/lib/transcripts';
 import { convertTranscriptsToSegments } from '@/hooks/usePaginatedTranscripts';
 import { SpeakerChip } from '@/components/Speakers/SpeakerChip';
 import { SpeakerBar } from '@/components/Speakers/SpeakerBar';
@@ -11,6 +11,7 @@ import { SpeakerJobBanner } from '@/components/Speakers/SpeakerJobBanner';
 import { usePlayback } from '@/hooks/usePlayback';
 import { PlayerBar } from './PlayerBar';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { toast } from 'sonner';
 import { VirtualizedTranscriptView, type RenderSpeaker } from '@/components/VirtualizedTranscriptView';
 import { TranscriptButtonGroup } from './TranscriptButtonGroup';
 
@@ -31,8 +32,12 @@ export interface SpeakerTools {
   onStartIdentify: (numSpeakers: number | null) => Promise<void>;
   /** Queues the naming stage; progress shows in the job banner. */
   onGuessNames: () => Promise<void>;
+  /** Plays a few seconds of the speaker's longest line. */
+  onPlaySample: (key: string) => void;
 }
 
+/** What the meeting page provides; the panel adds the sample player, which it owns. */
+export type SpeakerToolsInput = Omit<SpeakerTools, 'onPlaySample'>;
 
 interface TranscriptPanelProps {
   transcripts: Transcript[];
@@ -57,7 +62,7 @@ interface TranscriptPanelProps {
   meetingFolderPath?: string | null;
   onRefetchTranscripts?: () => Promise<void>;
 
-  speakerTools?: SpeakerTools;
+  speakerTools?: SpeakerToolsInput;
   /** Kept out of speakerTools: it changes on every progress event, and the rows must not. */
   speakerJob?: SpeakerJobStatus | null;
 }
@@ -120,29 +125,58 @@ export function TranscriptPanel({
     if (needsMore && !isLoadingMore) onLoadMore?.();
   }, [needsMore, isLoadingMore, onLoadMore, convertedSegments.length]);
 
+  // Samples need every row (the view only holds the loaded pages): fetched on the first sample,
+  // again after speakers change.
+  const allRowsRef = useRef<TranscriptSegmentData[] | null>(null);
+  const speakerList = speakerTools?.speakers;
+  useEffect(() => {
+    allRowsRef.current = null;
+  }, [speakerList]);
+  const playSample = useCallback(async (key: string) => {
+    if (!meetingId) return;
+    try {
+      const rows = allRowsRef.current ?? convertTranscriptsToSegments(await fetchAllMeetingTranscripts(meetingId));
+      allRowsRef.current = rows;
+      const sample = chooseSpeakerSample(rows, key);
+      if (!sample) {
+        toast.info('No line of this speaker to play');
+        return;
+      }
+      playbackRef.current.playFrom(sample.startS, sample.endS);
+    } catch (error) {
+      console.error('Failed to play a speaker sample:', error);
+      toast.error('Failed to play a sample');
+    }
+  }, [meetingId]);
+  const tools = useMemo<SpeakerTools | undefined>(
+    () => speakerTools && { ...speakerTools, onPlaySample: (key: string) => { void playSample(key); } },
+    [speakerTools, playSample],
+  );
+
   // Stable for a given speakerTools (which leaves out the job and the clock), so the memoised
   // rows skip re-rendering while the list scrolls, a job reports progress or playback moves.
   const renderSpeaker = useCallback<RenderSpeaker>((speakerKey, transcriptId, isRunStart) => {
-    if (!speakerTools) return null;
-    const control = rowSpeakerControl(speakerKey, isRunStart, speakerTools.editable);
+    if (!tools) return null;
+    const control = rowSpeakerControl(speakerKey, isRunStart, tools.editable);
     if (!control) return null;
     return (
       <SpeakerChip
         compact={control.compact}
         speakerKey={control.speakerKey}
         transcriptId={transcriptId}
-        speakers={speakerTools.speakers}
-        names={speakerTools.names}
-        editable={speakerTools.editable}
-        people={speakerTools.people}
-        onRename={speakerTools.onRename}
-        onMerge={speakerTools.onMerge}
-        onReassign={speakerTools.onReassign}
-        onConfirm={speakerTools.onConfirm}
-        onReject={speakerTools.onReject}
+        speakers={tools.speakers}
+        names={tools.names}
+        editable={tools.editable}
+        people={tools.people}
+        onRename={tools.onRename}
+        onMerge={tools.onMerge}
+        onReassign={tools.onReassign}
+        onConfirm={tools.onConfirm}
+        onReject={tools.onReject}
+        onPlaySample={playback.ready ? tools.onPlaySample : undefined}
       />
     );
-  }, [speakerTools]);
+  }, [tools, playback.ready]);
 
   return (
     <div className="flex h-full min-w-0 w-full bg-white flex-col relative @container">
@@ -155,24 +189,25 @@ export function TranscriptPanel({
           meetingId={meetingId}
           meetingFolderPath={meetingFolderPath}
           onRefetchTranscripts={onRefetchTranscripts}
-          onIdentifySpeakers={speakerTools?.onStartIdentify}
-          hasSpeakers={(speakerTools?.speakers.length ?? 0) > 0}
+          onIdentifySpeakers={tools?.onStartIdentify}
+          hasSpeakers={(tools?.speakers.length ?? 0) > 0}
           speakerJobActive={!!speakerJob}
         />
       </div>
 
-      {speakerTools && (
+      {tools && (
         <>
-          <SpeakerJobBanner job={speakerJob} onCancel={() => void speakerTools.onCancelJob()} />
+          <SpeakerJobBanner job={speakerJob} onCancel={() => void tools.onCancelJob()} />
           <SpeakerBar
-            speakers={speakerTools.speakers}
-            names={speakerTools.names}
-            editable={speakerTools.editable}
-            people={speakerTools.people}
-            onRename={speakerTools.onRename}
-            onConfirm={speakerTools.onConfirm}
-            onReject={speakerTools.onReject}
-            onGuessNames={speakerTools.onGuessNames}
+            speakers={tools.speakers}
+            names={tools.names}
+            editable={tools.editable}
+            people={tools.people}
+            onRename={tools.onRename}
+            onConfirm={tools.onConfirm}
+            onReject={tools.onReject}
+            onGuessNames={tools.onGuessNames}
+            onPlaySample={playback.ready ? tools.onPlaySample : undefined}
           />
         </>
       )}
@@ -193,7 +228,7 @@ export function TranscriptPanel({
           totalCount={totalCount}
           loadedCount={loadedCount}
           onLoadMore={onLoadMore}
-          renderSpeaker={speakerTools ? renderSpeaker : undefined}
+          renderSpeaker={tools ? renderSpeaker : undefined}
           activeSegmentId={activeSegmentId}
           onPlayFrom={playback.ready ? onPlayFrom : undefined}
           onManualScroll={onManualScroll}
