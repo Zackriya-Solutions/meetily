@@ -38,8 +38,17 @@ pub fn powerset_to_multilabel(scores: &[[f32; 7]]) -> Vec<[f32; NUM_LOCAL]> {
 pub struct WindowActivity {
     pub start_sample: usize,
     pub activity: Vec<[f32; NUM_LOCAL]>,
-    /// Global cluster for each local speaker; None when it was not embedded.
-    pub local_to_global: [Option<usize>; NUM_LOCAL],
+    /// Global cluster of each local speaker as `(first_frame, cluster)` pairs in frame order: a
+    /// local speaker can be two people either side of a pause. Empty when it was not embedded.
+    pub local_to_global: [Vec<(usize, usize)>; NUM_LOCAL],
+}
+
+impl WindowActivity {
+    fn cluster_at(&self, local: usize, frame: usize) -> Option<usize> {
+        let spans = &self.local_to_global[local];
+        let k = spans.partition_point(|&(first, _)| first <= frame);
+        spans.get(k.saturating_sub(1)).map(|&(_, c)| c)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -74,7 +83,7 @@ pub fn reconstruct(windows: &[WindowActivity], total_samples: usize, geo: FrameG
             // Max over this window's local speakers that map to the same cluster.
             let mut local: [(Option<usize>, f32); NUM_LOCAL] = [(None, 0.0); NUM_LOCAL];
             for l in 0..NUM_LOCAL {
-                if let Some(c) = w.local_to_global[l] {
+                if let Some(c) = w.cluster_at(l, i) {
                     if let Some(e) = local.iter_mut().find(|e| e.0 == Some(c)) {
                         e.1 = e.1.max(frame[l]);
                     } else if let Some(e) = local.iter_mut().find(|e| e.0.is_none()) {
@@ -173,6 +182,11 @@ mod tests {
     // 100 Hz "audio", 10-sample frames: one frame = 0.1 s.
     const GEO: FrameGeometry = FrameGeometry { frame_shift: 10, frame_size: 10, sample_rate: 100 };
 
+    /// Each local speaker mapped to one cluster for the whole window.
+    fn whole(map: [Option<usize>; NUM_LOCAL]) -> [Vec<(usize, usize)>; NUM_LOCAL] {
+        map.map(|c| c.map(|c| vec![(0, c)]).unwrap_or_default())
+    }
+
     fn t(start: f64, end: f64, cluster: usize) -> RawTurn {
         RawTurn { start_s: start, end_s: end, cluster }
     }
@@ -195,7 +209,7 @@ mod tests {
         let activity = (0..20)
             .map(|i| if i < 10 { [1.0, 0.0, 0.0] } else { [0.0, 1.0, 0.0] })
             .collect();
-        let windows = vec![WindowActivity { start_sample: 0, activity, local_to_global: [Some(1), Some(0), None] }];
+        let windows = vec![WindowActivity { start_sample: 0, activity, local_to_global: whole([Some(1), Some(0), None]) }];
         let turns = reconstruct(&windows, 200, GEO);
         assert_eq!(turns.len(), 2);
         assert_eq!(turns[0].cluster, 1);
@@ -209,8 +223,8 @@ mod tests {
     fn overlapping_windows_vote_and_padding_is_ignored() {
         // Window A says cluster 0 for frames 0..20; window B (starting at 1.0 s) says cluster 0
         // for its first 10 frames. Audio is only 1.5 s long, so B's tail is padding.
-        let a = WindowActivity { start_sample: 0, activity: vec![[1.0, 0.0, 0.0]; 20], local_to_global: [Some(0), None, None] };
-        let b = WindowActivity { start_sample: 100, activity: vec![[1.0, 0.0, 0.0]; 20], local_to_global: [Some(0), None, None] };
+        let a = WindowActivity { start_sample: 0, activity: vec![[1.0, 0.0, 0.0]; 20], local_to_global: whole([Some(0), None, None]) };
+        let b = WindowActivity { start_sample: 100, activity: vec![[1.0, 0.0, 0.0]; 20], local_to_global: whole([Some(0), None, None]) };
         let turns = reconstruct(&[a, b], 150, GEO);
         assert_eq!(turns.len(), 1);
         assert!(turns[0].end_s <= 1.5 + 1e-9);
@@ -219,8 +233,18 @@ mod tests {
     #[test]
     fn unmapped_local_speaker_frames_stay_unlabelled() {
         let activity = vec![[0.0, 0.0, 1.0]; 10];
-        let windows = vec![WindowActivity { start_sample: 0, activity, local_to_global: [Some(0), None, None] }];
+        let windows = vec![WindowActivity { start_sample: 0, activity, local_to_global: whole([Some(0), None, None]) }];
         assert!(reconstruct(&windows, 100, GEO).is_empty());
+    }
+
+    #[test]
+    fn one_local_speaker_can_map_to_different_clusters_in_different_stretches() {
+        // Local 0 speaks frames 0..8 and 12..20, as two different people.
+        let activity = (0..20).map(|i| if (8..12).contains(&i) { [0.0; 3] } else { [1.0, 0.0, 0.0] }).collect();
+        let local_to_global = [vec![(0, 3), (12, 5)], vec![], vec![]];
+        let windows = vec![WindowActivity { start_sample: 0, activity, local_to_global }];
+        let clusters: Vec<usize> = reconstruct(&windows, 200, GEO).iter().map(|t| t.cluster).collect();
+        assert_eq!(clusters, vec![3, 5]);
     }
 
     #[test]
@@ -239,7 +263,7 @@ mod tests {
     #[test]
     fn huge_cluster_indices_need_no_dense_scores() {
         let activity = (0..20).map(|i| if i < 10 { [1.0, 0.0, 0.0] } else { [0.0, 1.0, 0.0] }).collect();
-        let windows = vec![WindowActivity { start_sample: 0, activity, local_to_global: [Some(100_000), Some(0), None] }];
+        let windows = vec![WindowActivity { start_sample: 0, activity, local_to_global: whole([Some(100_000), Some(0), None]) }];
         let clusters: Vec<usize> = reconstruct(&windows, 200, GEO).iter().map(|t| t.cluster).collect();
         assert_eq!(clusters, vec![100_000, 0]);
     }

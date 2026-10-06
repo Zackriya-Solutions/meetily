@@ -7,12 +7,18 @@ use super::segmentation::SegmentationModel;
 use super::{Cancelled, Turn};
 use anyhow::Result;
 use std::collections::HashMap;
+use std::ops::Range;
 use std::path::Path;
 use std::time::Instant;
 
 pub const DEFAULT_THRESHOLD: f32 = 0.5;
 pub const WINDOW_STEP_S: f64 = 2.5;
 pub const MIN_EMBED_S: f64 = 0.5;
+/// A pause this long inside one local speaker's speech starts a new stretch, embedded on its own.
+pub const SPLIT_GAP_S: f64 = 0.5;
+/// Clean speech a stretch needs to be embedded on its own; shorter ones join a neighbour. Shorter
+/// stretches give off-centre embeddings that can add up to a speaker who does not exist.
+pub const MIN_STRETCH_S: f64 = 1.5;
 pub const MIN_TURN_S: f64 = 0.3;
 pub const MAX_GAP_S: f64 = 0.5;
 const BATCH: usize = 8;
@@ -58,6 +64,40 @@ pub fn window_starts(total: usize, window: usize, step: usize) -> Vec<usize> {
 pub fn window_slice(samples: &[f32], start: usize, window: usize) -> &[f32] {
     let end = (start + window).min(samples.len());
     &samples[start.min(end)..end]
+}
+
+/// Stretches of one local speaker's active frames to embed separately, as frame ranges.
+/// `frames` lists the active frames in order with whether each is clean (no overlap).
+/// segmentation-3.0 can give one local speaker to two people either side of a pause, so a pause of
+/// `split_gap` frames or more starts a new stretch. A stretch with fewer than `min_clean` clean
+/// frames joins the neighbour across the shorter pause, so its frames still get a speaker.
+pub fn speaker_stretches(frames: &[(usize, bool)], split_gap: usize, min_clean: usize) -> Vec<Range<usize>> {
+    // (first, end, clean frames)
+    let mut stretches: Vec<(usize, usize, usize)> = Vec::new();
+    for &(i, clean) in frames {
+        match stretches.last_mut() {
+            Some(s) if i - s.1 < split_gap => {
+                s.1 = i + 1;
+                s.2 += clean as usize;
+            }
+            _ => stretches.push((i, i + 1, clean as usize)),
+        }
+    }
+    while stretches.len() > 1 {
+        let Some(k) = stretches.iter().position(|s| s.2 < min_clean) else { break };
+        let pause_before = k.checked_sub(1).map(|p| stretches[k].0 - stretches[p].1);
+        let pause_after = stretches.get(k + 1).map(|n| n.0 - stretches[k].1);
+        let into = match (pause_before, pause_after) {
+            (Some(b), Some(a)) if a < b => k + 1,
+            (Some(_), _) => k - 1,
+            _ => k + 1,
+        };
+        let (keep, gone) = (k.min(into), k.max(into));
+        let removed = stretches.remove(gone);
+        stretches[keep].1 = removed.1;
+        stretches[keep].2 += removed.2;
+    }
+    stretches.into_iter().map(|(first, end, _)| first..end).collect()
 }
 
 /// Key clusters `spk_0..` by first speech, drop clusters without turns, and build
@@ -138,43 +178,48 @@ impl Diarizer {
         }
         let seg_done = started.elapsed();
 
-        // 2. One embedding per (window, local speaker) with enough clean speech (40–90 %).
+        // 2. One embedding per stretch of a local speaker with enough clean speech (40–90 %).
         // Each frame's slice is centred on the frame, where `reconstruct` places it.
         let half_gap = geo.frame_size.saturating_sub(geo.frame_shift) / 2;
-        let mut members_raw: Vec<(usize, usize, Vec<f32>, f64)> = Vec::new();
+        let frames_for = |seconds: f64| (seconds * geo.sample_rate as f64 / geo.frame_shift as f64).ceil() as usize;
+        let mut members_raw: Vec<(usize, usize, usize, Vec<f32>, f64)> = Vec::new();
         for (w, activity) in activities.iter().enumerate() {
             if cancelled() {
                 return Err(Cancelled.into());
             }
             for local in 0..NUM_LOCAL {
-                let clean: Vec<usize> = activity
+                let frames: Vec<(usize, bool)> = activity
                     .iter()
                     .enumerate()
-                    .filter(|(_, f)| f[local] > 0.5 && f.iter().sum::<f32>() < 1.5)
-                    .map(|(i, _)| i)
+                    .filter(|(_, f)| f[local] > 0.5)
+                    .map(|(i, f)| (i, f.iter().sum::<f32>() < 1.5))
                     .collect();
-                let clean_s = clean.len() as f64 * geo.frame_shift as f64 / geo.sample_rate as f64;
-                if clean_s < MIN_EMBED_S {
-                    continue;
-                }
-                let mut audio = Vec::with_capacity(clean.len() * geo.frame_shift);
-                for i in clean {
-                    let a = starts[w] + i * geo.frame_shift + half_gap;
-                    if a >= samples.len() {
-                        break;
+                for stretch in speaker_stretches(&frames, frames_for(SPLIT_GAP_S), frames_for(MIN_STRETCH_S)) {
+                    let clean: Vec<usize> =
+                        frames.iter().filter(|&&(i, c)| c && stretch.contains(&i)).map(|&(i, _)| i).collect();
+                    let clean_s = clean.len() as f64 * geo.frame_shift as f64 / geo.sample_rate as f64;
+                    if clean_s < MIN_EMBED_S {
+                        continue;
                     }
-                    audio.extend_from_slice(&samples[a..(a + geo.frame_shift).min(samples.len())]);
+                    let mut audio = Vec::with_capacity(clean.len() * geo.frame_shift);
+                    for i in clean {
+                        let a = starts[w] + i * geo.frame_shift + half_gap;
+                        if a >= samples.len() {
+                            break;
+                        }
+                        audio.extend_from_slice(&samples[a..(a + geo.frame_shift).min(samples.len())]);
+                    }
+                    if audio.len() < (MIN_EMBED_S * geo.sample_rate as f64) as usize {
+                        continue;
+                    }
+                    let emb = self.embedding.embed(&audio)?;
+                    // The embedding model can emit NaN on odd input; such vectors would poison clustering.
+                    if emb.is_empty() || !emb.iter().all(|x| x.is_finite()) || emb.iter().all(|&x| x == 0.0) {
+                        log::debug!("Skipping non-finite or empty speaker embedding (window {w}, local {local})");
+                        continue;
+                    }
+                    members_raw.push((w, local, stretch.start, emb, clean_s));
                 }
-                if audio.len() < (MIN_EMBED_S * geo.sample_rate as f64) as usize {
-                    continue;
-                }
-                let emb = self.embedding.embed(&audio)?;
-                // The embedding model can emit NaN on odd input; such vectors would poison clustering.
-                if emb.is_empty() || !emb.iter().all(|x| x.is_finite()) || emb.iter().all(|&x| x == 0.0) {
-                    log::debug!("Skipping non-finite or empty speaker embedding (window {w}, local {local})");
-                    continue;
-                }
-                members_raw.push((w, local, emb, clean_s));
             }
             progress(40 + ((w + 1) * 50 / activities.len()) as u32);
         }
@@ -188,18 +233,18 @@ impl Diarizer {
         if cancelled() {
             return Err(Cancelled.into());
         }
-        let embeddings: Vec<Vec<f32>> = members_raw.iter().map(|m| m.2.clone()).collect();
-        let weights: Vec<f64> = members_raw.iter().map(|m| m.3).collect();
+        let embeddings: Vec<Vec<f32>> = members_raw.iter().map(|m| m.3.clone()).collect();
+        let weights: Vec<f64> = members_raw.iter().map(|m| m.4).collect();
         let labels = cluster_speakers(&embeddings, &weights, opts.num_speakers, opts.threshold);
 
-        let mut local_to_global = vec![[None; NUM_LOCAL]; activities.len()];
-        for ((w, local, _, _), &label) in members_raw.iter().zip(&labels) {
-            local_to_global[*w][*local] = Some(label);
+        let mut local_to_global: Vec<[Vec<(usize, usize)>; NUM_LOCAL]> = vec![Default::default(); activities.len()];
+        for ((w, local, first, _, _), &label) in members_raw.iter().zip(&labels) {
+            local_to_global[*w][*local].push((*first, label));
         }
         let windows: Vec<WindowActivity> = activities
             .into_iter()
             .enumerate()
-            .map(|(w, activity)| WindowActivity { start_sample: starts[w], activity, local_to_global: local_to_global[w] })
+            .map(|(w, activity)| WindowActivity { start_sample: starts[w], activity, local_to_global: std::mem::take(&mut local_to_global[w]) })
             .collect();
         let raw = smooth_turns(reconstruct(&windows, samples.len(), geo), MIN_TURN_S, MAX_GAP_S);
         let result = finalize(raw, &embeddings, &weights, &labels);
@@ -231,6 +276,46 @@ mod tests {
         assert_eq!(window_starts(0, 100, 25), Vec::<usize>::new());
         assert_eq!(window_starts(40, 100, 25), vec![0]);
         assert_eq!(window_starts(150, 100, 25), vec![0, 25, 50]);
+    }
+
+    /// Active frames `first..end`, all clean.
+    fn run(first: usize, end: usize) -> Vec<(usize, bool)> {
+        (first..end).map(|i| (i, true)).collect()
+    }
+
+    #[test]
+    fn a_long_pause_starts_a_new_stretch() {
+        // The model can give one local speaker to two people either side of a pause.
+        let frames = [run(0, 20), run(30, 50)].concat();
+        assert_eq!(speaker_stretches(&frames, 5, 10), vec![0..20, 30..50]);
+    }
+
+    #[test]
+    fn a_short_pause_keeps_one_stretch() {
+        let frames = [run(0, 20), run(23, 50)].concat();
+        assert_eq!(speaker_stretches(&frames, 5, 10), vec![0..50]);
+    }
+
+    #[test]
+    fn a_stretch_too_short_to_embed_joins_the_neighbour_across_the_shorter_pause() {
+        let frames = [run(0, 20), run(40, 44), run(50, 70)].concat();
+        assert_eq!(speaker_stretches(&frames, 5, 10), vec![0..20, 40..70]);
+        let frames = [run(0, 20), run(26, 30), run(50, 70)].concat();
+        assert_eq!(speaker_stretches(&frames, 5, 10), vec![0..30, 50..70]);
+    }
+
+    #[test]
+    fn only_clean_frames_count_towards_embedding() {
+        // The second stretch is long but mostly overlapped speech, so it joins the first.
+        let overlapped: Vec<(usize, bool)> = (30..50).map(|i| (i, i < 34)).collect();
+        let frames = [run(0, 20), overlapped].concat();
+        assert_eq!(speaker_stretches(&frames, 5, 10), vec![0..50]);
+    }
+
+    #[test]
+    fn a_lone_short_stretch_is_kept() {
+        assert_eq!(speaker_stretches(&run(3, 6), 5, 10), vec![3..6]);
+        assert!(speaker_stretches(&[], 5, 10).is_empty());
     }
 
     #[test]
@@ -302,6 +387,15 @@ mod tests {
         let distinct: std::collections::HashSet<_> = key_of.values().collect();
         assert_eq!(distinct.len(), key_of.len(), "two speakers share a key: {key_of:?}");
         assert_eq!(d.speakers.len(), key_of.len());
+
+        // Speaker changes land where they happen: little reference speech goes to the wrong key.
+        let (mut speech, mut confused) = (0.0, 0.0);
+        for seg in reference["en_truth"].as_array().unwrap() {
+            let (s, e, who) = (seg[0].as_f64().unwrap(), seg[1].as_f64().unwrap(), seg[2].as_str().unwrap());
+            speech += e - s;
+            confused += d.turns.iter().filter(|t| t.key != key_of[who]).map(|t| (t.end_s.min(e) - t.start_s.max(s)).max(0.0)).sum::<f64>();
+        }
+        assert!(confused / speech < 0.01, "{:.1}% of speech went to the wrong speaker", 100.0 * confused / speech);
     }
 
     /// Our embedding of every clip listed under `key` in reference.json, checked against the
