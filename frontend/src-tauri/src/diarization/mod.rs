@@ -39,6 +39,20 @@ pub(crate) fn intra_op_threads() -> usize {
     intra_op_threads_for(std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1))
 }
 
+/// Session builder shared by the diarization models: CPU, full graph optimisation and
+/// `intra_op_threads()` threads.
+pub(crate) fn session_builder() -> anyhow::Result<ort::session::builder::SessionBuilder> {
+    Ok(ort::session::Session::builder()?
+        .with_optimization_level(ort::session::builder::GraphOptimizationLevel::Level3)?
+        .with_execution_providers(vec![ort::execution_providers::CPUExecutionProvider::default().build()])?
+        .with_intra_threads(intra_op_threads())?)
+}
+
+/// A custom metadata value of a loaded model, if present.
+pub(crate) fn model_metadata(session: &ort::session::Session, key: &str) -> Option<String> {
+    session.metadata().ok().and_then(|m| m.custom(key).ok().flatten())
+}
+
 /// Returned when a diarization run is cancelled by the user.
 #[derive(thiserror::Error, Debug)]
 #[error("Speaker identification cancelled")]

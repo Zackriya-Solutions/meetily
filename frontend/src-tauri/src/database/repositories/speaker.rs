@@ -1,5 +1,8 @@
 //! Per-meeting speakers: names, voice centroids, merges and row reassignment.
+use super::transcript::TranscriptsRepository;
+use crate::api::TranscriptSegment;
 use crate::diarization::cluster::weighted_centroid;
+use crate::diarization::diarizer::SpeakerCentroid;
 use serde::{Deserialize, Serialize};
 use sqlx::{Connection, Error as SqlxError, Row, SqliteConnection, SqlitePool};
 use std::collections::BTreeMap;
@@ -24,6 +27,13 @@ pub struct NewSpeaker {
     pub display_name: Option<String>,
     pub embedding: Vec<f32>,
     pub speech_seconds: f64,
+}
+
+/// An unnamed speaker from a diarization run.
+impl From<&SpeakerCentroid> for NewSpeaker {
+    fn from(s: &SpeakerCentroid) -> Self {
+        Self { key: s.key.clone(), display_name: None, embedding: s.embedding.clone(), speech_seconds: s.speech_seconds }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -124,12 +134,16 @@ impl SpeakersRepository {
 
     /// Speaker key → label shown to the user.
     pub async fn labels(pool: &SqlitePool, meeting_id: &str) -> Result<BTreeMap<String, String>, SqlxError> {
-        Ok(Self::list(pool, meeting_id)
-            .await?
+        let rows: Vec<(String, Option<String>)> =
+            sqlx::query_as("SELECT speaker_key, display_name FROM meeting_speakers WHERE meeting_id = ?")
+                .bind(meeting_id)
+                .fetch_all(pool)
+                .await?;
+        Ok(rows
             .into_iter()
-            .map(|s| {
-                let label = speaker_label(&s.speaker_key, s.display_name.as_deref());
-                (s.speaker_key, label)
+            .map(|(key, name)| {
+                let label = speaker_label(&key, name.as_deref());
+                (key, label)
             })
             .collect())
     }
@@ -214,23 +228,31 @@ impl SpeakersRepository {
         let Some(previous) = previous else {
             return Err(not_found("transcript"));
         };
-        let speakers = Self::list_conn(&mut tx, meeting_id).await?;
         let key = match target {
             ReassignTarget::Existing(key) => {
-                if !speakers.iter().any(|s| s.speaker_key == key) {
+                let exists: Option<i64> =
+                    sqlx::query_scalar("SELECT 1 FROM meeting_speakers WHERE meeting_id = ? AND speaker_key = ?")
+                        .bind(meeting_id)
+                        .bind(&key)
+                        .fetch_optional(&mut *tx)
+                        .await?;
+                if exists.is_none() {
                     return Err(not_found("speaker"));
                 }
                 key
             }
             ReassignTarget::New => {
+                let keys: Vec<String> = sqlx::query_scalar("SELECT speaker_key FROM meeting_speakers WHERE meeting_id = ?")
+                    .bind(meeting_id)
+                    .fetch_all(&mut *tx)
+                    .await?;
                 let used: Vec<Option<String>> =
                     sqlx::query_scalar("SELECT DISTINCT speaker FROM transcripts WHERE meeting_id = ?")
                         .bind(meeting_id)
                         .fetch_all(&mut *tx)
                         .await?;
-                let next = speakers
-                    .iter()
-                    .map(|s| s.speaker_key.clone())
+                let next = keys
+                    .into_iter()
                     .chain(used.into_iter().flatten())
                     .filter_map(|k| key_index(&k))
                     .max()
@@ -317,20 +339,16 @@ impl SpeakersRepository {
                 .execute(&mut *conn)
                 .await?;
             for piece in pieces {
-                sqlx::query(
-                    "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration, speaker)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                )
-                .bind(format!("transcript-{}", Uuid::new_v4()))
-                .bind(meeting_id)
-                .bind(&piece.text)
-                .bind(&timestamp)
-                .bind(piece.start_s)
-                .bind(piece.end_s)
-                .bind(piece.end_s - piece.start_s)
-                .bind(&piece.speaker)
-                .execute(&mut *conn)
-                .await?;
+                let row = TranscriptSegment {
+                    id: format!("transcript-{}", Uuid::new_v4()),
+                    text: piece.text.clone(),
+                    timestamp: timestamp.clone(),
+                    audio_start_time: Some(piece.start_s),
+                    audio_end_time: Some(piece.end_s),
+                    duration: Some(piece.end_s - piece.start_s),
+                    speaker: Some(piece.speaker.clone()),
+                };
+                TranscriptsRepository::insert_row(&mut *conn, &row.id, meeting_id, &row).await?;
             }
         }
         Ok(())

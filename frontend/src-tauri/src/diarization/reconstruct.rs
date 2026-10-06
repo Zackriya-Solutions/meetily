@@ -51,13 +51,8 @@ pub struct RawTurn {
 
 /// Aggregate overlapping windows on a global frame grid and label each frame with its
 /// dominant cluster, or nothing when the windows agree nobody is speaking.
-pub fn reconstruct(
-    windows: &[WindowActivity],
-    total_samples: usize,
-    geo: FrameGeometry,
-    num_clusters: usize,
-) -> Vec<RawTurn> {
-    if total_samples == 0 || num_clusters == 0 {
+pub fn reconstruct(windows: &[WindowActivity], total_samples: usize, geo: FrameGeometry) -> Vec<RawTurn> {
+    if total_samples == 0 {
         return Vec::new();
     }
     let num_frames = total_samples / geo.frame_shift + 1;
@@ -201,7 +196,7 @@ mod tests {
             .map(|i| if i < 10 { [1.0, 0.0, 0.0] } else { [0.0, 1.0, 0.0] })
             .collect();
         let windows = vec![WindowActivity { start_sample: 0, activity, local_to_global: [Some(1), Some(0), None] }];
-        let turns = reconstruct(&windows, 200, GEO, 2);
+        let turns = reconstruct(&windows, 200, GEO);
         assert_eq!(turns.len(), 2);
         assert_eq!(turns[0].cluster, 1);
         assert_eq!(turns[1].cluster, 0);
@@ -216,7 +211,7 @@ mod tests {
         // for its first 10 frames. Audio is only 1.5 s long, so B's tail is padding.
         let a = WindowActivity { start_sample: 0, activity: vec![[1.0, 0.0, 0.0]; 20], local_to_global: [Some(0), None, None] };
         let b = WindowActivity { start_sample: 100, activity: vec![[1.0, 0.0, 0.0]; 20], local_to_global: [Some(0), None, None] };
-        let turns = reconstruct(&[a, b], 150, GEO, 1);
+        let turns = reconstruct(&[a, b], 150, GEO);
         assert_eq!(turns.len(), 1);
         assert!(turns[0].end_s <= 1.5 + 1e-9);
     }
@@ -225,7 +220,7 @@ mod tests {
     fn unmapped_local_speaker_frames_stay_unlabelled() {
         let activity = vec![[0.0, 0.0, 1.0]; 10];
         let windows = vec![WindowActivity { start_sample: 0, activity, local_to_global: [Some(0), None, None] }];
-        assert!(reconstruct(&windows, 100, GEO, 1).is_empty());
+        assert!(reconstruct(&windows, 100, GEO).is_empty());
     }
 
     #[test]
@@ -242,11 +237,10 @@ mod tests {
     }
 
     #[test]
-    fn huge_cluster_counts_give_the_same_turns() {
-        let make = || {
-            let activity = (0..20).map(|i| if i < 10 { [1.0, 0.0, 0.0] } else { [0.0, 1.0, 0.0] }).collect();
-            vec![WindowActivity { start_sample: 0, activity, local_to_global: [Some(1), Some(0), None] }]
-        };
-        assert_eq!(reconstruct(&make(), 200, GEO, 100_000), reconstruct(&make(), 200, GEO, 3));
+    fn huge_cluster_indices_need_no_dense_scores() {
+        let activity = (0..20).map(|i| if i < 10 { [1.0, 0.0, 0.0] } else { [0.0, 1.0, 0.0] }).collect();
+        let windows = vec![WindowActivity { start_sample: 0, activity, local_to_global: [Some(100_000), Some(0), None] }];
+        let clusters: Vec<usize> = reconstruct(&windows, 200, GEO).iter().map(|t| t.cluster).collect();
+        assert_eq!(clusters, vec![100_000, 0]);
     }
 }

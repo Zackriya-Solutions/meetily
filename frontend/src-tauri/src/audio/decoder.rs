@@ -51,7 +51,7 @@ impl DecodedAudio {
 
     /// Convert decoded audio to Whisper format with optional progress callback
     pub fn to_whisper_format_with_progress(&self, progress_callback: Option<ProgressCallback>) -> Vec<f32> {
-        whisper_format_from(self.samples.clone(), self.sample_rate, self.channels, progress_callback)
+        whisper_format_from(Cow::Borrowed(&self.samples), self.sample_rate, self.channels, progress_callback)
     }
 
     /// Like `to_whisper_format`, but consumes the decoded audio instead of copying its samples,
@@ -63,14 +63,14 @@ impl DecodedAudio {
     /// Consuming variant of `to_whisper_format_with_progress`.
     pub fn into_whisper_format_with_progress(self, progress_callback: Option<ProgressCallback>) -> Vec<f32> {
         let DecodedAudio { samples, sample_rate, channels, .. } = self;
-        whisper_format_from(samples, sample_rate, channels, progress_callback)
+        whisper_format_from(Cow::Owned(samples), sample_rate, channels, progress_callback)
     }
 }
 
-/// Mono conversion, normalisation and resampling to 16 kHz. Takes ownership of `samples` so no
-/// full-length copy is made.
+/// Mono conversion, normalisation and resampling to 16 kHz. Owned `samples` are consumed, so no
+/// full-length copy is made; borrowed ones are copied only when already mono.
 fn whisper_format_from(
-    samples: Vec<f32>,
+    samples: Cow<'_, [f32]>,
     sample_rate: u32,
     channels: u16,
     progress_callback: Option<ProgressCallback>,
@@ -82,7 +82,7 @@ fn whisper_format_from(
         drop(samples);
         mono
     } else {
-        samples
+        samples.into_owned()
     };
 
     // Step 1.5: Normalize samples to valid range (-1.0 to 1.0)

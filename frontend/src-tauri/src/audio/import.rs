@@ -4,6 +4,7 @@ use crate::api::TranscriptSegment;
 use crate::audio::decoder::{decode_audio_file, decode_audio_file_with_progress};
 use crate::audio::vad::get_speech_chunks_with_progress;
 use crate::config::{DEFAULT_WHISPER_MODEL, DEFAULT_PARAKEET_MODEL};
+use crate::database::repositories::transcript::TranscriptsRepository;
 use crate::parakeet_engine::ParakeetEngine;
 use crate::state::AppState;
 use crate::whisper_engine::WhisperEngine;
@@ -18,7 +19,7 @@ use tauri_plugin_dialog::DialogExt;
 use uuid::Uuid;
 
 use super::audio_processing::create_meeting_folder;
-use super::common::{create_transcript_segments, split_segment_at_silence, write_transcripts_json};
+use super::common::{create_transcript_segments, split_segment_at_silence};
 use super::constants::AUDIO_EXTENSIONS;
 use super::recording_preferences::get_default_recordings_folder;
 
@@ -529,30 +530,21 @@ async fn run_import<R: Runtime>(
 
     let (diarization, speaker_warning): (Option<crate::diarization::diarizer::Diarization>, Option<String>) =
         if speakers.identify && total_segments > 0 {
-            emit_progress(&app, "speakers", 30, "Identifying speakers...");
-            let (app_d, app_w, app_p) = (app.clone(), app.clone(), app.clone());
-            match crate::diarization::jobs::diarize_samples(
+            let app_p = app.clone();
+            let report = move |message: &str| emit_progress(&app_p, "speakers", 30, message);
+            match crate::diarization::jobs::diarize_for_batch(
+                &app,
                 audio_samples.clone(),
                 speakers.num_speakers,
-                move |p| {
-                    crate::diarization::commands::emit_download_progress(&app_d, p.clone());
-                    emit_progress(&app_d, "speakers", 30, &format!("Downloading speaker models... {}%", p.percent));
-                },
-                move || emit_progress(&app_w, "speakers", 30, "Waiting for another speaker identification..."),
-                move |p| emit_progress(&app_p, "speakers", 30, &format!("Identifying speakers... {}%", p)),
+                report,
                 || IMPORT_CANCELLED.load(Ordering::SeqCst),
             )
             .await
             {
-                Ok(d) if !d.speakers.is_empty() => (Some(d), None),
-                Ok(_) => (None, Some("No distinct speakers were found".to_string())),
-                Err(e) if e.is::<crate::diarization::Cancelled>() => {
+                Ok(result) => result,
+                Err(crate::diarization::Cancelled) => {
                     let _ = std::fs::remove_dir_all(&meeting_folder);
                     return Err(anyhow!("Import cancelled"));
-                }
-                Err(e) => {
-                    warn!("Speaker identification failed, continuing without speakers: {:#}", e);
-                    (None, Some(format!("Speaker identification failed: {:#}", e)))
                 }
             }
         } else {
@@ -697,17 +689,7 @@ async fn run_import<R: Runtime>(
 
     let new_speakers: Vec<crate::database::repositories::speaker::NewSpeaker> = diarization
         .as_ref()
-        .map(|d| {
-            d.speakers
-                .iter()
-                .map(|s| crate::database::repositories::speaker::NewSpeaker {
-                    key: s.key.clone(),
-                    display_name: None,
-                    embedding: s.embedding.clone(),
-                    speech_seconds: s.speech_seconds,
-                })
-                .collect()
-        })
+        .map(|d| d.speakers.iter().map(Into::into).collect())
         .unwrap_or_default();
 
     // Save to database
@@ -727,12 +709,8 @@ async fn run_import<R: Runtime>(
     // Write transcripts.json and metadata.json to the meeting folder
     emit_progress(&app, "saving", 90, "Writing transcript files...");
 
-    let labels = crate::database::repositories::speaker::SpeakersRepository::labels(app_state.db_manager.pool(), &meeting_id)
-        .await
-        .unwrap_or_default();
-    if let Err(e) = write_transcripts_json(&meeting_folder, &segments, &labels) {
-        warn!("Failed to write transcripts.json: {}", e);
-    }
+    crate::diarization::jobs::rewrite_transcripts_json(app_state.db_manager.pool(), &meeting_id, Some(&meeting_folder))
+        .await;
 
     if let Err(e) = write_import_metadata(
         &meeting_folder,
@@ -803,21 +781,9 @@ async fn create_meeting_with_transcripts(
 
     // Insert transcripts
     for segment in segments {
-        sqlx::query(
-            "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration, speaker)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(&segment.id)
-        .bind(&meeting_id)
-        .bind(&segment.text)
-        .bind(&segment.timestamp)
-        .bind(segment.audio_start_time)
-        .bind(segment.audio_end_time)
-        .bind(segment.duration)
-        .bind(&segment.speaker)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| anyhow!("Failed to insert transcript: {}", e))?;
+        TranscriptsRepository::insert_row(&mut tx, &segment.id, &meeting_id, segment)
+            .await
+            .map_err(|e| anyhow!("Failed to insert transcript: {}", e))?;
     }
 
     crate::database::repositories::speaker::SpeakersRepository::replace_for_meeting(
@@ -1299,7 +1265,7 @@ mod tests {
             },
         ];
 
-        let result = write_transcripts_json(dir.path(), &segments, &std::collections::BTreeMap::new());
+        let result = crate::audio::common::write_transcripts_json(dir.path(), &segments, &std::collections::BTreeMap::new());
         assert!(result.is_ok(), "write_transcripts_json failed: {:?}", result);
 
         // Verify file exists and is valid JSON

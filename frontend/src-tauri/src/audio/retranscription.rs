@@ -2,9 +2,10 @@
 
 use crate::audio::decoder::decode_audio_file;
 use crate::audio::vad::get_speech_chunks_with_progress;
-use super::common::{create_transcript_segments, split_segment_at_silence, write_transcripts_json};
+use super::common::{create_transcript_segments, split_segment_at_silence};
 use super::constants::AUDIO_EXTENSIONS;
 use crate::config::{DEFAULT_WHISPER_MODEL, DEFAULT_PARAKEET_MODEL};
+use crate::database::repositories::transcript::TranscriptsRepository;
 use crate::parakeet_engine::ParakeetEngine;
 use crate::state::AppState;
 use crate::whisper_engine::WhisperEngine;
@@ -311,31 +312,17 @@ async fn run_retranscription<R: Runtime>(
     }
 
     let (diarization, speaker_warning): (Option<crate::diarization::diarizer::Diarization>, Option<String>) = if speakers.identify {
-        emit_progress(&app, &meeting_id, "speakers", 25, "Identifying speakers...");
-        let (app_d, id_d) = (app.clone(), meeting_id.clone());
-        let (app_w, id_w) = (app.clone(), meeting_id.clone());
         let (app_p, id_p) = (app.clone(), meeting_id.clone());
-        match crate::diarization::jobs::diarize_samples(
+        let report = move |message: &str| emit_progress(&app_p, &id_p, "speakers", 25, message);
+        crate::diarization::jobs::diarize_for_batch(
+            &app,
             audio_samples.clone(),
             speakers.num_speakers,
-            move |p| {
-                crate::diarization::commands::emit_download_progress(&app_d, p.clone());
-                emit_progress(&app_d, &id_d, "speakers", 25, &format!("Downloading speaker models... {}%", p.percent));
-            },
-            move || emit_progress(&app_w, &id_w, "speakers", 25, "Waiting for another speaker identification..."),
-            move |p| emit_progress(&app_p, &id_p, "speakers", 25, &format!("Identifying speakers... {}%", p)),
+            report,
             || RETRANSCRIPTION_CANCELLED.load(Ordering::SeqCst),
         )
         .await
-        {
-            Ok(d) if !d.speakers.is_empty() => (Some(d), None),
-            Ok(_) => (None, Some("No distinct speakers were found".to_string())),
-            Err(e) if e.is::<crate::diarization::Cancelled>() => return Err(anyhow!("Retranscription cancelled")),
-            Err(e) => {
-                warn!("Speaker identification failed, continuing without speakers: {:#}", e);
-                (None, Some(format!("Speaker identification failed: {:#}", e)))
-            }
-        }
+        .map_err(|_| anyhow!("Retranscription cancelled"))?
     } else {
         (None, None)
     };
@@ -491,12 +478,7 @@ async fn run_retranscription<R: Runtime>(
     // Write updated transcripts.json and metadata.json to the meeting folder
     emit_progress(&app, &meeting_id, "saving", 90, "Writing transcript files...");
 
-    let labels = crate::database::repositories::speaker::SpeakersRepository::labels(pool, &meeting_id)
-        .await
-        .unwrap_or_default();
-    if let Err(e) = write_transcripts_json(&folder_path, &segments, &labels) {
-        warn!("Failed to write transcripts.json: {}", e);
-    }
+    crate::diarization::jobs::rewrite_transcripts_json(pool, &meeting_id, Some(&folder_path)).await;
 
     // Find audio filename for metadata
     let audio_filename = audio_path
@@ -547,21 +529,9 @@ pub(crate) async fn save_retranscribed_rows(
         .map_err(|e| anyhow!("Failed to delete existing transcripts: {}", e))?;
 
     for segment in segments {
-        sqlx::query(
-            "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration, speaker)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-        )
-        .bind(&segment.id)
-        .bind(meeting_id)
-        .bind(&segment.text)
-        .bind(&segment.timestamp)
-        .bind(segment.audio_start_time)
-        .bind(segment.audio_end_time)
-        .bind(segment.duration)
-        .bind(&segment.speaker)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| anyhow!("Failed to insert transcript: {}", e))?;
+        TranscriptsRepository::insert_row(&mut tx, &segment.id, meeting_id, segment)
+            .await
+            .map_err(|e| anyhow!("Failed to insert transcript: {}", e))?;
     }
 
     if let Some(d) = diarization {
@@ -581,15 +551,13 @@ pub(crate) async fn save_retranscribed_rows(
     Ok(())
 }
 
-/// Load the local engine configured in transcript settings (Parakeet or Whisper).
+/// Load the local engine for the provider configured in transcript settings (Parakeet or Whisper).
 /// Call it while holding the batch engine lock.
-pub(crate) async fn load_configured_engine<R: Runtime>(app: &AppHandle<R>) -> Result<super::common::BatchEngine> {
-    let app_state = app.try_state::<AppState>().ok_or_else(|| anyhow!("App state not available"))?;
-    let provider: Option<String> = sqlx::query_scalar("SELECT provider FROM transcript_settings WHERE id = '1'")
-        .fetch_optional(app_state.db_manager.pool())
-        .await
-        .map_err(|e| anyhow!("Failed to query transcript config: {}", e))?;
-    if provider.as_deref() == Some("parakeet") {
+pub(crate) async fn load_configured_engine<R: Runtime>(
+    app: &AppHandle<R>,
+    provider: Option<&str>,
+) -> Result<super::common::BatchEngine> {
+    if provider == Some("parakeet") {
         Ok(super::common::BatchEngine::Parakeet(get_or_init_parakeet(app, None).await?))
     } else {
         Ok(super::common::BatchEngine::Whisper(get_or_init_whisper(app, None).await?))

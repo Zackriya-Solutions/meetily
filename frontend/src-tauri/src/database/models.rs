@@ -39,6 +39,20 @@ pub struct Transcript {
     pub speaker: Option<String>,
 }
 
+impl From<Transcript> for crate::api::TranscriptSegment {
+    fn from(t: Transcript) -> Self {
+        Self {
+            id: t.id,
+            text: t.transcript,
+            timestamp: t.timestamp,
+            audio_start_time: t.audio_start_time,
+            audio_end_time: t.audio_end_time,
+            duration: t.duration,
+            speaker: t.speaker,
+        }
+    }
+}
+
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct SummaryProcess {
     pub meeting_id: String,

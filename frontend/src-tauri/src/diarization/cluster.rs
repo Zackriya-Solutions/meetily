@@ -91,49 +91,57 @@ impl UnionFind {
 /// of first occurrence. More than MAX_CLUSTER_POINTS inputs (which arrive in window order) are
 /// clustered through a time-uniform subset; the other inputs join the nearest centroid.
 pub fn agglomerative(embeddings: &[Vec<f32>], stop: ClusterStop) -> Vec<usize> {
-    let n = embeddings.len();
-    if n <= MAX_CLUSTER_POINTS {
-        return agglomerative_dense(embeddings, stop);
-    }
-    let idx: Vec<usize> = (0..MAX_CLUSTER_POINTS).map(|i| i * n / MAX_CLUSTER_POINTS).collect();
-    let subset: Vec<Vec<f32>> = idx.iter().map(|&i| embeddings[i].clone()).collect();
-    let sub_labels = agglomerative_dense(&subset, stop);
-    let k = sub_labels.iter().max().map_or(0, |m| m + 1);
-    let centroids: Vec<Vec<f32>> = (0..k)
-        .map(|c| {
-            let members: Vec<&[f32]> = idx
-                .iter()
-                .zip(&sub_labels)
-                .filter(|(_, l)| **l == c)
-                .map(|(&i, _)| embeddings[i].as_slice())
-                .collect();
-            weighted_centroid(&members, &vec![1.0; members.len()])
-        })
-        .collect();
-    let mut in_subset = vec![false; n];
-    let mut raw = vec![0usize; n];
-    for (&i, &l) in idx.iter().zip(&sub_labels) {
-        in_subset[i] = true;
-        raw[i] = l;
-    }
-    for i in 0..n {
-        if !in_subset[i] {
-            raw[i] = (0..k)
-                .max_by(|&a, &b| {
-                    cosine(&embeddings[i], &centroids[a])
-                        .partial_cmp(&cosine(&embeddings[i], &centroids[b]))
-                        .unwrap_or(Ordering::Equal)
-                })
-                .unwrap_or(0);
+    Linkage::new(embeddings).cut(stop)
+}
+
+/// The average-linkage merges of a set of embeddings, built once and cut at any stop.
+struct Linkage<'a> {
+    embeddings: &'a [Vec<f32>],
+    /// The clustered inputs and their embeddings, when only a subset was clustered.
+    subset: Option<(Vec<usize>, Vec<Vec<f32>>)>,
+    /// Merges of the clustered points, most similar first.
+    merges: Vec<(usize, usize, f32)>,
+}
+
+impl<'a> Linkage<'a> {
+    fn new(embeddings: &'a [Vec<f32>]) -> Self {
+        let n = embeddings.len();
+        if n <= MAX_CLUSTER_POINTS {
+            return Self { embeddings, subset: None, merges: dense_merges(embeddings) };
         }
+        let idx: Vec<usize> = (0..MAX_CLUSTER_POINTS).map(|i| i * n / MAX_CLUSTER_POINTS).collect();
+        let points: Vec<Vec<f32>> = idx.iter().map(|&i| embeddings[i].clone()).collect();
+        let merges = dense_merges(&points);
+        Self { embeddings, subset: Some((idx, points)), merges }
     }
-    let mut relabel: HashMap<usize, usize> = HashMap::new();
-    raw.into_iter()
-        .map(|c| {
-            let next = relabel.len();
-            *relabel.entry(c).or_insert(next)
-        })
-        .collect()
+
+    fn cut(&self, stop: ClusterStop) -> Vec<usize> {
+        let Some((idx, points)) = &self.subset else {
+            return cut_merges(self.embeddings.len(), &self.merges, stop);
+        };
+        let sub_labels = cut_merges(points.len(), &self.merges, stop);
+        let k = cluster_count(&sub_labels);
+        let centroids = cluster_centroids(points, &vec![1.0; points.len()], &sub_labels, k);
+        let n = self.embeddings.len();
+        let mut in_subset = vec![false; n];
+        let mut raw = vec![0usize; n];
+        for (&i, &l) in idx.iter().zip(&sub_labels) {
+            in_subset[i] = true;
+            raw[i] = l;
+        }
+        for i in 0..n {
+            if !in_subset[i] {
+                raw[i] = (0..k)
+                    .max_by(|&a, &b| {
+                        cosine(&self.embeddings[i], &centroids[a])
+                            .partial_cmp(&cosine(&self.embeddings[i], &centroids[b]))
+                            .unwrap_or(Ordering::Equal)
+                    })
+                    .unwrap_or(0);
+            }
+        }
+        renumber(raw.into_iter())
+    }
 }
 
 /// A cluster carrying less speech than this (summed over the overlapping windows its embeddings
@@ -149,14 +157,16 @@ const COUNT_THRESHOLD_STEP: f32 = 0.05;
 /// most similar speakers are then merged down to the count. Labels are numbered 0.. in order of
 /// first occurrence.
 pub fn cluster_speakers(embeddings: &[Vec<f32>], weights: &[f64], num_speakers: Option<usize>, threshold: f32) -> Vec<usize> {
+    let linkage = Linkage::new(embeddings);
+    let run = |t: f32| fold_small_clusters(embeddings, weights, linkage.cut(ClusterStop::Threshold(t)));
     let Some(n) = num_speakers.map(|n| n.max(1)) else {
-        return fold_small_clusters(embeddings, weights, agglomerative(embeddings, ClusterStop::Threshold(threshold)));
+        return run(threshold);
     };
     let mut t = threshold;
-    let mut labels = fold_small_clusters(embeddings, weights, agglomerative(embeddings, ClusterStop::Threshold(t)));
+    let mut labels = run(t);
     while cluster_count(&labels) < n && t < MAX_COUNT_THRESHOLD {
         t += COUNT_THRESHOLD_STEP;
-        labels = fold_small_clusters(embeddings, weights, agglomerative(embeddings, ClusterStop::Threshold(t)));
+        labels = run(t);
     }
     let k = cluster_count(&labels);
     if k <= n {
@@ -171,7 +181,8 @@ fn cluster_count(labels: &[usize]) -> usize {
     labels.iter().max().map_or(0, |m| m + 1)
 }
 
-fn cluster_centroids(embeddings: &[Vec<f32>], weights: &[f64], labels: &[usize], k: usize) -> Vec<Vec<f32>> {
+/// Speech-weighted centroid of each cluster 0..k.
+pub(crate) fn cluster_centroids(embeddings: &[Vec<f32>], weights: &[f64], labels: &[usize], k: usize) -> Vec<Vec<f32>> {
     (0..k)
         .map(|c| {
             let (vs, ws): (Vec<&[f32]>, Vec<f64>) = labels
@@ -224,8 +235,9 @@ fn renumber(labels: impl Iterator<Item = usize>) -> Vec<usize> {
         .collect()
 }
 
-/// Nearest-neighbour chain (O(n²) time and memory); used for up to MAX_CLUSTER_POINTS inputs.
-fn agglomerative_dense(embeddings: &[Vec<f32>], stop: ClusterStop) -> Vec<usize> {
+/// Average-linkage merges by nearest-neighbour chain (O(n²) time and memory), most similar
+/// first; used for up to MAX_CLUSTER_POINTS inputs.
+fn dense_merges(embeddings: &[Vec<f32>]) -> Vec<(usize, usize, f32)> {
     let n = embeddings.len();
     if n == 0 {
         return Vec::new();
@@ -294,9 +306,14 @@ fn agglomerative_dense(embeddings: &[Vec<f32>], stop: ClusterStop) -> Vec<usize>
     }
 
     // Average linkage is monotone, so applying merges from most to least similar
-    // reproduces the dendrogram; the merges form a spanning tree over the points,
-    // so applying m of them leaves exactly n - m clusters.
+    // reproduces the dendrogram.
     merges.sort_by(|x, y| y.2.partial_cmp(&x.2).unwrap_or(Ordering::Equal));
+    merges
+}
+
+/// Labels of `n` points after applying `merges` (most similar first) down to `stop`. The merges
+/// form a spanning tree over the points, so applying m of them leaves exactly n - m clusters.
+fn cut_merges(n: usize, merges: &[(usize, usize, f32)], stop: ClusterStop) -> Vec<usize> {
     let to_apply = match stop {
         ClusterStop::Threshold(t) => merges.iter().take_while(|m| m.2 >= t).count(),
         ClusterStop::Count(k) => n.saturating_sub(k.max(1)),
@@ -305,15 +322,7 @@ fn agglomerative_dense(embeddings: &[Vec<f32>], stop: ClusterStop) -> Vec<usize>
     for &(a, b, _) in merges.iter().take(to_apply) {
         uf.union(a, b);
     }
-
-    let mut relabel: HashMap<usize, usize> = HashMap::new();
-    (0..n)
-        .map(|i| {
-            let root = uf.find(i);
-            let next = relabel.len();
-            *relabel.entry(root).or_insert(next)
-        })
-        .collect()
+    renumber((0..n).map(|i| uf.find(i)))
 }
 
 #[cfg(test)]

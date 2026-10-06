@@ -33,8 +33,9 @@ fn overlap(a0: f64, a1: f64, b0: f64, b1: f64) -> f64 {
     (a1.min(b1) - a0.max(b0)).max(0.0)
 }
 
-/// Seconds spoken by each speaker inside the span, largest first.
-fn speaker_totals(span: RowSpan, turns: &[Turn]) -> Vec<(String, f64)> {
+/// The speaker with the most seconds inside the span (ties go to the smaller key); None when no
+/// turn overlaps it.
+fn majority_speaker(span: RowSpan, turns: &[Turn]) -> Option<&str> {
     let mut totals: HashMap<&str, f64> = HashMap::new();
     for t in turns {
         let o = overlap(span.start_s, span.end_s, t.start_s, t.end_s);
@@ -42,9 +43,10 @@ fn speaker_totals(span: RowSpan, turns: &[Turn]) -> Vec<(String, f64)> {
             *totals.entry(t.key.as_str()).or_default() += o;
         }
     }
-    let mut v: Vec<(String, f64)> = totals.into_iter().map(|(k, s)| (k.to_string(), s)).collect();
-    v.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal).then(a.0.cmp(&b.0)));
-    v
+    totals
+        .into_iter()
+        .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal).then(b.0.cmp(a.0)))
+        .map(|(k, _)| k)
 }
 
 fn nearest_turn(span: RowSpan, turns: &[Turn]) -> Option<&Turn> {
@@ -191,17 +193,16 @@ pub fn label_rows(rows: &[Option<RowSpan>], turns: &[Turn]) -> Vec<RowLabel> {
     rows.iter()
         .map(|row| {
             let Some(span) = *row else { return RowLabel::Unlabeled };
-            let totals = speaker_totals(span, turns);
-            let Some((majority, _)) = totals.first() else {
+            let Some(majority) = majority_speaker(span, turns) else {
                 return nearest_turn(span, turns)
                     .map(|t| RowLabel::Single(t.key.clone()))
                     .unwrap_or(RowLabel::Unlabeled);
             };
             let pieces = fold_short_pieces(pieces_for_span(span, turns), MIXED_MIN_SECONDS);
             if pieces.len() > 1 {
-                return RowLabel::Mixed { majority: majority.clone(), pieces };
+                return RowLabel::Mixed { majority: majority.to_string(), pieces };
             }
-            RowLabel::Single(majority.clone())
+            RowLabel::Single(majority.to_string())
         })
         .collect()
 }

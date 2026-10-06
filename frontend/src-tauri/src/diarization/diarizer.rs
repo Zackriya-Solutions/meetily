@@ -1,5 +1,5 @@
 //! End-to-end diarization: segmentation → embeddings → clustering → turns.
-use super::cluster::{cluster_speakers, weighted_centroid};
+use super::cluster::{cluster_centroids, cluster_speakers};
 use super::embedding::EmbeddingModel;
 use super::models::{EMBEDDING, SEGMENTATION};
 use super::reconstruct::{powerset_to_multilabel, reconstruct, smooth_turns, RawTurn, WindowActivity, NUM_LOCAL};
@@ -53,17 +53,16 @@ pub fn window_starts(total: usize, window: usize, step: usize) -> Vec<usize> {
     starts
 }
 
-/// `window` samples starting at `start`, zero-padded past the end of the audio.
-pub fn window_samples(samples: &[f32], start: usize, window: usize) -> Vec<f32> {
+/// The part of the `window` samples starting at `start` that lies inside the audio; the
+/// segmentation model zero-pads the rest.
+pub fn window_slice(samples: &[f32], start: usize, window: usize) -> &[f32] {
     let end = (start + window).min(samples.len());
-    let mut w = samples[start.min(end)..end].to_vec();
-    w.resize(window, 0.0);
-    w
+    &samples[start.min(end)..end]
 }
 
 /// Key clusters `spk_0..` by first speech, drop clusters without turns, and build
-/// speech-weighted centroids. `members` = (cluster, embedding, clean seconds).
-pub fn finalize(raw: Vec<RawTurn>, members: &[(usize, Vec<f32>, f64)]) -> Diarization {
+/// speech-weighted centroids from each embedding, its clean seconds and its cluster label.
+pub fn finalize(raw: Vec<RawTurn>, embeddings: &[Vec<f32>], weights: &[f64], labels: &[usize]) -> Diarization {
     let mut order: Vec<usize> = Vec::new();
     for t in &raw {
         if !order.contains(&t.cluster) {
@@ -71,17 +70,14 @@ pub fn finalize(raw: Vec<RawTurn>, members: &[(usize, Vec<f32>, f64)]) -> Diariz
         }
     }
     let key_of: HashMap<usize, String> = order.iter().enumerate().map(|(i, c)| (*c, format!("spk_{i}"))).collect();
+    let k = order.iter().max().map_or(0, |m| m + 1);
+    let mut centroids = cluster_centroids(embeddings, weights, labels, k);
     let speakers = order
         .iter()
-        .map(|c| {
-            let mine: Vec<&(usize, Vec<f32>, f64)> = members.iter().filter(|m| m.0 == *c).collect();
-            let vectors: Vec<&[f32]> = mine.iter().map(|m| m.1.as_slice()).collect();
-            let weights: Vec<f64> = mine.iter().map(|m| m.2).collect();
-            SpeakerCentroid {
-                key: key_of[c].clone(),
-                embedding: weighted_centroid(&vectors, &weights),
-                speech_seconds: raw.iter().filter(|t| t.cluster == *c).map(|t| t.end_s - t.start_s).sum(),
-            }
+        .map(|c| SpeakerCentroid {
+            key: key_of[c].clone(),
+            embedding: std::mem::take(&mut centroids[*c]),
+            speech_seconds: raw.iter().filter(|t| t.cluster == *c).map(|t| t.end_s - t.start_s).sum(),
         })
         .collect();
     let turns = raw
@@ -120,6 +116,13 @@ impl Diarizer {
         if starts.is_empty() {
             return Ok(Diarization::default());
         }
+        // Report each percent once.
+        let mut last_percent = None;
+        let mut progress = |p: u32| {
+            if last_percent.replace(p) != Some(p) {
+                progress(p);
+            }
+        };
 
         // 1. Segmentation (0–40 %).
         let mut activities: Vec<Vec<[f32; NUM_LOCAL]>> = Vec::with_capacity(starts.len());
@@ -127,7 +130,7 @@ impl Diarizer {
             if cancelled() {
                 return Err(Cancelled.into());
             }
-            let windows: Vec<Vec<f32>> = chunk.iter().map(|&s| window_samples(samples, s, window)).collect();
+            let windows: Vec<&[f32]> = chunk.iter().map(|&s| window_slice(samples, s, window)).collect();
             for scores in self.segmentation.run_batch(&windows)? {
                 activities.push(powerset_to_multilabel(&scores));
             }
@@ -188,7 +191,6 @@ impl Diarizer {
         let embeddings: Vec<Vec<f32>> = members_raw.iter().map(|m| m.2.clone()).collect();
         let weights: Vec<f64> = members_raw.iter().map(|m| m.3).collect();
         let labels = cluster_speakers(&embeddings, &weights, opts.num_speakers, opts.threshold);
-        let num_clusters = labels.iter().max().map(|m| m + 1).unwrap_or(0);
 
         let mut local_to_global = vec![[None; NUM_LOCAL]; activities.len()];
         for ((w, local, _, _), &label) in members_raw.iter().zip(&labels) {
@@ -199,20 +201,15 @@ impl Diarizer {
             .enumerate()
             .map(|(w, activity)| WindowActivity { start_sample: starts[w], activity, local_to_global: local_to_global[w] })
             .collect();
-        let raw = smooth_turns(reconstruct(&windows, samples.len(), geo, num_clusters), MIN_TURN_S, MAX_GAP_S);
-        let members: Vec<(usize, Vec<f32>, f64)> = members_raw
-            .into_iter()
-            .zip(labels)
-            .map(|((_, _, e, s), label)| (label, e, s))
-            .collect();
-        let result = finalize(raw, &members);
+        let raw = smooth_turns(reconstruct(&windows, samples.len(), geo), MIN_TURN_S, MAX_GAP_S);
+        let result = finalize(raw, &embeddings, &weights, &labels);
         progress(100);
 
         log::info!(
             "Diarized {:.1}s audio: {} windows, {} embeddings, {} speakers, {} turns (segmentation {:?}, embeddings {:?}, total {:?})",
             samples.len() as f64 / geo.sample_rate as f64,
             starts.len(),
-            members.len(),
+            embeddings.len(),
             result.speakers.len(),
             result.turns.len(),
             seg_done,
@@ -243,8 +240,8 @@ mod tests {
             RawTurn { start_s: 2.0, end_s: 3.0, cluster: 0 },
             RawTurn { start_s: 3.0, end_s: 5.0, cluster: 2 },
         ];
-        let members = vec![(0, vec![1.0, 0.0], 1.0), (1, vec![0.0, 1.0], 1.0), (2, vec![0.6, 0.8], 2.0)];
-        let d = finalize(raw, &members);
+        let embeddings = vec![vec![1.0, 0.0], vec![0.0, 1.0], vec![0.6, 0.8]];
+        let d = finalize(raw, &embeddings, &[1.0, 1.0, 2.0], &[0, 1, 2]);
         assert_eq!(d.speakers.len(), 2);
         assert_eq!(d.speakers[0].key, "spk_0");
         assert_eq!(d.speakers[0].speech_seconds, 4.0);
@@ -253,18 +250,17 @@ mod tests {
     }
 
     #[test]
-    fn short_clip_is_zero_padded_to_one_window() {
+    fn short_clip_fills_part_of_one_window() {
         let clip = vec![0.5f32; 40];
         assert_eq!(window_starts(clip.len(), 100, 25), vec![0]);
-        let w = window_samples(&clip, 0, 100);
-        assert_eq!(w.len(), 100);
-        assert!(w[..40].iter().all(|&x| x == 0.5));
-        assert!(w[40..].iter().all(|&x| x == 0.0));
+        assert_eq!(window_slice(&clip, 0, 100), &clip[..]);
+        assert_eq!(window_slice(&clip, 25, 100), &clip[25..]);
+        assert!(window_slice(&clip, 50, 100).is_empty());
     }
 
     #[test]
     fn finalize_of_nothing_is_empty() {
-        let d = finalize(Vec::new(), &[]);
+        let d = finalize(Vec::new(), &[], &[], &[]);
         assert!(d.speakers.is_empty() && d.turns.is_empty());
     }
 

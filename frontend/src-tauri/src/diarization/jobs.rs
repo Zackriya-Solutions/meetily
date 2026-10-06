@@ -1,8 +1,5 @@
 //! Speaker identification jobs: one at a time, queued, cancellable.
-use super::assign::{
-    carry_over_names, fold_short_pieces, label_rows, split_text_at_turns, RowLabel, RowSpan,
-    CARRY_OVER_MIN_SIMILARITY, MIN_TRANSCRIBED_PIECE_S,
-};
+use super::assign::{carry_over_names, label_rows, split_text_at_turns, RowLabel, RowSpan, CARRY_OVER_MIN_SIMILARITY};
 use super::diarizer::{Diarization, DiarizeOptions, Diarizer};
 use super::models::{self, DownloadProgress};
 use super::timing::{read_metadata, recording_time_map, TimeMap};
@@ -12,6 +9,7 @@ use crate::audio::common::{
     acquire_batch_engine_lock, batch_engine_busy, unload_engine_after_batch, write_transcripts_json, BatchEngine,
 };
 use crate::audio::decoder::decode_audio_file;
+use crate::database::models::Transcript;
 use crate::database::repositories::meeting::MeetingsRepository;
 use crate::database::repositories::speaker::{NewSpeaker, SpeakerWrite, SpeakersRepository, SplitRow};
 use crate::state::AppState;
@@ -19,7 +17,7 @@ use crate::whisper_engine::WhisperCompiledBackend;
 use anyhow::{anyhow, Result};
 use once_cell::sync::Lazy;
 use serde::Serialize;
-use sqlx::{Row, SqliteConnection, SqlitePool};
+use sqlx::{SqliteConnection, SqlitePool};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -149,14 +147,10 @@ impl JobQueue {
     pub fn status(&self, meeting_id: &str) -> Option<JobStatus> {
         self.statuses.get(meeting_id).cloned()
     }
-
-    /// Why the meeting's speakers and rows must not be changed by anything else right now.
-    pub fn busy_message(&self, meeting_id: &str) -> Option<&'static str> {
-        self.statuses
-            .contains_key(meeting_id)
-            .then_some("Speaker identification is running for this meeting; try again when it finishes")
-    }
 }
+
+const IDENTIFYING_MESSAGE: &str = "Speaker identification is running for this meeting; try again when it finishes";
+const RETRANSCRIBING_MESSAGE: &str = "This meeting is being retranscribed; try again when it finishes";
 
 static JOBS: Lazy<Mutex<JobQueue>> = Lazy::new(|| Mutex::new(JobQueue::default()));
 /// Cancel flag of the running job. Set and cleared only while holding the JOBS lock.
@@ -185,8 +179,21 @@ pub fn status(meeting_id: &str) -> Option<JobStatus> {
     jobs().status(meeting_id)
 }
 
-pub fn is_active(meeting_id: &str) -> bool {
-    status(meeting_id).is_some()
+/// Refuse while identification is queued or running for the meeting, or while it is being
+/// retranscribed: either would overwrite its speakers and rows.
+pub fn ensure_idle(meeting_id: &str) -> Result<(), String> {
+    ensure_idle_locked(&jobs(), meeting_id)
+}
+
+/// `ensure_idle` for a caller that already holds the queue lock.
+fn ensure_idle_locked(q: &JobQueue, meeting_id: &str) -> Result<(), String> {
+    if q.statuses.contains_key(meeting_id) {
+        return Err(IDENTIFYING_MESSAGE.into());
+    }
+    if is_retranscribing(meeting_id) {
+        return Err(RETRANSCRIBING_MESSAGE.into());
+    }
+    Ok(())
 }
 
 /// Marks a meeting as being retranscribed until dropped.
@@ -203,12 +210,11 @@ impl Drop for RetranscribeClaim {
 /// identification job can start on it.
 pub fn claim_for_retranscription(meeting_id: &str) -> Result<RetranscribeClaim, String> {
     let q = jobs();
-    if let Some(message) = q.busy_message(meeting_id) {
-        return Err(message.to_string());
-    }
-    if !busy_retranscribing().insert(meeting_id.to_string()) {
+    if is_retranscribing(meeting_id) {
         return Err("This meeting is already being retranscribed".into());
     }
+    ensure_idle_locked(&q, meeting_id)?;
+    busy_retranscribing().insert(meeting_id.to_string());
     drop(q);
     Ok(RetranscribeClaim(meeting_id.to_string()))
 }
@@ -221,8 +227,9 @@ pub fn enqueue<R: Runtime>(app: &AppHandle<R>, req: IdentifyRequest) -> Result<(
     let meeting_id = req.meeting_id.clone();
     let (spawn_worker, queued) = {
         let mut q = jobs();
+        // Not ensure_idle: a meeting that already has a job gets push's own message.
         if is_retranscribing(&meeting_id) {
-            return Err("This meeting is being retranscribed; try again when it finishes".into());
+            return Err(RETRANSCRIBING_MESSAGE.into());
         }
         q.push(req)?;
         let spawn = !q.worker_running;
@@ -419,6 +426,21 @@ async fn decode_16k(path: PathBuf) -> Result<DecodedMeetingAudio> {
     .map_err(|e| anyhow!("Decode task panicked: {}", e))?
 }
 
+/// Wait for the guard `lock()` resolves to, giving up with `Cancelled` once `cancelled` returns true.
+async fn lock_cancellable<G, Fut>(lock: impl Fn() -> Fut, cancelled: &(dyn Fn() -> bool + Sync)) -> Result<G>
+where
+    Fut: std::future::Future<Output = G>,
+{
+    loop {
+        if cancelled() {
+            return Err(Cancelled.into());
+        }
+        if let Ok(guard) = tokio::time::timeout(LOCK_POLL, lock()).await {
+            return Ok(guard);
+        }
+    }
+}
+
 /// Download models if needed, then diarize on a blocking thread. Only one diarization runs at a
 /// time; `waiting` is called once when another one is running. `cancelled` is checked while
 /// waiting, during the download and during diarization.
@@ -435,14 +457,7 @@ pub async fn diarize_samples(
         Ok(guard) => guard,
         Err(_) => {
             waiting();
-            loop {
-                if (*cancelled)() {
-                    return Err(Cancelled.into());
-                }
-                if let Ok(guard) = tokio::time::timeout(LOCK_POLL, DIARIZE_LOCK.lock()).await {
-                    break guard;
-                }
-            }
+            lock_cancellable(|| DIARIZE_LOCK.lock(), &*cancelled).await?
         }
     };
     let dir = models::models_directory()?;
@@ -464,6 +479,41 @@ pub async fn diarize_samples(
     .map_err(|e| anyhow!("Diarization task panicked: {}", e))?
 }
 
+/// Speaker identification inside an import or retranscription. Returns the diarization, or None
+/// with a warning for the user when no speakers were found or identification failed (the job then
+/// continues without speakers). `report` shows a progress message; Err when `cancelled` returned true.
+pub async fn diarize_for_batch<R: Runtime>(
+    app: &AppHandle<R>,
+    samples: Arc<Vec<f32>>,
+    num_speakers: Option<usize>,
+    report: impl Fn(&str) + Clone + Send + Sync + 'static,
+    cancelled: impl Fn() -> bool + Send + Sync + 'static,
+) -> Result<(Option<Diarization>, Option<String>), Cancelled> {
+    report("Identifying speakers...");
+    let (app, on_download, on_wait, on_progress) = (app.clone(), report.clone(), report.clone(), report);
+    let result = diarize_samples(
+        samples,
+        num_speakers,
+        move |p| {
+            super::commands::emit_download_progress(&app, p.clone());
+            on_download(&format!("Downloading speaker models... {}%", p.percent));
+        },
+        move || on_wait("Waiting for another speaker identification..."),
+        move |p| on_progress(&format!("Identifying speakers... {}%", p)),
+        cancelled,
+    )
+    .await;
+    match result {
+        Ok(d) if !d.speakers.is_empty() => Ok((Some(d), None)),
+        Ok(_) => Ok((None, Some("No distinct speakers were found".to_string()))),
+        Err(e) if e.is::<Cancelled>() => Err(Cancelled),
+        Err(e) => {
+            log::warn!("Speaker identification failed, continuing without speakers: {:#}", e);
+            Ok((None, Some(format!("Speaker identification failed: {:#}", e))))
+        }
+    }
+}
+
 /// New speakers for `d`, with names carried over from the meeting's previous speakers. Reads the
 /// previous speakers through `conn`, so call it inside the write transaction.
 pub async fn speaker_write_names(conn: &mut SqliteConnection, meeting_id: &str, d: &Diarization) -> Result<Vec<NewSpeaker>> {
@@ -476,47 +526,40 @@ pub async fn speaker_write_names(conn: &mut SqliteConnection, meeting_id: &str, 
     let names = carry_over_names(&new, &old, CARRY_OVER_MIN_SIMILARITY);
     Ok(d.speakers
         .iter()
-        .map(|s| NewSpeaker {
-            key: s.key.clone(),
-            display_name: names.get(&s.key).cloned(),
-            embedding: s.embedding.clone(),
-            speech_seconds: s.speech_seconds,
-        })
+        .map(|s| NewSpeaker { display_name: names.get(&s.key).cloned(), ..s.into() })
         .collect())
 }
 
-/// Rewrite the meeting folder's transcripts.json from the database.
-pub async fn rewrite_transcripts_json(pool: &SqlitePool, meeting_id: &str, folder: &Path) -> Result<()> {
+/// Rewrite transcripts.json from the database into the meeting's stored folder, or `fallback`
+/// when it has none. Failures are logged; the database stays the source of truth.
+pub async fn rewrite_transcripts_json(pool: &SqlitePool, meeting_id: &str, fallback: Option<&Path>) {
+    let Some(folder) = transcripts_json_folder(pool, meeting_id, fallback).await else {
+        return;
+    };
+    if let Err(e) = write_json_from_db(pool, meeting_id, folder).await {
+        log::warn!("Failed to rewrite transcripts.json for {}: {:#}", meeting_id, e);
+    }
+}
+
+async fn write_json_from_db(pool: &SqlitePool, meeting_id: &str, folder: PathBuf) -> Result<()> {
     // Held across the read and the write, so concurrent rewrites cannot interleave or write stale data.
     let _guard = JSON_REWRITE_LOCK.lock().await;
-    let rows = sqlx::query(
-        "SELECT id, transcript, timestamp, audio_start_time, audio_end_time, duration, speaker
-         FROM transcripts WHERE meeting_id = ? ORDER BY audio_start_time",
-    )
-    .bind(meeting_id)
-    .fetch_all(pool)
-    .await?;
-    let segments: Vec<TranscriptSegment> = rows
-        .into_iter()
-        .map(|r| TranscriptSegment {
-            id: r.get("id"),
-            text: r.get("transcript"),
-            timestamp: r.get("timestamp"),
-            audio_start_time: r.get("audio_start_time"),
-            audio_end_time: r.get("audio_end_time"),
-            duration: r.get("duration"),
-            speaker: r.get("speaker"),
-        })
-        .collect();
+    let segments: Vec<TranscriptSegment> =
+        sqlx::query_as::<_, Transcript>("SELECT * FROM transcripts WHERE meeting_id = ? ORDER BY audio_start_time")
+            .bind(meeting_id)
+            .fetch_all(pool)
+            .await?
+            .into_iter()
+            .map(TranscriptSegment::from)
+            .collect();
     let labels = SpeakersRepository::labels(pool, meeting_id).await?;
-    let folder = folder.to_path_buf();
     tokio::task::spawn_blocking(move || write_transcripts_json(&folder, &segments, &labels))
         .await
         .map_err(|e| anyhow!("transcripts.json write task panicked: {}", e))?
 }
 
 /// The meeting's folder as stored in the database; `fallback` when it has none.
-async fn transcripts_json_folder(pool: &SqlitePool, meeting_id: &str, fallback: &Path) -> PathBuf {
+async fn transcripts_json_folder(pool: &SqlitePool, meeting_id: &str, fallback: Option<&Path>) -> Option<PathBuf> {
     match MeetingsRepository::get_meeting_metadata(pool, meeting_id).await {
         Ok(Some(meeting)) => meeting.folder_path.filter(|f| !f.is_empty()).map(PathBuf::from),
         Ok(None) => None,
@@ -525,7 +568,7 @@ async fn transcripts_json_folder(pool: &SqlitePool, meeting_id: &str, fallback: 
             None
         }
     }
-    .unwrap_or_else(|| fallback.to_path_buf())
+    .or_else(|| fallback.map(Path::to_path_buf))
 }
 
 struct StoredRow {
@@ -543,44 +586,30 @@ struct RowUpdates {
     text_splits: usize,
     /// Rows with a speaker change that kept their majority label because they could not be cut.
     kept_whole: usize,
-    warning: Option<String>,
 }
 
-/// What happens to a row with a speaker change.
-#[derive(Debug, PartialEq)]
-enum RowDecision {
-    /// Keep the row and its text; label it with this speaker.
-    Whole(String),
-    /// Replace the row with these pieces.
-    Split(Vec<SplitRow>),
-}
-
-/// The pieces of a row with a speaker change to transcribe, each with its 16 kHz sample range.
-/// Pieces shorter than `MIN_TRANSCRIBED_PIECE_S` are folded into a neighbour first. None when the
-/// row should stay whole: fewer than two pieces remain, or a piece has no audio.
-fn plan_row_pieces(pieces: Vec<Turn>, time_map: TimeMap, samples_len: usize) -> Option<Vec<(Turn, Range<usize>)>> {
-    let pieces = fold_short_pieces(pieces, MIN_TRANSCRIBED_PIECE_S);
-    if pieces.len() < 2 {
-        return None;
-    }
+/// The 16 kHz sample range of each piece of a row with a speaker change. Pieces come from
+/// `label_rows`, so there are at least two and none is shorter than MIN_TRANSCRIBED_PIECE_S.
+/// None when a piece has no audio.
+fn piece_ranges(pieces: &[Turn], time_map: TimeMap, samples_len: usize) -> Option<Vec<Range<usize>>> {
     pieces
-        .into_iter()
+        .iter()
         .map(|p| {
             // Pieces are in transcript time; cut the audio at the matching file positions.
             let a = ((time_map.file_s(p.start_s) * 16000.0) as usize).min(samples_len);
             let b = ((time_map.file_s(p.end_s) * 16000.0) as usize).min(samples_len);
-            (b > a).then_some((p, a..b))
+            (b > a).then_some(a..b)
         })
         .collect()
 }
 
-/// Split the row only when every piece came back with text; otherwise its words would be lost,
-/// so it stays whole with the majority label.
-fn decide_row_update(majority: String, pieces: &[Turn], texts: &[String]) -> RowDecision {
-    if pieces.len() < 2 || texts.len() != pieces.len() || texts.iter().any(|t| t.trim().is_empty()) {
-        return RowDecision::Whole(majority);
+/// The rows replacing a row cut into `pieces`, when every piece has text; otherwise None, since
+/// the row's words would be lost.
+fn split_rows(pieces: &[Turn], texts: &[String]) -> Option<Vec<SplitRow>> {
+    if texts.len() != pieces.len() || texts.iter().any(|t| t.trim().is_empty()) {
+        return None;
     }
-    RowDecision::Split(
+    Some(
         pieces
             .iter()
             .zip(texts)
@@ -595,13 +624,9 @@ fn engine_is_fast(provider: Option<&str>, whisper_backend: WhisperCompiledBacken
     provider == Some("parakeet") || whisper_backend != WhisperCompiledBackend::Cpu
 }
 
-/// Splits a row's existing text among its pieces, after folding pieces too short to hold words.
-fn split_row_text(majority: String, text: &str, span: RowSpan, pieces: Vec<Turn>) -> RowDecision {
-    let pieces = fold_short_pieces(pieces, MIN_TRANSCRIBED_PIECE_S);
-    match split_text_at_turns(text, span, &pieces) {
-        Some(texts) => decide_row_update(majority, &pieces, &texts),
-        None => RowDecision::Whole(majority),
-    }
+/// Splits a row's existing text among its pieces; None when the text cannot be cut.
+fn split_row_text(text: &str, span: RowSpan, pieces: &[Turn]) -> Option<Vec<SplitRow>> {
+    split_rows(pieces, &split_text_at_turns(text, span, pieces)?)
 }
 
 /// How rows with a speaker change are split.
@@ -653,25 +678,21 @@ async fn run_identify<R: Runtime>(app: &AppHandle<R>, req: &IdentifyRequest) -> 
     }
     let time_map = recording_time_map(read_metadata(&req.folder_path).as_ref(), decoded.native_rate, decoded.native_frames);
 
-    let rows: Vec<StoredRow> = sqlx::query(
-        "SELECT id, transcript, audio_start_time, audio_end_time FROM transcripts WHERE meeting_id = ? ORDER BY audio_start_time",
-    )
-    .bind(&meeting_id)
-    .fetch_all(&pool)
-    .await?
-    .into_iter()
-    .map(|r| {
-        let (a, b): (Option<f64>, Option<f64>) = (r.get("audio_start_time"), r.get("audio_end_time"));
-        StoredRow {
-            id: r.get("id"),
-            text: r.get("transcript"),
-            span: match (a, b) {
-                (Some(a), Some(b)) if b > a => Some(RowSpan { start_s: a, end_s: b }),
-                _ => None,
-            },
-        }
-    })
-    .collect();
+    let rows: Vec<StoredRow> =
+        sqlx::query_as::<_, Transcript>("SELECT * FROM transcripts WHERE meeting_id = ? ORDER BY audio_start_time")
+            .bind(&meeting_id)
+            .fetch_all(&pool)
+            .await?
+            .into_iter()
+            .map(|r| StoredRow {
+                span: match (r.audio_start_time, r.audio_end_time) {
+                    (Some(a), Some(b)) if b > a => Some(RowSpan { start_s: a, end_s: b }),
+                    _ => None,
+                },
+                id: r.id,
+                text: r.transcript,
+            })
+            .collect();
 
     yield_to_recording(app, req, 2).await?;
     let diarize_started = Instant::now();
@@ -736,16 +757,9 @@ async fn run_identify<R: Runtime>(app: &AppHandle<R>, req: &IdentifyRequest) -> 
             emit_progress(app, &meeting_id, "waiting", 86, "Waiting for another transcription to finish…");
         }
         // Held from engine load to unload, so another batch job cannot unload or swap the model.
-        batch_guard = Some(loop {
-            if is_cancelled() {
-                return Err(Cancelled.into());
-            }
-            if let Ok(guard) = tokio::time::timeout(LOCK_POLL, acquire_batch_engine_lock()).await {
-                break guard;
-            }
-        });
+        batch_guard = Some(lock_cancellable(acquire_batch_engine_lock, &is_cancelled).await?);
         emit_progress(app, &meeting_id, "splitting", 86, "Loading transcription engine…");
-        match crate::audio::retranscription::load_configured_engine(app).await {
+        match crate::audio::retranscription::load_configured_engine(app, provider.as_deref()).await {
             Ok(engine) => Some(engine),
             Err(e) => {
                 log::warn!("Cannot re-transcribe rows with speaker changes, splitting their text instead: {:#}", e);
@@ -771,7 +785,7 @@ async fn run_identify<R: Runtime>(app: &AppHandle<R>, req: &IdentifyRequest) -> 
         unload_engine_after_batch(engine.is_parakeet()).await;
     }
     drop(batch_guard);
-    let RowUpdates { row_labels, row_splits, pieces_done, text_splits, kept_whole, warning: piece_warning } = updates?;
+    let RowUpdates { row_labels, row_splits, pieces_done, text_splits, kept_whole } = updates?;
     let t_split = split_started.elapsed();
     if is_cancelled() {
         return Err(Cancelled.into());
@@ -791,10 +805,7 @@ async fn run_identify<R: Runtime>(app: &AppHandle<R>, req: &IdentifyRequest) -> 
     SpeakersRepository::replace_for_meeting(&mut tx, &meeting_id, &SpeakerWrite { speakers, row_labels, row_splits }).await?;
     tx.commit().await?;
     drop(conn);
-    let json_folder = transcripts_json_folder(&pool, &meeting_id, &req.folder_path).await;
-    if let Err(e) = rewrite_transcripts_json(&pool, &meeting_id, &json_folder).await {
-        log::warn!("Failed to rewrite transcripts.json for {}: {:#}", meeting_id, e);
-    }
+    rewrite_transcripts_json(&pool, &meeting_id, Some(&req.folder_path)).await;
     let t_save = save_started.elapsed();
 
     let total = started.elapsed();
@@ -815,6 +826,7 @@ async fn run_identify<R: Runtime>(app: &AppHandle<R>, req: &IdentifyRequest) -> 
         total.as_secs_f64() / decoded_s.max(1e-9) * 100.0
     );
     emit_progress(app, &meeting_id, "done", 100, "Done");
+    let piece_warning = (kept_whole > 0).then(|| "Some lines with two speakers were kept whole".to_string());
     Ok(IdentifyOutcome { speaker_count, warning: split_warning.or(piece_warning) })
 }
 
@@ -832,14 +844,7 @@ async fn build_row_updates<R: Runtime>(
     mixed_count: usize,
     language: Option<String>,
 ) -> Result<RowUpdates> {
-    let mut out = RowUpdates {
-        row_labels: Vec::new(),
-        row_splits: Vec::new(),
-        pieces_done: 0,
-        text_splits: 0,
-        kept_whole: 0,
-        warning: None,
-    };
+    let mut out = RowUpdates { row_labels: Vec::new(), row_splits: Vec::new(), pieces_done: 0, text_splits: 0, kept_whole: 0 };
     let mut done_mixed = 0usize;
     for (row, label) in rows.iter().zip(labels) {
         if is_cancelled() {
@@ -862,35 +867,21 @@ async fn build_row_updates<R: Runtime>(
                     continue;
                 };
                 let transcribed = match splitter {
-                    Splitter::Engine(engine) => Some(
-                        transcribe_row_pieces(
-                            engine,
-                            &row.id,
-                            majority.clone(),
-                            pieces.clone(),
-                            time_map,
-                            samples,
-                            &language,
-                            &mut out.pieces_done,
-                        )
-                        .await,
-                    ),
+                    Splitter::Engine(engine) => {
+                        transcribe_row_pieces(engine, &row.id, &pieces, time_map, samples, &language, &mut out.pieces_done).await
+                    }
                     _ => None,
                 };
-                let decision = match transcribed {
-                    Some(split @ RowDecision::Split(_)) => split,
-                    _ => {
-                        out.text_splits += 1;
-                        split_row_text(majority, &row.text, span, pieces)
-                    }
-                };
-                match decision {
-                    RowDecision::Whole(label) => {
+                let split = transcribed.or_else(|| {
+                    out.text_splits += 1;
+                    split_row_text(&row.text, span, &pieces)
+                });
+                match split {
+                    Some(split) => out.row_splits.push((row.id.clone(), split)),
+                    None => {
                         out.kept_whole += 1;
-                        out.warning.get_or_insert_with(|| "Some lines with two speakers were kept whole".into());
-                        out.row_labels.push((row.id.clone(), Some(label)));
+                        out.row_labels.push((row.id.clone(), Some(majority)));
                     }
-                    RowDecision::Split(split) => out.row_splits.push((row.id.clone(), split)),
                 }
             }
         }
@@ -898,25 +889,21 @@ async fn build_row_updates<R: Runtime>(
     Ok(out)
 }
 
-/// Re-transcribes each piece of a row with a speaker change. Whole when the row cannot be cut into
-/// pieces with audio, or a piece fails or comes back empty.
-#[allow(clippy::too_many_arguments)]
+/// Re-transcribes each piece of a row with a speaker change. None when a piece has no audio, or
+/// fails or comes back empty.
 async fn transcribe_row_pieces(
     engine: &BatchEngine,
     row_id: &str,
-    majority: String,
-    pieces: Vec<Turn>,
+    pieces: &[Turn],
     time_map: TimeMap,
     samples: &[f32],
     language: &Option<String>,
     pieces_done: &mut usize,
-) -> RowDecision {
-    let Some(plan) = plan_row_pieces(pieces, time_map, samples.len()) else {
-        return RowDecision::Whole(majority);
-    };
-    let mut texts = Vec::with_capacity(plan.len());
-    for (_, range) in &plan {
-        match engine.transcribe(samples[range.clone()].to_vec(), language.clone()).await {
+) -> Option<Vec<SplitRow>> {
+    let ranges = piece_ranges(pieces, time_map, samples.len())?;
+    let mut texts = Vec::with_capacity(ranges.len());
+    for range in ranges {
+        match engine.transcribe(samples[range].to_vec(), language.clone()).await {
             Ok(t) => texts.push(t),
             Err(e) => {
                 log::warn!("Piece transcription failed for row {}, splitting its text instead: {:#}", row_id, e);
@@ -929,8 +916,7 @@ async fn transcribe_row_pieces(
             break;
         }
     }
-    let pieces: Vec<Turn> = plan.into_iter().map(|(p, _)| p).collect();
-    decide_row_update(majority, &pieces, &texts)
+    split_rows(pieces, &texts)
 }
 
 #[cfg(test)]
@@ -1002,15 +988,15 @@ mod tests {
     }
 
     #[test]
-    fn busy_message_reports_queued_and_running_jobs() {
+    fn ensure_idle_refuses_queued_and_running_jobs() {
         let mut q = JobQueue::default();
-        assert!(q.busy_message("a").is_none());
+        assert!(ensure_idle_locked(&q, "a").is_ok());
         q.push(req("a")).unwrap();
-        assert!(q.busy_message("a").is_some());
+        assert_eq!(ensure_idle_locked(&q, "a"), Err(IDENTIFYING_MESSAGE.to_string()));
         q.start_next();
-        assert!(q.busy_message("a").is_some());
+        assert!(ensure_idle_locked(&q, "a").is_err());
         q.finish("a");
-        assert!(q.busy_message("a").is_none());
+        assert!(ensure_idle_locked(&q, "a").is_ok());
     }
 
     #[test]
@@ -1018,11 +1004,13 @@ mod tests {
         let id = "claim-test-meeting";
         let claim = claim_for_retranscription(id).unwrap();
         assert!(is_retranscribing(id));
+        assert_eq!(ensure_idle(id), Err(RETRANSCRIBING_MESSAGE.to_string()));
         // A second claim on the same meeting is refused and must not release the first one.
         assert!(claim_for_retranscription(id).is_err());
         assert!(is_retranscribing(id));
         drop(claim);
         assert!(!is_retranscribing(id));
+        assert!(ensure_idle(id).is_ok());
     }
 
     fn turn(s: f64, e: f64, k: &str) -> Turn {
@@ -1034,12 +1022,12 @@ mod tests {
     }
 
     #[test]
-    fn row_with_an_empty_piece_stays_whole_with_its_majority_label() {
+    fn row_with_an_empty_piece_is_not_split() {
         let pieces = vec![turn(0.0, 2.0, "spk_0"), turn(2.0, 4.5, "spk_1")];
         let texts = vec!["hello there".to_string(), "  ".to_string()];
-        assert_eq!(decide_row_update("spk_1".into(), &pieces, &texts), RowDecision::Whole("spk_1".into()));
+        assert_eq!(split_rows(&pieces, &texts), None);
         let texts = vec![String::new(), "general kenobi".to_string()];
-        assert_eq!(decide_row_update("spk_1".into(), &pieces, &texts), RowDecision::Whole("spk_1".into()));
+        assert_eq!(split_rows(&pieces, &texts), None);
     }
 
     #[test]
@@ -1047,28 +1035,23 @@ mod tests {
         let pieces = vec![turn(0.0, 2.0, "spk_0"), turn(2.0, 4.5, "spk_1")];
         let texts = vec![" hello there ".to_string(), "general kenobi".to_string()];
         assert_eq!(
-            decide_row_update("spk_1".into(), &pieces, &texts),
-            RowDecision::Split(vec![split_row("hello there", 0.0, 2.0, "spk_0"), split_row("general kenobi", 2.0, 4.5, "spk_1")])
+            split_rows(&pieces, &texts),
+            Some(vec![split_row("hello there", 0.0, 2.0, "spk_0"), split_row("general kenobi", 2.0, 4.5, "spk_1")])
         );
     }
 
     #[test]
-    fn row_stays_whole_when_texts_do_not_match_its_pieces() {
+    fn row_is_not_split_when_texts_do_not_match_its_pieces() {
         let pieces = vec![turn(0.0, 2.0, "spk_0"), turn(2.0, 4.5, "spk_1")];
         let texts = vec!["hello there".to_string()];
-        assert_eq!(decide_row_update("spk_1".into(), &pieces, &texts), RowDecision::Whole("spk_1".into()));
+        assert_eq!(split_rows(&pieces, &texts), None);
     }
 
     #[test]
-    fn short_pieces_are_folded_before_transcription() {
-        let pieces = vec![turn(10.0, 12.0, "spk_0"), turn(12.0, 12.5, "spk_1"), turn(12.5, 15.0, "spk_2")];
-        let plan = plan_row_pieces(pieces, TimeMap::Identity, 16_000 * 20).expect("two pieces remain");
-        assert_eq!(plan.iter().map(|(t, _)| t.clone()).collect::<Vec<_>>(), vec![turn(10.0, 12.5, "spk_0"), turn(12.5, 15.0, "spk_2")]);
-        assert_eq!(plan.iter().map(|(_, r)| r.clone()).collect::<Vec<_>>(), vec![160_000..200_000, 200_000..240_000]);
-        for (t, r) in &plan {
-            assert!(t.duration() >= MIN_TRANSCRIBED_PIECE_S);
-            assert!(r.len() >= 16_000);
-        }
+    fn pieces_map_to_their_sample_ranges() {
+        let pieces = vec![turn(10.0, 12.5, "spk_0"), turn(12.5, 15.0, "spk_2")];
+        let ranges = piece_ranges(&pieces, TimeMap::Identity, 16_000 * 20).expect("every piece has audio");
+        assert_eq!(ranges, vec![160_000..200_000, 200_000..240_000]);
     }
 
     #[test]
@@ -1087,8 +1070,8 @@ mod tests {
         let pieces = vec![turn(10.0, 15.0, "spk_0"), turn(15.0, 20.0, "spk_1")];
         let text = "Hello there, how are you doing today? I am fine thanks for asking.";
         assert_eq!(
-            split_row_text("spk_0".into(), text, span, pieces),
-            RowDecision::Split(vec![
+            split_row_text(text, span, &pieces),
+            Some(vec![
                 split_row("Hello there, how are you doing today?", 10.0, 15.0, "spk_0"),
                 split_row("I am fine thanks for asking.", 15.0, 20.0, "spk_1"),
             ])
@@ -1096,23 +1079,16 @@ mod tests {
     }
 
     #[test]
-    fn row_text_split_folds_short_pieces_and_keeps_uncuttable_rows_whole() {
+    fn uncuttable_row_text_is_not_split() {
         let span = RowSpan { start_s: 0.0, end_s: 10.0 };
-        let pieces = vec![turn(0.0, 5.0, "spk_0"), turn(5.0, 5.5, "spk_2"), turn(5.5, 10.0, "spk_1")];
-        let text = "Hello there, how are you doing today? I am fine thanks for asking.";
-        let RowDecision::Split(rows) = split_row_text("spk_0".into(), text, span, pieces.clone()) else {
-            panic!("expected a split");
-        };
-        assert_eq!(rows.iter().map(|r| r.speaker.as_str()).collect::<Vec<_>>(), vec!["spk_0", "spk_1"]);
-        assert_eq!(split_row_text("spk_1".into(), "Yes.", span, pieces), RowDecision::Whole("spk_1".into()));
+        let pieces = vec![turn(0.0, 5.0, "spk_0"), turn(5.0, 10.0, "spk_1")];
+        assert_eq!(split_row_text("Yes.", span, &pieces), None);
     }
 
     #[test]
-    fn row_stays_whole_when_folding_leaves_one_piece_or_a_piece_has_no_audio() {
-        let short = vec![turn(0.0, 0.75, "spk_0"), turn(0.75, 1.5, "spk_1")];
-        assert!(plan_row_pieces(short, TimeMap::Identity, 16_000 * 20).is_none());
+    fn row_is_not_split_when_a_piece_has_no_audio() {
         let past_the_end = vec![turn(0.0, 2.0, "spk_0"), turn(2.0, 4.0, "spk_1")];
-        assert!(plan_row_pieces(past_the_end, TimeMap::Identity, 16_000 * 2).is_none());
+        assert!(piece_ranges(&past_the_end, TimeMap::Identity, 16_000 * 2).is_none());
     }
 
     #[tokio::test]
@@ -1128,9 +1104,11 @@ mod tests {
             .await
             .unwrap();
         let given = Path::new("/from/request");
-        assert_eq!(transcripts_json_folder(&pool, "stored", given).await, PathBuf::from("/meetings/stored"));
-        assert_eq!(transcripts_json_folder(&pool, "no-folder", given).await, given);
-        assert_eq!(transcripts_json_folder(&pool, "missing", given).await, given);
+        assert_eq!(transcripts_json_folder(&pool, "stored", Some(given)).await, Some(PathBuf::from("/meetings/stored")));
+        assert_eq!(transcripts_json_folder(&pool, "stored", None).await, Some(PathBuf::from("/meetings/stored")));
+        assert_eq!(transcripts_json_folder(&pool, "no-folder", Some(given)).await.as_deref(), Some(given));
+        assert_eq!(transcripts_json_folder(&pool, "missing", Some(given)).await.as_deref(), Some(given));
+        assert_eq!(transcripts_json_folder(&pool, "no-folder", None).await, None);
     }
 
     #[tokio::test]

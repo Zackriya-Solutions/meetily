@@ -31,7 +31,7 @@ pub async fn diarization_delete_models() -> Result<ModelsStatus, String> {
 }
 
 use super::jobs::{self, IdentifyRequest, JobStatus};
-use crate::database::repositories::meeting::MeetingsRepository;
+use crate::audio::common::speaker_count_from_command;
 use crate::database::repositories::speaker::{MeetingSpeaker, ReassignTarget, SpeakersRepository};
 use crate::state::AppState;
 use std::path::PathBuf;
@@ -50,7 +50,7 @@ pub async fn start_speaker_identification<R: Runtime>(
         IdentifyRequest {
             meeting_id,
             folder_path: PathBuf::from(meeting_folder_path),
-            num_speakers: num_speakers.map(|n| n as usize),
+            num_speakers: speaker_count_from_command(num_speakers),
             automatic: false,
         },
     )
@@ -64,28 +64,6 @@ pub async fn cancel_speaker_identification<R: Runtime>(app: AppHandle<R>, meetin
 #[tauri::command]
 pub async fn get_speaker_identification_status(meeting_id: String) -> Result<Option<JobStatus>, String> {
     Ok(jobs::status(&meeting_id))
-}
-
-/// Refuse speaker edits that a running identification or retranscription would overwrite.
-fn ensure_editable(meeting_id: &str) -> Result<(), String> {
-    if jobs::is_active(meeting_id) {
-        return Err("Speaker identification is running for this meeting; try again when it finishes".into());
-    }
-    if jobs::is_retranscribing(meeting_id) {
-        return Err("This meeting is being retranscribed; try again when it finishes".into());
-    }
-    Ok(())
-}
-
-async fn refresh_json(state: &AppState, meeting_id: &str) {
-    let pool = state.db_manager.pool();
-    if let Ok(Some(meeting)) = MeetingsRepository::get_meeting_metadata(pool, meeting_id).await {
-        if let Some(folder) = meeting.folder_path {
-            if let Err(e) = jobs::rewrite_transcripts_json(pool, meeting_id, std::path::Path::new(&folder)).await {
-                log::warn!("Failed to rewrite transcripts.json for {}: {:#}", meeting_id, e);
-            }
-        }
-    }
 }
 
 #[tauri::command]
@@ -105,11 +83,11 @@ pub async fn api_rename_meeting_speaker(
     speaker_key: String,
     display_name: String,
 ) -> Result<(), String> {
-    ensure_editable(&meeting_id)?;
+    jobs::ensure_idle(&meeting_id)?;
     SpeakersRepository::rename(state.db_manager.pool(), &meeting_id, &speaker_key, &display_name)
         .await
         .map_err(|e| format!("Failed to rename speaker: {}", e))?;
-    refresh_json(&state, &meeting_id).await;
+    jobs::rewrite_transcripts_json(state.db_manager.pool(), &meeting_id, None).await;
     Ok(())
 }
 
@@ -120,11 +98,11 @@ pub async fn api_merge_meeting_speakers(
     from_key: String,
     into_key: String,
 ) -> Result<(), String> {
-    ensure_editable(&meeting_id)?;
+    jobs::ensure_idle(&meeting_id)?;
     SpeakersRepository::merge(state.db_manager.pool(), &meeting_id, &from_key, &into_key)
         .await
         .map_err(|e| format!("Failed to merge speakers: {}", e))?;
-    refresh_json(&state, &meeting_id).await;
+    jobs::rewrite_transcripts_json(state.db_manager.pool(), &meeting_id, None).await;
     Ok(())
 }
 
@@ -136,7 +114,7 @@ pub async fn api_set_transcript_speaker(
     transcript_id: String,
     speaker_key: Option<String>,
 ) -> Result<String, String> {
-    ensure_editable(&meeting_id)?;
+    jobs::ensure_idle(&meeting_id)?;
     let target = match speaker_key {
         Some(k) => ReassignTarget::Existing(k),
         None => ReassignTarget::New,
@@ -144,6 +122,6 @@ pub async fn api_set_transcript_speaker(
     let key = SpeakersRepository::reassign_row(state.db_manager.pool(), &meeting_id, &transcript_id, target)
         .await
         .map_err(|e| format!("Failed to change speaker: {}", e))?;
-    refresh_json(&state, &meeting_id).await;
+    jobs::rewrite_transcripts_json(state.db_manager.pool(), &meeting_id, None).await;
     Ok(key)
 }

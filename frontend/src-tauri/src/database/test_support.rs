@@ -1,4 +1,6 @@
 //! Shared fixtures for database tests.
+use crate::api::TranscriptSegment;
+use crate::database::repositories::transcript::TranscriptsRepository;
 use sqlx::sqlite::SqlitePoolOptions;
 use sqlx::SqlitePool;
 
@@ -35,24 +37,22 @@ pub async fn seed_meeting(pool: &SqlitePool, meeting_id: &str, rows: &[SeedRow])
         .execute(pool)
         .await
         .expect("insert meeting");
+    let mut conn = pool.acquire().await.expect("acquire connection");
     for row in rows {
-        sqlx::query(
-            "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration, speaker)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(row.id)
-        .bind(meeting_id)
-        .bind(row.text)
-        .bind("2026-09-27T10:00:00Z")
-        .bind(row.start)
-        .bind(row.end)
-        .bind(match (row.start, row.end) {
-            (Some(s), Some(e)) => Some(e - s),
-            _ => None,
-        })
-        .bind(row.speaker)
-        .execute(pool)
-        .await
-        .expect("insert transcript");
+        let segment = TranscriptSegment {
+            id: row.id.to_string(),
+            text: row.text.to_string(),
+            timestamp: "2026-09-27T10:00:00Z".to_string(),
+            audio_start_time: row.start,
+            audio_end_time: row.end,
+            duration: match (row.start, row.end) {
+                (Some(s), Some(e)) => Some(e - s),
+                _ => None,
+            },
+            speaker: row.speaker.map(str::to_string),
+        };
+        TranscriptsRepository::insert_row(&mut conn, row.id, meeting_id, &segment)
+            .await
+            .expect("insert transcript");
     }
 }

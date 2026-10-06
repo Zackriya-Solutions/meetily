@@ -1,10 +1,9 @@
 //! pyannote segmentation-3.0: per-frame activity of up to 3 local speakers per 10 s window.
 use super::reconstruct::FrameGeometry;
+use super::{model_metadata, session_builder};
 use anyhow::{anyhow, Result};
 use ndarray::{Array3, Ix3};
-use ort::execution_providers::CPUExecutionProvider;
 use ort::inputs;
-use ort::session::builder::GraphOptimizationLevel;
 use ort::session::Session;
 use ort::value::TensorRef;
 use std::path::Path;
@@ -19,22 +18,13 @@ pub struct SegmentationModel {
 }
 
 fn meta_usize(session: &Session, key: &str, default: usize) -> usize {
-    session
-        .metadata()
-        .ok()
-        .and_then(|m| m.custom(key).ok().flatten())
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(default)
+    model_metadata(session, key).and_then(|v| v.parse().ok()).unwrap_or(default)
 }
 
 impl SegmentationModel {
     pub fn load(path: &Path) -> Result<Self> {
         crate::ensure_onnx_runtime_available()?;
-        let session = Session::builder()?
-            .with_optimization_level(GraphOptimizationLevel::Level3)?
-            .with_execution_providers(vec![CPUExecutionProvider::default().build()])?
-            .with_intra_threads(super::intra_op_threads())?
-            .commit_from_file(path)?;
+        let session = session_builder()?.commit_from_file(path)?;
         let window_samples = meta_usize(&session, "window_size", 160_000);
         let geometry = FrameGeometry {
             frame_shift: meta_usize(&session, "receptive_field_shift", 270),
@@ -45,13 +35,15 @@ impl SegmentationModel {
         Ok(Self { session, window_samples, geometry })
     }
 
-    /// Powerset scores (frames × 7) for each window. Every window must be `window_samples` long.
-    pub fn run_batch(&mut self, windows: &[Vec<f32>]) -> Result<Vec<Vec<[f32; 7]>>> {
-        let mut input = Array3::<f32>::zeros((windows.len(), 1, self.window_samples));
-        for (b, w) in windows.iter().enumerate() {
-            for (i, &x) in w.iter().take(self.window_samples).enumerate() {
-                input[[b, 0, i]] = x;
-            }
+    /// Powerset scores (frames × 7) for each window. Windows shorter than `window_samples` are
+    /// zero-padded; longer ones are cut.
+    pub fn run_batch(&mut self, windows: &[&[f32]]) -> Result<Vec<Vec<[f32; 7]>>> {
+        let len = self.window_samples;
+        let mut input = Array3::<f32>::zeros((windows.len(), 1, len));
+        let rows = input.as_slice_mut().expect("a new array is contiguous").chunks_exact_mut(len);
+        for (row, w) in rows.zip(windows) {
+            let n = w.len().min(len);
+            row[..n].copy_from_slice(&w[..n]);
         }
         let outputs = self.session.run(inputs![INPUT => TensorRef::from_array_view(input.view())?])?;
         let scores = outputs

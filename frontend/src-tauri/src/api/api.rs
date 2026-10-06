@@ -959,23 +959,11 @@ pub async fn api_save_meeting_title<R: Runtime>(
     }
 }
 
-/// Automatic identification needs both the beta flag (sent by the frontend) and the preference.
-pub fn auto_identify_enabled(identify_speakers: Option<bool>, preference: bool) -> bool {
-    identify_speakers.unwrap_or(false) && preference
-}
-
-/// Whether a freshly saved recording should get automatic speaker identification.
-pub fn should_auto_identify(folder_path: Option<&str>, enabled: bool, has_audio: bool) -> bool {
-    enabled && has_audio && folder_path.map(|f| !f.trim().is_empty()).unwrap_or(false)
-}
-
 /// True when `folder` already belongs to another meeting, for example a stale folder left
 /// over from the previous recording. Speaker identification must not run on it.
 pub(crate) async fn folder_owned_by_other_meeting(pool: &sqlx::SqlitePool, folder: &str, meeting_id: &str) -> bool {
-    let metadata_owner = std::fs::read_to_string(std::path::Path::new(folder).join("metadata.json"))
-        .ok()
-        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
-        .and_then(|v| v.get("meeting_id").and_then(|m| m.as_str()).map(str::to_string));
+    let metadata = crate::diarization::timing::read_metadata(std::path::Path::new(folder));
+    let metadata_owner = metadata.as_ref().and_then(|m| m.get("meeting_id")?.as_str());
     if metadata_owner.is_some_and(|owner| owner != meeting_id) {
         return true;
     }
@@ -1016,7 +1004,7 @@ pub async fn api_save_transcript<R: Runtime>(
         })?;
 
     let pool = state.db_manager.pool();
-    let folder_for_speakers = folder_path.clone();
+    let folder_for_speakers = folder_path.clone().filter(|f| !f.trim().is_empty());
 
     // Now, call the repository with the correctly typed data.
     match TranscriptsRepository::save_transcript(
@@ -1037,15 +1025,14 @@ pub async fn api_save_transcript<R: Runtime>(
                 .await
                 .map(|p| p.identify_speakers_after_recording)
                 .unwrap_or(false);
-            let enabled = auto_identify_enabled(identify_speakers, preference);
-            // Audio is finalised before the save; with auto-save off there is no file and no job.
-            let has_audio = folder_for_speakers
-                .as_deref()
-                .map(|f| crate::audio::retranscription::find_audio_file(std::path::Path::new(f)).is_ok())
-                .unwrap_or(false);
+            // Automatic identification needs both the beta flag (sent by the frontend) and the
+            // preference. Audio is finalised before the save; with auto-save off there is no file
+            // and no job.
+            let enabled = identify_speakers.unwrap_or(false) && preference;
             let mut speaker_identification_queued = false;
-            if should_auto_identify(folder_for_speakers.as_deref(), enabled, has_audio) {
-                let folder = folder_for_speakers.clone().unwrap_or_default();
+            if let Some(folder) = folder_for_speakers.filter(|f| {
+                enabled && crate::audio::retranscription::find_audio_file(std::path::Path::new(f)).is_ok()
+            }) {
                 if folder_owned_by_other_meeting(pool, &folder, &meeting_id).await {
                     log_warn!("Not identifying speakers for {}: its recording folder belongs to another meeting", meeting_id);
                 } else {
@@ -1474,24 +1461,7 @@ pub async fn api_test_custom_openai_connection<R: Runtime>(
 
 #[cfg(test)]
 mod speaker_tests {
-    use super::{auto_identify_enabled, folder_owned_by_other_meeting, should_auto_identify};
-
-    #[test]
-    fn auto_identify_needs_a_folder_audio_and_the_preference() {
-        assert!(should_auto_identify(Some("/rec/m1"), true, true));
-        assert!(!should_auto_identify(Some("/rec/m1"), false, true));
-        assert!(!should_auto_identify(None, true, true));
-        assert!(!should_auto_identify(Some("  "), true, true));
-        assert!(!should_auto_identify(Some("/rec/m1"), true, false));
-    }
-
-    #[test]
-    fn beta_flag_and_preference_must_both_be_on() {
-        assert!(!auto_identify_enabled(None, true));
-        assert!(!auto_identify_enabled(Some(false), true));
-        assert!(!auto_identify_enabled(Some(true), false));
-        assert!(auto_identify_enabled(Some(true), true));
-    }
+    use super::folder_owned_by_other_meeting;
 
     #[tokio::test]
     async fn folder_owned_by_other_meeting_detects_reused_folders() {

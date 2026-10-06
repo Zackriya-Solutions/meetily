@@ -5,6 +5,7 @@ use futures_util::StreamExt;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::{AppHandle, Manager, Runtime};
@@ -192,6 +193,8 @@ pub async fn ensure_models(
         .build()?;
     let total: u64 = MODEL_FILES.iter().map(|f| f.size_bytes).sum();
     let mut done: u64 = MODEL_FILES.iter().filter(|f| is_installed(dir, f)).map(|f| f.size_bytes).sum();
+    // Progress is reported once per percent, not once per network chunk.
+    let last_percent = AtomicU32::new(u32::MAX);
     for file in MODEL_FILES {
         if is_installed(dir, file) {
             continue;
@@ -200,11 +203,10 @@ pub async fn ensure_models(
         let base = done;
         let report = |received: u64| {
             let downloaded = base + received;
-            on_progress(DownloadProgress {
-                downloaded_bytes: downloaded,
-                total_bytes: total,
-                percent: ((downloaded as f64 / total.max(1) as f64) * 100.0).min(100.0) as u32,
-            });
+            let percent = ((downloaded as f64 / total.max(1) as f64) * 100.0).min(100.0) as u32;
+            if last_percent.swap(percent, Ordering::Relaxed) != percent {
+                on_progress(DownloadProgress { downloaded_bytes: downloaded, total_bytes: total, percent });
+            }
         };
         download_file(&client, file, dir, &report, &cancelled)
             .await

@@ -37,11 +37,13 @@ pub struct SpeakerOptions {
 
 impl SpeakerOptions {
     pub fn from_command(identify: Option<bool>, num_speakers: Option<u32>) -> Self {
-        Self {
-            identify: identify.unwrap_or(false),
-            num_speakers: num_speakers.filter(|n| *n > 0).map(|n| n as usize),
-        }
+        Self { identify: identify.unwrap_or(false), num_speakers: speaker_count_from_command(num_speakers) }
     }
+}
+
+/// The speaker count a command asked for; None (automatic) when it gave none or 0.
+pub fn speaker_count_from_command(num_speakers: Option<u32>) -> Option<usize> {
+    num_speakers.filter(|n| *n > 0).map(|n| n as usize)
 }
 
 /// Unload the transcription engine after a batch job (import or retranscription).
@@ -135,7 +137,8 @@ pub(crate) fn write_transcripts_json(
     speaker_labels: &std::collections::BTreeMap<String, String>,
 ) -> Result<()> {
     let transcript_path = folder.join("transcripts.json");
-    // Unique per call: speaker edits, jobs and retranscription may rewrite the file concurrently.
+    // Unique per call. Rewrites from the database are serialised, but the live recording saver
+    // writes this file without that lock.
     let temp_path = folder.join(format!(".transcripts.json.{}.tmp", Uuid::new_v4()));
 
     let json = serde_json::json!({

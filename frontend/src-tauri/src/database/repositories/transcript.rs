@@ -1,6 +1,6 @@
 use crate::api::{TranscriptSearchResult, TranscriptSegment};
 use chrono::Utc;
-use sqlx::{Connection, Error as SqlxError, SqlitePool};
+use sqlx::{Connection, Error as SqlxError, SqliteConnection, SqlitePool};
 use log::{error, info};
 use uuid::Uuid;
 
@@ -46,20 +46,7 @@ impl TranscriptsRepository {
         // 2. Save each transcript segment with audio timing fields
         for segment in transcripts {
             let transcript_id = format!("transcript-{}", Uuid::new_v4());
-            let result = sqlx::query(
-                "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration, speaker)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-            )
-            .bind(&transcript_id)
-            .bind(&meeting_id)
-            .bind(&segment.text)
-            .bind(&segment.timestamp)
-            .bind(segment.audio_start_time)
-            .bind(segment.audio_end_time)
-            .bind(segment.duration)
-            .bind(&segment.speaker)
-            .execute(&mut *transaction)
-            .await;
+            let result = Self::insert_row(&mut transaction, &transcript_id, &meeting_id, segment).await;
 
             if let Err(e) = result {
                 error!("Failed to save transcript segment for meeting {}", meeting_id);
@@ -78,6 +65,30 @@ impl TranscriptsRepository {
         transaction.commit().await?;
 
         Ok(meeting_id)
+    }
+
+    /// Inserts `segment` as the transcript row `id` of the meeting.
+    pub async fn insert_row(
+        conn: &mut SqliteConnection,
+        id: &str,
+        meeting_id: &str,
+        segment: &TranscriptSegment,
+    ) -> Result<(), SqlxError> {
+        sqlx::query(
+            "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration, speaker)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(id)
+        .bind(meeting_id)
+        .bind(&segment.text)
+        .bind(&segment.timestamp)
+        .bind(segment.audio_start_time)
+        .bind(segment.audio_end_time)
+        .bind(segment.duration)
+        .bind(&segment.speaker)
+        .execute(&mut *conn)
+        .await?;
+        Ok(())
     }
 
     /// Searches for a query string within the transcripts.
@@ -180,6 +191,18 @@ mod tests {
         assert_eq!(total, 2);
         assert_eq!(rows[0].speaker.as_deref(), Some("spk_1"));
         assert_eq!(rows[1].speaker, None);
+    }
+
+    #[tokio::test]
+    async fn per_meeting_speaker_queries_use_an_index() {
+        let pool = migrated_pool().await;
+        let plan: Vec<(i64, i64, i64, String)> =
+            sqlx::query_as("EXPLAIN QUERY PLAN SELECT DISTINCT speaker FROM transcripts WHERE meeting_id = ?")
+                .bind("m")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert!(plan.iter().any(|row| row.3.contains("idx_transcripts_meeting_speaker")), "{plan:?}");
     }
 
     #[tokio::test]

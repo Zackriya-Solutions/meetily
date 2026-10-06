@@ -1,10 +1,9 @@
 //! CAM++ speaker embeddings from Kaldi filterbank features.
 use super::fbank::{Fbank, NUM_MEL_BINS};
+use super::{model_metadata, session_builder};
 use anyhow::{anyhow, Context, Result};
 use ndarray::Array3;
-use ort::execution_providers::CPUExecutionProvider;
 use ort::inputs;
-use ort::session::builder::GraphOptimizationLevel;
 use ort::session::Session;
 use ort::value::TensorRef;
 use sha2::{Digest, Sha256};
@@ -74,12 +73,8 @@ impl EmbeddingModel {
             ));
         }
         log::debug!("Corrected {} speaker-model pooling layers for onnxruntime before 1.29", patched);
-        let session = Session::builder()?
-            .with_optimization_level(GraphOptimizationLevel::Level3)?
-            .with_execution_providers(vec![CPUExecutionProvider::default().build()])?
-            .with_intra_threads(super::intra_op_threads())?
-            .commit_from_memory(&model)?;
-        let meta = |key: &str| session.metadata().ok().and_then(|m| m.custom(key).ok().flatten());
+        let session = session_builder()?.commit_from_memory(&model)?;
+        let meta = |key: &str| model_metadata(&session, key);
         let scale_to_int16 = meta("normalize_samples").map(|v| v == "0").unwrap_or(false);
         let global_mean = meta("feature_normalize_type").map(|v| v == "global-mean").unwrap_or(true);
         let sample_rate: usize = meta("sample_rate").and_then(|v| v.parse().ok()).unwrap_or(16_000);
