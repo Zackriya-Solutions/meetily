@@ -979,6 +979,9 @@ pub fn run() {
             diarization::commands::api_merge_meeting_speakers,
             diarization::commands::api_set_transcript_speaker,
             diarization::commands::api_guess_speaker_names,
+            // Recording playback commands
+            playback::api_prepare_meeting_playback,
+            playback::api_render_playback_clip,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
