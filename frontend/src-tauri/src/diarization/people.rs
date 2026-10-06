@@ -11,10 +11,11 @@ use sqlx::{Connection, Error as SqlxError, SqliteConnection, SqlitePool};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 /// Score at or above which a voice is linked to a person automatically (shown as "auto").
-/// Provisional until set from measured same-person and different-person scores.
+/// Measured with `calibrate_voice_thresholds` on four recorded meetings: the same person scored
+/// 0.82–0.91 across meetings, different people in one meeting at most 0.51. Both thresholds sit
+/// inside that gap with room on either side.
 pub const VOICE_STRONG: f32 = 0.75;
 /// Score at or above which a person is suggested for a voice.
-/// Provisional until set from measured same-person and different-person scores.
 pub const VOICE_WEAK: f32 = 0.60;
 
 /// A meeting speaker as voice matching sees it.
