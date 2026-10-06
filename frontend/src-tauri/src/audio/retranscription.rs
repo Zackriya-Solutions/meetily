@@ -1172,6 +1172,7 @@ mod tests {
         segments[0].speaker = Some("spk_0".into());
         let d = crate::diarization::diarizer::Diarization {
             turns: vec![],
+            overlap: vec![],
             speakers: vec![crate::diarization::diarizer::SpeakerCentroid { key: "spk_0".into(), embedding: vec![0.9, 0.1], speech_seconds: 1.0 }],
         };
         save_retranscribed_rows(&pool, "m1", &segments, Some(&d), true).await.unwrap();

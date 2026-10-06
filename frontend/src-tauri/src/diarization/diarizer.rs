@@ -2,7 +2,10 @@
 use super::cluster::{cluster_centroids, cluster_speakers, nearest_centroid};
 use super::embedding::EmbeddingModel;
 use super::models::{EMBEDDING, SEGMENTATION};
-use super::reconstruct::{powerset_to_multilabel, reconstruct, smooth_turns, RawTurn, WindowActivity, NUM_LOCAL};
+use super::reconstruct::{
+    powerset_to_multilabel, reconstruct, second_speakers, smooth_turns, tidy_second_speakers, RawTurn, WindowActivity,
+    NUM_LOCAL,
+};
 use super::segmentation::SegmentationModel;
 use super::{Cancelled, Turn};
 use anyhow::Result;
@@ -44,7 +47,10 @@ pub struct SpeakerCentroid {
 
 #[derive(Debug, Clone, Default)]
 pub struct Diarization {
+    /// One speaker at a time, the strongest; transcript rows are labelled from these.
     pub turns: Vec<Turn>,
+    /// The second speaker wherever two people talk at once.
+    pub overlap: Vec<Turn>,
     pub speakers: Vec<SpeakerCentroid>,
 }
 
@@ -102,7 +108,8 @@ pub fn speaker_stretches(frames: &[(usize, bool)], split_gap: usize, min_clean: 
 
 /// Key clusters `spk_0..` by first speech, drop clusters without turns, and build
 /// speech-weighted centroids from each embedding, its clean seconds and its cluster label.
-pub fn finalize(raw: Vec<RawTurn>, embeddings: &[Vec<f32>], weights: &[f64], labels: &[usize]) -> Diarization {
+/// `second` holds second speakers in overlapped speech; a cluster heard only there is dropped.
+pub fn finalize(raw: Vec<RawTurn>, second: Vec<RawTurn>, embeddings: &[Vec<f32>], weights: &[f64], labels: &[usize]) -> Diarization {
     let mut order: Vec<usize> = Vec::new();
     for t in &raw {
         if !order.contains(&t.cluster) {
@@ -117,14 +124,16 @@ pub fn finalize(raw: Vec<RawTurn>, embeddings: &[Vec<f32>], weights: &[f64], lab
         .map(|c| SpeakerCentroid {
             key: key_of[c].clone(),
             embedding: std::mem::take(&mut centroids[*c]),
-            speech_seconds: raw.iter().filter(|t| t.cluster == *c).map(|t| t.end_s - t.start_s).sum(),
+            speech_seconds: raw.iter().chain(&second).filter(|t| t.cluster == *c).map(|t| t.end_s - t.start_s).sum(),
         })
         .collect();
-    let turns = raw
-        .into_iter()
-        .map(|t| Turn { start_s: t.start_s, end_s: t.end_s, key: key_of[&t.cluster].clone() })
-        .collect();
-    Diarization { turns, speakers }
+    let keyed = |turns: Vec<RawTurn>| -> Vec<Turn> {
+        turns
+            .into_iter()
+            .filter_map(|t| Some(Turn { start_s: t.start_s, end_s: t.end_s, key: key_of.get(&t.cluster)?.clone() }))
+            .collect()
+    };
+    Diarization { turns: keyed(raw), overlap: keyed(second), speakers }
 }
 
 pub struct Diarizer {
@@ -269,7 +278,8 @@ impl Diarizer {
             .map(|(w, activity)| WindowActivity { start_sample: starts[w], activity, local_to_global: std::mem::take(&mut local_to_global[w]) })
             .collect();
         let raw = smooth_turns(reconstruct(&windows, samples.len(), geo), MIN_TURN_S, MAX_GAP_S);
-        let result = finalize(raw, &embeddings, &weights, &labels);
+        let second = tidy_second_speakers(second_speakers(&windows, samples.len(), geo), MIN_TURN_S, MAX_GAP_S);
+        let result = finalize(raw, second, &embeddings, &weights, &labels);
         progress(100);
 
         log::info!(
@@ -348,12 +358,24 @@ mod tests {
             RawTurn { start_s: 3.0, end_s: 5.0, cluster: 2 },
         ];
         let embeddings = vec![vec![1.0, 0.0], vec![0.0, 1.0], vec![0.6, 0.8]];
-        let d = finalize(raw, &embeddings, &[1.0, 1.0, 2.0], &[0, 1, 2]);
+        let d = finalize(raw, Vec::new(), &embeddings, &[1.0, 1.0, 2.0], &[0, 1, 2]);
         assert_eq!(d.speakers.len(), 2);
         assert_eq!(d.speakers[0].key, "spk_0");
         assert_eq!(d.speakers[0].speech_seconds, 4.0);
         assert!((d.speakers[0].embedding[0] - 0.6).abs() < 1e-5);
         assert_eq!(d.turns.iter().map(|t| t.key.as_str()).collect::<Vec<_>>(), vec!["spk_0", "spk_1", "spk_0"]);
+    }
+
+    #[test]
+    fn finalize_keys_overlap_and_counts_it_as_speech() {
+        let raw = vec![RawTurn { start_s: 0.0, end_s: 4.0, cluster: 1 }, RawTurn { start_s: 4.0, end_s: 6.0, cluster: 0 }];
+        // Cluster 0 talks over cluster 1 for a second; cluster 2 is only ever heard in overlap.
+        let second = vec![RawTurn { start_s: 1.0, end_s: 2.0, cluster: 0 }, RawTurn { start_s: 2.5, end_s: 3.0, cluster: 2 }];
+        let embeddings = vec![vec![1.0, 0.0], vec![0.0, 1.0], vec![0.6, 0.8]];
+        let d = finalize(raw, second, &embeddings, &[1.0, 1.0, 1.0], &[0, 1, 2]);
+        assert_eq!(d.speakers.iter().map(|s| s.key.as_str()).collect::<Vec<_>>(), vec!["spk_0", "spk_1"]);
+        assert_eq!(d.overlap, vec![Turn { start_s: 1.0, end_s: 2.0, key: "spk_1".into() }]);
+        assert_eq!(d.speakers[1].speech_seconds, 3.0, "two seconds alone and one over spk_0");
     }
 
     #[test]
@@ -367,8 +389,8 @@ mod tests {
 
     #[test]
     fn finalize_of_nothing_is_empty() {
-        let d = finalize(Vec::new(), &[], &[], &[]);
-        assert!(d.speakers.is_empty() && d.turns.is_empty());
+        let d = finalize(Vec::new(), Vec::new(), &[], &[], &[]);
+        assert!(d.speakers.is_empty() && d.turns.is_empty() && d.overlap.is_empty());
     }
 
     #[test]

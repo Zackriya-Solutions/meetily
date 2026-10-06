@@ -58,73 +58,110 @@ pub struct RawTurn {
     pub cluster: usize,
 }
 
+/// The windows' votes on a global frame grid.
+struct FrameVotes {
+    /// Sparse per-frame scores: each window touches at most NUM_LOCAL clusters per frame, so
+    /// memory does not grow with the number of clusters.
+    score: Vec<Vec<(usize, f32)>>,
+    active_sum: Vec<f32>,
+    coverage: Vec<u32>,
+    frame_s: f64,
+    total_s: f64,
+}
+
+impl FrameVotes {
+    fn new(windows: &[WindowActivity], total_samples: usize, geo: FrameGeometry) -> Self {
+        let num_frames = total_samples / geo.frame_shift + 1;
+        let mut score: Vec<Vec<(usize, f32)>> = vec![Vec::new(); num_frames];
+        let mut active_sum = vec![0f32; num_frames];
+        let mut coverage = vec![0u32; num_frames];
+
+        for w in windows {
+            for (i, frame) in w.activity.iter().enumerate() {
+                let center = w.start_sample + i * geo.frame_shift + geo.frame_size / 2;
+                if center >= total_samples {
+                    break;
+                }
+                let g = center / geo.frame_shift;
+                coverage[g] += 1;
+                active_sum[g] += frame.iter().sum::<f32>();
+                // Max over this window's local speakers that map to the same cluster.
+                let mut local: [(Option<usize>, f32); NUM_LOCAL] = [(None, 0.0); NUM_LOCAL];
+                for l in 0..NUM_LOCAL {
+                    if let Some(c) = w.cluster_at(l, i) {
+                        if let Some(e) = local.iter_mut().find(|e| e.0 == Some(c)) {
+                            e.1 = e.1.max(frame[l]);
+                        } else if let Some(e) = local.iter_mut().find(|e| e.0.is_none()) {
+                            *e = (Some(c), frame[l]);
+                        }
+                    }
+                }
+                for (c, v) in local.iter().filter_map(|&(c, v)| c.map(|c| (c, v))) {
+                    match score[g].iter_mut().find(|e| e.0 == c) {
+                        Some(e) => e.1 += v,
+                        None => score[g].push((c, v)),
+                    }
+                }
+            }
+        }
+        Self {
+            score,
+            active_sum,
+            coverage,
+            frame_s: geo.frame_shift as f64 / geo.sample_rate as f64,
+            total_s: total_samples as f64 / geo.sample_rate as f64,
+        }
+    }
+
+    /// How many people the windows covering frame `g` hear, on average.
+    fn heard(&self, g: usize) -> usize {
+        if self.coverage[g] == 0 {
+            return 0;
+        }
+        (self.active_sum[g] / self.coverage[g] as f32).round() as usize
+    }
+
+    /// The `rank`-th strongest cluster at frame `g`, 0 being the strongest; ties go to the larger
+    /// cluster index.
+    fn ranked(&self, g: usize, rank: usize) -> Option<usize> {
+        let mut scores: Vec<(usize, f32)> = self.score[g].iter().copied().filter(|e| e.1 > 0.0).collect();
+        scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal).then(b.0.cmp(&a.0)));
+        scores.get(rank).map(|e| e.0)
+    }
+
+    fn turns(&self, label: impl Fn(usize) -> Option<usize>) -> Vec<RawTurn> {
+        let mut turns: Vec<RawTurn> = Vec::new();
+        for g in 0..self.score.len() {
+            let Some(cluster) = label(g) else { continue };
+            let start = g as f64 * self.frame_s;
+            let end = ((g + 1) as f64 * self.frame_s).min(self.total_s);
+            match turns.last_mut() {
+                Some(last) if last.cluster == cluster && (last.end_s - start).abs() < 1e-9 => last.end_s = end,
+                _ => turns.push(RawTurn { start_s: start, end_s: end, cluster }),
+            }
+        }
+        turns
+    }
+}
+
 /// Aggregate overlapping windows on a global frame grid and label each frame with its
 /// dominant cluster, or nothing when the windows agree nobody is speaking.
 pub fn reconstruct(windows: &[WindowActivity], total_samples: usize, geo: FrameGeometry) -> Vec<RawTurn> {
     if total_samples == 0 {
         return Vec::new();
     }
-    let num_frames = total_samples / geo.frame_shift + 1;
-    // Sparse per-frame scores: each window touches at most NUM_LOCAL clusters per frame,
-    // so memory does not grow with the number of clusters.
-    let mut score: Vec<Vec<(usize, f32)>> = vec![Vec::new(); num_frames];
-    let mut active_sum = vec![0f32; num_frames];
-    let mut coverage = vec![0u32; num_frames];
+    let votes = FrameVotes::new(windows, total_samples, geo);
+    votes.turns(|g| if votes.heard(g) >= 1 { votes.ranked(g, 0) } else { None })
+}
 
-    for w in windows {
-        for (i, frame) in w.activity.iter().enumerate() {
-            let center = w.start_sample + i * geo.frame_shift + geo.frame_size / 2;
-            if center >= total_samples {
-                break;
-            }
-            let g = center / geo.frame_shift;
-            coverage[g] += 1;
-            active_sum[g] += frame.iter().sum::<f32>();
-            // Max over this window's local speakers that map to the same cluster.
-            let mut local: [(Option<usize>, f32); NUM_LOCAL] = [(None, 0.0); NUM_LOCAL];
-            for l in 0..NUM_LOCAL {
-                if let Some(c) = w.cluster_at(l, i) {
-                    if let Some(e) = local.iter_mut().find(|e| e.0 == Some(c)) {
-                        e.1 = e.1.max(frame[l]);
-                    } else if let Some(e) = local.iter_mut().find(|e| e.0.is_none()) {
-                        *e = (Some(c), frame[l]);
-                    }
-                }
-            }
-            for (c, v) in local.iter().filter_map(|&(c, v)| c.map(|c| (c, v))) {
-                match score[g].iter_mut().find(|e| e.0 == c) {
-                    Some(e) => e.1 += v,
-                    None => score[g].push((c, v)),
-                }
-            }
-        }
+/// Where the windows hear two people at once, the second strongest cluster; `reconstruct`
+/// gives the strongest.
+pub fn second_speakers(windows: &[WindowActivity], total_samples: usize, geo: FrameGeometry) -> Vec<RawTurn> {
+    if total_samples == 0 {
+        return Vec::new();
     }
-
-    let label = |g: usize| -> Option<usize> {
-        if coverage[g] == 0 || (active_sum[g] / coverage[g] as f32).round() < 1.0 {
-            return None;
-        }
-        // Largest score wins; ties go to the larger cluster index.
-        let (best, value) = score[g]
-            .iter()
-            .copied()
-            .reduce(|a, b| if b.1 > a.1 || (b.1 == a.1 && b.0 > a.0) { b } else { a })?;
-        (value > 0.0).then_some(best)
-    };
-
-    let frame_s = geo.frame_shift as f64 / geo.sample_rate as f64;
-    let total_s = total_samples as f64 / geo.sample_rate as f64;
-    let mut turns: Vec<RawTurn> = Vec::new();
-    for g in 0..num_frames {
-        let Some(cluster) = label(g) else { continue };
-        let start = g as f64 * frame_s;
-        let end = ((g + 1) as f64 * frame_s).min(total_s);
-        match turns.last_mut() {
-            Some(last) if last.cluster == cluster && (last.end_s - start).abs() < 1e-9 => last.end_s = end,
-            _ => turns.push(RawTurn { start_s: start, end_s: end, cluster }),
-        }
-    }
-    turns
+    let votes = FrameVotes::new(windows, total_samples, geo);
+    votes.turns(|g| if votes.heard(g) >= 2 { votes.ranked(g, 1) } else { None })
 }
 
 fn bridge_same_speaker(turns: Vec<RawTurn>, max_gap_s: f64) -> Vec<RawTurn> {
@@ -138,6 +175,13 @@ fn bridge_same_speaker(turns: Vec<RawTurn>, max_gap_s: f64) -> Vec<RawTurn> {
         }
     }
     out
+}
+
+/// Bridge short same-speaker gaps in second-speaker turns and drop those shorter than
+/// `min_turn_s`. Unlike `smooth_turns`, short ones are not handed to a neighbour: talking over
+/// someone briefly says nothing about who spoke next to it.
+pub fn tidy_second_speakers(turns: Vec<RawTurn>, min_turn_s: f64, max_gap_s: f64) -> Vec<RawTurn> {
+    bridge_same_speaker(turns, max_gap_s).into_iter().filter(|t| t.end_s - t.start_s >= min_turn_s).collect()
 }
 
 /// Bridge short same-speaker gaps, fold turns shorter than `min_turn_s` into an adjacent
@@ -245,6 +289,44 @@ mod tests {
         let windows = vec![WindowActivity { start_sample: 0, activity, local_to_global }];
         let clusters: Vec<usize> = reconstruct(&windows, 200, GEO).iter().map(|t| t.cluster).collect();
         assert_eq!(clusters, vec![3, 5]);
+    }
+
+    fn close(a: &[RawTurn], b: &[RawTurn]) -> bool {
+        a.len() == b.len()
+            && a.iter().zip(b).all(|(x, y)| {
+                x.cluster == y.cluster && (x.start_s - y.start_s).abs() < 1e-6 && (x.end_s - y.end_s).abs() < 1e-6
+            })
+    }
+
+    #[test]
+    fn a_second_speaker_where_the_windows_hear_two_people() {
+        // Local 0 speaks frames 0..20 in both windows; local 1 talks over it in frames 8..12, heard
+        // by one of them (1.5 people on average rounds to 2).
+        let activity = (0..20).map(|i| if (8..12).contains(&i) { [1.0, 1.0, 0.0] } else { [1.0, 0.0, 0.0] }).collect();
+        let over = WindowActivity { start_sample: 0, activity, local_to_global: whole([Some(0), Some(1), None]) };
+        let alone = WindowActivity { start_sample: 0, activity: vec![[1.0, 0.0, 0.0]; 20], local_to_global: whole([Some(0), None, None]) };
+        let windows = vec![over, alone];
+        assert!(close(&second_speakers(&windows, 200, GEO), &[t(0.8, 1.2, 1)]));
+        assert!(close(&reconstruct(&windows, 200, GEO), &[t(0.0, 2.0, 0)]), "turns keep one speaker at a time");
+    }
+
+    #[test]
+    fn no_second_speaker_when_most_windows_hear_one() {
+        let one = || WindowActivity { start_sample: 0, activity: vec![[1.0, 0.0, 0.0]; 20], local_to_global: whole([Some(0), Some(1), None]) };
+        let two = WindowActivity { start_sample: 0, activity: vec![[1.0, 1.0, 0.0]; 20], local_to_global: whole([Some(0), Some(1), None]) };
+        assert!(second_speakers(&[two, one(), one()], 200, GEO).is_empty());
+    }
+
+    #[test]
+    fn two_local_speakers_of_one_cluster_are_one_speaker() {
+        let windows = vec![WindowActivity { start_sample: 0, activity: vec![[1.0, 1.0, 0.0]; 20], local_to_global: whole([Some(0), Some(0), None]) }];
+        assert!(second_speakers(&windows, 200, GEO).is_empty());
+    }
+
+    #[test]
+    fn second_speakers_are_bridged_and_blips_dropped() {
+        let turns = vec![t(1.0, 2.0, 1), t(2.3, 3.0, 1), t(3.0, 3.1, 2), t(5.0, 5.2, 1)];
+        assert_eq!(tidy_second_speakers(turns, 0.3, 0.5), vec![t(1.0, 3.0, 1)]);
     }
 
     #[test]

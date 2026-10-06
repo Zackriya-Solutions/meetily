@@ -1507,6 +1507,7 @@ mod tests {
     fn centroids(voices: &[(&str, &[f32])]) -> Diarization {
         Diarization {
             turns: vec![],
+            overlap: vec![],
             speakers: voices
                 .iter()
                 .map(|(key, e)| SpeakerCentroid { key: key.to_string(), embedding: e.to_vec(), speech_seconds: 1.0 })
