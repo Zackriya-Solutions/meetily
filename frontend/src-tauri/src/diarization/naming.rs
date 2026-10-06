@@ -5,7 +5,12 @@ use crate::summary::chunk_text;
 use crate::summary::processor::clean_llm_markdown_detailed;
 use serde::Deserialize;
 use serde_json::Value;
+use crate::database::repositories::setting::SettingsRepository;
+use crate::summary::llm_client::generate_summary;
+use crate::summary::service::{resolve_llm, ResolvedLlm};
+use sqlx::SqlitePool;
 use std::collections::{BTreeSet, HashSet};
+use std::path::PathBuf;
 
 /// Longest name accepted from the model, in characters.
 pub const MAX_NAME_CHARS: usize = 40;
@@ -380,6 +385,69 @@ pub async fn propose_names(model: &dyn NamingModel, input: &NamingInput) -> Resu
         return Err(UNREADABLE.to_string());
     }
     Ok(decide(input, &proposals))
+}
+
+const NO_MODEL: &str = "No summary model is configured";
+
+/// The user's summary model, asked for the names said in a meeting.
+pub struct SummaryModel {
+    llm: ResolvedLlm,
+    client: reqwest::Client,
+}
+
+#[async_trait::async_trait]
+impl NamingModel for SummaryModel {
+    async fn complete(&self, system: &str, user: &str) -> Result<String, String> {
+        let llm = &self.llm;
+        // The shared client sends sampling settings only to custom OpenAI-compatible endpoints:
+        // there, temperature 0 makes answers repeatable unless the user set a temperature. Other
+        // providers answer at their default temperature.
+        let temperature = llm.temperature.or(Some(0.0));
+        generate_summary(
+            &self.client,
+            &llm.provider,
+            &llm.model,
+            &llm.api_key,
+            system,
+            user,
+            llm.ollama_endpoint.as_deref(),
+            llm.custom_openai_endpoint.as_deref(),
+            llm.max_tokens,
+            temperature,
+            llm.top_p,
+            llm.app_data_dir.as_ref(),
+            None,
+        )
+        .await
+        .map(|completion| completion.content)
+    }
+
+    fn context_tokens(&self) -> usize {
+        self.llm.context_tokens
+    }
+}
+
+/// The summary provider and model from the settings table. A custom OpenAI endpoint uses its
+/// configured model, falling back to the settings model (as the frontend does).
+pub async fn summary_model_from_settings(pool: &SqlitePool, app_data_dir: Option<PathBuf>) -> Result<SummaryModel, String> {
+    let setting = SettingsRepository::get_model_config(pool)
+        .await
+        .map_err(|e| format!("Failed to read the summary model settings: {e}"))?
+        .ok_or_else(|| NO_MODEL.to_string())?;
+    let provider = setting.provider.trim().to_string();
+    let mut model = setting.model.trim().to_string();
+    if provider == "custom-openai" {
+        match SettingsRepository::get_custom_openai_config(pool).await {
+            Ok(Some(config)) if !config.model.trim().is_empty() => model = config.model.trim().to_string(),
+            Ok(_) => {}
+            Err(e) => return Err(format!("Failed to read the custom OpenAI settings: {e}")),
+        }
+    }
+    if provider.is_empty() || model.is_empty() {
+        return Err(NO_MODEL.to_string());
+    }
+    let llm = resolve_llm(pool, &provider, &model, app_data_dir).await?;
+    Ok(SummaryModel { llm, client: reqwest::Client::new() })
 }
 #[cfg(test)]
 pub(crate) mod test_support {
@@ -802,5 +870,88 @@ mod tests {
         let model = FakeNamingModel::new(PROMPT_OVERHEAD_TOKENS + 500, answers);
         let ds = propose_names(&model, &input).await.unwrap();
         assert_eq!(ds, vec![decided("spk_0", "Noah", DecisionKind::Apply, "introduced as Noah at 00:05")]);
+    }
+
+    use crate::database::repositories::setting::SettingsRepository;
+    use crate::database::test_support::migrated_pool;
+    use crate::summary::CustomOpenAIConfig;
+
+    /// Reads one HTTP request; returns (head, body).
+    async fn read_request(stream: &mut tokio::net::TcpStream) -> (String, String) {
+        use tokio::io::AsyncReadExt;
+        let mut data = Vec::new();
+        let mut buffer = [0_u8; 4096];
+        loop {
+            let n = stream.read(&mut buffer).await.unwrap();
+            assert_ne!(n, 0, "connection closed before the request was complete");
+            data.extend_from_slice(&buffer[..n]);
+            let Some(end) = data.windows(4).position(|w| w == b"\r\n\r\n") else { continue };
+            let head = String::from_utf8_lossy(&data[..end]).to_string();
+            let length = head
+                .lines()
+                .find_map(|l| {
+                    let (name, value) = l.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length").then(|| value.trim().parse::<usize>().unwrap())
+                })
+                .unwrap_or(0);
+            if data.len() >= end + 4 + length {
+                return (head, String::from_utf8_lossy(&data[end + 4..end + 4 + length]).to_string());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn summary_model_requires_a_configured_model() {
+        let pool = migrated_pool().await;
+        assert_eq!(summary_model_from_settings(&pool, None).await.err(), Some("No summary model is configured".to_string()));
+        SettingsRepository::save_model_config(&pool, "ollama", "  ", "large-v3", None).await.unwrap();
+        assert_eq!(summary_model_from_settings(&pool, None).await.err(), Some("No summary model is configured".to_string()));
+    }
+
+    #[tokio::test]
+    async fn summary_model_calls_the_configured_endpoint() {
+        use tokio::io::AsyncWriteExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let request = read_request(&mut stream).await;
+            let body = r#"{"choices":[{"message":{"content":"{\"speakers\": []}"}}]}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+            stream.flush().await.unwrap();
+            request
+        });
+
+        let pool = migrated_pool().await;
+        SettingsRepository::save_custom_openai_config(
+            &pool,
+            &CustomOpenAIConfig {
+                endpoint: format!("http://{address}"),
+                api_key: Some("local-key".into()),
+                model: "naming-model".into(),
+                max_tokens: None,
+                temperature: None,
+                top_p: None,
+            },
+        )
+        .await
+        .unwrap();
+        let model = summary_model_from_settings(&pool, None).await.ok().expect("the custom model resolves");
+        assert_eq!(model.context_tokens(), 100_000);
+        assert_eq!(model.complete("system text", "user text").await.unwrap(), r#"{"speakers": []}"#);
+
+        let (head, body) = server.await.unwrap();
+        assert!(head.starts_with("POST /chat/completions "), "{head}");
+        assert!(head.to_ascii_lowercase().contains("authorization: bearer local-key"));
+        let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body["model"], "naming-model");
+        assert_eq!(body["temperature"].as_f64(), Some(0.0));
+        assert_eq!(body["messages"][0]["content"], "system text");
+        assert_eq!(body["messages"][1]["content"], "user text");
     }
 }
