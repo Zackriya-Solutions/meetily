@@ -254,6 +254,26 @@ pub fn label_segments(segments: &mut [TranscriptSegment], turns: &[Turn]) {
     }
 }
 
+/// Greedy one-to-one pairing, best score first. `pairs` holds (score, left index, right index)
+/// with indices below `left` and `right`; each index is used at most once. Returns the kept
+/// pairs, best first. Equal scores keep their input order.
+pub fn greedy_pairs(mut pairs: Vec<(f32, usize, usize)>, left: usize, right: usize) -> Vec<(f32, usize, usize)> {
+    pairs.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    let mut used_left = vec![false; left];
+    let mut used_right = vec![false; right];
+    pairs
+        .into_iter()
+        .filter(|&(_, i, j)| {
+            if used_left[i] || used_right[j] {
+                return false;
+            }
+            used_left[i] = true;
+            used_right[j] = true;
+            true
+        })
+        .collect()
+}
+
 /// Greedy one-to-one match of new speakers to the meeting's previous speakers by voice
 /// similarity, highest first. `new` holds (key, centroid); `old` holds (display name if any,
 /// centroid). Unnamed previous voices take part, so a name cannot move onto their voice.
@@ -272,16 +292,8 @@ pub fn carry_over_names(
             }
         }
     }
-    pairs.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-    let mut used_new = vec![false; new.len()];
-    let mut used_old = vec![false; old.len()];
     let mut names = HashMap::new();
-    for (_, i, j) in pairs {
-        if used_new[i] || used_old[j] {
-            continue;
-        }
-        used_new[i] = true;
-        used_old[j] = true;
+    for (_, i, j) in greedy_pairs(pairs, new.len(), old.len()) {
         if let Some(name) = &old[j].0 {
             names.insert(new[i].0.clone(), name.clone());
         }
@@ -511,5 +523,13 @@ mod tests {
         let names = carry_over_names(&new, &old, CARRY_OVER_MIN_SIMILARITY);
         assert_eq!(names.get("spk_0"), None);
         assert_eq!(names.get("spk_1").map(String::as_str), Some("Noah"));
+    }
+
+    #[test]
+    fn greedy_pairs_take_the_best_first_one_to_one() {
+        // (0, 1) wins at 0.9, which rules out (1, 1) and (0, 0); (1, 0) is what is left.
+        let pairs = vec![(0.7, 0, 0), (0.9, 0, 1), (0.8, 1, 1), (0.6, 1, 0)];
+        assert_eq!(greedy_pairs(pairs, 2, 2), vec![(0.9, 0, 1), (0.6, 1, 0)]);
+        assert!(greedy_pairs(Vec::new(), 3, 3).is_empty());
     }
 }

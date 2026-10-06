@@ -8,6 +8,7 @@ pub mod embedding;
 pub mod fbank;
 pub mod jobs;
 pub mod models;
+pub mod people;
 pub mod reconstruct;
 pub mod segmentation;
 pub mod timing;
