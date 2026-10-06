@@ -45,8 +45,8 @@ pub struct NamingInput {
     pub summary: Option<String>,
     pub speakers: Vec<NamingSpeaker>,
     pub people: Vec<KnownPerson>,
-    /// (speaker key, person id) pairs the user rejected in this meeting.
-    pub rejected: HashSet<(String, String)>,
+    /// (speaker key, normalised name) pairs the user rejected in this meeting.
+    pub rejected_names: HashSet<(String, String)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -239,18 +239,16 @@ fn verify(input: &NamingInput, lines: &[String], summary: Option<&str>, p: &Prop
     }
     // A short quote can occur more than once ("Noah?"): every line holding it is a candidate.
     let found: Vec<usize> =
-        lines.iter().enumerate().filter(|(_, l)| l.contains(evidence.as_str())).map(|(i, _)| i).collect();
+        lines.iter().enumerate().filter(|(_, l)| contains_word(l, &evidence)).map(|(i, _)| i).collect();
     let first = *found.first()?;
     // The quote has to name the person: at least one word of the name is in it.
     if !name_norm.split(' ').any(|word| contains_word(&evidence, word)) {
         return None;
     }
-    let person = input.people.iter().find(|k| normalize(&k.name) == name_norm);
-    if let Some(person) = person {
-        if input.rejected.contains(&(p.key.clone(), person.id.clone())) {
-            return None;
-        }
+    if input.rejected_names.contains(&(p.key.clone(), name_norm.clone())) {
+        return None;
     }
+    let person = input.people.iter().find(|k| normalize(&k.name) == name_norm);
     let name = person.map(|k| k.name.clone()).unwrap_or(name);
     // The kind's rule for the proposed speaker, at transcript line `i`.
     let fits = |i: usize| {
@@ -638,7 +636,7 @@ mod tests {
         let mut input = base_input();
         input.speakers[0].display_name = Some("Noah".into());
         input.people = vec![KnownPerson { id: "person-ana".into(), name: "Ana".into() }];
-        input.rejected.insert(("spk_2".into(), "person-ana".into()));
+        input.rejected_names.insert(("spk_2".into(), "ana".into()));
         let ds = decide(
             &input,
             &[
@@ -664,6 +662,34 @@ mod tests {
             ],
         );
         assert_eq!(ds, vec![decided("spk_2", "Ana", DecisionKind::Apply, "addressed as Ana at 00:12")]);
+    }
+
+    #[test]
+    fn rejected_name_is_skipped_even_for_an_unknown_person() {
+        let mut input = base_input();
+        assert!(input.people.is_empty());
+        input.rejected_names.insert(("spk_2".into(), "ana".into()));
+        let ds = decide(&input, &[proposal("spk_2", "Ana", "Ana, can you start", Addressed, "high")]);
+        assert!(ds.is_empty(), "{ds:?}");
+        // Another speaker can still get that name.
+        let ds = decide(&input, &[proposal("spk_1", "Ana", "Ana, can you start", Mentioned, "high")]);
+        assert_eq!(decision(&ds, "spk_1").unwrap().name, "Ana");
+    }
+
+    #[test]
+    fn quote_matches_whole_words_only() {
+        let mut input = base_input();
+        input.lines = vec![
+            line(1.0, "spk_1", "Ana is out today."),
+            line(2.0, "spk_0", "Okay."),
+            line(3.0, "spk_1", "Our manager wants the report."),
+            line(4.0, "spk_2", "Sure, I'll send it."),
+        ];
+        // "Ana" only fits the first line, which spk_2 does not answer: never applied via "manager".
+        let ds = decide(&input, &[proposal("spk_2", "Ana", "Ana", Addressed, "high")]);
+        assert_eq!(ds, vec![decided("spk_2", "Ana", DecisionKind::Suggest, "addressed as Ana at 00:01")]);
+        input.lines = vec![line(1.0, "spk_0", "Let's look at the analytics.")];
+        assert!(decide(&input, &[proposal("spk_0", "Ana", "Ana", SelfIntro, "high")]).is_empty());
     }
 
     #[test]
