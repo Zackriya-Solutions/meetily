@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, mock, test } from 'bun:test';
+import { Play } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import type { TranscriptSegmentData } from '../../src/types';
@@ -63,6 +64,17 @@ describe('play from a line', () => {
     const play = renderer.root.find((n) => n.type === 'button' && n.props['aria-label'] === 'Play from 00:02');
     await act(async () => { play.props.onClick(); });
     expect(onPlayFrom).toHaveBeenCalledWith(2);
+  });
+
+  test('the play icon sits inside the timestamp button, after the time', async () => {
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<VirtualizedTranscriptView segments={segments} onPlayFrom={() => {}} disableAutoScroll totalCount={4} />);
+    });
+    const play = renderer.root.find((n) => n.type === 'button' && n.props['aria-label'] === 'Play from 00:02');
+    const parts = play.children.filter((c) => typeof c !== 'string' || c.trim() !== '');
+    expect(parts[0]).toBe('[00:02]');
+    expect(play.findAllByType(Play)).toHaveLength(1);
   });
 
   test('only rows whose active state changes rerender', async () => {

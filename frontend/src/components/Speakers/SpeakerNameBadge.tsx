@@ -47,7 +47,7 @@ export function SpeakerNameBadge({ state, label, editable, onConfirm, onReject, 
         </>
       )}
       {onPlaySample && (
-        <button type="button" className={ACTION} aria-label={`Play a sample of ${label}`} title="Play a sample" onClick={onPlaySample}>
+        <button type="button" className={ACTION} aria-label={`Play a sample of ${label}`} title={`Hear a few seconds of ${label}`} onClick={onPlaySample}>
           <Play className="h-3 w-3" />
         </button>
       )}

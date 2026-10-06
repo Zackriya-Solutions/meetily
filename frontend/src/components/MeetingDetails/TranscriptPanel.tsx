@@ -173,10 +173,9 @@ export function TranscriptPanel({
         onReassign={tools.onReassign}
         onConfirm={tools.onConfirm}
         onReject={tools.onReject}
-        onPlaySample={playback.ready ? tools.onPlaySample : undefined}
       />
     );
-  }, [tools, playback.ready]);
+  }, [tools]);
 
   return (
     <div className="flex h-full min-w-0 w-full bg-white flex-col relative @container">

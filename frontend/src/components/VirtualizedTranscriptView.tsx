@@ -8,6 +8,7 @@ import { ConfidenceIndicator } from "./ConfidenceIndicator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { RecordingStatusBar } from "./RecordingStatusBar";
 import { motion, AnimatePresence } from "framer-motion";
+import { Play } from "lucide-react";
 import { TranscriptSegmentData } from "@/types";
 import { isSpeakerRunStart } from "@/lib/speakers";
 
@@ -121,10 +122,11 @@ const TranscriptSegment = memo(function TranscriptSegment({
                             <button
                                 type="button"
                                 aria-label={`Play from ${time.slice(1, -1)}`}
-                                className="text-xs text-gray-400 hover:text-blue-600 mt-1 flex-shrink-0 min-w-[50px] text-left"
+                                className="inline-flex items-center gap-1 text-xs text-gray-400 hover:text-blue-600 mt-1 flex-shrink-0 min-w-[50px] text-left"
                                 onClick={() => onPlayFrom(timestamp)}
                             >
                                 {time}
+                                <Play className="h-3 w-3" aria-hidden="true" />
                             </button>
                         </TooltipTrigger>
                     ) : (
