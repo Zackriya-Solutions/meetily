@@ -2,7 +2,7 @@
 //! answer, and the checks that keep only names grounded in a quote from the transcript.
 use crate::database::repositories::person::clean_person_name;
 use crate::summary::chunk_text;
-use crate::summary::processor::clean_llm_markdown_detailed;
+use crate::summary::processor::{clean_llm_markdown_detailed, rough_token_count};
 use serde::Deserialize;
 use serde_json::Value;
 use crate::database::repositories::setting::SettingsRepository;
@@ -366,7 +366,12 @@ pub async fn propose_names(model: &dyn NamingModel, input: &NamingInput) -> Resu
     if transcript.trim().is_empty() {
         return Ok(Vec::new());
     }
-    let chunk_tokens = model.context_tokens().saturating_sub(PROMPT_OVERHEAD_TOKENS).max(MIN_CHUNK_TOKENS);
+    // Every chunk's prompt also carries the summary and the people list.
+    let people_text: String = input.people.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(", ");
+    let reserved = PROMPT_OVERHEAD_TOKENS
+        + rough_token_count(input.summary.as_deref().unwrap_or_default())
+        + rough_token_count(&people_text);
+    let chunk_tokens = model.context_tokens().saturating_sub(reserved).max(MIN_CHUNK_TOKENS);
     let chunks = chunk_text(&transcript, chunk_tokens, CHUNK_OVERLAP_TOKENS);
     let mut proposals = Vec::new();
     let mut readable = 0usize;
@@ -826,12 +831,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_long_summary_and_people_list_shrink_the_transcript_chunks() {
+        let mut input = with_filler(base_input());
+        let context = PROMPT_OVERHEAD_TOKENS + 1500;
+        let plain = FakeNamingModel::new(context, vec![]);
+        propose_names(&plain, &input).await.unwrap();
+        input.summary = Some("A long summary sentence. ".repeat(80));
+        input.people = (0..40).map(|i| KnownPerson { id: format!("p{i}"), name: format!("Person Number {i}") }).collect();
+        let heavy = FakeNamingModel::new(context, vec![]);
+        propose_names(&heavy, &input).await.unwrap();
+        assert!(
+            heavy.prompts().len() > plain.prompts().len(),
+            "{} chunks with a long summary, {} without",
+            heavy.prompts().len(),
+            plain.prompts().len()
+        );
+    }
+
+    #[tokio::test]
     async fn long_transcripts_are_chunked_to_the_model_context() {
         let input = with_filler(base_input());
         let transcript = transcript_text(&input.lines);
         let chunks = chunk_text(&transcript, 600, 100);
         assert!(chunks.len() > 1);
-        let model = FakeNamingModel::new(PROMPT_OVERHEAD_TOKENS + 600, vec![]);
+        let reserved = crate::summary::processor::rough_token_count(input.summary.as_deref().unwrap());
+        let model = FakeNamingModel::new(PROMPT_OVERHEAD_TOKENS + 600 + reserved, vec![]);
         assert_eq!(propose_names(&model, &input).await.unwrap(), vec![]);
         let prompts = model.prompts();
         assert_eq!(prompts.len(), chunks.len());
