@@ -1,5 +1,5 @@
 //! Speaker identification jobs: one at a time, queued, cancellable.
-use super::assign::{carry_over_names, label_rows, split_text_at_turns, RowLabel, RowSpan, CARRY_OVER_MIN_SIMILARITY};
+use super::assign::{carry_over, label_rows, split_text_at_turns, RowLabel, RowSpan, CARRY_OVER_MIN_SIMILARITY};
 use super::diarizer::{Diarization, DiarizeOptions, Diarizer};
 use super::models::{self, DownloadProgress};
 use super::timing::{read_metadata, recording_time_map, TimeMap};
@@ -11,7 +11,8 @@ use crate::audio::common::{
 use crate::audio::decoder::decode_audio_file;
 use crate::database::models::Transcript;
 use crate::database::repositories::meeting::MeetingsRepository;
-use crate::database::repositories::speaker::{NewSpeaker, SpeakerWrite, SpeakersRepository, SplitRow};
+use crate::database::repositories::person::PeopleRepository;
+use crate::database::repositories::speaker::{NewSpeaker, SpeakerLink, SpeakerWrite, SpeakersRepository, SplitRow};
 use crate::state::AppState;
 use crate::whisper_engine::WhisperCompiledBackend;
 use anyhow::{anyhow, Result};
@@ -514,19 +515,36 @@ pub async fn diarize_for_batch<R: Runtime>(
     }
 }
 
-/// New speakers for `d`, with names carried over from the meeting's previous speakers. Reads the
-/// previous speakers through `conn`, so call it inside the write transaction.
+/// New speakers for `d`. Each takes the name, person link and suggestion of the previous speaker
+/// with the same voice, and the meeting's rejections follow their voices to the new keys (a
+/// rejection whose voice is gone is dropped). Reads and writes through `conn`, so call it inside
+/// the write transaction.
 pub async fn speaker_write_names(conn: &mut SqliteConnection, meeting_id: &str, d: &Diarization) -> Result<Vec<NewSpeaker>> {
-    let old: Vec<(Option<String>, Vec<f32>)> = SpeakersRepository::list_conn(&mut *conn, meeting_id)
+    let previous: Vec<(String, Vec<f32>, Option<String>, SpeakerLink)> = SpeakersRepository::list_conn(&mut *conn, meeting_id)
         .await?
         .into_iter()
-        .filter_map(|s| s.embedding.map(|e| (s.display_name, e)))
+        .filter_map(|s| s.embedding.map(|e| (s.speaker_key, e, s.display_name, s.link)))
         .collect();
+    let old: Vec<Vec<f32>> = previous.iter().map(|p| p.1.clone()).collect();
     let new: Vec<(String, Vec<f32>)> = d.speakers.iter().map(|s| (s.key.clone(), s.embedding.clone())).collect();
-    let names = carry_over_names(&new, &old, CARRY_OVER_MIN_SIMILARITY);
+    let matched = carry_over(&new, &old, CARRY_OVER_MIN_SIMILARITY);
+
+    let new_key_of: HashMap<&str, &str> =
+        matched.iter().map(|(new_key, &i)| (previous[i].0.as_str(), new_key.as_str())).collect();
+    let rejections = PeopleRepository::rejections_conn(&mut *conn, meeting_id).await?;
+    PeopleRepository::clear_rejections_conn(&mut *conn, meeting_id).await?;
+    for (old_key, person_id) in &rejections {
+        if let Some(new_key) = new_key_of.get(old_key.as_str()) {
+            PeopleRepository::add_rejection_conn(&mut *conn, meeting_id, new_key, person_id).await?;
+        }
+    }
+
     Ok(d.speakers
         .iter()
-        .map(|s| NewSpeaker { display_name: names.get(&s.key).cloned(), ..s.into() })
+        .map(|s| match matched.get(&s.key) {
+            Some(&i) => NewSpeaker { display_name: previous[i].2.clone(), link: previous[i].3.clone(), ..s.into() },
+            None => s.into(),
+        })
         .collect())
 }
 
@@ -1193,5 +1211,115 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let err = wait_for_audio(dir.path(), Duration::from_secs(5), &|| true).await.unwrap_err();
         assert!(err.is::<Cancelled>());
+    }
+
+    use crate::database::repositories::person::PeopleRepository;
+    use crate::database::repositories::speaker::{MeetingSpeaker, NameSource, SpeakerLink, SuggestionSource};
+    use crate::database::test_support::{migrated_pool, seed_meeting, seed_person};
+    use crate::diarization::diarizer::SpeakerCentroid;
+
+    fn centroids(voices: &[(&str, &[f32])]) -> Diarization {
+        Diarization {
+            turns: vec![],
+            speakers: voices
+                .iter()
+                .map(|(key, e)| SpeakerCentroid { key: key.to_string(), embedding: e.to_vec(), speech_seconds: 1.0 })
+                .collect(),
+        }
+    }
+
+    fn stored(key: &str, embedding: &[f32], name: Option<&str>, link: SpeakerLink) -> NewSpeaker {
+        NewSpeaker { key: key.into(), display_name: name.map(str::to_string), embedding: embedding.to_vec(), speech_seconds: 1.0, link }
+    }
+
+    fn linked(person_id: &str, source: NameSource) -> SpeakerLink {
+        SpeakerLink { person_id: Some(person_id.into()), name_source: Some(source), ..Default::default() }
+    }
+
+    /// Creates the meeting and writes its speakers.
+    async fn seed_speakers(pool: &SqlitePool, meeting_id: &str, speakers: Vec<NewSpeaker>) {
+        seed_meeting(pool, meeting_id, &[]).await;
+        let mut conn = pool.acquire().await.unwrap();
+        SpeakersRepository::replace_for_meeting(&mut conn, meeting_id, &SpeakerWrite { speakers, ..Default::default() })
+            .await
+            .unwrap();
+    }
+
+    /// The speaker write of an Identify run, as `run_identify` does it.
+    async fn rerun(pool: &SqlitePool, meeting_id: &str, d: &Diarization) {
+        let mut conn = pool.acquire().await.unwrap();
+        let mut tx = sqlx::Connection::begin(&mut *conn).await.unwrap();
+        let speakers = speaker_write_names(&mut tx, meeting_id, d).await.unwrap();
+        SpeakersRepository::replace_for_meeting(&mut tx, meeting_id, &SpeakerWrite { speakers, ..Default::default() })
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+    }
+
+    async fn by_key(pool: &SqlitePool, meeting_id: &str) -> HashMap<String, MeetingSpeaker> {
+        SpeakersRepository::list(pool, meeting_id)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|s| (s.speaker_key.clone(), s))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn rerun_keeps_person_link_source_and_suggestion() {
+        let pool = migrated_pool().await;
+        seed_person(&pool, "person-noah", "Noah").await;
+        seed_person(&pool, "person-sam", "Sam").await;
+        seed_person(&pool, "person-ana", "Ana").await;
+        let suggestion = SpeakerLink {
+            suggested_person_id: Some("person-ana".into()),
+            suggested_name: Some("Ana".into()),
+            suggestion_source: Some(SuggestionSource::Voice),
+            suggestion_reason: Some("voice match 0.68".into()),
+            ..Default::default()
+        };
+        seed_speakers(
+            &pool,
+            "m1",
+            vec![
+                stored("spk_0", &[1.0, 0.0, 0.0], Some("Noah"), linked("person-noah", NameSource::Voice)),
+                stored("spk_1", &[0.0, 1.0, 0.0], Some("Sam"), linked("person-sam", NameSource::User)),
+                stored("spk_2", &[0.0, 0.0, 1.0], None, suggestion.clone()),
+            ],
+        )
+        .await;
+
+        // The new run numbers the same voices differently.
+        rerun(&pool, "m1", &centroids(&[("spk_0", &[0.0, 0.99, 0.1]), ("spk_1", &[0.99, 0.1, 0.0]), ("spk_2", &[0.1, 0.0, 0.99])])).await;
+
+        let s = by_key(&pool, "m1").await;
+        assert_eq!(s["spk_1"].display_name.as_deref(), Some("Noah"));
+        assert_eq!(s["spk_1"].link, linked("person-noah", NameSource::Voice));
+        assert_eq!(s["spk_0"].display_name.as_deref(), Some("Sam"));
+        assert_eq!(s["spk_0"].link, linked("person-sam", NameSource::User));
+        assert_eq!(s["spk_2"].display_name, None);
+        assert_eq!(s["spk_2"].link, suggestion);
+    }
+
+    #[tokio::test]
+    async fn rejections_survive_a_rerun() {
+        let pool = migrated_pool().await;
+        seed_person(&pool, "person-noah", "Noah").await;
+        seed_speakers(
+            &pool,
+            "m1",
+            vec![stored("spk_0", &[1.0, 0.0], None, SpeakerLink::default()), stored("spk_1", &[0.0, 1.0], None, SpeakerLink::default())],
+        )
+        .await;
+        let mut conn = pool.acquire().await.unwrap();
+        PeopleRepository::add_rejection_conn(&mut conn, "m1", "spk_0", "person-noah").await.unwrap();
+        drop(conn);
+
+        // The rejected voice comes back as spk_1.
+        rerun(&pool, "m1", &centroids(&[("spk_0", &[0.0, 1.0]), ("spk_1", &[1.0, 0.0])])).await;
+
+        let mut conn = pool.acquire().await.unwrap();
+        let rejected = PeopleRepository::rejections_conn(&mut conn, "m1").await.unwrap();
+        assert_eq!(rejected, HashSet::from([("spk_1".to_string(), "person-noah".to_string())]));
     }
 }

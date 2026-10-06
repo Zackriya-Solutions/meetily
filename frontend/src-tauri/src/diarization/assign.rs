@@ -275,30 +275,23 @@ pub fn greedy_pairs(mut pairs: Vec<(f32, usize, usize)>, left: usize, right: usi
 }
 
 /// Greedy one-to-one match of new speakers to the meeting's previous speakers by voice
-/// similarity, highest first. `new` holds (key, centroid); `old` holds (display name if any,
-/// centroid). Unnamed previous voices take part, so a name cannot move onto their voice.
-/// Returns new key → carried-over name.
-pub fn carry_over_names(
-    new: &[(String, Vec<f32>)],
-    old: &[(Option<String>, Vec<f32>)],
-    min_similarity: f32,
-) -> HashMap<String, String> {
+/// similarity, highest first. `new` holds (key, centroid); `old` holds the previous centroids.
+/// Every previous voice takes part, named or not, so a name cannot move onto another voice.
+/// Returns new key → index into `old`.
+pub fn carry_over(new: &[(String, Vec<f32>)], old: &[Vec<f32>], min_similarity: f32) -> HashMap<String, usize> {
     let mut pairs: Vec<(f32, usize, usize)> = Vec::new();
     for (i, (_, ne)) in new.iter().enumerate() {
-        for (j, (_, oe)) in old.iter().enumerate() {
+        for (j, oe) in old.iter().enumerate() {
             let s = cosine(ne, oe);
             if s >= min_similarity {
                 pairs.push((s, i, j));
             }
         }
     }
-    let mut names = HashMap::new();
-    for (_, i, j) in greedy_pairs(pairs, new.len(), old.len()) {
-        if let Some(name) = &old[j].0 {
-            names.insert(new[i].0.clone(), name.clone());
-        }
-    }
-    names
+    greedy_pairs(pairs, new.len(), old.len())
+        .into_iter()
+        .map(|(_, i, j)| (new[i].0.clone(), j))
+        .collect()
 }
 
 #[cfg(test)]
@@ -508,21 +501,21 @@ mod tests {
     #[test]
     fn names_carry_over_to_best_matching_new_speaker() {
         let new = vec![("spk_0".to_string(), vec![0.0, 1.0]), ("spk_1".to_string(), vec![1.0, 0.1])];
-        let old = vec![(Some("Noah".to_string()), vec![1.0, 0.0]), (Some("Ana".to_string()), vec![-1.0, 0.0])];
-        let names = carry_over_names(&new, &old, CARRY_OVER_MIN_SIMILARITY);
-        assert_eq!(names.get("spk_1").map(String::as_str), Some("Noah"));
-        assert_eq!(names.get("spk_0"), None, "Ana is below the similarity floor");
+        let old = vec![vec![1.0, 0.0], vec![-1.0, 0.0]];
+        let matched = carry_over(&new, &old, CARRY_OVER_MIN_SIMILARITY);
+        assert_eq!(matched.get("spk_1"), Some(&0));
+        assert_eq!(matched.get("spk_0"), None, "the second old voice is below the similarity floor");
     }
 
     #[test]
     fn unnamed_old_voice_keeps_name_from_moving() {
-        // spk_0 is the unnamed old voice (cosine 0.92) and only 0.66 like Noah; spk_1 is Noah (0.63).
-        // Ignoring the unnamed voice would hand Noah's name to spk_0.
+        // Old voice 0 is unnamed (cosine 0.92 with spk_0); old voice 1 is Noah (0.66 with spk_0,
+        // 0.63 with spk_1). Ignoring the unnamed voice would hand Noah's name to spk_0.
         let new = vec![("spk_0".to_string(), vec![0.92, 0.3919]), ("spk_1".to_string(), vec![-0.5405, 0.8413])];
-        let old = vec![(None, vec![1.0, 0.0]), (Some("Noah".to_string()), vec![0.3129, 0.9498])];
-        let names = carry_over_names(&new, &old, CARRY_OVER_MIN_SIMILARITY);
-        assert_eq!(names.get("spk_0"), None);
-        assert_eq!(names.get("spk_1").map(String::as_str), Some("Noah"));
+        let old = vec![vec![1.0, 0.0], vec![0.3129, 0.9498]];
+        let matched = carry_over(&new, &old, CARRY_OVER_MIN_SIMILARITY);
+        assert_eq!(matched.get("spk_0"), Some(&0));
+        assert_eq!(matched.get("spk_1"), Some(&1));
     }
 
     #[test]
