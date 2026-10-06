@@ -2,7 +2,7 @@
 
 import { memo, useState } from 'react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { MeetingSpeaker } from '@/types';
+import { MeetingSpeaker, Person } from '@/types';
 import { speakerColor, speakerLabel, speakerNameState } from '@/lib/speakers';
 import { toast } from 'sonner';
 import { SpeakerRenameForm } from './SpeakerRenameForm';
@@ -14,6 +14,8 @@ interface SpeakerChipProps {
   speakers: MeetingSpeaker[];
   names: Record<string, string>;
   editable: boolean;
+  /** Known people for the name autocomplete; a stable array. */
+  people: Person[];
   /** Small dot trigger for rows inside a same-speaker run. */
   compact?: boolean;
   onRename: (key: string, name: string) => Promise<void>;
@@ -55,6 +57,7 @@ function SpeakerChipImpl({
   speakers,
   names,
   editable,
+  people,
   compact = false,
   onRename,
   onMerge,
@@ -112,6 +115,7 @@ function SpeakerChipImpl({
           initialName={current?.display_name ?? ''}
           placeholder={label}
           label={`Name for everyone labelled ${label}`}
+          people={people}
           onRename={onRename}
           onSaved={() => setOpen(false)}
         />

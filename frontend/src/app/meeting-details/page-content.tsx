@@ -8,6 +8,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
 import { TranscriptPanel, type SpeakerTools } from '@/components/MeetingDetails/TranscriptPanel';
 import { useMeetingSpeakers } from '@/hooks/useMeetingSpeakers';
+import { usePeople } from '@/hooks/usePeople';
 import { useSpeakerIdentification } from '@/hooks/useSpeakerIdentification';
 import { SummaryPanel } from '@/components/MeetingDetails/SummaryPanel';
 import { MeetingDetailsSplitView, type MeetingDetailsTab } from '@/components/MeetingDetails/MeetingDetailsSplitView';
@@ -82,6 +83,8 @@ export default function PageContent({
   const templates = useTemplates();
 
   // Speakers
+  // Known people for the name autocomplete; naming can add one.
+  const { people, refresh: refreshPeople } = usePeople(betaFeatures.speakerIdentification);
   const {
     speakers,
     names: speakerNames,
@@ -98,10 +101,12 @@ export default function PageContent({
   }, [onRefetchTranscripts, refetchSpeakers]);
   const onRenameSpeaker = useCallback(async (key: string, name: string) => {
     await nameSpeaker(key, name);
-  }, [nameSpeaker]);
+    void refreshPeople();
+  }, [nameSpeaker, refreshPeople]);
   const onConfirmSpeaker = useCallback(async (key: string) => {
     await confirmSpeaker(key);
-  }, [confirmSpeaker]);
+    void refreshPeople();
+  }, [confirmSpeaker, refreshPeople]);
   const speakerIdentification = useSpeakerIdentification(meeting.id, refetchTranscriptsAndSpeakers);
   const {
     job: speakerJob,
@@ -135,6 +140,7 @@ export default function PageContent({
   const speakerTools = useMemo<SpeakerTools>(() => ({
     speakers,
     names: speakerNames,
+    people,
     // Edits made while a job runs would be overwritten by its final write.
     editable: betaFeatures.speakerIdentification && !speakerJobActive,
     onRename: onRenameSpeaker,
@@ -147,6 +153,7 @@ export default function PageContent({
   }), [
     speakers,
     speakerNames,
+    people,
     betaFeatures.speakerIdentification,
     speakerJobActive,
     onRenameSpeaker,

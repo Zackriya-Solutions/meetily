@@ -1,7 +1,7 @@
 "use client";
 
 import { TranscriptView } from '@/components/TranscriptView';
-import { MeetingSpeaker, SpeakerJobStatus, Transcript, TranscriptSegmentData } from '@/types';
+import { MeetingSpeaker, Person, SpeakerJobStatus, Transcript, TranscriptSegmentData } from '@/types';
 import { rowSpeakerControl } from '@/lib/speakers';
 import { convertTranscriptsToSegments } from '@/hooks/usePaginatedTranscripts';
 import { SpeakerChip } from '@/components/Speakers/SpeakerChip';
@@ -15,6 +15,8 @@ export interface SpeakerTools {
   speakers: MeetingSpeaker[];
   names: Record<string, string>;
   editable: boolean;
+  /** Known people for the name autocomplete */
+  people: Person[];
   onRename: (key: string, name: string) => Promise<void>;
   onMerge: (fromKey: string, intoKey: string) => Promise<void>;
   onReassign: (transcriptId: string, key: string | null) => Promise<void>;
@@ -99,6 +101,7 @@ export function TranscriptPanel({
         speakers={speakerTools.speakers}
         names={speakerTools.names}
         editable={speakerTools.editable}
+        people={speakerTools.people}
         onRename={speakerTools.onRename}
         onMerge={speakerTools.onMerge}
         onReassign={speakerTools.onReassign}
@@ -132,6 +135,7 @@ export function TranscriptPanel({
             speakers={speakerTools.speakers}
             names={speakerTools.names}
             editable={speakerTools.editable}
+            people={speakerTools.people}
             onRename={speakerTools.onRename}
             onConfirm={speakerTools.onConfirm}
             onReject={speakerTools.onReject}
