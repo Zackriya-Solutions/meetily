@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { matchPeople } from '../../src/lib/people';
+import { formatLastSeen, matchPeople } from '../../src/lib/people';
 import type { Person } from '../../src/types';
 
 const person = (id: string, name: string): Person => ({ id, name, meeting_count: 1, last_seen: null });
@@ -24,5 +24,17 @@ describe('matchPeople', () => {
   test('an empty draft offers nothing', () => {
     expect(matchPeople(people, '')).toEqual([]);
     expect(matchPeople(people, '   ')).toEqual([]);
+  });
+});
+
+describe('formatLastSeen', () => {
+  test('never seen and unreadable dates', () => {
+    expect(formatLastSeen(null)).toBe('never');
+    expect(formatLastSeen('not a date')).toBe('not a date');
+  });
+
+  test('dates use the local short format', () => {
+    const iso = '2026-10-01T10:00:00+00:00';
+    expect(formatLastSeen(iso)).toBe(new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }));
   });
 });

@@ -16,6 +16,8 @@ export interface RecordingPreferences {
   preferred_mic_device: string | null;
   preferred_system_device: string | null;
   identify_speakers_after_recording: boolean;
+  /** Recognise voices named in one meeting in the others (Settings → Speakers) */
+  remember_voices: boolean;
 }
 
 interface RecordingSettingsProps {
@@ -29,7 +31,8 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
     file_format: 'mp4',
     preferred_mic_device: null,
     preferred_system_device: null,
-    identify_speakers_after_recording: true
+    identify_speakers_after_recording: true,
+    remember_voices: true
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);

@@ -13,3 +13,11 @@ export function matchPeople(people: Person[], draft: string, limit = 5): Person[
   }
   return [...prefix, ...inside].slice(0, limit);
 }
+
+/** A person's last meeting as a short local date; 'never' without one, the raw text if unreadable. */
+export function formatLastSeen(lastSeen: string | null): string {
+  if (!lastSeen) return 'never';
+  const date = new Date(lastSeen);
+  if (Number.isNaN(date.getTime())) return lastSeen;
+  return date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+}
