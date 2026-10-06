@@ -30,7 +30,7 @@ pub async fn diarization_delete_models() -> Result<ModelsStatus, String> {
     Ok(models::status(&dir))
 }
 
-use super::jobs::{self, IdentifyRequest, JobStatus};
+use super::jobs::{self, IdentifyRequest, JobKind, JobStatus};
 use super::people::{self, PropagatedLink};
 use crate::audio::common::speaker_count_from_command;
 use crate::database::repositories::person::{PeopleRepository, PersonSummary};
@@ -56,6 +56,7 @@ pub async fn start_speaker_identification<R: Runtime>(
             folder_path: PathBuf::from(meeting_folder_path),
             num_speakers: speaker_count_from_command(num_speakers),
             automatic: false,
+            kind: JobKind::Identify,
         },
     )
 }
@@ -365,4 +366,14 @@ mod tests {
         assert_eq!(outcome.person_id.as_deref(), Some("person-noah"));
         assert_eq!(outcome.propagated, vec![link("cmd-d", "spk_0", "person-noah")]);
     }
+}
+
+/// Queues a search for names said in the meeting. `automatic` runs are started by the app after
+/// Identify and show no toast.
+#[tauri::command]
+pub async fn api_guess_speaker_names<R: Runtime>(app: AppHandle<R>, meeting_id: String, automatic: bool) -> Result<(), String> {
+    jobs::enqueue(
+        &app,
+        IdentifyRequest { meeting_id, folder_path: PathBuf::new(), num_speakers: None, automatic, kind: JobKind::Naming },
+    )
 }

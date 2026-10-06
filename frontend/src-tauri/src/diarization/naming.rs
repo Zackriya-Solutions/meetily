@@ -182,7 +182,7 @@ pub fn parse_proposals(raw: &str) -> Result<Vec<Proposal>, String> {
 }
 
 /// Lowercase, single spaces, typographic quotes as plain ones.
-fn normalize(s: &str) -> String {
+pub(super) fn normalize(s: &str) -> String {
     s.replace(['\u{2018}', '\u{2019}'], "'")
         .replace(['\u{201C}', '\u{201D}'], "\"")
         .split_whitespace()

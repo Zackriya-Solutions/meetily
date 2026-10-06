@@ -977,6 +977,7 @@ pub fn run() {
             diarization::commands::api_forget_all_voices,
             diarization::commands::api_merge_meeting_speakers,
             diarization::commands::api_set_transcript_speaker,
+            diarization::commands::api_guess_speaker_names,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

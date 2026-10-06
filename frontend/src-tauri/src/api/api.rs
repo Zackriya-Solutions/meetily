@@ -1043,6 +1043,7 @@ pub async fn api_save_transcript<R: Runtime>(
                             folder_path: std::path::PathBuf::from(folder),
                             num_speakers: None,
                             automatic: true,
+                            kind: crate::diarization::jobs::JobKind::Identify,
                         },
                     ) {
                         Ok(()) => speaker_identification_queued = true,

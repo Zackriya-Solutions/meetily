@@ -3,6 +3,7 @@ use super::assign::{carry_over, label_rows, split_text_at_turns, RowLabel, RowSp
 use super::diarizer::{Diarization, DiarizeOptions, Diarizer};
 use super::models::{self, DownloadProgress};
 use super::timing::{read_metadata, recording_time_map, TimeMap};
+use super::naming::{normalize, propose_names, summary_model_from_settings, KnownPerson, NamingInput, NamingLine, NamingModel, NamingSpeaker};
 use super::{Cancelled, Turn};
 use crate::api::TranscriptSegment;
 use crate::audio::common::{
@@ -12,7 +13,8 @@ use crate::audio::decoder::decode_audio_file;
 use crate::database::models::Transcript;
 use crate::database::repositories::meeting::MeetingsRepository;
 use crate::database::repositories::person::PeopleRepository;
-use crate::database::repositories::speaker::{NewSpeaker, SpeakerLink, SpeakerWrite, SpeakersRepository, SplitRow};
+use crate::database::repositories::speaker::{NewSpeaker, SpeakerLink, SpeakerWrite, SpeakersRepository, SplitRow, SuggestionSource};
+use crate::database::repositories::summary::SummaryProcessesRepository;
 use crate::state::AppState;
 use crate::whisper_engine::WhisperCompiledBackend;
 use anyhow::{anyhow, Result};
@@ -20,6 +22,7 @@ use once_cell::sync::Lazy;
 use serde::Serialize;
 use sqlx::{SqliteConnection, SqlitePool};
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::future::Future;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -36,12 +39,24 @@ const AUTO_AUDIO_WAIT: Duration = Duration::from_secs(30);
 /// How often cancellable waits re-check the cancel flag.
 const LOCK_POLL: Duration = Duration::from_millis(250);
 
+/// What a queued job does with the meeting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JobKind {
+    /// Find who speaks when and label the rows.
+    Identify,
+    /// Ask the summary model for names said in the conversation.
+    Naming,
+}
+
 #[derive(Debug, Clone)]
 pub struct IdentifyRequest {
     pub meeting_id: String,
+    /// The meeting's folder; not used by naming jobs.
     pub folder_path: PathBuf,
     pub num_speakers: Option<usize>,
     pub automatic: bool,
+    pub kind: JobKind,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
@@ -54,9 +69,11 @@ pub enum JobState {
 #[derive(Debug, Clone, Serialize)]
 pub struct JobStatus {
     pub meeting_id: String,
+    /// Which job this is, so the queued banner and the busy message can name it.
+    pub kind: JobKind,
     pub state: JobState,
     /// What the job is doing: None while queued, then "audio", "waiting", "download",
-    /// "segmentation", "embeddings", "clustering", "splitting", "saving" or "done".
+    /// "segmentation", "embeddings", "clustering", "splitting", "saving", "naming" or "done".
     pub stage: Option<&'static str>,
     pub percent: u32,
     pub message: String,
@@ -81,13 +98,18 @@ pub struct JobQueue {
 
 impl JobQueue {
     pub fn push(&mut self, req: IdentifyRequest) -> Result<(), String> {
-        if self.statuses.contains_key(&req.meeting_id) {
-            return Err("Speaker identification is already queued or running for this meeting".into());
+        if let Some(existing) = self.statuses.get(&req.meeting_id) {
+            return Err(match existing.kind {
+                JobKind::Identify => "Speaker identification is already queued or running for this meeting",
+                JobKind::Naming => "Finding names is already queued or running for this meeting",
+            }
+            .into());
         }
         self.statuses.insert(
             req.meeting_id.clone(),
             JobStatus {
                 meeting_id: req.meeting_id.clone(),
+                kind: req.kind,
                 state: JobState::Queued,
                 stage: None,
                 percent: 0,
@@ -151,6 +173,7 @@ impl JobQueue {
 }
 
 const IDENTIFYING_MESSAGE: &str = "Speaker identification is running for this meeting; try again when it finishes";
+const NAMING_MESSAGE: &str = "Finding names for this meeting; try again when it finishes";
 const RETRANSCRIBING_MESSAGE: &str = "This meeting is being retranscribed; try again when it finishes";
 
 static JOBS: Lazy<Mutex<JobQueue>> = Lazy::new(|| Mutex::new(JobQueue::default()));
@@ -193,8 +216,12 @@ pub fn is_busy(meeting_id: &str) -> bool {
 
 /// `ensure_idle` for a caller that already holds the queue lock.
 fn ensure_idle_locked(q: &JobQueue, meeting_id: &str) -> Result<(), String> {
-    if q.statuses.contains_key(meeting_id) {
-        return Err(IDENTIFYING_MESSAGE.into());
+    if let Some(status) = q.statuses.get(meeting_id) {
+        return Err(match status.kind {
+            JobKind::Identify => IDENTIFYING_MESSAGE,
+            JobKind::Naming => NAMING_MESSAGE,
+        }
+        .into());
     }
     if is_retranscribing(meeting_id) {
         return Err(RETRANSCRIBING_MESSAGE.into());
@@ -265,15 +292,11 @@ pub fn cancel<R: Runtime>(app: &AppHandle<R>, meeting_id: &str) -> Result<(), St
     };
     match outcome {
         CancelOutcome::Queued(req) => {
-            let _ = app.emit(
-                ERROR_EVENT,
-                serde_json::json!({
-                    "meeting_id": meeting_id,
-                    "error": "Speaker identification cancelled",
-                    "automatic": req.automatic,
-                    "cancelled": true
-                }),
-            );
+            let message = match req.kind {
+                JobKind::Identify => "Speaker identification cancelled",
+                JobKind::Naming => "Finding names cancelled",
+            };
+            let _ = app.emit(ERROR_EVENT, error_payload(&req, message, true));
             Ok(())
         }
         CancelOutcome::Running => Ok(()),
@@ -295,6 +318,52 @@ pub struct IdentifyOutcome {
     pub warning: Option<String>,
 }
 
+/// Names written by a naming job.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct NamingOutcome {
+    pub named: usize,
+    pub suggested: usize,
+}
+
+/// What a finished job reports.
+enum JobOutcome {
+    Identify(IdentifyOutcome),
+    Naming(NamingOutcome),
+}
+
+fn complete_payload(req: &IdentifyRequest, outcome: &JobOutcome) -> serde_json::Value {
+    let (speaker_count, warning, named, suggested) = match outcome {
+        JobOutcome::Identify(o) => (o.speaker_count, o.warning.clone(), 0, 0),
+        JobOutcome::Naming(o) => (0, None, o.named, o.suggested),
+    };
+    serde_json::json!({
+        "meeting_id": req.meeting_id,
+        "kind": req.kind,
+        "speaker_count": speaker_count,
+        "automatic": req.automatic,
+        "warning": warning,
+        "named": named,
+        "suggested": suggested
+    })
+}
+
+fn error_payload(req: &IdentifyRequest, error: &str, cancelled: bool) -> serde_json::Value {
+    serde_json::json!({
+        "meeting_id": req.meeting_id,
+        "kind": req.kind,
+        "error": error,
+        "automatic": req.automatic,
+        "cancelled": cancelled
+    })
+}
+
+async fn run_job<R: Runtime>(app: &AppHandle<R>, req: &IdentifyRequest) -> Result<JobOutcome> {
+    match req.kind {
+        JobKind::Identify => run_identify(app, req).await.map(JobOutcome::Identify),
+        JobKind::Naming => run_naming(app, req).await.map(JobOutcome::Naming),
+    }
+}
+
 async fn worker<R: Runtime>(app: AppHandle<R>) {
     loop {
         let next = {
@@ -311,41 +380,32 @@ async fn worker<R: Runtime>(app: AppHandle<R>) {
 
         // Run each job in its own task: a panic comes back as an error and the queue keeps going.
         let (job_app, job_req) = (app.clone(), req.clone());
-        let result = match tauri::async_runtime::spawn(async move { run_identify(&job_app, &job_req).await }).await {
+        let result = match tauri::async_runtime::spawn(async move { run_job(&job_app, &job_req).await }).await {
             Ok(result) => result,
-            Err(e) => Err(anyhow!("Speaker identification task panicked: {}", e)),
+            Err(e) => Err(anyhow!("Speaker job task panicked: {}", e)),
         };
         jobs().finish(&req.meeting_id);
 
         match result {
             Ok(outcome) => {
-                log::info!("Speaker identification finished for {}: {} speakers", req.meeting_id, outcome.speaker_count);
-                let _ = app.emit(
-                    COMPLETE_EVENT,
-                    serde_json::json!({
-                        "meeting_id": req.meeting_id,
-                        "speaker_count": outcome.speaker_count,
-                        "automatic": req.automatic,
-                        "warning": outcome.warning
-                    }),
-                );
+                match &outcome {
+                    JobOutcome::Identify(o) => {
+                        log::info!("Speaker identification finished for {}: {} speakers", req.meeting_id, o.speaker_count)
+                    }
+                    JobOutcome::Naming(o) => {
+                        log::info!("Finding names finished for {}: {} named, {} suggested", req.meeting_id, o.named, o.suggested)
+                    }
+                }
+                let _ = app.emit(COMPLETE_EVENT, complete_payload(&req, &outcome));
             }
             Err(e) => {
                 let cancelled = e.is::<Cancelled>();
                 if cancelled {
-                    log::info!("Speaker identification cancelled for {}", req.meeting_id);
+                    log::info!("{:?} job cancelled for {}", req.kind, req.meeting_id);
                 } else {
-                    log::warn!("Speaker identification failed for {}: {:#}", req.meeting_id, e);
+                    log::warn!("{:?} job failed for {}: {:#}", req.kind, req.meeting_id, e);
                 }
-                let _ = app.emit(
-                    ERROR_EVENT,
-                    serde_json::json!({
-                        "meeting_id": req.meeting_id,
-                        "error": format!("{e:#}"),
-                        "automatic": req.automatic,
-                        "cancelled": cancelled
-                    }),
-                );
+                let _ = app.emit(ERROR_EVENT, error_payload(&req, &format!("{e:#}"), cancelled));
             }
         }
     }
@@ -605,6 +665,115 @@ async fn transcripts_json_folder(pool: &SqlitePool, meeting_id: &str, fallback: 
         }
     }
     .or_else(|| fallback.map(Path::to_path_buf))
+}
+
+/// Resolves once the running job is cancelled.
+async fn until_cancelled() {
+    while !is_cancelled() {
+        tokio::time::sleep(LOCK_POLL).await;
+    }
+}
+
+async fn run_naming<R: Runtime>(app: &AppHandle<R>, req: &IdentifyRequest) -> Result<NamingOutcome> {
+    let pool = app
+        .try_state::<AppState>()
+        .ok_or_else(|| anyhow!("App state not available"))?
+        .db_manager
+        .pool()
+        .clone();
+    emit_progress(app, &req.meeting_id, "naming", 10, "Finding names…");
+    let model = summary_model_from_settings(&pool, app.path().app_data_dir().ok()).await.map_err(|e| anyhow!(e))?;
+    let outcome = name_from_conversation(&pool, &req.meeting_id, &model, until_cancelled()).await?;
+    emit_progress(app, &req.meeting_id, "done", 100, "Done");
+    Ok(outcome)
+}
+
+/// The meeting's summary markdown, when a summary was generated.
+async fn meeting_summary_markdown(pool: &SqlitePool, meeting_id: &str) -> Option<String> {
+    match SummaryProcessesRepository::get_summary_data_for_meeting(pool, meeting_id).await {
+        Ok(process) => process?
+            .result
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+            .and_then(|v| v.get("markdown").and_then(|m| m.as_str()).map(str::to_string))
+            .filter(|m| !m.trim().is_empty()),
+        Err(e) => {
+            log::warn!("Failed to read the summary of {}: {}", meeting_id, e);
+            None
+        }
+    }
+}
+
+/// Asks `model` for the names said in the meeting and writes what passes the checks: applied
+/// names and suggestions, only on speakers that are still unnamed. No connection is held while
+/// the model answers; the write is one transaction. Only the model call races `cancelled`: once
+/// the answer is in, the write and the transcripts.json rewrite always finish together.
+pub async fn name_from_conversation(
+    pool: &SqlitePool,
+    meeting_id: &str,
+    model: &dyn NamingModel,
+    cancelled: impl Future<Output = ()>,
+) -> Result<NamingOutcome> {
+    let speakers = SpeakersRepository::list(pool, meeting_id).await?;
+    if speakers.is_empty() {
+        return Err(anyhow!("Identify speakers first"));
+    }
+    if speakers.iter().all(|s| s.display_name.is_some()) {
+        return Ok(NamingOutcome::default());
+    }
+    let lines: Vec<NamingLine> = sqlx::query_as::<_, (Option<f64>, String, String)>(
+        "SELECT audio_start_time, speaker, transcript FROM transcripts
+         WHERE meeting_id = ? AND speaker IS NOT NULL ORDER BY audio_start_time",
+    )
+    .bind(meeting_id)
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(|(start, speaker, text)| NamingLine { start_s: start.unwrap_or(0.0), speaker, text })
+    .collect();
+    if lines.is_empty() {
+        return Ok(NamingOutcome::default());
+    }
+    let summary = meeting_summary_markdown(pool, meeting_id).await;
+    let (people, rejected_names) = {
+        let mut conn = pool.acquire().await?;
+        // Rejection-only people are not offered: they are names the user said a speaker is not.
+        let people = PeopleRepository::linked_conn(&mut conn).await?;
+        let rejected_names = PeopleRepository::rejected_names_conn(&mut conn, meeting_id)
+            .await?
+            .into_iter()
+            .map(|(key, name)| (key, normalize(&name)))
+            .collect();
+        (people, rejected_names)
+    };
+    let input = NamingInput {
+        lines,
+        summary,
+        speakers: speakers
+            .into_iter()
+            .map(|s| NamingSpeaker {
+                has_voice_suggestion: s.link.suggestion_source == Some(SuggestionSource::Voice),
+                key: s.speaker_key,
+                display_name: s.display_name,
+            })
+            .collect(),
+        people: people.into_iter().map(|p| KnownPerson { id: p.id, name: p.name }).collect(),
+        rejected_names,
+    };
+    let decisions = tokio::select! {
+        biased;
+        _ = cancelled => return Err(Cancelled.into()),
+        result = propose_names(model, &input) => result.map_err(|e| anyhow!(e))?,
+    };
+
+    let mut conn = pool.acquire().await?;
+    let mut tx = sqlx::Connection::begin(&mut *conn).await?;
+    let (named, suggested) = SpeakersRepository::apply_naming_conn(&mut tx, meeting_id, &decisions).await?;
+    tx.commit().await?;
+    drop(conn);
+    if named > 0 {
+        rewrite_transcripts_json(pool, meeting_id, None).await;
+    }
+    Ok(NamingOutcome { named, suggested })
 }
 
 struct StoredRow {
@@ -962,7 +1131,13 @@ mod tests {
     use super::*;
 
     fn req(id: &str) -> IdentifyRequest {
-        IdentifyRequest { meeting_id: id.into(), folder_path: PathBuf::from("/tmp"), num_speakers: None, automatic: false }
+        IdentifyRequest {
+            meeting_id: id.into(),
+            folder_path: PathBuf::from("/tmp"),
+            num_speakers: None,
+            automatic: false,
+            kind: JobKind::Identify,
+        }
     }
 
     #[test]
@@ -1490,5 +1665,261 @@ mod tests {
         assert!(is_busy(id));
         drop(claim);
         assert!(!is_busy(id));
+    }
+
+    use crate::diarization::naming::test_support::{answer, FakeNamingModel};
+
+    #[test]
+    fn naming_and_identify_share_the_queue() {
+        let mut q = JobQueue::default();
+        q.push(req("a")).unwrap();
+        let naming = |id: &str| IdentifyRequest { kind: JobKind::Naming, ..req(id) };
+        assert_eq!(
+            q.push(naming("a")),
+            Err("Speaker identification is already queued or running for this meeting".to_string()),
+            "a meeting with a queued identify job refuses naming"
+        );
+        q.push(naming("b")).unwrap();
+        assert_eq!(
+            q.push(req("b")),
+            Err("Finding names is already queued or running for this meeting".to_string()),
+            "a meeting with a queued naming job refuses identify and says why"
+        );
+        assert_eq!(ensure_idle_locked(&q, "b"), Err(NAMING_MESSAGE.to_string()), "speaker edits wait for the naming job");
+        assert_eq!(ensure_idle_locked(&q, "a"), Err(IDENTIFYING_MESSAGE.to_string()));
+        // The queued status tells the banner which job waits.
+        assert_eq!(serde_json::to_value(q.status("b").unwrap()).unwrap()["kind"], "naming");
+        assert_eq!(q.start_next().unwrap().kind, JobKind::Identify);
+        assert_eq!(q.start_next().unwrap().kind, JobKind::Naming);
+    }
+
+    #[test]
+    fn job_events_carry_kind_and_counts() {
+        let naming = IdentifyRequest { kind: JobKind::Naming, automatic: true, ..req("m") };
+        assert_eq!(
+            complete_payload(&naming, &JobOutcome::Naming(NamingOutcome { named: 2, suggested: 1 })),
+            serde_json::json!({
+                "meeting_id": "m", "kind": "naming", "speaker_count": 0, "automatic": true,
+                "warning": null, "named": 2, "suggested": 1
+            })
+        );
+        let identify = complete_payload(&req("m"), &JobOutcome::Identify(IdentifyOutcome { speaker_count: 3, warning: None }));
+        assert_eq!(identify["kind"], "identify");
+        assert_eq!(identify["speaker_count"], 3);
+        assert_eq!(identify["named"], 0);
+        assert_eq!(
+            error_payload(&naming, "No summary model is configured", false),
+            serde_json::json!({
+                "meeting_id": "m", "kind": "naming", "error": "No summary model is configured",
+                "automatic": true, "cancelled": false
+            })
+        );
+    }
+
+    /// Noah introduces himself, Ana is asked and answers, Bea is asked but never answers.
+    fn conversation() -> Vec<SeedRow> {
+        vec![
+            SeedRow { id: "r0", start: Some(5.0), end: Some(11.0), speaker: Some("spk_0"), text: "Hi everyone, I'm Noah and I run the platform team." },
+            SeedRow { id: "r1", start: Some(12.0), end: Some(19.0), speaker: Some("spk_1"), text: "Thanks Noah. Ana, can you start with the numbers?" },
+            SeedRow { id: "r2", start: Some(20.0), end: Some(30.0), speaker: Some("spk_2"), text: "Sure, the annual numbers look good." },
+            SeedRow { id: "r3", start: Some(31.0), end: Some(34.0), speaker: Some("spk_1"), text: "Great. Bea, are you there?" },
+            SeedRow { id: "r4", start: Some(35.0), end: Some(40.0), speaker: Some("spk_0"), text: "I think Bea had to step out." },
+            SeedRow { id: "r5", start: Some(41.0), end: Some(49.0), speaker: Some("spk_2"), text: "Has anyone heard from José?" },
+            SeedRow { id: "r6", start: Some(50.0), end: Some(52.0), speaker: Some("spk_3"), text: "Sorry, I was on mute." },
+            SeedRow { id: "r7", start: Some(53.0), end: Some(55.0), speaker: None, text: "unlabelled row" },
+        ]
+    }
+
+    fn unnamed(key: &str) -> NewSpeaker {
+        NewSpeaker { key: key.into(), embedding: vec![1.0, 0.0], speech_seconds: 1.0, ..Default::default() }
+    }
+
+    fn four_unnamed() -> Vec<NewSpeaker> {
+        ["spk_0", "spk_1", "spk_2", "spk_3"].into_iter().map(unnamed).collect()
+    }
+
+    /// Meeting "m" with the conversation rows, `people` as (id, name) and `speakers`.
+    async fn naming_meeting(people: &[(&str, &str)], speakers: Vec<NewSpeaker>) -> SqlitePool {
+        let pool = migrated_pool().await;
+        seed_meeting(&pool, "m", &conversation()).await;
+        for (id, name) in people {
+            seed_person(&pool, id, name).await;
+        }
+        let mut conn = pool.acquire().await.unwrap();
+        SpeakersRepository::replace_for_meeting(&mut conn, "m", &SpeakerWrite { speakers, ..Default::default() })
+            .await
+            .unwrap();
+        drop(conn);
+        pool
+    }
+
+    async fn seed_summary(pool: &SqlitePool, meeting_id: &str, markdown: &str) {
+        let now = chrono::Utc::now();
+        sqlx::query(
+            "INSERT INTO transcript_chunks (meeting_id, transcript_text, model, model_name, created_at)
+             VALUES (?, '', 'ollama', 'gemma3:1b', ?)",
+        )
+        .bind(meeting_id)
+        .bind(now)
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO summary_processes (meeting_id, status, created_at, updated_at, result) VALUES (?, 'completed', ?, ?, ?)")
+            .bind(meeting_id)
+            .bind(now)
+            .bind(now)
+            .bind(serde_json::json!({ "markdown": markdown }).to_string())
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn name_from_conversation_applies_and_suggests() {
+        let pool = naming_meeting(&[], four_unnamed()).await;
+        seed_summary(&pool, "m", "Attendees: Noah, Ana, Bea").await;
+        let model = FakeNamingModel::new(
+            8000,
+            vec![Ok(answer(&[
+                ("spk_0", "Noah", "I'm Noah", "self_intro", "high"),
+                ("spk_3", "Bea", "Bea, are you there?", "addressed", "high"),
+            ]))],
+        );
+        let outcome = name_from_conversation(&pool, "m", &model, std::future::pending()).await.unwrap();
+        assert_eq!(outcome, NamingOutcome { named: 1, suggested: 1 });
+
+        let speakers = SpeakersRepository::list(&pool, "m").await.unwrap();
+        assert_eq!(speakers[0].display_name.as_deref(), Some("Noah"));
+        assert_eq!(speakers[0].link.name_source, Some(NameSource::Conversation));
+        assert_eq!(speakers[0].link.person_id, None);
+        assert_eq!(speakers[3].display_name, None);
+        assert_eq!(speakers[3].link.suggested_name.as_deref(), Some("Bea"));
+        assert_eq!(speakers[3].link.suggestion_source, Some(SuggestionSource::Conversation));
+        assert_eq!(speakers[3].link.suggestion_reason.as_deref(), Some("addressed as Bea at 00:31"));
+
+        let (_, user) = model.prompts().remove(0);
+        assert!(user.contains("[00:05] spk_0: Hi everyone, I'm Noah and I run the platform team."));
+        assert!(user.contains("Attendees: Noah, Ana, Bea"));
+        assert!(!user.contains("unlabelled row"));
+    }
+
+    #[tokio::test]
+    async fn name_from_conversation_without_valid_names_changes_nothing() {
+        let pool = naming_meeting(&[], four_unnamed()).await;
+        let before = SpeakersRepository::list(&pool, "m").await.unwrap();
+
+        // A quote that is not in the transcript.
+        let model = FakeNamingModel::new(8000, vec![Ok(answer(&[("spk_0", "Noah", "Noah left early", "self_intro", "high")]))]);
+        assert_eq!(name_from_conversation(&pool, "m", &model, std::future::pending()).await.unwrap(), NamingOutcome::default());
+        // An answer that cannot be read.
+        let model = FakeNamingModel::new(8000, vec![Ok("I don't know who these people are.".into())]);
+        let err = name_from_conversation(&pool, "m", &model, std::future::pending()).await.unwrap_err();
+        assert_eq!(format!("{err:#}"), "The model's answer could not be read");
+        assert_eq!(SpeakersRepository::list(&pool, "m").await.unwrap(), before);
+
+        // A meeting without speakers is refused before the model is asked.
+        seed_meeting(&pool, "no-speakers", &[]).await;
+        let model = FakeNamingModel::new(8000, vec![]);
+        let err = name_from_conversation(&pool, "no-speakers", &model, std::future::pending()).await.unwrap_err();
+        assert_eq!(format!("{err:#}"), "Identify speakers first");
+        assert!(model.prompts().is_empty());
+    }
+
+    #[tokio::test]
+    async fn name_from_conversation_never_touches_named_or_voice_speakers() {
+        let typed = NewSpeaker {
+            display_name: Some("Ana".into()),
+            link: SpeakerLink { person_id: Some("person-ana".into()), name_source: Some(NameSource::User), ..Default::default() },
+            ..unnamed("spk_0")
+        };
+        let voice_linked = NewSpeaker {
+            display_name: Some("Noah".into()),
+            link: SpeakerLink { person_id: Some("person-noah".into()), name_source: Some(NameSource::Voice), ..Default::default() },
+            ..unnamed("spk_1")
+        };
+        let voice_suggested = NewSpeaker {
+            link: SpeakerLink {
+                suggested_person_id: Some("person-bea".into()),
+                suggested_name: Some("Bea".into()),
+                suggestion_source: Some(SuggestionSource::Voice),
+                suggestion_reason: Some("voice match 0.66".into()),
+                ..Default::default()
+            },
+            ..unnamed("spk_2")
+        };
+        let pool = naming_meeting(
+            &[("person-ana", "Ana"), ("person-noah", "Noah"), ("person-bea", "Bea"), ("person-zoe", "Zoe")],
+            vec![typed, voice_linked, voice_suggested, unnamed("spk_3")],
+        )
+        .await;
+        // Zoe exists only to anchor a rejection ("spk_3 is not Zoe").
+        let mut conn = pool.acquire().await.unwrap();
+        PeopleRepository::add_rejection_conn(&mut conn, "m", "spk_3", "person-zoe").await.unwrap();
+        drop(conn);
+        let before = SpeakersRepository::list(&pool, "m").await.unwrap();
+        let model = FakeNamingModel::new(
+            8000,
+            vec![Ok(answer(&[
+                ("spk_0", "Noah", "I'm Noah", "self_intro", "high"),
+                ("spk_1", "Ana", "Ana, can you start", "addressed", "high"),
+                ("spk_2", "José", "heard from José", "mentioned", "high"),
+            ]))],
+        );
+        assert_eq!(name_from_conversation(&pool, "m", &model, std::future::pending()).await.unwrap(), NamingOutcome::default());
+        assert_eq!(SpeakersRepository::list(&pool, "m").await.unwrap(), before);
+        // Only people linked to a speaker are offered to the model: Bea is only a suggestion and
+        // Zoe only a rejection.
+        let (_, user) = model.prompts().remove(0);
+        assert!(user.contains("People named in earlier meetings: Ana, Noah\n"), "{user}");
+        assert!(!user.contains("Zoe"));
+    }
+
+    #[tokio::test]
+    async fn cancelled_naming_writes_nothing() {
+        let pool = naming_meeting(&[], four_unnamed()).await;
+        let before = SpeakersRepository::list(&pool, "m").await.unwrap();
+        let model = FakeNamingModel::new(8000, vec![Ok(answer(&[("spk_0", "Noah", "I'm Noah", "self_intro", "high")]))]);
+
+        let err = name_from_conversation(&pool, "m", &model, std::future::ready(())).await.unwrap_err();
+
+        assert!(err.is::<Cancelled>(), "{err:#}");
+        assert_eq!(SpeakersRepository::list(&pool, "m").await.unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn name_from_conversation_skips_names_rejected_for_the_speaker() {
+        let pool = naming_meeting(&[("person-noah", "Noah")], four_unnamed()).await;
+        let mut conn = pool.acquire().await.unwrap();
+        PeopleRepository::add_rejection_conn(&mut conn, "m", "spk_0", "person-noah").await.unwrap();
+        drop(conn);
+        let reply = answer(&[("spk_0", "noah", "I'm Noah", "self_intro", "high")]);
+        let model = FakeNamingModel::new(8000, vec![Ok(reply)]);
+        assert_eq!(name_from_conversation(&pool, "m", &model, std::future::pending()).await.unwrap(), NamingOutcome::default());
+        assert_eq!(SpeakersRepository::list(&pool, "m").await.unwrap()[0].display_name, None);
+    }
+
+    struct HangingModel;
+
+    #[async_trait::async_trait]
+    impl NamingModel for HangingModel {
+        async fn complete(&self, _system: &str, _user: &str) -> Result<String, String> {
+            std::future::pending().await
+        }
+
+        fn context_tokens(&self) -> usize {
+            8000
+        }
+    }
+
+    #[tokio::test]
+    async fn cancelling_stops_a_model_call_that_never_answers() {
+        let pool = naming_meeting(&[], four_unnamed()).await;
+        let before = SpeakersRepository::list(&pool, "m").await.unwrap();
+        let cancel_soon = tokio::time::sleep(Duration::from_millis(20));
+        let result = tokio::time::timeout(Duration::from_secs(5), name_from_conversation(&pool, "m", &HangingModel, cancel_soon))
+            .await
+            .expect("cancel ends the wait");
+        assert!(result.unwrap_err().is::<Cancelled>());
+        assert_eq!(SpeakersRepository::list(&pool, "m").await.unwrap(), before);
     }
 }

@@ -4,6 +4,7 @@ use super::transcript::TranscriptsRepository;
 use crate::api::TranscriptSegment;
 use crate::diarization::cluster::weighted_centroid;
 use crate::diarization::diarizer::SpeakerCentroid;
+use crate::diarization::naming::{DecisionKind, NamingDecision};
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Connection, Error as SqlxError, Row, SqliteConnection, SqlitePool};
@@ -429,6 +430,58 @@ impl SpeakersRepository {
             return Err(not_found("name to reject"));
         }
         tx.commit().await
+    }
+
+    /// Writes names found in the conversation. Every update re-checks that the speaker is still
+    /// unnamed, so a name written by another path since the read is kept. Applied names are marked
+    /// `conversation` and clear any suggestion; a suggestion never replaces a voice suggestion.
+    /// Returns (named, suggested).
+    pub async fn apply_naming_conn(
+        conn: &mut SqliteConnection,
+        meeting_id: &str,
+        decisions: &[NamingDecision],
+    ) -> Result<(usize, usize), SqlxError> {
+        let (mut named, mut suggested) = (0usize, 0usize);
+        for d in decisions {
+            match d.kind {
+                DecisionKind::Apply => {
+                    let result = sqlx::query(
+                        "UPDATE meeting_speakers
+                         SET display_name = ?, person_id = ?, name_source = ?,
+                             suggested_person_id = NULL, suggested_name = NULL,
+                             suggestion_source = NULL, suggestion_reason = NULL
+                         WHERE meeting_id = ? AND speaker_key = ? AND display_name IS NULL",
+                    )
+                    .bind(&d.name)
+                    .bind(&d.person_id)
+                    .bind(NameSource::Conversation.as_str())
+                    .bind(meeting_id)
+                    .bind(&d.key)
+                    .execute(&mut *conn)
+                    .await?;
+                    named += result.rows_affected() as usize;
+                }
+                DecisionKind::Suggest => {
+                    let result = sqlx::query(
+                        "UPDATE meeting_speakers
+                         SET suggested_person_id = ?, suggested_name = ?, suggestion_source = ?, suggestion_reason = ?
+                         WHERE meeting_id = ? AND speaker_key = ? AND display_name IS NULL
+                           AND (suggestion_source IS NULL OR suggestion_source <> ?)",
+                    )
+                    .bind(&d.person_id)
+                    .bind(&d.name)
+                    .bind(SuggestionSource::Conversation.as_str())
+                    .bind(&d.reason)
+                    .bind(meeting_id)
+                    .bind(&d.key)
+                    .bind(SuggestionSource::Voice.as_str())
+                    .execute(&mut *conn)
+                    .await?;
+                    suggested += result.rows_affected() as usize;
+                }
+            }
+        }
+        Ok((named, suggested))
     }
 
     /// Fold `from` into `into`: rows and rejections move, centroids combine weighted by speech
@@ -1262,5 +1315,72 @@ mod tests {
         let json = serde_json::to_value(&speakers[0]).unwrap();
         assert!(json["person_id"].is_null());
         assert!(json["name_source"].is_null());
+    }
+
+    #[tokio::test]
+    async fn apply_naming_skips_speakers_named_meanwhile() {
+        use crate::diarization::naming::{DecisionKind, NamingDecision};
+        let decision = |key: &str, name: &str, kind: DecisionKind| NamingDecision {
+            key: key.into(),
+            name: name.into(),
+            person_id: None,
+            kind,
+            reason: format!("introduced as {name} at 00:05"),
+        };
+        let pool = seeded().await;
+        // A name written by another path since the read is kept.
+        sqlx::query("UPDATE meeting_speakers SET display_name = 'Typed', name_source = 'user' WHERE meeting_id = ? AND speaker_key = 'spk_0'")
+            .bind(M)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let mut conn = pool.acquire().await.unwrap();
+        let counts = SpeakersRepository::apply_naming_conn(
+            &mut conn,
+            M,
+            &[decision("spk_0", "Noah", DecisionKind::Apply), decision("spk_1", "Bea", DecisionKind::Suggest)],
+        )
+        .await
+        .unwrap();
+        drop(conn);
+        assert_eq!(counts, (0, 0));
+        let speakers = SpeakersRepository::list(&pool, M).await.unwrap();
+        assert_eq!(speakers[0].display_name.as_deref(), Some("Typed"));
+        assert_eq!(speakers[0].link.name_source, Some(NameSource::User));
+        assert_eq!(speakers[1].display_name.as_deref(), Some("Ana"));
+        assert!(!speakers[1].link.has_suggestion());
+
+        // An unnamed speaker with a voice suggestion keeps it over a conversation suggestion...
+        sqlx::query(
+            "UPDATE meeting_speakers SET display_name = NULL, name_source = NULL, suggested_name = 'Ana',
+                 suggestion_source = 'voice', suggestion_reason = 'voice match 0.66'
+             WHERE meeting_id = ? AND speaker_key = 'spk_0'",
+        )
+        .bind(M)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let mut conn = pool.acquire().await.unwrap();
+        let suggested = SpeakersRepository::apply_naming_conn(&mut conn, M, &[decision("spk_0", "Noah", DecisionKind::Suggest)])
+            .await
+            .unwrap();
+        drop(conn);
+        assert_eq!(suggested, (0, 0));
+        let spk0 = SpeakersRepository::list(&pool, M).await.unwrap().remove(0);
+        assert_eq!(spk0.link.suggested_name.as_deref(), Some("Ana"));
+        assert_eq!(spk0.link.suggestion_source, Some(SuggestionSource::Voice));
+
+        // ...but an applied name replaces it.
+        let mut conn = pool.acquire().await.unwrap();
+        let named = SpeakersRepository::apply_naming_conn(&mut conn, M, &[decision("spk_0", "Noah", DecisionKind::Apply)])
+            .await
+            .unwrap();
+        drop(conn);
+        assert_eq!(named, (1, 0));
+        let spk0 = SpeakersRepository::list(&pool, M).await.unwrap().remove(0);
+        assert_eq!(spk0.display_name.as_deref(), Some("Noah"));
+        assert_eq!(spk0.link.name_source, Some(NameSource::Conversation));
+        assert_eq!(spk0.link.person_id, None);
+        assert!(!spk0.link.has_suggestion());
     }
 }

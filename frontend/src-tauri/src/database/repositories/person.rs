@@ -83,6 +83,18 @@ impl PeopleRepository {
     }
 
     /// People with at least one linked meeting speaker, by name. People that only anchor a
+    /// rejection are left out (as in `list`).
+    pub async fn linked_conn(conn: &mut SqliteConnection) -> Result<Vec<Person>, SqlxError> {
+        sqlx::query_as::<_, Person>(
+            "SELECT p.id, p.name, p.created_at, p.updated_at FROM people p
+             WHERE EXISTS (SELECT 1 FROM meeting_speakers ms WHERE ms.person_id = p.id)
+             ORDER BY p.name COLLATE NOCASE",
+        )
+        .fetch_all(&mut *conn)
+        .await
+    }
+
+    /// People with at least one linked meeting speaker, by name. People that only anchor a
     /// rejection are hidden.
     pub async fn list(pool: &SqlitePool) -> Result<Vec<PersonSummary>, SqlxError> {
         let rows: Vec<(String, String, i64, Option<String>)> = sqlx::query_as(
@@ -293,6 +305,17 @@ impl PeopleRepository {
                 .bind(meeting_id)
                 .fetch_all(&mut *conn)
                 .await?;
+        Ok(rows.into_iter().collect())
+    }
+
+    /// (speaker_key, person name) pairs rejected in the meeting.
+    pub async fn rejected_names_conn(conn: &mut SqliteConnection, meeting_id: &str) -> Result<HashSet<(String, String)>, SqlxError> {
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT r.speaker_key, p.name FROM speaker_rejections r JOIN people p ON p.id = r.person_id WHERE r.meeting_id = ?",
+        )
+        .bind(meeting_id)
+        .fetch_all(&mut *conn)
+        .await?;
         Ok(rows.into_iter().collect())
     }
 }
@@ -643,6 +666,39 @@ mod tests {
                 meeting_count: 2,
                 last_seen: Some("2026-10-03T09:00:00+00:00".into()),
             }]
+        );
+    }
+
+    #[tokio::test]
+    async fn linked_people_exclude_rejection_only_people() {
+        let pool = migrated_pool().await;
+        seed_meeting(&pool, "m1", &[]).await;
+        for (id, name) in [("person-zoe", "Zoe"), ("person-ana", "ana"), ("person-bea", "Bea")] {
+            seed_person(&pool, id, name).await;
+        }
+        add_speaker(&pool, "m1", "spk_0", Some("ana"), Some("person-ana"), Some(NameSource::User), true).await;
+        add_speaker(&pool, "m1", "spk_1", Some("Bea"), Some("person-bea"), Some(NameSource::Voice), true).await;
+        reject(&pool, "m1", "spk_2", "person-zoe").await;
+        let mut conn = pool.acquire().await.unwrap();
+        let names: Vec<String> = PeopleRepository::linked_conn(&mut conn).await.unwrap().into_iter().map(|p| p.name).collect();
+        assert_eq!(names, ["ana", "Bea"]);
+    }
+
+    #[tokio::test]
+    async fn rejected_names_pair_each_speaker_with_the_rejected_name() {
+        let pool = migrated_pool().await;
+        seed_meeting(&pool, "m1", &[]).await;
+        seed_meeting(&pool, "m2", &[]).await;
+        seed_person(&pool, "person-zoe", "Zoe Q").await;
+        seed_person(&pool, "person-ana", "Ana").await;
+        reject(&pool, "m1", "spk_2", "person-zoe").await;
+        reject(&pool, "m1", "spk_3", "person-ana").await;
+        reject(&pool, "m2", "spk_2", "person-ana").await;
+        let mut conn = pool.acquire().await.unwrap();
+        let pairs = PeopleRepository::rejected_names_conn(&mut conn, "m1").await.unwrap();
+        assert_eq!(
+            pairs,
+            HashSet::from([("spk_2".to_string(), "Zoe Q".to_string()), ("spk_3".to_string(), "Ana".to_string())])
         );
     }
 }
