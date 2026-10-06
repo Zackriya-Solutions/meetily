@@ -18,6 +18,10 @@ export interface SpeakerTools {
   onRename: (key: string, name: string) => Promise<void>;
   onMerge: (fromKey: string, intoKey: string) => Promise<void>;
   onReassign: (transcriptId: string, key: string | null) => Promise<void>;
+  /** The automatic name, else the suggestion, becomes a typed name. */
+  onConfirm: (key: string) => Promise<void>;
+  /** "Not <name>": never proposed again for this speaker. */
+  onReject: (key: string) => Promise<void>;
   onCancelJob: () => Promise<void>;
   onStartIdentify: (numSpeakers: number | null) => Promise<void>;
 }
@@ -98,6 +102,8 @@ export function TranscriptPanel({
         onRename={speakerTools.onRename}
         onMerge={speakerTools.onMerge}
         onReassign={speakerTools.onReassign}
+        onConfirm={speakerTools.onConfirm}
+        onReject={speakerTools.onReject}
       />
     );
   }, [speakerTools]);
@@ -122,7 +128,14 @@ export function TranscriptPanel({
       {speakerTools && (
         <>
           <SpeakerJobBanner job={speakerJob} onCancel={() => void speakerTools.onCancelJob()} />
-          <SpeakerBar speakers={speakerTools.speakers} names={speakerTools.names} editable={speakerTools.editable} onRename={speakerTools.onRename} />
+          <SpeakerBar
+            speakers={speakerTools.speakers}
+            names={speakerTools.names}
+            editable={speakerTools.editable}
+            onRename={speakerTools.onRename}
+            onConfirm={speakerTools.onConfirm}
+            onReject={speakerTools.onReject}
+          />
         </>
       )}
 

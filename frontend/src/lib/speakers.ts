@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import { MeetingSpeaker, PropagatedLink, Transcript } from '@/types';
+import { MeetingSpeaker, PropagatedLink, SuggestionSource, Transcript } from '@/types';
 
 const PALETTE = [
   { chip: 'bg-blue-100 text-blue-800 border-blue-200', dot: 'bg-blue-500' },
@@ -88,4 +88,28 @@ export function propagatedMeetingCount(links: PropagatedLink[], currentMeetingId
 
 export function formatPropagationMessage(count: number): string {
   return `Also named in ${count} other meeting${count === 1 ? '' : 's'}`;
+}
+
+export type SpeakerNameState =
+  | { kind: 'default' }
+  /** Typed or confirmed by the user, or set before people existed */
+  | { kind: 'named'; name: string }
+  | { kind: 'auto'; name: string; source: 'voice' | 'conversation' }
+  | { kind: 'suggestion'; name: string; reason: string | null; source: SuggestionSource };
+
+/** What a chip shows besides its label: an automatic name to confirm, or a suggestion. */
+export function speakerNameState(speaker: MeetingSpeaker | undefined): SpeakerNameState {
+  if (!speaker) return { kind: 'default' };
+  const name = speaker.display_name?.trim();
+  if (name) {
+    if (speaker.name_source === 'voice' || speaker.name_source === 'conversation') {
+      return { kind: 'auto', name, source: speaker.name_source };
+    }
+    return { kind: 'named', name };
+  }
+  const suggested = speaker.suggested_name?.trim();
+  if (suggested && speaker.suggestion_source) {
+    return { kind: 'suggestion', name: suggested, reason: speaker.suggestion_reason, source: speaker.suggestion_source };
+  }
+  return { kind: 'default' };
 }

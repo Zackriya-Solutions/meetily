@@ -87,6 +87,8 @@ export default function PageContent({
     names: speakerNames,
     refetch: refetchSpeakers,
     name: nameSpeaker,
+    confirm: confirmSpeaker,
+    reject: rejectSpeaker,
     merge: mergeSpeakers,
     reassign: reassignSpeaker,
   } = useMeetingSpeakers(meeting.id);
@@ -97,6 +99,9 @@ export default function PageContent({
   const onRenameSpeaker = useCallback(async (key: string, name: string) => {
     await nameSpeaker(key, name);
   }, [nameSpeaker]);
+  const onConfirmSpeaker = useCallback(async (key: string) => {
+    await confirmSpeaker(key);
+  }, [confirmSpeaker]);
   const speakerIdentification = useSpeakerIdentification(meeting.id, refetchTranscriptsAndSpeakers);
   const {
     job: speakerJob,
@@ -135,6 +140,8 @@ export default function PageContent({
     onRename: onRenameSpeaker,
     onMerge: onMergeSpeakers,
     onReassign: onReassignSpeaker,
+    onConfirm: onConfirmSpeaker,
+    onReject: rejectSpeaker,
     onCancelJob: cancelSpeakerIdentification,
     onStartIdentify,
   }), [
@@ -145,6 +152,8 @@ export default function PageContent({
     onRenameSpeaker,
     onMergeSpeakers,
     onReassignSpeaker,
+    onConfirmSpeaker,
+    rejectSpeaker,
     cancelSpeakerIdentification,
     onStartIdentify,
   ]);

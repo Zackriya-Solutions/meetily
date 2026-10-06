@@ -3,9 +3,10 @@
 import { memo, useState } from 'react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { MeetingSpeaker } from '@/types';
-import { speakerColor, speakerLabel } from '@/lib/speakers';
+import { speakerColor, speakerLabel, speakerNameState } from '@/lib/speakers';
 import { toast } from 'sonner';
 import { SpeakerRenameForm } from './SpeakerRenameForm';
+import { SpeakerNameBadge } from './SpeakerNameBadge';
 
 interface SpeakerChipProps {
   speakerKey: string;
@@ -18,6 +19,8 @@ interface SpeakerChipProps {
   onRename: (key: string, name: string) => Promise<void>;
   onMerge: (fromKey: string, intoKey: string) => Promise<void>;
   onReassign: (transcriptId: string, key: string | null) => Promise<void>;
+  onConfirm: (key: string) => Promise<void>;
+  onReject: (key: string) => Promise<void>;
 }
 
 function SpeakerOptionButtons({ speakers, names, ariaPrefix, onPick }: {
@@ -56,17 +59,12 @@ function SpeakerChipImpl({
   onRename,
   onMerge,
   onReassign,
+  onConfirm,
+  onReject,
 }: SpeakerChipProps) {
   const [open, setOpen] = useState(false);
   const label = speakerLabel(speakerKey, names);
   const color = speakerColor(speakerKey);
-  const chip = (
-    <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${color.chip}`}>{label}</span>
-  );
-  if (!editable) return chip;
-
-  // Speakers left without rows (every line reassigned away) are not offered.
-  const others = speakers.filter((s) => s.speaker_key !== speakerKey && s.row_count > 0);
   const current = speakers.find((s) => s.speaker_key === speakerKey);
   const run = async (action: () => Promise<void>, failure: string) => {
     try {
@@ -74,11 +72,27 @@ function SpeakerChipImpl({
       setOpen(false);
     } catch (error) {
       console.error(failure, error);
-      toast.error(failure);
+      // Refusals from the backend (for example while a speaker job runs) are written for the user.
+      toast.error(typeof error === 'string' ? error : failure);
     }
   };
+  const chip = (
+    <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${color.chip}`}>{label}</span>
+  );
+  const badge = (
+    <SpeakerNameBadge
+      state={speakerNameState(current)}
+      label={label}
+      editable={editable}
+      onConfirm={() => void run(() => onConfirm(speakerKey), 'Failed to confirm the name')}
+      onReject={() => void run(() => onReject(speakerKey), 'Failed to reject the name')}
+    />
+  );
+  if (!editable) return compact ? chip : <span className="inline-flex items-center gap-1">{chip}{badge}</span>;
 
-  return (
+  // Speakers left without rows (every line reassigned away) are not offered.
+  const others = speakers.filter((s) => s.speaker_key !== speakerKey && s.row_count > 0);
+  const popover = (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         {compact ? (
@@ -132,6 +146,8 @@ function SpeakerChipImpl({
       </PopoverContent>
     </Popover>
   );
+  // The badge stays outside the trigger: its buttons cannot sit inside the chip's button.
+  return compact ? popover : <span className="inline-flex items-center gap-1">{popover}{badge}</span>;
 }
 
 /** Memoised: every prop is a primitive or a stable reference, so scrolling does not re-render it. */

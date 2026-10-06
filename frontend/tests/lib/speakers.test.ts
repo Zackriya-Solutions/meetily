@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
   buildSpeakerNameMap, defaultSpeakerLabel, formatPropagationMessage, formatSpeakerCount, formatTranscriptLine,
-  isSpeakerRunStart, propagatedMeetingCount, rowSpeakerControl,
+  isSpeakerRunStart, propagatedMeetingCount, rowSpeakerControl, speakerNameState,
 } from '../../src/lib/speakers';
 import type { MeetingSpeaker, PropagatedLink, Transcript } from '../../src/types';
 import { makeSpeaker } from '../fixtures/speakers';
@@ -59,5 +59,35 @@ describe('propagation toast', () => {
   test('propagatedMeetingCount ignores the current meeting', () => {
     expect(propagatedMeetingCount([link('a'), link('b')], 'a')).toBe(1);
     expect(propagatedMeetingCount([], 'a')).toBe(0);
+  });
+});
+
+describe('speaker name state', () => {
+  test('a missing or unnamed speaker shows the default label', () => {
+    expect(speakerNameState(undefined)).toEqual({ kind: 'default' });
+    expect(speakerNameState(makeSpeaker('spk_0'))).toEqual({ kind: 'default' });
+  });
+
+  test('a typed name is named', () => {
+    expect(speakerNameState(makeSpeaker('spk_0', { display_name: 'Noah', person_id: 'p1', name_source: 'user' })))
+      .toEqual({ kind: 'named', name: 'Noah' });
+  });
+
+  test('a name from before people existed counts as typed', () => {
+    expect(speakerNameState(makeSpeaker('spk_0', { display_name: ' Noah ', name_source: null })))
+      .toEqual({ kind: 'named', name: 'Noah' });
+  });
+
+  test('voice and conversation names are auto', () => {
+    expect(speakerNameState(makeSpeaker('spk_0', { display_name: 'Noah', person_id: 'p1', name_source: 'voice' })))
+      .toEqual({ kind: 'auto', name: 'Noah', source: 'voice' });
+    expect(speakerNameState(makeSpeaker('spk_0', { display_name: 'Ana', name_source: 'conversation' })))
+      .toEqual({ kind: 'auto', name: 'Ana', source: 'conversation' });
+  });
+
+  test('an unnamed speaker with a suggestion shows it with its reason', () => {
+    expect(speakerNameState(makeSpeaker('spk_1', {
+      display_name: '  ', suggested_name: 'Ana', suggested_person_id: 'p2', suggestion_source: 'voice', suggestion_reason: 'voice match 0.68',
+    }))).toEqual({ kind: 'suggestion', name: 'Ana', reason: 'voice match 0.68', source: 'voice' });
   });
 });
