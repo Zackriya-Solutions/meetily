@@ -75,6 +75,8 @@ export function usePlayback(meetingId: string | null, enabled: boolean): Playbac
   const stopAtRef = useRef<number | null>(null);
   /** The user wants sound: set by play, cleared by pause and by the end. */
   const wantPlayRef = useRef(false);
+  /** A clip render started by a play or seek is in flight. */
+  const loadingRef = useRef(false);
   const rateRef = useRef<PlaybackRate>(1);
 
   const setMode = useCallback((next: PlaybackMode) => {
@@ -130,9 +132,11 @@ export function usePlayback(meetingId: string | null, enabled: boolean): Playbac
 
   const loadClipAt = useCallback(async (fileS: number, play: boolean) => {
     const id = ++loadIdRef.current;
+    loadingRef.current = true;
     dropNextClip();
     try {
       const clip = await renderClip(Math.max(0, fileS));
+      if (id === loadIdRef.current) loadingRef.current = false;
       if (id !== loadIdRef.current) {
         revoke(clip);
         return;
@@ -146,6 +150,7 @@ export function usePlayback(meetingId: string | null, enabled: boolean): Playbac
       showClip(clip, play);
     } catch (e) {
       if (id !== loadIdRef.current) return;
+      loadingRef.current = false;
       setError(errorMessage(e, 'Failed to play the recording'));
       setPlaying(false);
     }
@@ -174,9 +179,20 @@ export function usePlayback(meetingId: string | null, enabled: boolean): Playbac
   const toggle = useCallback(() => {
     const audio = audioRef.current;
     if (!audio || !sourceRef.current) return;
-    if (!audio.paused) {
+    // The user's intent, not audio.paused: the audio is paused while a clip renders.
+    if (wantPlayRef.current) {
       wantPlayRef.current = false;
+      if (modeRef.current === 'clip' && (loadingRef.current || seekTimerRef.current !== null)) {
+        // Cancel the pending render; the clip on hand is not at the clock, so resume renders anew.
+        cancelPendingSeek();
+        loadIdRef.current += 1;
+        loadingRef.current = false;
+        dropNextClip();
+        revoke(clipRef.current);
+        clipRef.current = null;
+      }
       audio.pause();
+      setPlaying(false);
       return;
     }
     stopAtRef.current = null;
@@ -186,7 +202,7 @@ export function usePlayback(meetingId: string | null, enabled: boolean): Playbac
     } else {
       playFrom(clockRef.current);
     }
-  }, [playFrom]);
+  }, [cancelPendingSeek, dropNextClip, playFrom]);
 
   const seek = useCallback((clock: number) => {
     const audio = audioRef.current;
@@ -200,7 +216,7 @@ export function usePlayback(meetingId: string | null, enabled: boolean): Playbac
     cancelPendingSeek();
     if (modeRef.current === 'asset') {
       audio.currentTime = fileS;
-    } else if (!audio.paused) {
+    } else if (wantPlayRef.current) {
       // Dragging the seek bar seeks on every step; one clip is rendered where the drag stops.
       seekTimerRef.current = setTimeout(() => {
         seekTimerRef.current = null;
@@ -209,6 +225,7 @@ export function usePlayback(meetingId: string | null, enabled: boolean): Playbac
     } else {
       // Paused: the clip at the new position is rendered when playback resumes.
       loadIdRef.current += 1;
+      loadingRef.current = false;
       dropNextClip();
       revoke(clipRef.current);
       clipRef.current = null;
@@ -275,14 +292,17 @@ export function usePlayback(meetingId: string | null, enabled: boolean): Playbac
       const pending = nextClipRef.current ?? renderClip(clip.startFileS + clip.lengthS).catch(() => null);
       nextClipRef.current = null;
       const id = ++loadIdRef.current;
+      loadingRef.current = true;
       const next = await pending;
       if (!alive || id !== loadIdRef.current) {
         revoke(next);
         return;
       }
-      if (next) {
+      loadingRef.current = false;
+      if (next && wantPlayRef.current) {
         showClip(next, true);
       } else {
+        revoke(next);
         wantPlayRef.current = false;
         setPlaying(false);
       }
@@ -314,6 +334,7 @@ export function usePlayback(meetingId: string | null, enabled: boolean): Playbac
         if (modeRef.current === 'asset') audio.src = prepared.url;
       })
       .catch((e) => {
+        console.warn('Meeting playback is not available:', e);
         if (alive) setError(errorMessage(e, 'The recording is not available'));
       });
 

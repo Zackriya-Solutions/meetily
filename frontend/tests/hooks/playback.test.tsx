@@ -55,9 +55,15 @@ const IDENTITY_SOURCE: PlaybackSource = {
 };
 let source: PlaybackSource = IDENTITY_SOURCE;
 const fullClip = () => new ArrayBuffer(44 + 30 * 16_000 * 2);
+/** While set, clip renders wait for it, which keeps a clip "loading" for the test. */
+let renderGate: Promise<void> | null = null;
+let renderResult: () => ArrayBuffer = fullClip;
 const invoke = mock(async (command: string, _args?: Record<string, unknown>): Promise<unknown> => {
   if (command === 'api_prepare_meeting_playback') return source;
-  if (command === 'api_render_playback_clip') return fullClip();
+  if (command === 'api_render_playback_clip') {
+    if (renderGate) await renderGate;
+    return renderResult();
+  }
   throw new Error(`Unexpected command: ${command}`);
 });
 mock.module('@tauri-apps/api/core', () => ({ ...originalCore, invoke }));
@@ -87,6 +93,8 @@ beforeEach(() => {
   FakeAudio.canPlay = 'maybe';
   source = IDENTITY_SOURCE;
   invoke.mockClear();
+  renderGate = null;
+  renderResult = fullClip;
 });
 afterEach(async () => {
   if (renderer) await act(async () => renderer!.unmount());
@@ -186,6 +194,55 @@ describe('usePlayback', () => {
     expect(clipStarts()).toHaveLength(before + 1);
     near(clipStarts()[before], 50);
     expect(audio.paused).toBe(false);
+  });
+
+  test('a seek while the first clip is still rendering ends up playing at the new position', async () => {
+    FakeAudio.canPlay = '';
+    const audio = await mount();
+    let release!: () => void;
+    renderGate = new Promise<void>((resolve) => { release = resolve; });
+    await act(async () => { controls.playFrom(0); });
+    await act(async () => { controls.seek(40); });
+    renderGate = null;
+    release();
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, CLIP_SEEK_DELAY_MS + 50)); });
+    await settle();
+    expect(clipStarts().at(-1)).toBeCloseTo(40, 6);
+    expect(audio.paused).toBe(false);
+    expect(controls.playing).toBe(true);
+  });
+
+  test('toggle while a clip renders pauses without rendering again', async () => {
+    FakeAudio.canPlay = '';
+    const audio = await mount();
+    let release!: () => void;
+    renderGate = new Promise<void>((resolve) => { release = resolve; });
+    await act(async () => { controls.playFrom(0); });
+    expect(clipStarts()).toHaveLength(1);
+    await act(async () => { controls.toggle(); });
+    expect(clipStarts()).toHaveLength(1);
+    expect(controls.playing).toBe(false);
+    release();
+    await settle();
+    expect(audio.paused).toBe(true);
+    expect(controls.playing).toBe(false);
+  });
+
+  test('playing is false when the clip handoff finds nothing to play after a seek', async () => {
+    FakeAudio.canPlay = '';
+    const audio = await mount();
+    await act(async () => { controls.playFrom(0); });
+    await settle();
+    let release!: () => void;
+    renderGate = new Promise<void>((resolve) => { release = resolve; });
+    audio.ended = true;
+    await act(async () => { audio.emit('ended'); });
+    await act(async () => { controls.seek(70); });
+    renderResult = () => new ArrayBuffer(44); // past the end of the file
+    release();
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, CLIP_SEEK_DELAY_MS + 50)); });
+    await settle();
+    expect(controls.playing).toBe(false);
   });
 
   test('play from with stop pauses at the end', async () => {
