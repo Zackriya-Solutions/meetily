@@ -186,6 +186,11 @@ pub fn ensure_idle(meeting_id: &str) -> Result<(), String> {
     ensure_idle_locked(&jobs(), meeting_id)
 }
 
+/// True while identification is queued or running for the meeting, or it is being retranscribed.
+pub fn is_busy(meeting_id: &str) -> bool {
+    ensure_idle(meeting_id).is_err()
+}
+
 /// `ensure_idle` for a caller that already holds the queue lock.
 fn ensure_idle_locked(q: &JobQueue, meeting_id: &str) -> Result<(), String> {
     if q.statuses.contains_key(meeting_id) {
@@ -1475,5 +1480,15 @@ mod tests {
         assert_eq!(s["spk_1"].display_name, None);
         assert_eq!(s["spk_1"].link, SpeakerLink::default(), "neither linked nor suggested again");
         assert_eq!(s["spk_0"].link, SpeakerLink::default());
+    }
+
+    #[test]
+    fn is_busy_follows_ensure_idle() {
+        let id = "busy-test-meeting";
+        assert!(!is_busy(id));
+        let claim = claim_for_retranscription(id).unwrap();
+        assert!(is_busy(id));
+        drop(claim);
+        assert!(!is_busy(id));
     }
 }
