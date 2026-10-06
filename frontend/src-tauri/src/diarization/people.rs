@@ -546,3 +546,211 @@ mod tests {
         assert!(PeopleRepository::rejections_conn(&mut conn, "b").await.unwrap().is_empty(), "undo records no rejection");
     }
 }
+
+/// Measures how voices of the same person and of different people score, to choose the voice
+/// thresholds. Reads the isolated dev database only, read-only.
+#[cfg(test)]
+mod calibration {
+    use super::person_score;
+    use crate::database::repositories::speaker::blob_to_embedding;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use std::collections::{BTreeMap, HashSet};
+    use std::path::PathBuf;
+
+    /// Highest strong threshold proposed: only the same recording scores 1.0.
+    const MAX_STRONG: f32 = 0.99;
+    /// Highest different-person pairs listed, so a voice split into two speakers can be spotted.
+    const TOP_PAIRS: usize = 5;
+
+    struct Stats {
+        count: usize,
+        min: f32,
+        p05: f32,
+        median: f32,
+        p95: f32,
+        max: f32,
+    }
+
+    fn stats(scores: &[f32]) -> Option<Stats> {
+        if scores.is_empty() {
+            return None;
+        }
+        let mut s = scores.to_vec();
+        s.sort_by(|a, b| a.total_cmp(b));
+        let at = |q: f64| s[((s.len() - 1) as f64 * q).round() as usize];
+        Some(Stats { count: s.len(), min: s[0], p05: at(0.05), median: at(0.5), p95: at(0.95), max: s[s.len() - 1] })
+    }
+
+    /// Rounds up to two decimals, ignoring float noise just above a step (in f32, 0.62 + 0.05 is
+    /// 0.6700000167, which must still give 0.67).
+    fn ceil_hundredth(x: f32) -> f32 {
+        ((x as f64 * 100.0 - 1e-4).ceil() / 100.0) as f32
+    }
+
+    /// (strong, weak): strong clears the given different-person score by 0.05 (at most
+    /// MAX_STRONG); weak is that score, kept below strong.
+    fn propose_thresholds(max_different: f32) -> (f32, f32) {
+        let strong = ceil_hundredth(max_different + 0.05).min(MAX_STRONG);
+        let weak = ceil_hundredth(max_different).min(strong - 0.01);
+        (strong, weak)
+    }
+
+    /// Non-empty 0.05-wide buckets as (bucket start, count).
+    fn histogram(scores: &[f32]) -> Vec<(f32, usize)> {
+        let mut buckets: BTreeMap<i32, usize> = BTreeMap::new();
+        for &s in scores {
+            *buckets.entry((s / 0.05).floor() as i32).or_default() += 1;
+        }
+        buckets.into_iter().map(|(b, n)| (b as f32 * 0.05, n)).collect()
+    }
+
+    fn print_class(label: &str, scores: &[f32]) {
+        match stats(scores) {
+            Some(s) => println!(
+                "{label}: count {} | min {:.3} | p05 {:.3} | median {:.3} | p95 {:.3} | max {:.3}",
+                s.count, s.min, s.p05, s.median, s.p95, s.max
+            ),
+            None => println!("{label}: no pairs"),
+        }
+        for (start, n) in histogram(scores) {
+            println!("  {:+.2}..{:+.2} {:>5} {}", start, start + 0.05, n, "#".repeat(n.min(60)));
+        }
+    }
+
+    fn dev_database() -> PathBuf {
+        std::env::var_os("SPEAKERS_DEV_DB").map(PathBuf::from).unwrap_or_else(|| {
+            dirs::data_dir().expect("no data directory").join("com.meetily.ai.speakers-dev/meeting_minutes.sqlite")
+        })
+    }
+
+    /// "meeting_id/speaker_key" items separated by commas: speakers left out of the measurement
+    /// (for a voice that diarization split into two speakers).
+    fn parse_excluded(list: &str) -> HashSet<(String, String)> {
+        list.split(',')
+            .filter_map(|item| item.trim().split_once('/'))
+            .map(|(meeting, key)| (meeting.trim().to_string(), key.trim().to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn threshold_proposal_rounds_up_and_keeps_weak_below_strong() {
+        assert_eq!(propose_thresholds(0.62), (0.67, 0.62));
+        assert_eq!(propose_thresholds(0.613), (0.67, 0.62));
+        assert_eq!(propose_thresholds(0.70), (0.75, 0.70));
+        assert_eq!(propose_thresholds(0.97), (0.99, 0.97), "strong stays below 1");
+        let s = stats(&[0.5, 0.1, 0.9, 0.3, 0.7]).unwrap();
+        assert_eq!((s.count, s.min, s.median, s.max), (5, 0.1, 0.5, 0.9));
+        assert!(stats(&[]).is_none());
+        let h = histogram(&[0.61, 0.64, 0.66]);
+        assert_eq!(h.iter().map(|&(_, n)| n).collect::<Vec<_>>(), vec![2, 1]);
+        assert!((h[0].0 - 0.60).abs() < 1e-6 && (h[1].0 - 0.65).abs() < 1e-6);
+    }
+
+    #[test]
+    fn excluded_speakers_are_read_from_the_list() {
+        let excluded = parse_excluded(" m1/spk_3, m2/spk_0 ,broken,");
+        assert_eq!(
+            excluded,
+            HashSet::from([("m1".to_string(), "spk_3".to_string()), ("m2".to_string(), "spk_0".to_string())])
+        );
+        assert!(parse_excluded("").is_empty());
+    }
+
+    #[ignore]
+    #[tokio::test]
+    async fn calibrate_voice_thresholds() {
+        let path = dev_database();
+        let shown = path.to_string_lossy().to_string();
+        assert!(!shown.contains("/com.meetily.ai/"), "refusing to read the installed app's database: {shown}");
+        let options = SqliteConnectOptions::new().filename(&path).read_only(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .unwrap_or_else(|e| panic!("cannot open {shown} read-only: {e}"));
+        let rows: Vec<(String, String, Option<String>, Option<String>, Vec<u8>)> = sqlx::query_as(
+            "SELECT meeting_id, speaker_key, person_id, name_source, embedding FROM meeting_speakers WHERE embedding IS NOT NULL",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        let excluded = parse_excluded(&std::env::var("CALIBRATION_EXCLUDE").unwrap_or_default());
+
+        struct Voice {
+            meeting: String,
+            key: String,
+            person: Option<String>,
+            exemplar: bool,
+            embedding: Vec<f32>,
+        }
+        let voices: Vec<Voice> = rows
+            .into_iter()
+            .filter(|(meeting, key, ..)| !excluded.contains(&(meeting.clone(), key.clone())))
+            .map(|(meeting, key, person, source, blob)| Voice {
+                exemplar: person.is_some() && source.as_deref() == Some("user"),
+                meeting,
+                key,
+                person,
+                embedding: blob_to_embedding(&blob),
+            })
+            .collect();
+        let exemplars: Vec<&Voice> = voices.iter().filter(|v| v.exemplar).collect();
+
+        // Same person: each exemplar against that person's exemplars from other meetings.
+        let mut same = Vec::new();
+        for v in &exemplars {
+            let others: Vec<Vec<f32>> = exemplars
+                .iter()
+                .filter(|o| o.person == v.person && o.meeting != v.meeting)
+                .map(|o| o.embedding.clone())
+                .collect();
+            if !others.is_empty() {
+                same.push(person_score(&v.embedding, &others));
+            }
+        }
+        // Different people: each exemplar against the other speakers of its own meeting, as
+        // (score, meeting, named speaker, other speaker), highest first. Two exemplars of
+        // different people in one meeting are one pair: only the one with the lower key scores it.
+        let mut different: Vec<(f32, &str, &str, &str)> = Vec::new();
+        for v in &exemplars {
+            for o in voices
+                .iter()
+                .filter(|o| o.meeting == v.meeting && o.person != v.person && !(o.exemplar && o.key < v.key))
+            {
+                let score = person_score(&o.embedding, std::slice::from_ref(&v.embedding));
+                different.push((score, v.meeting.as_str(), v.key.as_str(), o.key.as_str()));
+            }
+        }
+        different.sort_by(|a, b| b.0.total_cmp(&a.0));
+        let different_scores: Vec<f32> = different.iter().map(|d| d.0).collect();
+
+        let people: HashSet<&Option<String>> = exemplars.iter().map(|v| &v.person).collect();
+        let meetings: HashSet<&String> = exemplars.iter().map(|v| &v.meeting).collect();
+        println!("Dev database: {shown}");
+        if !excluded.is_empty() {
+            println!("Left out: {excluded:?}");
+        }
+        println!("{} exemplars of {} people in {} meetings; {} embedded speakers in all", exemplars.len(), people.len(), meetings.len(), voices.len());
+        print_class("Same person", &same);
+        print_class("Different people", &different_scores);
+        println!("Highest different-person pairs (one voice split into two speakers scores like the same person):");
+        for (score, meeting, named, other) in different.iter().take(TOP_PAIRS) {
+            println!("  {score:.3}  meeting {meeting}  {named} (named) vs {other}");
+        }
+
+        assert!(!same.is_empty(), "no same-person pairs: name the same person in at least two meetings");
+        assert!(!different.is_empty(), "no different-person pairs: name people in meetings with other speakers");
+        let report = |label: &str, basis: f32| {
+            let (strong, weak) = propose_thresholds(basis);
+            let below = same.iter().filter(|&&s| s < strong).count();
+            let weak_only = same.iter().filter(|&&s| s >= weak && s < strong).count();
+            println!("Proposed from the {label} different-person score ({basis:.3}): VOICE_STRONG = {strong:.2}, VOICE_WEAK = {weak:.2}");
+            println!("  same-person scores below strong: {below} of {} ({weak_only} of them would be suggestions)", same.len());
+        };
+        report("highest", different[0].0);
+        if let Some(second) = different.get(1) {
+            report("second-highest", second.0);
+        }
+        println!("To leave a split voice out: CALIBRATION_EXCLUDE=meeting_id/speaker_key[,…]");
+    }
+}
