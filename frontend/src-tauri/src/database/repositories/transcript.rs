@@ -158,7 +158,7 @@ impl TranscriptsRepository {
 mod tests {
     use super::*;
     use crate::database::repositories::meeting::MeetingsRepository;
-    use crate::database::test_support::migrated_pool;
+    use crate::database::test_support::{migrated_pool, seed_person};
 
     fn segment(id: &str, start: f64, speaker: Option<&str>) -> TranscriptSegment {
         TranscriptSegment {
@@ -225,5 +225,32 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn deleting_a_meeting_removes_its_rejections() {
+        let pool = migrated_pool().await;
+        // The delete must not rely on the cascade. One connection, so the pragma holds.
+        sqlx::query("PRAGMA foreign_keys = OFF").execute(&pool).await.unwrap();
+        let meeting_id = TranscriptsRepository::save_transcript(&pool, "M", &[segment("a", 0.0, Some("spk_0"))], None)
+            .await
+            .unwrap();
+        seed_person(&pool, "person-noah", "Noah").await;
+        sqlx::query("INSERT INTO speaker_rejections (meeting_id, speaker_key, person_id) VALUES (?, 'spk_0', 'person-noah')")
+            .bind(&meeting_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        assert!(MeetingsRepository::delete_meeting(&pool, &meeting_id).await.unwrap());
+
+        let (rejections,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM speaker_rejections WHERE meeting_id = ?")
+            .bind(&meeting_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(rejections, 0);
+        let (people,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM people").fetch_one(&pool).await.unwrap();
+        assert_eq!(people, 1, "the person outlives the meeting");
     }
 }

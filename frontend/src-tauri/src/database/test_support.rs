@@ -56,3 +56,15 @@ pub async fn seed_meeting(pool: &SqlitePool, meeting_id: &str, rows: &[SeedRow])
             .expect("insert transcript");
     }
 }
+
+pub async fn seed_person(pool: &SqlitePool, id: &str, name: &str) {
+    let now = chrono::Utc::now().to_rfc3339();
+    sqlx::query("INSERT INTO people (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)")
+        .bind(id)
+        .bind(name)
+        .bind(&now)
+        .bind(&now)
+        .execute(pool)
+        .await
+        .expect("insert person");
+}

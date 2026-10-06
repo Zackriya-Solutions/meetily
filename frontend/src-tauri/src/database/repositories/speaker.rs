@@ -4,9 +4,94 @@ use crate::api::TranscriptSegment;
 use crate::diarization::cluster::weighted_centroid;
 use crate::diarization::diarizer::SpeakerCentroid;
 use serde::{Deserialize, Serialize};
+use sqlx::sqlite::SqliteRow;
 use sqlx::{Connection, Error as SqlxError, Row, SqliteConnection, SqlitePool};
 use std::collections::BTreeMap;
 use uuid::Uuid;
+
+/// Who gave a speaker its current name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NameSource {
+    /// Typed or confirmed by the user. Only these names teach a person's voice.
+    User,
+    /// A strong voice match to a person named in another meeting.
+    Voice,
+    /// Found in the conversation by the summary model and checked against the transcript.
+    Conversation,
+}
+
+impl NameSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NameSource::User => "user",
+            NameSource::Voice => "voice",
+            NameSource::Conversation => "conversation",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "user" => Some(NameSource::User),
+            "voice" => Some(NameSource::Voice),
+            "conversation" => Some(NameSource::Conversation),
+            _ => None,
+        }
+    }
+}
+
+/// Where a suggested name came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SuggestionSource {
+    Voice,
+    Conversation,
+}
+
+impl SuggestionSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SuggestionSource::Voice => "voice",
+            SuggestionSource::Conversation => "conversation",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "voice" => Some(SuggestionSource::Voice),
+            "conversation" => Some(SuggestionSource::Conversation),
+            _ => None,
+        }
+    }
+}
+
+/// A speaker's link to a person and its pending suggestion. A name without a person (typed while
+/// voices are not remembered, or from before people existed) has `person_id` None.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SpeakerLink {
+    pub person_id: Option<String>,
+    pub name_source: Option<NameSource>,
+    /// The suggested person when it already exists.
+    pub suggested_person_id: Option<String>,
+    /// Name shown with the suggestion; always written, also for people that do not exist yet.
+    pub suggested_name: Option<String>,
+    pub suggestion_source: Option<SuggestionSource>,
+    /// Why it is suggested, for example "voice match 0.68".
+    pub suggestion_reason: Option<String>,
+}
+
+impl SpeakerLink {
+    pub fn clear_suggestion(&mut self) {
+        self.suggested_person_id = None;
+        self.suggested_name = None;
+        self.suggestion_source = None;
+        self.suggestion_reason = None;
+    }
+
+    pub fn has_suggestion(&self) -> bool {
+        self.suggested_person_id.is_some() || self.suggested_name.is_some()
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MeetingSpeaker {
@@ -20,19 +105,44 @@ pub struct MeetingSpeaker {
     pub row_count: i64,
     /// Seconds covered by those rows (the speaker's share in the speaker bar).
     pub row_seconds: f64,
+    #[serde(flatten)]
+    pub link: SpeakerLink,
 }
 
+#[derive(Debug, Clone, Default)]
 pub struct NewSpeaker {
     pub key: String,
     pub display_name: Option<String>,
     pub embedding: Vec<f32>,
     pub speech_seconds: f64,
+    pub link: SpeakerLink,
 }
 
 /// An unnamed speaker from a diarization run.
 impl From<&SpeakerCentroid> for NewSpeaker {
     fn from(s: &SpeakerCentroid) -> Self {
-        Self { key: s.key.clone(), display_name: None, embedding: s.embedding.clone(), speech_seconds: s.speech_seconds }
+        Self {
+            key: s.key.clone(),
+            display_name: None,
+            embedding: s.embedding.clone(),
+            speech_seconds: s.speech_seconds,
+            link: SpeakerLink::default(),
+        }
+    }
+}
+
+/// Link columns of a `meeting_speakers` row; unknown source strings read as None.
+fn link_from_row(r: &SqliteRow) -> SpeakerLink {
+    SpeakerLink {
+        person_id: r.get("person_id"),
+        name_source: r.get::<Option<String>, _>("name_source").as_deref().and_then(NameSource::parse),
+        suggested_person_id: r.get("suggested_person_id"),
+        suggested_name: r.get("suggested_name"),
+        suggestion_source: r
+            .get::<Option<String>, _>("suggestion_source")
+            .as_deref()
+            .and_then(SuggestionSource::parse),
+        suggestion_reason: r.get("suggestion_reason"),
     }
 }
 
@@ -100,6 +210,8 @@ impl SpeakersRepository {
     pub async fn list_conn(conn: &mut SqliteConnection, meeting_id: &str) -> Result<Vec<MeetingSpeaker>, SqlxError> {
         let rows = sqlx::query(
             "SELECT ms.speaker_key, ms.display_name, ms.speech_seconds, ms.embedding,
+                    ms.person_id, ms.name_source, ms.suggested_person_id, ms.suggested_name,
+                    ms.suggestion_source, ms.suggestion_reason,
                     COALESCE(r.row_count, 0) AS row_count,
                     CAST(COALESCE(r.row_seconds, 0) AS REAL) AS row_seconds
              FROM meeting_speakers ms
@@ -126,6 +238,7 @@ impl SpeakersRepository {
                 embedding: r.get::<Option<Vec<u8>>, _>("embedding").map(|b| blob_to_embedding(&b)),
                 row_count: r.get("row_count"),
                 row_seconds: r.get("row_seconds"),
+                link: link_from_row(&r),
             })
             .collect();
         speakers.sort_by_key(|s| (key_index(&s.speaker_key).unwrap_or(usize::MAX), s.speaker_key.clone()));
@@ -305,8 +418,9 @@ impl SpeakersRepository {
             .await?;
         for s in &write.speakers {
             sqlx::query(
-                "INSERT INTO meeting_speakers (meeting_id, speaker_key, display_name, embedding, speech_seconds, created_at)
-                 VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO meeting_speakers (meeting_id, speaker_key, display_name, embedding, speech_seconds, created_at,
+                     person_id, name_source, suggested_person_id, suggested_name, suggestion_source, suggestion_reason)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(meeting_id)
             .bind(&s.key)
@@ -314,6 +428,12 @@ impl SpeakersRepository {
             .bind(embedding_to_blob(&s.embedding))
             .bind(s.speech_seconds)
             .bind(&now)
+            .bind(&s.link.person_id)
+            .bind(s.link.name_source.map(NameSource::as_str))
+            .bind(&s.link.suggested_person_id)
+            .bind(&s.link.suggested_name)
+            .bind(s.link.suggestion_source.map(SuggestionSource::as_str))
+            .bind(&s.link.suggestion_reason)
             .execute(&mut *conn)
             .await?;
         }
@@ -358,7 +478,7 @@ impl SpeakersRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::database::test_support::{migrated_pool, seed_meeting, SeedRow};
+    use crate::database::test_support::{migrated_pool, seed_meeting, seed_person, SeedRow};
 
     const M: &str = "meeting-1";
 
@@ -380,8 +500,8 @@ mod tests {
             M,
             &SpeakerWrite {
                 speakers: vec![
-                    NewSpeaker { key: "spk_0".into(), display_name: None, embedding: vec![1.0, 0.0], speech_seconds: 3.0 },
-                    NewSpeaker { key: "spk_1".into(), display_name: Some("Ana".into()), embedding: vec![0.0, 1.0], speech_seconds: 1.0 },
+                    NewSpeaker { key: "spk_0".into(), display_name: None, embedding: vec![1.0, 0.0], speech_seconds: 3.0, ..Default::default() },
+                    NewSpeaker { key: "spk_1".into(), display_name: Some("Ana".into()), embedding: vec![0.0, 1.0], speech_seconds: 1.0, ..Default::default() },
                 ],
                 ..Default::default()
             },
@@ -510,7 +630,7 @@ mod tests {
             &mut conn,
             M,
             &SpeakerWrite {
-                speakers: vec![NewSpeaker { key: "spk_0".into(), display_name: Some("Noah".into()), embedding: vec![1.0, 0.0], speech_seconds: 6.0 }],
+                speakers: vec![NewSpeaker { key: "spk_0".into(), display_name: Some("Noah".into()), embedding: vec![1.0, 0.0], speech_seconds: 6.0, ..Default::default() }],
                 row_labels: vec![("t1".into(), Some("spk_0".into())), ("t2".into(), None)],
                 row_splits: vec![(
                     "t3".into(),
@@ -538,5 +658,80 @@ mod tests {
         assert_eq!(SpeakersRepository::list(&pool, M).await.unwrap().len(), 1);
         let labels = SpeakersRepository::labels(&pool, M).await.unwrap();
         assert_eq!(labels.get("spk_0").map(String::as_str), Some("Noah"));
+    }
+
+    #[test]
+    fn name_and_suggestion_sources_round_trip_as_strings() {
+        for s in [NameSource::User, NameSource::Voice, NameSource::Conversation] {
+            assert_eq!(NameSource::parse(s.as_str()), Some(s));
+        }
+        for s in [SuggestionSource::Voice, SuggestionSource::Conversation] {
+            assert_eq!(SuggestionSource::parse(s.as_str()), Some(s));
+        }
+        assert_eq!(NameSource::parse("robot"), None);
+        assert_eq!(SuggestionSource::parse("user"), None);
+    }
+
+    #[tokio::test]
+    async fn speaker_links_round_trip_through_replace_and_list() {
+        let pool = migrated_pool().await;
+        seed_meeting(&pool, M, &[]).await;
+        seed_person(&pool, "person-noah", "Noah").await;
+        seed_person(&pool, "person-ana", "Ana").await;
+        let link = SpeakerLink {
+            person_id: Some("person-noah".into()),
+            name_source: Some(NameSource::Voice),
+            suggested_person_id: Some("person-ana".into()),
+            suggested_name: Some("Ana".into()),
+            suggestion_source: Some(SuggestionSource::Conversation),
+            suggestion_reason: Some("addressed as Ana at 01:12".into()),
+        };
+        let mut conn = pool.acquire().await.unwrap();
+        SpeakersRepository::replace_for_meeting(
+            &mut conn,
+            M,
+            &SpeakerWrite {
+                speakers: vec![NewSpeaker {
+                    key: "spk_0".into(),
+                    display_name: Some("Noah".into()),
+                    embedding: vec![1.0, 0.0],
+                    speech_seconds: 2.0,
+                    link: link.clone(),
+                }],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        drop(conn);
+
+        let speakers = SpeakersRepository::list(&pool, M).await.unwrap();
+        assert_eq!(speakers[0].link, link);
+        let json = serde_json::to_value(&speakers[0]).unwrap();
+        assert_eq!(json["person_id"], "person-noah");
+        assert_eq!(json["name_source"], "voice");
+        assert_eq!(json["suggested_person_id"], "person-ana");
+        assert_eq!(json["suggested_name"], "Ana");
+        assert_eq!(json["suggestion_source"], "conversation");
+        assert_eq!(json["suggestion_reason"], "addressed as Ana at 01:12");
+        assert!(json.get("link").is_none(), "link fields are flattened");
+        assert!(json.get("embedding").is_none());
+    }
+
+    #[tokio::test]
+    async fn existing_speakers_read_with_empty_links() {
+        let pool = migrated_pool().await;
+        seed_meeting(&pool, M, &[]).await;
+        sqlx::query("INSERT INTO meeting_speakers (meeting_id, speaker_key, display_name, created_at) VALUES (?, 'spk_0', 'Ana', '2026-09-27T10:00:00Z')")
+            .bind(M)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let speakers = SpeakersRepository::list(&pool, M).await.unwrap();
+        assert_eq!(speakers[0].display_name.as_deref(), Some("Ana"));
+        assert_eq!(speakers[0].link, SpeakerLink::default());
+        let json = serde_json::to_value(&speakers[0]).unwrap();
+        assert!(json["person_id"].is_null());
+        assert!(json["name_source"].is_null());
     }
 }

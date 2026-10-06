@@ -265,6 +265,12 @@ async fn delete_meeting_with_transaction(
         .execute(&mut *transaction)
         .await?;
 
+    // Rejections reference the meeting; deleted explicitly so this does not depend on PRAGMA foreign_keys.
+    sqlx::query("DELETE FROM speaker_rejections WHERE meeting_id = ?")
+        .bind(meeting_id)
+        .execute(&mut *transaction)
+        .await?;
+
     // 3. Delete from transcripts
     sqlx::query("DELETE FROM transcripts WHERE meeting_id = ?")
         .bind(meeting_id)

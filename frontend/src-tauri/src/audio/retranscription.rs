@@ -1133,7 +1133,7 @@ mod tests {
             &mut conn,
             "m1",
             &SpeakerWrite {
-                speakers: vec![NewSpeaker { key: "spk_0".into(), display_name: Some("Noah".into()), embedding: vec![1.0, 0.0], speech_seconds: 1.0 }],
+                speakers: vec![NewSpeaker { key: "spk_0".into(), display_name: Some("Noah".into()), embedding: vec![1.0, 0.0], speech_seconds: 1.0, ..Default::default() }],
                 ..Default::default()
             },
         )
