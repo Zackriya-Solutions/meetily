@@ -10,11 +10,12 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use symphonia::core::audio::SampleBuffer;
-use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
-use symphonia::core::formats::FormatOptions;
+use symphonia::core::codecs::{CodecParameters, DecoderOptions, CODEC_TYPE_NULL};
+use symphonia::core::formats::{FormatOptions, FormatReader};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
+use symphonia::core::units::TimeBase;
 
 use super::audio_processing::{audio_to_mono, resample, resample_audio};
 use super::ffmpeg::find_ffmpeg_path;
@@ -622,6 +623,68 @@ pub fn decode_audio_file_with_progress(
     })
 }
 
+/// The file's demuxer, at the start, with the id and parameters of its first audio track.
+fn open_format(path: &Path) -> Result<(Box<dyn FormatReader>, u32, CodecParameters)> {
+    let file = std::fs::File::open(path).map_err(|e| anyhow!("Failed to open audio file '{}': {}", path.display(), e))?;
+    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+    let mut hint = Hint::new();
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        hint.with_extension(ext);
+    }
+    let probed = symphonia::default::get_probe()
+        .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
+        .map_err(|e| anyhow!("Failed to probe audio format: {}", e))?;
+    let format = probed.format;
+    let track = format
+        .tracks()
+        .iter()
+        .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
+        .ok_or_else(|| anyhow!("No audio track found in file"))?;
+    let (track_id, params) = (track.id, track.codec_params.clone());
+    Ok((format, track_id, params))
+}
+
+/// Seconds of container timestamp `ts`, or of `ts` frames at `rate` when the track has no time base.
+fn ts_seconds(time_base: Option<TimeBase>, ts: u64, rate: u32) -> f64 {
+    match time_base {
+        Some(tb) => {
+            let t = tb.calc_time(ts);
+            t.seconds as f64 + t.frac
+        }
+        None => ts as f64 / rate.max(1) as f64,
+    }
+}
+
+/// Length of the first audio track on the container timeline: the sum of its packet durations.
+/// Only demuxes, so a long recording is read in well under a second. For a live recording this
+/// is the recording clock (plus the first checkpoint's 21 ms of encoder priming): the joined
+/// checkpoints advance the container by exactly 30 s each, while decoding yields 1792 more frames
+/// per checkpoint.
+pub fn container_duration_s(path: &Path) -> Result<f64> {
+    if needs_ffmpeg_conversion(path) {
+        // Symphonia cannot demux these; their decoded length is the best measure available.
+        return Ok(decode_audio_file(path)?.duration_seconds);
+    }
+    let (mut format, track_id, params) = open_format(path)?;
+    let rate = params.sample_rate.unwrap_or(0);
+    if params.time_base.is_none() && rate == 0 {
+        return Err(anyhow!("Unknown sample rate"));
+    }
+    let mut duration_ts: u64 = 0;
+    loop {
+        match format.next_packet() {
+            Ok(packet) if packet.track_id() == track_id => duration_ts += packet.dur(),
+            Ok(_) => {}
+            Err(symphonia::core::errors::Error::IoError(ref e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            Err(e) => {
+                warn!("Error reading packet while measuring {}: {}", path.display(), e);
+                break;
+            }
+        }
+    }
+    Ok(ts_seconds(params.time_base, duration_ts, rate))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -915,5 +978,102 @@ mod tests {
             duration_seconds: 1.0,
         };
         assert_eq!(stereo.to_whisper_format(), stereo.clone().into_whisper_format());
+    }
+
+    #[test]
+    fn container_duration_is_the_recording_clock() {
+        use super::test_audio::{joined_checkpoints, silence_then_tone, write_wav};
+        let dir = tempfile::tempdir().unwrap();
+
+        let wav = dir.path().join("speech.wav");
+        write_wav(&wav, 16_000, 1, &silence_then_tone(16_000, 0.5, 1.5));
+        assert_eq!(container_duration_s(&wav).unwrap(), 1.5);
+
+        // Three checkpoints joined as a live recording: the container advances exactly 30 s per
+        // checkpoint; only the first checkpoint's encoder priming (1024 frames) is added.
+        let live = joined_checkpoints(dir.path(), 3, |_| false);
+        let duration = container_duration_s(&live).unwrap();
+        assert!((duration - (90.0 + 1024.0 / 48_000.0)).abs() < 1e-6, "container duration {duration}");
+        // Counting decoded frames instead gains priming and padding at every checkpoint. That
+        // drift is the diarization time map's concern, not the player's.
+        let decoded = decode_audio_file(&live).unwrap();
+        let decoded_s = decoded.samples.len() as f64 / decoded.channels.max(1) as f64 / decoded.sample_rate as f64;
+        assert!(decoded_s - duration > 0.07, "decoded {decoded_s} s vs container {duration} s");
+    }
+}
+
+/// Audio files for tests.
+#[cfg(test)]
+pub(crate) mod test_audio {
+    use std::path::{Path, PathBuf};
+
+    /// 16-bit PCM WAV of interleaved `samples`.
+    pub(crate) fn write_wav(path: &Path, rate: u32, channels: u16, samples: &[f32]) {
+        std::fs::write(path, crate::audio::encode::pcm16_wav(rate, channels, samples)).unwrap();
+    }
+
+    /// Mono: silence for `silent_s`, then a 440 Hz tone at half scale until `total_s`.
+    pub(crate) fn silence_then_tone(rate: u32, silent_s: f64, total_s: f64) -> Vec<f32> {
+        let onset = (silent_s * rate as f64) as usize;
+        (0..(total_s * rate as f64) as usize)
+            .map(|i| if i < onset { 0.0 } else { 0.5 * (2.0 * std::f32::consts::PI * 440.0 * i as f32 / rate as f32).sin() })
+            .collect()
+    }
+
+    /// AAC in MP4 encoded from `wav` with ffmpeg.
+    pub(crate) fn aac_mp4_from_wav(wav: &Path) -> PathBuf {
+        let ffmpeg = crate::audio::ffmpeg::find_ffmpeg_path().expect("ffmpeg is needed for this test");
+        let out = wav.with_extension("mp4");
+        let status = std::process::Command::new(ffmpeg)
+            .args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
+            .arg(wav)
+            .args(["-c:a", "aac", "-b:a", "128k"])
+            .arg(&out)
+            .status()
+            .expect("run ffmpeg");
+        assert!(status.success(), "ffmpeg could not encode {}", wav.display());
+        out
+    }
+
+    /// `dir/audio.mp4` built as a live recording is: 30 s checkpoints of 48 kHz mono encoded by
+    /// `encode_single_audio`, joined with the ffmpeg concat demuxer and `-c copy`. The signal is
+    /// a 440 Hz tone at half scale wherever `tone_at(recording clock seconds)` holds, else silence.
+    pub(crate) fn joined_checkpoints(dir: &Path, checkpoints: usize, tone_at: impl Fn(f64) -> bool) -> PathBuf {
+        const RATE: usize = 48_000;
+        const CHECKPOINT: usize = 30 * RATE;
+        let mut list = String::new();
+        for k in 0..checkpoints {
+            let samples: Vec<f32> = (k * CHECKPOINT..(k + 1) * CHECKPOINT)
+                .map(|n| {
+                    let t = n as f64 / RATE as f64;
+                    if tone_at(t) { 0.5 * (2.0 * std::f64::consts::PI * 440.0 * t).sin() as f32 } else { 0.0 }
+                })
+                .collect();
+            let chunk = dir.join(format!("audio_chunk_{:03}.mp4", k));
+            crate::audio::encode::encode_single_audio(bytemuck::cast_slice(&samples), RATE as u32, 1, &chunk)
+                .expect("encode a checkpoint");
+            list.push_str(&format!("file '{}'\n", chunk.display()));
+        }
+        let list_file = dir.join("concat_list.txt");
+        std::fs::write(&list_file, list).unwrap();
+        let out = dir.join("audio.mp4");
+        let ffmpeg = crate::audio::ffmpeg::find_ffmpeg_path().expect("ffmpeg is needed for this test");
+        let status = std::process::Command::new(ffmpeg)
+            .args(["-hide_banner", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i"])
+            .arg(&list_file)
+            .args(["-c", "copy", "-y"])
+            .arg(&out)
+            .status()
+            .expect("run ffmpeg");
+        assert!(status.success(), "ffmpeg could not join the checkpoints");
+        out
+    }
+
+    /// Seconds into mono `samples` of the first 2 ms window whose RMS exceeds 0.1.
+    pub(crate) fn onset_s(samples: &[f32], rate: u32) -> Option<f64> {
+        let window = (rate as usize / 500).max(1);
+        (0..samples.len().saturating_sub(window))
+            .find(|&i| (samples[i..i + window].iter().map(|x| x * x).sum::<f32>() / window as f32).sqrt() > 0.1)
+            .map(|i| i as f64 / rate as f64)
     }
 }
