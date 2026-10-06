@@ -267,22 +267,6 @@ impl SpeakersRepository {
             .collect())
     }
 
-    /// Rename a speaker for the whole meeting. An empty name resets to the default label.
-    pub async fn rename(pool: &SqlitePool, meeting_id: &str, key: &str, name: &str) -> Result<(), SqlxError> {
-        let trimmed = name.trim();
-        let value = if trimmed.is_empty() { None } else { Some(trimmed) };
-        let result = sqlx::query("UPDATE meeting_speakers SET display_name = ? WHERE meeting_id = ? AND speaker_key = ?")
-            .bind(value)
-            .bind(meeting_id)
-            .bind(key)
-            .execute(pool)
-            .await?;
-        if result.rows_affected() == 0 {
-            return Err(not_found("speaker"));
-        }
-        Ok(())
-    }
-
     /// Name, link and suggestion of one speaker, read through `conn`.
     async fn name_state_conn(
         conn: &mut SqliteConnection,
@@ -1094,11 +1078,11 @@ mod tests {
     #[tokio::test]
     async fn rename_trims_and_empty_resets_to_default() {
         let pool = seeded().await;
-        SpeakersRepository::rename(&pool, M, "spk_0", "  Noah ").await.unwrap();
+        SpeakersRepository::name(&pool, M, "spk_0", "  Noah ", true).await.unwrap();
         assert_eq!(SpeakersRepository::list(&pool, M).await.unwrap()[0].display_name.as_deref(), Some("Noah"));
-        SpeakersRepository::rename(&pool, M, "spk_0", "   ").await.unwrap();
+        SpeakersRepository::name(&pool, M, "spk_0", "   ", true).await.unwrap();
         assert_eq!(SpeakersRepository::list(&pool, M).await.unwrap()[0].display_name, None);
-        assert!(SpeakersRepository::rename(&pool, M, "spk_9", "X").await.is_err());
+        assert!(SpeakersRepository::name(&pool, M, "spk_9", "X", true).await.is_err());
     }
 
     #[tokio::test]
@@ -1120,7 +1104,7 @@ mod tests {
     #[tokio::test]
     async fn merge_keeps_the_target_name_when_both_are_named() {
         let pool = seeded().await;
-        SpeakersRepository::rename(&pool, M, "spk_0", "Noah").await.unwrap();
+        SpeakersRepository::name(&pool, M, "spk_0", "Noah", true).await.unwrap();
         SpeakersRepository::merge(&pool, M, "spk_1", "spk_0").await.unwrap();
         let speakers = SpeakersRepository::list(&pool, M).await.unwrap();
         assert_eq!(speakers.len(), 1);

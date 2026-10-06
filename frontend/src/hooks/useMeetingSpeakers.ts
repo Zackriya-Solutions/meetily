@@ -24,8 +24,8 @@ export function useMeetingSpeakers(meetingId: string | null) {
 
   const names = useMemo(() => buildSpeakerNameMap(speakers), [speakers]);
 
-  const rename = useCallback(async (speakerKey: string, displayName: string) => {
-    await invoke('api_rename_meeting_speaker', { meetingId, speakerKey, displayName });
+  const rename = useCallback(async (speakerKey: string, name: string) => {
+    await invoke('api_name_meeting_speaker', { meetingId, speakerKey, name });
     await refetch();
   }, [meetingId, refetch]);
 

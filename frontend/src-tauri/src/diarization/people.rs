@@ -6,7 +6,6 @@ use crate::diarization::assign::greedy_pairs;
 use crate::diarization::cluster::cosine;
 use serde::{Deserialize, Serialize};
 use sqlx::{Connection, Error as SqlxError, SqliteConnection, SqlitePool};
-use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashSet};
 
 /// Score at or above which a voice is linked to a person automatically (shown as "auto").
