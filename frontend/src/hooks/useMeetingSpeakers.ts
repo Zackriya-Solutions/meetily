@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
 import { MeetingSpeaker, NameOutcome, PropagatedLink } from '@/types';
-import { buildSpeakerNameMap, formatPropagationMessage, propagatedMeetingCount } from '@/lib/speakers';
+import { buildSpeakerNameMap, formatPropagationMessage } from '@/lib/speakers';
 
 async function undoPropagation(links: PropagatedLink[]) {
   try {
@@ -13,8 +13,11 @@ async function undoPropagation(links: PropagatedLink[]) {
   }
 }
 
-export function useMeetingSpeakers(meetingId: string | null) {
+/** `onNamed` reloads what a typed or confirmed name changes besides the speakers (the people list). */
+export function useMeetingSpeakers(meetingId: string | null, onNamed?: () => Promise<void>) {
   const [speakers, setSpeakers] = useState<MeetingSpeaker[]>([]);
+  const onNamedRef = useRef(onNamed);
+  onNamedRef.current = onNamed;
 
   /** Reloads and returns the speakers, so a caller can decide on the fresh list. */
   const refetch = useCallback(async (): Promise<MeetingSpeaker[]> => {
@@ -39,29 +42,27 @@ export function useMeetingSpeakers(meetingId: string | null) {
   const names = useMemo(() => buildSpeakerNameMap(speakers), [speakers]);
 
   // Naming a voice can name the same voice in other meetings; offer to take that back.
-  const announce = useCallback((outcome: NameOutcome) => {
-    const count = propagatedMeetingCount(outcome.propagated, meetingId ?? '');
-    if (count === 0) return;
+  // The backend links at most one speaker in each other meeting.
+  const applyName = useCallback(async (command: string, args: { speakerKey: string; name?: string }) => {
+    const outcome = await invoke<NameOutcome>(command, { meetingId, ...args });
+    await Promise.all([refetch(), onNamedRef.current?.()]);
     const links = outcome.propagated;
-    toast.success(formatPropagationMessage(count), {
+    if (links.length === 0) return;
+    toast.success(formatPropagationMessage(links.length), {
       action: { label: 'Undo', onClick: () => { void undoPropagation(links); } },
       duration: 10000,
     });
-  }, [meetingId]);
+  }, [meetingId, refetch]);
 
-  const name = useCallback(async (speakerKey: string, name: string) => {
-    const outcome = await invoke<NameOutcome>('api_name_meeting_speaker', { meetingId, speakerKey, name });
-    await refetch();
-    announce(outcome);
-    return outcome;
-  }, [meetingId, refetch, announce]);
+  const name = useCallback(
+    (speakerKey: string, name: string) => applyName('api_name_meeting_speaker', { speakerKey, name }),
+    [applyName],
+  );
 
-  const confirm = useCallback(async (speakerKey: string) => {
-    const outcome = await invoke<NameOutcome>('api_confirm_meeting_speaker_name', { meetingId, speakerKey });
-    await refetch();
-    announce(outcome);
-    return outcome;
-  }, [meetingId, refetch, announce]);
+  const confirm = useCallback(
+    (speakerKey: string) => applyName('api_confirm_meeting_speaker_name', { speakerKey }),
+    [applyName],
+  );
 
   const reject = useCallback(async (speakerKey: string) => {
     await invoke('api_reject_meeting_speaker_name', { meetingId, speakerKey });

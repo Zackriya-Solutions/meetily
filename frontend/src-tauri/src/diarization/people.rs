@@ -1,12 +1,14 @@
 //! Voice matching: recognises people the user named in other meetings by their stored voices.
 
 use crate::database::repositories::person::PeopleRepository;
-use crate::database::repositories::speaker::{blob_to_embedding, NameSource, NewSpeaker, SpeakersRepository, SuggestionSource};
+use crate::database::repositories::speaker::{
+    blob_to_embedding, NameSource, NewSpeaker, SpeakersRepository, SuggestionSource, CLEAR_NAME,
+};
 use crate::diarization::assign::greedy_pairs;
 use crate::diarization::cluster::cosine;
 use serde::{Deserialize, Serialize};
 use sqlx::{Connection, Error as SqlxError, SqliteConnection, SqlitePool};
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 /// Score at or above which a voice is linked to a person automatically (shown as "auto").
 /// Provisional until set from measured same-person and different-person scores.
@@ -101,15 +103,25 @@ pub fn assign_voices(
 /// person and have a stored voice. Automatic names never teach a voice. `exclude_meeting` leaves
 /// out the meeting whose speakers are being replaced.
 pub async fn exemplars_conn(conn: &mut SqliteConnection, exclude_meeting: Option<&str>) -> Result<Vec<PersonVoice>, SqlxError> {
+    exemplars_of_conn(conn, exclude_meeting, None).await
+}
+
+/// `exemplars_conn`, limited to one person when `person_id` is set.
+async fn exemplars_of_conn(
+    conn: &mut SqliteConnection,
+    exclude_meeting: Option<&str>,
+    person_id: Option<&str>,
+) -> Result<Vec<PersonVoice>, SqlxError> {
     let rows: Vec<(String, String, Vec<u8>)> = sqlx::query_as(
         "SELECT p.id, p.name, ms.embedding
          FROM meeting_speakers ms
          JOIN people p ON p.id = ms.person_id
-         WHERE ms.name_source = 'user' AND ms.embedding IS NOT NULL AND (? IS NULL OR ms.meeting_id <> ?)
+         WHERE ms.name_source = 'user' AND ms.embedding IS NOT NULL AND (?1 IS NULL OR ms.meeting_id <> ?1)
+           AND (?2 IS NULL OR ms.person_id = ?2)
          ORDER BY p.id",
     )
     .bind(exclude_meeting)
-    .bind(exclude_meeting)
+    .bind(person_id)
     .fetch_all(&mut *conn)
     .await?;
     let mut people: Vec<PersonVoice> = Vec::new();
@@ -185,50 +197,55 @@ pub struct PropagatedLink {
     pub person_id: String,
 }
 
-/// After a speaker is named or confirmed: link the person's voice, at `strong` or above only, to
-/// unnamed speakers of other meetings. Skips meetings `is_busy` reports (a running job would
+/// After a speaker is named or confirmed: link the person's voice, at VOICE_STRONG or above only,
+/// to unnamed speakers of other meetings. Skips meetings `is_busy` reports (a running job would
 /// overwrite them), rejected pairs and meetings where the person is already linked. Only the name
-/// and the link are written; a suggestion the speaker has stays. Returns the links made, in
-/// meeting order.
+/// and the link are written; a suggestion the speaker has stays unless it names the person.
+/// Returns the links made, in meeting order.
 pub async fn propagate_person(
     pool: &SqlitePool,
     person_id: &str,
     is_busy: &(dyn Fn(&str) -> bool + Sync),
-    strong: f32,
 ) -> Result<Vec<PropagatedLink>, SqlxError> {
     let mut conn = pool.acquire().await?;
     let mut tx = conn.begin().await?;
-    let Some(voice) = exemplars_conn(&mut tx, None).await?.into_iter().find(|p| p.person_id == person_id) else {
+    let Some(voice) = exemplars_of_conn(&mut tx, None, Some(person_id)).await?.pop() else {
         return Ok(Vec::new());
     };
-    let meetings: Vec<String> = sqlx::query_scalar(
-        "SELECT DISTINCT ms.meeting_id FROM meeting_speakers ms
-         WHERE ms.display_name IS NULL AND ms.embedding IS NOT NULL
+    // Unnamed voiced speakers of meetings where the person is not linked yet.
+    let candidates: Vec<(String, String, Vec<u8>)> = sqlx::query_as(
+        "SELECT ms.meeting_id, ms.speaker_key, ms.embedding FROM meeting_speakers ms
+         WHERE ms.display_name IS NULL AND ms.person_id IS NULL AND ms.embedding IS NOT NULL
            AND NOT EXISTS (SELECT 1 FROM meeting_speakers o WHERE o.meeting_id = ms.meeting_id AND o.person_id = ?)
-         ORDER BY ms.meeting_id",
+         ORDER BY ms.meeting_id, ms.speaker_key",
     )
     .bind(person_id)
     .fetch_all(&mut *tx)
     .await?;
+    let rejected: HashSet<(String, String)> =
+        sqlx::query_as::<_, (String, String)>("SELECT meeting_id, speaker_key FROM speaker_rejections WHERE person_id = ?")
+            .bind(person_id)
+            .fetch_all(&mut *tx)
+            .await?
+            .into_iter()
+            .collect();
+    let mut meetings: BTreeMap<String, Vec<VoiceSpeaker>> = BTreeMap::new();
+    for (meeting_id, key, blob) in candidates {
+        if rejected.contains(&(meeting_id.clone(), key.clone())) {
+            continue;
+        }
+        let speaker = VoiceSpeaker { key, embedding: Some(blob_to_embedding(&blob)), display_name: None, person_id: None };
+        meetings.entry(meeting_id).or_default().push(speaker);
+    }
     let mut links = Vec::new();
-    for meeting_id in meetings {
+    for (meeting_id, speakers) in meetings {
         if is_busy(meeting_id.as_str()) {
             continue;
         }
-        let speakers: Vec<VoiceSpeaker> = SpeakersRepository::list_conn(&mut tx, &meeting_id)
-            .await?
-            .into_iter()
-            .map(|s| VoiceSpeaker { key: s.speaker_key, embedding: s.embedding, display_name: s.display_name, person_id: s.link.person_id })
-            .collect();
-        let rejected = PeopleRepository::rejections_conn(&mut tx, &meeting_id).await?;
-        for m in assign_voices(&speakers, std::slice::from_ref(&voice), &rejected, strong, strong) {
+        for m in assign_voices(&speakers, std::slice::from_ref(&voice), &HashSet::new(), VOICE_STRONG, VOICE_STRONG) {
             let result = sqlx::query(
-                "UPDATE meeting_speakers SET display_name = ?1, person_id = ?2, name_source = 'voice',
-                     suggested_person_id = CASE WHEN (suggested_person_id = ?2 OR lower(trim(suggested_name)) = lower(trim(?1))) THEN NULL ELSE suggested_person_id END,
-                     suggested_name = CASE WHEN (suggested_person_id = ?2 OR lower(trim(suggested_name)) = lower(trim(?1))) THEN NULL ELSE suggested_name END,
-                     suggestion_source = CASE WHEN (suggested_person_id = ?2 OR lower(trim(suggested_name)) = lower(trim(?1))) THEN NULL ELSE suggestion_source END,
-                     suggestion_reason = CASE WHEN (suggested_person_id = ?2 OR lower(trim(suggested_name)) = lower(trim(?1))) THEN NULL ELSE suggestion_reason END
-                 WHERE meeting_id = ?3 AND speaker_key = ?4 AND display_name IS NULL",
+                "UPDATE meeting_speakers SET display_name = ?, person_id = ?, name_source = 'voice'
+                 WHERE meeting_id = ? AND speaker_key = ? AND display_name IS NULL",
             )
             .bind(&voice.name)
             .bind(person_id)
@@ -237,6 +254,7 @@ pub async fn propagate_person(
             .execute(&mut *tx)
             .await?;
             if result.rows_affected() == 1 {
+                SpeakersRepository::settle_links_conn(&mut tx, &meeting_id).await?;
                 links.push(PropagatedLink { meeting_id: meeting_id.clone(), speaker_key: m.key, person_id: person_id.to_string() });
             }
         }
@@ -254,10 +272,10 @@ pub async fn undo_propagation(pool: &SqlitePool, links: &[PropagatedLink]) -> Re
     let mut tx = conn.begin().await?;
     let mut changed = BTreeSet::new();
     for l in links {
-        let result = sqlx::query(
-            "UPDATE meeting_speakers SET display_name = NULL, person_id = NULL, name_source = NULL
-             WHERE meeting_id = ? AND speaker_key = ? AND person_id = ? AND name_source = 'voice'",
-        )
+        let result = sqlx::query(&format!(
+            "UPDATE meeting_speakers SET {CLEAR_NAME}
+             WHERE meeting_id = ? AND speaker_key = ? AND person_id = ? AND name_source = 'voice'"
+        ))
         .bind(&l.meeting_id)
         .bind(&l.speaker_key)
         .bind(&l.person_id)
@@ -370,19 +388,13 @@ mod tests {
         assert_eq!(voice_reason(0.7), "voice match 0.70");
     }
 
-    use crate::database::repositories::speaker::{MeetingSpeaker, SpeakerLink, SpeakerWrite, SpeakersRepository};
-    use crate::database::test_support::{migrated_pool, seed_meeting, seed_person};
+    use crate::database::repositories::speaker::SpeakerLink;
+    use crate::database::test_support::{
+        migrated_pool, seed_meeting, seed_person, seed_speakers, stored_speaker,
+    };
     use sqlx::SqlitePool;
 
     const NOAH: &str = "person-noah";
-
-    async fn meeting(pool: &SqlitePool, id: &str, speakers: Vec<NewSpeaker>) {
-        seed_meeting(pool, id, &[]).await;
-        let mut conn = pool.acquire().await.unwrap();
-        SpeakersRepository::replace_for_meeting(&mut conn, id, &SpeakerWrite { speakers, ..Default::default() })
-            .await
-            .unwrap();
-    }
 
     fn unnamed(key: &str, embedding: &[f32]) -> NewSpeaker {
         NewSpeaker { key: key.into(), embedding: embedding.to_vec(), speech_seconds: 1.0, ..Default::default() }
@@ -396,15 +408,6 @@ mod tests {
         }
     }
 
-    async fn stored_speaker(pool: &SqlitePool, meeting_id: &str, key: &str) -> MeetingSpeaker {
-        SpeakersRepository::list(pool, meeting_id)
-            .await
-            .unwrap()
-            .into_iter()
-            .find(|s| s.speaker_key == key)
-            .expect("speaker exists")
-    }
-
     fn idle(_: &str) -> bool {
         false
     }
@@ -416,7 +419,7 @@ mod tests {
     /// Noah, named by the user in meeting "a" with voice [1, 0, 0].
     async fn noah_named_in_a(pool: &SqlitePool) {
         seed_person(pool, NOAH, "Noah").await;
-        meeting(pool, "a", vec![named("spk_0", &[1.0, 0.0, 0.0], "Noah", NOAH, NameSource::User)]).await;
+        seed_speakers(pool, "a", vec![named("spk_0", &[1.0, 0.0, 0.0], "Noah", NOAH, NameSource::User)]).await;
     }
 
     #[tokio::test]
@@ -424,15 +427,15 @@ mod tests {
         let pool = migrated_pool().await;
         noah_named_in_a(&pool).await;
         let legacy = NewSpeaker { display_name: Some("Bob".into()), ..unnamed("spk_1", &[1.0, 0.0, 0.0]) };
-        meeting(&pool, "b", vec![unnamed("spk_0", &[0.99, 0.1, 0.0]), legacy]).await;
-        meeting(&pool, "c", vec![unnamed("spk_0", &[0.7, 0.71, 0.0])]).await; // weak: 0.70
+        seed_speakers(&pool, "b", vec![unnamed("spk_0", &[0.99, 0.1, 0.0]), legacy]).await;
+        seed_speakers(&pool, "c", vec![unnamed("spk_0", &[0.7, 0.71, 0.0])]).await; // weak: 0.70
         seed_meeting(&pool, "d", &[]).await;
         sqlx::query("INSERT INTO meeting_speakers (meeting_id, speaker_key, created_at) VALUES ('d', 'spk_0', '2026-10-05T10:00:00Z')")
             .execute(&pool)
             .await
             .unwrap();
 
-        let links = propagate_person(&pool, NOAH, &idle, VOICE_STRONG).await.unwrap();
+        let links = propagate_person(&pool, NOAH, &idle).await.unwrap();
 
         assert_eq!(links, vec![link("b", "spk_0")]);
         let b0 = stored_speaker(&pool, "b", "spk_0").await;
@@ -453,14 +456,14 @@ mod tests {
         let pool = migrated_pool().await;
         noah_named_in_a(&pool).await;
         for id in ["b", "c", "e"] {
-            meeting(&pool, id, vec![unnamed("spk_0", &[1.0, 0.0, 0.0])]).await;
+            seed_speakers(&pool, id, vec![unnamed("spk_0", &[1.0, 0.0, 0.0])]).await;
         }
         let mut conn = pool.acquire().await.unwrap();
         PeopleRepository::add_rejection_conn(&mut conn, "c", "spk_0", NOAH).await.unwrap();
         drop(conn);
         let busy = |m: &str| m == "b";
 
-        let links = propagate_person(&pool, NOAH, &busy, VOICE_STRONG).await.unwrap();
+        let links = propagate_person(&pool, NOAH, &busy).await.unwrap();
 
         assert_eq!(links, vec![link("e", "spk_0")]);
         assert_eq!(stored_speaker(&pool, "b", "spk_0").await.display_name, None);
@@ -471,14 +474,14 @@ mod tests {
     async fn propagation_skips_meetings_where_the_person_is_linked() {
         let pool = migrated_pool().await;
         noah_named_in_a(&pool).await;
-        meeting(
+        seed_speakers(
             &pool,
             "b",
             vec![named("spk_0", &[0.0, 1.0, 0.0], "Noah", NOAH, NameSource::Voice), unnamed("spk_1", &[1.0, 0.0, 0.0])],
         )
         .await;
 
-        let links = propagate_person(&pool, NOAH, &idle, VOICE_STRONG).await.unwrap();
+        let links = propagate_person(&pool, NOAH, &idle).await.unwrap();
 
         assert!(links.is_empty());
         assert_eq!(stored_speaker(&pool, "b", "spk_1").await.display_name, None);
@@ -488,9 +491,9 @@ mod tests {
     async fn undo_unlinks_exactly_the_listed_links() {
         let pool = migrated_pool().await;
         noah_named_in_a(&pool).await;
-        meeting(&pool, "b", vec![unnamed("spk_0", &[1.0, 0.0, 0.0])]).await;
-        meeting(&pool, "c", vec![unnamed("spk_0", &[0.99, 0.1, 0.0])]).await;
-        let links = propagate_person(&pool, NOAH, &idle, VOICE_STRONG).await.unwrap();
+        seed_speakers(&pool, "b", vec![unnamed("spk_0", &[1.0, 0.0, 0.0])]).await;
+        seed_speakers(&pool, "c", vec![unnamed("spk_0", &[0.99, 0.1, 0.0])]).await;
+        let links = propagate_person(&pool, NOAH, &idle).await.unwrap();
         assert_eq!(links, vec![link("b", "spk_0"), link("c", "spk_0")]);
 
         let changed = undo_propagation(&pool, &links[..1]).await.unwrap();
@@ -506,8 +509,8 @@ mod tests {
     async fn undo_leaves_links_changed_since() {
         let pool = migrated_pool().await;
         noah_named_in_a(&pool).await;
-        meeting(&pool, "b", vec![unnamed("spk_0", &[1.0, 0.0, 0.0])]).await;
-        let links = propagate_person(&pool, NOAH, &idle, VOICE_STRONG).await.unwrap();
+        seed_speakers(&pool, "b", vec![unnamed("spk_0", &[1.0, 0.0, 0.0])]).await;
+        let links = propagate_person(&pool, NOAH, &idle).await.unwrap();
         SpeakersRepository::confirm(&pool, "b", "spk_0", true).await.unwrap();
 
         let changed = undo_propagation(&pool, &links).await.unwrap();
@@ -522,7 +525,7 @@ mod tests {
     async fn a_rejected_propagated_person_does_not_return_as_a_suggestion() {
         let pool = migrated_pool().await;
         noah_named_in_a(&pool).await;
-        meeting(&pool, "b", vec![unnamed("spk_0", &[1.0, 0.0, 0.0])]).await;
+        seed_speakers(&pool, "b", vec![unnamed("spk_0", &[1.0, 0.0, 0.0])]).await;
         sqlx::query(
             "UPDATE meeting_speakers SET suggested_person_id = ?, suggested_name = 'Noah', suggestion_source = 'voice',
                  suggestion_reason = 'sounds like Noah'
@@ -533,7 +536,7 @@ mod tests {
         .await
         .unwrap();
 
-        propagate_person(&pool, NOAH, &idle, VOICE_STRONG).await.unwrap();
+        propagate_person(&pool, NOAH, &idle).await.unwrap();
         let linked = stored_speaker(&pool, "b", "spk_0").await;
         assert_eq!(linked.link.suggested_name, None, "the suggestion naming the linked person is cleared");
         assert_eq!(linked.link.suggested_person_id, None);
@@ -551,7 +554,7 @@ mod tests {
     async fn propagation_and_undo_leave_suggestions_and_record_no_rejection() {
         let pool = migrated_pool().await;
         noah_named_in_a(&pool).await;
-        meeting(&pool, "b", vec![unnamed("spk_0", &[1.0, 0.0, 0.0])]).await;
+        seed_speakers(&pool, "b", vec![unnamed("spk_0", &[1.0, 0.0, 0.0])]).await;
         sqlx::query(
             "UPDATE meeting_speakers SET suggested_name = 'Ana', suggestion_source = 'conversation',
                  suggestion_reason = 'addressed as Ana at 00:10'
@@ -561,7 +564,7 @@ mod tests {
         .await
         .unwrap();
 
-        let links = propagate_person(&pool, NOAH, &idle, VOICE_STRONG).await.unwrap();
+        let links = propagate_person(&pool, NOAH, &idle).await.unwrap();
 
         assert_eq!(links, vec![link("b", "spk_0")]);
         let b0 = stored_speaker(&pool, "b", "spk_0").await;

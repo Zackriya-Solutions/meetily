@@ -4,9 +4,9 @@ import { useState } from 'react';
 import { Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { MeetingSpeaker, Person } from '@/types';
+import { MeetingSpeaker } from '@/types';
 import { speakerColor, speakerLabel, speakerNameState } from '@/lib/speakers';
-import { toast } from 'sonner';
+import { attempt } from '@/lib/errors';
 import { SpeakerRenameForm } from './SpeakerRenameForm';
 import { SpeakerNameBadge } from './SpeakerNameBadge';
 
@@ -14,7 +14,6 @@ interface SpeakerBarProps {
   speakers: MeetingSpeaker[];
   names: Record<string, string>;
   editable: boolean;
-  people: Person[];
   onRename: (key: string, name: string) => Promise<void>;
   onConfirm: (key: string) => Promise<void>;
   onReject: (key: string) => Promise<void>;
@@ -23,7 +22,7 @@ interface SpeakerBarProps {
   onPlaySample?: (key: string) => void;
 }
 
-function RenameButton({ speaker, names, people, onRename }: { speaker: MeetingSpeaker; names: Record<string, string>; people: Person[]; onRename: SpeakerBarProps['onRename'] }) {
+function RenameButton({ speaker, names, onRename }: { speaker: MeetingSpeaker; names: Record<string, string>; onRename: SpeakerBarProps['onRename'] }) {
   const [open, setOpen] = useState(false);
   const label = speakerLabel(speaker.speaker_key, names);
   return (
@@ -36,7 +35,6 @@ function RenameButton({ speaker, names, people, onRename }: { speaker: MeetingSp
           speakerKey={speaker.speaker_key}
           initialName={speaker.display_name ?? ''}
           placeholder={label}
-          people={people}
           onRename={onRename}
           onSaved={() => setOpen(false)}
         />
@@ -45,17 +43,7 @@ function RenameButton({ speaker, names, people, onRename }: { speaker: MeetingSp
   );
 }
 
-async function attempt(action: () => Promise<void>, failure: string) {
-  try {
-    await action();
-  } catch (error) {
-    console.error(failure, error);
-    // Refusals from the backend (for example while a speaker job runs) are written for the user.
-    toast.error(typeof error === 'string' ? error : failure);
-  }
-}
-
-export function SpeakerBar({ speakers, names, editable, people, onRename, onConfirm, onReject, onGuessNames, onPlaySample }: SpeakerBarProps) {
+export function SpeakerBar({ speakers, names, editable, onRename, onConfirm, onReject, onGuessNames, onPlaySample }: SpeakerBarProps) {
   // Shares come from the rows each speaker has now, so reassignments show up; speakers left
   // without rows are hidden.
   const present = speakers.filter((s) => s.row_count > 0);
@@ -68,7 +56,7 @@ export function SpeakerBar({ speakers, names, editable, people, onRename, onConf
         return (
           <span key={s.speaker_key} className="inline-flex items-center gap-1.5">
             <span className={`h-2 w-2 rounded-full ${speakerColor(s.speaker_key).dot}`} />
-            {editable ? <RenameButton speaker={s} names={names} people={people} onRename={onRename} /> : label}
+            {editable ? <RenameButton speaker={s} names={names} onRename={onRename} /> : label}
             <SpeakerNameBadge
               state={speakerNameState(s)}
               label={label}

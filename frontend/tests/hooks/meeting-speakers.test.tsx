@@ -11,7 +11,7 @@ afterAll(() => {
 });
 
 let listed: MeetingSpeaker[] = [];
-let outcome: NameOutcome = { person_id: null, propagated: [] };
+let outcome: NameOutcome = { propagated: [] };
 const invoke = mock(async (command: string, _args?: Record<string, unknown>): Promise<unknown> => {
   if (command === 'api_list_meeting_speakers') return listed;
   if (command === 'api_name_meeting_speaker' || command === 'api_confirm_meeting_speaker_name') return outcome;
@@ -28,20 +28,24 @@ const { useMeetingSpeakers } = await import('../../src/hooks/useMeetingSpeakers'
 
 let state: ReturnType<typeof useMeetingSpeakers>;
 let renderer: ReactTestRenderer | undefined;
+/** Records when the people list reloads, relative to the speaker list. */
+const order: string[] = [];
+const refreshPeople = mock(async () => { order.push('people'); });
 function View() {
-  state = useMeetingSpeakers('meeting-a');
+  state = useMeetingSpeakers('meeting-a', refreshPeople);
   return null;
 }
+// The backend links at most one speaker per other meeting.
 const links: PropagatedLink[] = [
   { meeting_id: 'meeting-b', speaker_key: 'spk_0', person_id: 'person-1' },
-  { meeting_id: 'meeting-b', speaker_key: 'spk_3', person_id: 'person-1' },
   { meeting_id: 'meeting-c', speaker_key: 'spk_1', person_id: 'person-1' },
 ];
 
 beforeEach(async () => {
   listed = [makeSpeaker('spk_1')];
-  outcome = { person_id: null, propagated: [] };
+  outcome = { propagated: [] };
   invoke.mockClear();
+  refreshPeople.mockClear();
   success.mockClear();
   failure.mockClear();
   await act(async () => { renderer = create(<View />); });
@@ -53,7 +57,7 @@ afterEach(async () => {
 
 describe('meeting speaker naming', () => {
   test('naming shows undo toast for other meetings', async () => {
-    outcome = { person_id: 'person-1', propagated: links };
+    outcome = { propagated: links };
     await act(async () => { await state.name('spk_1', 'Noah'); });
     expect(invoke).toHaveBeenCalledWith('api_name_meeting_speaker', { meetingId: 'meeting-a', speakerKey: 'spk_1', name: 'Noah' });
     expect(success).toHaveBeenCalledTimes(1);
@@ -64,7 +68,7 @@ describe('meeting speaker naming', () => {
   });
 
   test('undo sends exactly the propagated links', async () => {
-    outcome = { person_id: 'person-1', propagated: links };
+    outcome = { propagated: links };
     await act(async () => { await state.confirm('spk_1'); });
     expect(invoke).toHaveBeenCalledWith('api_confirm_meeting_speaker_name', { meetingId: 'meeting-a', speakerKey: 'spk_1' });
     const options = success.mock.calls[0][1];
@@ -81,6 +85,27 @@ describe('meeting speaker naming', () => {
     await act(async () => { await state.reject('spk_1'); });
     expect(invoke).toHaveBeenCalledWith('api_reject_meeting_speaker_name', { meetingId: 'meeting-a', speakerKey: 'spk_1' });
     expect(success).not.toHaveBeenCalled();
+  });
+
+  test('a typed or confirmed name reloads the people list after the write, with the speakers', async () => {
+    const write = invoke.getMockImplementation()!;
+    invoke.mockImplementation(async (command, args) => {
+      if (command !== 'api_reject_meeting_speaker_name') order.push(command);
+      return write(command, args);
+    });
+    try {
+      for (const action of [() => state.name('spk_1', 'Noah'), () => state.confirm('spk_1')]) {
+        order.length = 0;
+        await act(async () => { await action(); });
+        expect(order.slice(0, 1)).toEqual([expect.stringMatching(/^api_(name|confirm)_meeting_speaker/)]);
+        expect(order.slice(1).sort()).toEqual(['api_list_meeting_speakers', 'people']);
+      }
+      expect(refreshPeople).toHaveBeenCalledTimes(2);
+      await act(async () => { await state.reject('spk_1'); });
+      expect(refreshPeople).toHaveBeenCalledTimes(2);
+    } finally {
+      invoke.mockImplementation(write);
+    }
   });
 
   test('refetch returns fresh speakers', async () => {

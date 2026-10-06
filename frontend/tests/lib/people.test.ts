@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { formatLastSeen, matchPeople } from '../../src/lib/people';
+import { formatLastSeen, formatMeetingCount, matchPeople } from '../../src/lib/people';
 import type { Person } from '../../src/types';
 
 const person = (id: string, name: string): Person => ({ id, name, meeting_count: 1, last_seen: null });
@@ -36,5 +36,13 @@ describe('formatLastSeen', () => {
   test('dates use the local short format', () => {
     const iso = '2026-10-01T10:00:00+00:00';
     expect(formatLastSeen(iso)).toBe(new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }));
+  });
+});
+
+describe('formatMeetingCount', () => {
+  test('is singular for one meeting and plural otherwise', () => {
+    expect(formatMeetingCount(1)).toBe('1 meeting');
+    expect(formatMeetingCount(0)).toBe('0 meetings');
+    expect(formatMeetingCount(3)).toBe('3 meetings');
   });
 });

@@ -3,7 +3,7 @@ use super::assign::{carry_over, label_rows, split_text_at_turns, RowLabel, RowSp
 use super::diarizer::{Diarization, DiarizeOptions, Diarizer};
 use super::models::{self, DownloadProgress};
 use super::timing::{read_metadata, recording_time_map, TimeMap};
-use super::naming::{normalize, propose_names, summary_model_from_settings, KnownPerson, NamingInput, NamingLine, NamingModel, NamingSpeaker};
+use super::naming::{propose_names, saved_model_is_local, summary_model_from_settings, KnownPerson, NamingInput, NamingLine, NamingModel, NamingSpeaker};
 use super::{Cancelled, Turn};
 use crate::api::TranscriptSegment;
 use crate::audio::common::{
@@ -12,7 +12,7 @@ use crate::audio::common::{
 use crate::audio::decoder::decode_audio_file;
 use crate::database::models::Transcript;
 use crate::database::repositories::meeting::MeetingsRepository;
-use crate::database::repositories::person::PeopleRepository;
+use crate::database::repositories::person::{name_key, PeopleRepository};
 use crate::database::repositories::speaker::{NewSpeaker, SpeakerLink, SpeakerWrite, SpeakersRepository, SplitRow, SuggestionSource};
 use crate::database::repositories::summary::SummaryProcessesRepository;
 use crate::state::AppState;
@@ -20,7 +20,6 @@ use crate::whisper_engine::WhisperCompiledBackend;
 use anyhow::{anyhow, Result};
 use once_cell::sync::Lazy;
 use serde::Serialize;
-use crate::database::repositories::setting::SettingsRepository;
 use sqlx::{SqliteConnection, SqlitePool};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
@@ -40,34 +39,59 @@ const AUTO_AUDIO_WAIT: Duration = Duration::from_secs(30);
 /// How often cancellable waits re-check the cancel flag.
 const LOCK_POLL: Duration = Duration::from_millis(250);
 
-/// What a queued job does with the meeting.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
+/// What a queued job does with the meeting. Serialized as its name ("identify" or "naming").
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum JobKind {
     /// Find who speaks when and label the rows.
-    Identify,
-    /// Ask the summary model for names said in the conversation.
-    Naming,
+    Identify { folder_path: PathBuf, num_speakers: Option<usize> },
+    /// Ask the summary model for names said in the conversation. An automatic job sends the
+    /// transcript to a model that is not local only with `allow_cloud`.
+    Naming { allow_cloud: bool },
+}
+
+impl JobKind {
+    pub fn name(&self) -> &'static str {
+        match self {
+            JobKind::Identify { .. } => "identify",
+            JobKind::Naming { .. } => "naming",
+        }
+    }
+
+    /// Refusal of a second job for a meeting that has this one.
+    fn queued_message(&self) -> &'static str {
+        match self {
+            JobKind::Identify { .. } => "Speaker identification is already queued or running for this meeting",
+            JobKind::Naming { .. } => "Finding names is already queued or running for this meeting",
+        }
+    }
+
+    /// Refusal of a speaker edit while this job is queued or running.
+    fn busy_message(&self) -> &'static str {
+        match self {
+            JobKind::Identify { .. } => IDENTIFYING_MESSAGE,
+            JobKind::Naming { .. } => NAMING_MESSAGE,
+        }
+    }
+
+    fn cancelled_message(&self) -> &'static str {
+        match self {
+            JobKind::Identify { .. } => "Speaker identification cancelled",
+            JobKind::Naming { .. } => "Finding names cancelled",
+        }
+    }
+}
+
+impl Serialize for JobKind {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.name())
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct IdentifyRequest {
     pub meeting_id: String,
-    /// The meeting's folder; not used by naming jobs.
-    pub folder_path: PathBuf,
-    pub num_speakers: Option<usize>,
     pub automatic: bool,
     pub kind: JobKind,
-    /// The summary model an automatic naming job was approved for; the job is skipped if the
-    /// saved model differs when it runs. None for manual runs and for unchecked automatic ones.
-    pub expected_model: Option<ExpectedModel>,
-}
-
-/// The provider and endpoint the app judged safe to send the transcript to.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExpectedModel {
-    pub provider: String,
-    pub endpoint: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
@@ -110,17 +134,13 @@ pub struct JobQueue {
 impl JobQueue {
     pub fn push(&mut self, req: IdentifyRequest) -> Result<(), String> {
         if let Some(existing) = self.statuses.get(&req.meeting_id) {
-            return Err(match existing.kind {
-                JobKind::Identify => "Speaker identification is already queued or running for this meeting",
-                JobKind::Naming => "Finding names is already queued or running for this meeting",
-            }
-            .into());
+            return Err(existing.kind.queued_message().into());
         }
         self.statuses.insert(
             req.meeting_id.clone(),
             JobStatus {
                 meeting_id: req.meeting_id.clone(),
-                kind: req.kind,
+                kind: req.kind.clone(),
                 state: JobState::Queued,
                 stage: None,
                 percent: 0,
@@ -228,11 +248,7 @@ pub fn is_busy(meeting_id: &str) -> bool {
 /// `ensure_idle` for a caller that already holds the queue lock.
 fn ensure_idle_locked(q: &JobQueue, meeting_id: &str) -> Result<(), String> {
     if let Some(status) = q.statuses.get(meeting_id) {
-        return Err(match status.kind {
-            JobKind::Identify => IDENTIFYING_MESSAGE,
-            JobKind::Naming => NAMING_MESSAGE,
-        }
-        .into());
+        return Err(status.kind.busy_message().into());
     }
     if is_retranscribing(meeting_id) {
         return Err(RETRANSCRIBING_MESSAGE.into());
@@ -303,11 +319,7 @@ pub fn cancel<R: Runtime>(app: &AppHandle<R>, meeting_id: &str) -> Result<(), St
     };
     match outcome {
         CancelOutcome::Queued(req) => {
-            let message = match req.kind {
-                JobKind::Identify => "Speaker identification cancelled",
-                JobKind::Naming => "Finding names cancelled",
-            };
-            let _ = app.emit(ERROR_EVENT, error_payload(&req, message, true));
+            let _ = app.emit(ERROR_EVENT, error_payload(&req, req.kind.cancelled_message(), true));
             Ok(())
         }
         CancelOutcome::Running => Ok(()),
@@ -369,9 +381,11 @@ fn error_payload(req: &IdentifyRequest, error: &str, cancelled: bool) -> serde_j
 }
 
 async fn run_job<R: Runtime>(app: &AppHandle<R>, req: &IdentifyRequest) -> Result<JobOutcome> {
-    match req.kind {
-        JobKind::Identify => run_identify(app, req).await.map(JobOutcome::Identify),
-        JobKind::Naming => run_naming(app, req).await.map(JobOutcome::Naming),
+    match &req.kind {
+        JobKind::Identify { folder_path, num_speakers } => {
+            run_identify(app, req, folder_path, *num_speakers).await.map(JobOutcome::Identify)
+        }
+        JobKind::Naming { allow_cloud } => run_naming(app, req, *allow_cloud).await.map(JobOutcome::Naming),
     }
 }
 
@@ -412,9 +426,9 @@ async fn worker<R: Runtime>(app: AppHandle<R>) {
             Err(e) => {
                 let cancelled = e.is::<Cancelled>();
                 if cancelled {
-                    log::info!("{:?} job cancelled for {}", req.kind, req.meeting_id);
+                    log::info!("{} job cancelled for {}", req.kind.name(), req.meeting_id);
                 } else {
-                    log::warn!("{:?} job failed for {}: {:#}", req.kind, req.meeting_id, e);
+                    log::warn!("{} job failed for {}: {:#}", req.kind.name(), req.meeting_id, e);
                 }
                 let _ = app.emit(ERROR_EVENT, error_payload(&req, &format!("{e:#}"), cancelled));
             }
@@ -648,17 +662,34 @@ pub async fn rewrite_transcripts_json(pool: &SqlitePool, meeting_id: &str, fallb
     }
 }
 
+/// `rewrite_transcripts_json` for each meeting in a background task, so a command returns as soon
+/// as its change is committed.
+pub fn rewrite_transcripts_json_later(pool: &SqlitePool, meeting_ids: impl IntoIterator<Item = String>) {
+    let meeting_ids: Vec<String> = meeting_ids.into_iter().collect();
+    if meeting_ids.is_empty() {
+        return;
+    }
+    let pool = pool.clone();
+    tauri::async_runtime::spawn(async move {
+        for meeting_id in &meeting_ids {
+            rewrite_transcripts_json(&pool, meeting_id, None).await;
+        }
+    });
+}
+
+/// The meeting's rows in transcript order.
+async fn transcripts_in_order(pool: &SqlitePool, meeting_id: &str) -> Result<Vec<Transcript>, sqlx::Error> {
+    sqlx::query_as::<_, Transcript>("SELECT * FROM transcripts WHERE meeting_id = ? ORDER BY audio_start_time")
+        .bind(meeting_id)
+        .fetch_all(pool)
+        .await
+}
+
 async fn write_json_from_db(pool: &SqlitePool, meeting_id: &str, folder: PathBuf) -> Result<()> {
     // Held across the read and the write, so concurrent rewrites cannot interleave or write stale data.
     let _guard = JSON_REWRITE_LOCK.lock().await;
     let segments: Vec<TranscriptSegment> =
-        sqlx::query_as::<_, Transcript>("SELECT * FROM transcripts WHERE meeting_id = ? ORDER BY audio_start_time")
-            .bind(meeting_id)
-            .fetch_all(pool)
-            .await?
-            .into_iter()
-            .map(TranscriptSegment::from)
-            .collect();
+        transcripts_in_order(pool, meeting_id).await?.into_iter().map(TranscriptSegment::from).collect();
     let labels = SpeakersRepository::labels(pool, meeting_id).await?;
     tokio::task::spawn_blocking(move || write_transcripts_json(&folder, &segments, &labels))
         .await
@@ -685,43 +716,45 @@ async fn until_cancelled() {
     }
 }
 
-async fn run_naming<R: Runtime>(app: &AppHandle<R>, req: &IdentifyRequest) -> Result<NamingOutcome> {
+async fn run_naming<R: Runtime>(app: &AppHandle<R>, req: &IdentifyRequest, allow_cloud: bool) -> Result<NamingOutcome> {
     let pool = app
         .try_state::<AppState>()
         .ok_or_else(|| anyhow!("App state not available"))?
         .db_manager
         .pool()
         .clone();
-    if let (true, Some(expected)) = (req.automatic, &req.expected_model) {
-        ensure_saved_model_is(&pool, expected).await?;
-    }
     emit_progress(app, &req.meeting_id, "naming", 10, "Finding names…");
     let model = summary_model_from_settings(&pool, app.path().app_data_dir().ok()).await.map_err(|e| anyhow!(e))?;
+    // Checked again here: the saved model may have changed while the job waited.
+    ensure_may_send(req.automatic, allow_cloud, model.is_local())?;
     let outcome = name_from_conversation(&pool, &req.meeting_id, &model, until_cancelled()).await?;
     emit_progress(app, &req.meeting_id, "done", 100, "Done");
     Ok(outcome)
 }
 
-fn same_endpoint(a: Option<&str>, b: Option<&str>) -> bool {
-    let clean = |e: Option<&str>| e.map(|e| e.trim().trim_end_matches('/').to_lowercase()).filter(|e| !e.is_empty());
-    clean(a) == clean(b)
-}
-
-/// Err unless the saved summary model is the one an automatic naming job was approved for: the
-/// transcript must not go to a model the user switched to while the job waited.
-async fn ensure_saved_model_is(pool: &SqlitePool, expected: &ExpectedModel) -> Result<()> {
-    let saved = SettingsRepository::get_model_config(pool).await?;
-    let provider = saved.as_ref().map(|s| s.provider.trim().to_string()).unwrap_or_default();
-    let endpoint = match provider.as_str() {
-        "ollama" => saved.and_then(|s| s.ollama_endpoint),
-        "custom-openai" => SettingsRepository::get_custom_openai_config(pool).await?.map(|c| c.endpoint),
-        _ => None,
-    };
-    if provider == expected.provider.trim() && same_endpoint(endpoint.as_deref(), expected.endpoint.as_deref()) {
+/// Err when an automatic naming job would send the transcript to a model that is not local
+/// without the user's consent (`allow_cloud`). Jobs the user started always run.
+fn ensure_may_send(automatic: bool, allow_cloud: bool, local: bool) -> Result<()> {
+    if !automatic || allow_cloud || local {
         return Ok(());
     }
-    log::info!("Skipping the automatic name guess: the summary model changed while it waited");
+    log::info!("Skipping the automatic name guess: the summary model is not local");
     Err(anyhow!("The summary model changed, so names were not guessed automatically. Use Guess names to run it."))
+}
+
+/// The naming job to queue, or None when an automatic request is declined because the saved
+/// summary model is not local and `allow_cloud` is not set.
+pub async fn naming_request(
+    pool: &SqlitePool,
+    meeting_id: String,
+    automatic: bool,
+    allow_cloud: Option<bool>,
+) -> Option<IdentifyRequest> {
+    let allow_cloud = allow_cloud == Some(true);
+    if automatic && !allow_cloud && !saved_model_is_local(pool).await {
+        return None;
+    }
+    Some(IdentifyRequest { meeting_id, automatic, kind: JobKind::Naming { allow_cloud } })
 }
 
 /// The meeting's summary markdown, when a summary was generated.
@@ -756,16 +789,14 @@ pub async fn name_from_conversation(
     if speakers.iter().all(|s| s.display_name.is_some()) {
         return Ok(NamingOutcome::default());
     }
-    let lines: Vec<NamingLine> = sqlx::query_as::<_, (Option<f64>, String, String)>(
-        "SELECT audio_start_time, speaker, transcript FROM transcripts
-         WHERE meeting_id = ? AND speaker IS NOT NULL ORDER BY audio_start_time",
-    )
-    .bind(meeting_id)
-    .fetch_all(pool)
-    .await?
-    .into_iter()
-    .map(|(start, speaker, text)| NamingLine { start_s: start.unwrap_or(0.0), speaker, text })
-    .collect();
+    let lines: Vec<NamingLine> = transcripts_in_order(pool, meeting_id)
+        .await?
+        .into_iter()
+        .filter_map(|r| {
+            let speaker = r.speaker?;
+            Some(NamingLine { start_s: r.audio_start_time.unwrap_or(0.0), speaker, text: r.transcript })
+        })
+        .collect();
     if lines.is_empty() {
         return Ok(NamingOutcome::default());
     }
@@ -777,7 +808,7 @@ pub async fn name_from_conversation(
         let rejected_names = PeopleRepository::rejected_names_conn(&mut conn, meeting_id)
             .await?
             .into_iter()
-            .map(|(key, name)| (key, normalize(&name)))
+            .map(|(key, name)| (key, name_key(&name)))
             .collect();
         (people, rejected_names)
     };
@@ -899,7 +930,12 @@ async fn meeting_exists(conn: &mut SqliteConnection, meeting_id: &str) -> Result
     Ok(found.is_some())
 }
 
-async fn run_identify<R: Runtime>(app: &AppHandle<R>, req: &IdentifyRequest) -> Result<IdentifyOutcome> {
+async fn run_identify<R: Runtime>(
+    app: &AppHandle<R>,
+    req: &IdentifyRequest,
+    folder_path: &Path,
+    num_speakers: Option<usize>,
+) -> Result<IdentifyOutcome> {
     let started = Instant::now();
     let pool = app
         .try_state::<AppState>()
@@ -911,7 +947,7 @@ async fn run_identify<R: Runtime>(app: &AppHandle<R>, req: &IdentifyRequest) -> 
 
     emit_progress(app, &meeting_id, "audio", 0, "Finding recording…");
     let wait = if req.automatic { AUTO_AUDIO_WAIT } else { Duration::ZERO };
-    let audio_path = wait_for_audio(&req.folder_path, wait, &is_cancelled).await?;
+    let audio_path = wait_for_audio(folder_path, wait, &is_cancelled).await?;
 
     yield_to_recording(app, req, 1).await?;
     emit_progress(app, &meeting_id, "audio", 1, "Decoding audio…");
@@ -928,23 +964,20 @@ async fn run_identify<R: Runtime>(app: &AppHandle<R>, req: &IdentifyRequest) -> 
             return Err(Cancelled.into());
         }
     }
-    let time_map = recording_time_map(read_metadata(&req.folder_path).as_ref(), decoded.native_rate, decoded.native_frames);
+    let time_map = recording_time_map(read_metadata(folder_path).as_ref(), decoded.native_rate, decoded.native_frames);
 
-    let rows: Vec<StoredRow> =
-        sqlx::query_as::<_, Transcript>("SELECT * FROM transcripts WHERE meeting_id = ? ORDER BY audio_start_time")
-            .bind(&meeting_id)
-            .fetch_all(&pool)
-            .await?
-            .into_iter()
-            .map(|r| StoredRow {
-                span: match (r.audio_start_time, r.audio_end_time) {
-                    (Some(a), Some(b)) if b > a => Some(RowSpan { start_s: a, end_s: b }),
-                    _ => None,
-                },
-                id: r.id,
-                text: r.transcript,
-            })
-            .collect();
+    let rows: Vec<StoredRow> = transcripts_in_order(&pool, &meeting_id)
+        .await?
+        .into_iter()
+        .map(|r| StoredRow {
+            span: match (r.audio_start_time, r.audio_end_time) {
+                (Some(a), Some(b)) if b > a => Some(RowSpan { start_s: a, end_s: b }),
+                _ => None,
+            },
+            id: r.id,
+            text: r.transcript,
+        })
+        .collect();
 
     yield_to_recording(app, req, 2).await?;
     let diarize_started = Instant::now();
@@ -952,7 +985,7 @@ async fn run_identify<R: Runtime>(app: &AppHandle<R>, req: &IdentifyRequest) -> 
     let (id_dl, id_wait, id_p) = (meeting_id.clone(), meeting_id.clone(), meeting_id.clone());
     let diarization = diarize_samples(
         samples.clone(),
-        req.num_speakers,
+        num_speakers,
         move |p| {
             super::commands::emit_download_progress(&app_dl, p.clone());
             emit_progress(&app_dl, &id_dl, "download", 2, &format!("Downloading speaker models… {}%", p.percent));
@@ -1059,7 +1092,7 @@ async fn run_identify<R: Runtime>(app: &AppHandle<R>, req: &IdentifyRequest) -> 
     SpeakersRepository::replace_for_meeting(&mut tx, &meeting_id, &SpeakerWrite { speakers, row_labels, row_splits, mixed_rows }).await?;
     tx.commit().await?;
     drop(conn);
-    rewrite_transcripts_json(&pool, &meeting_id, Some(&req.folder_path)).await;
+    rewrite_transcripts_json(&pool, &meeting_id, Some(folder_path)).await;
     let t_save = save_started.elapsed();
 
     let total = started.elapsed();
@@ -1180,12 +1213,13 @@ mod tests {
     fn req(id: &str) -> IdentifyRequest {
         IdentifyRequest {
             meeting_id: id.into(),
-            folder_path: PathBuf::from("/tmp"),
-            num_speakers: None,
             automatic: false,
-            kind: JobKind::Identify,
-            expected_model: None,
+            kind: JobKind::Identify { folder_path: PathBuf::from("/tmp"), num_speakers: None },
         }
+    }
+
+    fn naming(id: &str) -> IdentifyRequest {
+        IdentifyRequest { kind: JobKind::Naming { allow_cloud: false }, ..req(id) }
     }
 
     #[test]
@@ -1466,8 +1500,8 @@ mod tests {
     }
 
     use crate::database::repositories::person::PeopleRepository;
-    use crate::database::repositories::speaker::{MeetingSpeaker, NameSource, SpeakerLink, SuggestionSource};
-    use crate::database::test_support::{migrated_pool, seed_meeting, seed_person};
+    use crate::database::repositories::speaker::{NameSource, SpeakerLink, SuggestionSource};
+    use crate::database::test_support::{migrated_pool, seed_meeting, seed_person, seed_speakers, speakers_by_key, write_speakers};
     use crate::diarization::diarizer::SpeakerCentroid;
 
     fn centroids(voices: &[(&str, &[f32])]) -> Diarization {
@@ -1488,15 +1522,6 @@ mod tests {
         SpeakerLink { person_id: Some(person_id.into()), name_source: Some(source), ..Default::default() }
     }
 
-    /// Creates the meeting and writes its speakers.
-    async fn seed_speakers(pool: &SqlitePool, meeting_id: &str, speakers: Vec<NewSpeaker>) {
-        seed_meeting(pool, meeting_id, &[]).await;
-        let mut conn = pool.acquire().await.unwrap();
-        SpeakersRepository::replace_for_meeting(&mut conn, meeting_id, &SpeakerWrite { speakers, ..Default::default() })
-            .await
-            .unwrap();
-    }
-
     /// The speaker write of an Identify run with voices remembered, as `run_identify` does it.
     async fn rerun(pool: &SqlitePool, meeting_id: &str, d: &Diarization) {
         rerun_with(pool, meeting_id, d, true).await;
@@ -1510,15 +1535,6 @@ mod tests {
             .await
             .unwrap();
         tx.commit().await.unwrap();
-    }
-
-    async fn by_key(pool: &SqlitePool, meeting_id: &str) -> HashMap<String, MeetingSpeaker> {
-        SpeakersRepository::list(pool, meeting_id)
-            .await
-            .unwrap()
-            .into_iter()
-            .map(|s| (s.speaker_key.clone(), s))
-            .collect()
     }
 
     #[tokio::test]
@@ -1548,7 +1564,7 @@ mod tests {
         // The new run numbers the same voices differently.
         rerun(&pool, "m1", &centroids(&[("spk_0", &[0.0, 0.99, 0.1]), ("spk_1", &[0.99, 0.1, 0.0]), ("spk_2", &[0.1, 0.0, 0.99])])).await;
 
-        let s = by_key(&pool, "m1").await;
+        let s = speakers_by_key(&pool, "m1").await;
         assert_eq!(s["spk_1"].display_name.as_deref(), Some("Noah"));
         assert_eq!(s["spk_1"].link, linked("person-noah", NameSource::Voice));
         assert_eq!(s["spk_0"].display_name.as_deref(), Some("Sam"));
@@ -1611,7 +1627,7 @@ mod tests {
 
         rerun(&pool, "b", &strong_weak_and_unknown()).await;
 
-        let s = by_key(&pool, "b").await;
+        let s = speakers_by_key(&pool, "b").await;
         assert_eq!(s["spk_0"].display_name.as_deref(), Some("Noah"));
         assert_eq!(s["spk_0"].link, linked("person-noah", NameSource::Voice));
         assert_eq!(s["spk_1"].display_name, None);
@@ -1637,7 +1653,7 @@ mod tests {
 
         rerun_with(&pool, "b", &strong_weak_and_unknown(), false).await;
 
-        for s in by_key(&pool, "b").await.values() {
+        for s in speakers_by_key(&pool, "b").await.values() {
             assert_eq!(s.display_name, None, "{}", s.speaker_key);
             assert_eq!(s.link, SpeakerLink::default(), "{}", s.speaker_key);
         }
@@ -1653,7 +1669,7 @@ mod tests {
 
         rerun(&pool, "b", &centroids(&[("spk_0", &[1.0, 0.0]), ("spk_1", &[0.0, 1.0])])).await;
 
-        let s = by_key(&pool, "b").await;
+        let s = speakers_by_key(&pool, "b").await;
         assert_eq!(s["spk_0"].link, SpeakerLink::default());
         assert_eq!(s["spk_1"].link, SpeakerLink::default());
         let mut conn = pool.acquire().await.unwrap();
@@ -1670,7 +1686,7 @@ mod tests {
 
         rerun(&pool, "b", &centroids(&[("spk_0", &[1.0, 0.0])])).await;
 
-        let s = by_key(&pool, "b").await;
+        let s = speakers_by_key(&pool, "b").await;
         assert_eq!(s["spk_0"].display_name.as_deref(), Some("Bob"));
         assert_eq!(s["spk_0"].link, SpeakerLink::default());
         let mut conn = pool.acquire().await.unwrap();
@@ -1689,8 +1705,8 @@ mod tests {
 
         rerun(&pool, "b", &centroids(&[("spk_0", &[1.0, 0.0])])).await;
 
-        assert_eq!(by_key(&pool, "b").await["spk_0"].link, SpeakerLink::default());
-        assert_eq!(by_key(&pool, "a").await[&key].display_name.as_deref(), Some("Noah"));
+        assert_eq!(speakers_by_key(&pool, "b").await["spk_0"].link, SpeakerLink::default());
+        assert_eq!(speakers_by_key(&pool, "a").await[&key].display_name.as_deref(), Some("Noah"));
         let mut conn = pool.acquire().await.unwrap();
         assert!(exemplars_conn(&mut conn, None).await.unwrap().is_empty(), "a speaker without a voice teaches nothing");
     }
@@ -1702,13 +1718,13 @@ mod tests {
         seed_speakers(&pool, "a", vec![stored("spk_0", &[1.0, 0.0], Some("Noah"), linked("person-noah", NameSource::User))]).await;
         seed_meeting(&pool, "b", &[]).await;
         rerun(&pool, "b", &centroids(&[("spk_0", &[1.0, 0.0]), ("spk_1", &[0.0, 1.0])])).await;
-        assert_eq!(by_key(&pool, "b").await["spk_0"].link, linked("person-noah", NameSource::Voice));
+        assert_eq!(speakers_by_key(&pool, "b").await["spk_0"].link, linked("person-noah", NameSource::Voice));
 
         SpeakersRepository::reject(&pool, "b", "spk_0").await.unwrap();
         // Re-run with the voices numbered the other way round.
         rerun(&pool, "b", &centroids(&[("spk_0", &[0.0, 1.0]), ("spk_1", &[1.0, 0.0])])).await;
 
-        let s = by_key(&pool, "b").await;
+        let s = speakers_by_key(&pool, "b").await;
         assert_eq!(s["spk_1"].display_name, None);
         assert_eq!(s["spk_1"].link, SpeakerLink::default(), "neither linked nor suggested again");
         assert_eq!(s["spk_0"].link, SpeakerLink::default());
@@ -1726,31 +1742,37 @@ mod tests {
 
     use crate::diarization::naming::test_support::{answer, FakeNamingModel};
 
-    fn expected(provider: &str, endpoint: Option<&str>) -> ExpectedModel {
-        ExpectedModel { provider: provider.into(), endpoint: endpoint.map(str::to_string) }
-    }
+    use crate::database::repositories::setting::SettingsRepository;
 
     #[tokio::test]
-    async fn an_automatic_naming_job_is_skipped_when_the_saved_model_changed() {
-        let pool = crate::database::test_support::migrated_pool().await;
-        SettingsRepository::save_model_config(&pool, "ollama", "llama3", "large-v3", Some("http://localhost:11434")).await.unwrap();
-        let local = expected("ollama", Some("http://localhost:11434"));
-        assert!(ensure_saved_model_is(&pool, &local).await.is_ok());
-        assert!(ensure_saved_model_is(&pool, &expected("ollama", Some("http://localhost:11434/"))).await.is_ok());
-
-        // Switched to a cloud provider while the job waited.
+    async fn an_automatic_request_is_declined_unless_the_saved_model_is_local_or_cloud_is_allowed() {
+        let pool = migrated_pool().await;
         SettingsRepository::save_model_config(&pool, "claude", "sonnet", "large-v3", None).await.unwrap();
-        assert!(ensure_saved_model_is(&pool, &local).await.is_err());
-        assert!(ensure_saved_model_is(&pool, &expected("claude", None)).await.is_ok());
+        assert!(naming_request(&pool, "m".into(), true, None).await.is_none(), "nothing is queued");
+        assert!(naming_request(&pool, "m".into(), true, Some(false)).await.is_none());
+        let allowed = naming_request(&pool, "m".into(), true, Some(true)).await.expect("queued");
+        assert_eq!(allowed.kind, JobKind::Naming { allow_cloud: true });
+        let manual = naming_request(&pool, "m".into(), false, None).await.expect("a manual request always queues");
+        assert!(!manual.automatic);
 
-        // Same provider, endpoint moved to another machine.
+        SettingsRepository::save_model_config(&pool, "ollama", "llama3", "large-v3", Some("http://localhost:11434")).await.unwrap();
+        let local = naming_request(&pool, "m".into(), true, None).await.expect("a local model is used automatically");
+        assert_eq!(local.kind, JobKind::Naming { allow_cloud: false });
         SettingsRepository::save_model_config(&pool, "ollama", "llama3", "large-v3", Some("http://10.0.0.5:11434")).await.unwrap();
-        assert!(ensure_saved_model_is(&pool, &local).await.is_err());
+        assert!(naming_request(&pool, "m".into(), true, None).await.is_none(), "Ollama on another machine is not local");
+    }
+
+    #[test]
+    fn an_automatic_job_without_consent_stops_when_the_model_is_no_longer_local() {
+        assert!(ensure_may_send(true, false, true).is_ok());
+        assert!(ensure_may_send(true, true, false).is_ok());
+        assert!(ensure_may_send(false, false, false).is_ok(), "jobs the user started always run");
+        assert!(ensure_may_send(true, false, false).is_err());
     }
 
     #[test]
     fn a_skipped_automatic_job_reports_an_automatic_error() {
-        let naming = IdentifyRequest { kind: JobKind::Naming, automatic: true, ..req("m") };
+        let naming = IdentifyRequest { automatic: true, ..naming("m") };
         let payload = error_payload(&naming, "The summary model changed", false);
         assert_eq!(payload["automatic"], true);
         assert_eq!(payload["kind"], "naming");
@@ -1760,7 +1782,6 @@ mod tests {
     fn naming_and_identify_share_the_queue() {
         let mut q = JobQueue::default();
         q.push(req("a")).unwrap();
-        let naming = |id: &str| IdentifyRequest { kind: JobKind::Naming, ..req(id) };
         assert_eq!(
             q.push(naming("a")),
             Err("Speaker identification is already queued or running for this meeting".to_string()),
@@ -1776,13 +1797,13 @@ mod tests {
         assert_eq!(ensure_idle_locked(&q, "a"), Err(IDENTIFYING_MESSAGE.to_string()));
         // The queued status tells the banner which job waits.
         assert_eq!(serde_json::to_value(q.status("b").unwrap()).unwrap()["kind"], "naming");
-        assert_eq!(q.start_next().unwrap().kind, JobKind::Identify);
-        assert_eq!(q.start_next().unwrap().kind, JobKind::Naming);
+        assert_eq!(q.start_next().unwrap().kind.name(), "identify");
+        assert_eq!(q.start_next().unwrap().kind.name(), "naming");
     }
 
     #[test]
     fn job_events_carry_kind_and_counts() {
-        let naming = IdentifyRequest { kind: JobKind::Naming, automatic: true, ..req("m") };
+        let naming = IdentifyRequest { automatic: true, ..naming("m") };
         assert_eq!(
             complete_payload(&naming, &JobOutcome::Naming(NamingOutcome { named: 2, suggested: 1 })),
             serde_json::json!({
@@ -1832,11 +1853,7 @@ mod tests {
         for (id, name) in people {
             seed_person(&pool, id, name).await;
         }
-        let mut conn = pool.acquire().await.unwrap();
-        SpeakersRepository::replace_for_meeting(&mut conn, "m", &SpeakerWrite { speakers, ..Default::default() })
-            .await
-            .unwrap();
-        drop(conn);
+        write_speakers(&pool, "m", speakers).await;
         pool
     }
 

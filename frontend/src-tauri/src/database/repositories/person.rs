@@ -1,5 +1,6 @@
 //! People that meeting speakers are linked to, and the speaker/person pairs the user rejected.
 
+use super::speaker::{SpeakersRepository, CLEAR_SUGGESTION};
 use serde::{Deserialize, Serialize};
 use sqlx::{Connection, Error as SqlxError, SqliteConnection, SqlitePool};
 use std::collections::HashSet;
@@ -30,6 +31,17 @@ pub fn clean_person_name(name: &str) -> Option<String> {
     (!cleaned.is_empty()).then_some(cleaned)
 }
 
+/// The form names (and quotes) are compared in: lowercase, single spaces, typographic quotes as
+/// plain ones.
+pub fn name_key(s: &str) -> String {
+    s.replace(['\u{2018}', '\u{2019}'], "'")
+        .replace(['\u{201C}', '\u{201D}'], "\"")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
 /// An operation refused with a message meant for the user.
 fn refused(message: impl Into<String>) -> SqlxError {
     SqlxError::Protocol(message.into())
@@ -41,6 +53,43 @@ async fn linked_meetings(conn: &mut SqliteConnection, person_id: &str) -> Result
         .bind(person_id)
         .fetch_all(&mut *conn)
         .await
+}
+
+/// Meetings where a speaker is linked to, suggested or rejected the person.
+async fn meetings_with_person(conn: &mut SqliteConnection, person_id: &str) -> Result<Vec<String>, SqlxError> {
+    sqlx::query_scalar(
+        "SELECT meeting_id FROM meeting_speakers WHERE person_id = ?1 OR suggested_person_id = ?1
+         UNION SELECT meeting_id FROM speaker_rejections WHERE person_id = ?1",
+    )
+    .bind(person_id)
+    .fetch_all(&mut *conn)
+    .await
+}
+
+/// Forgets one person, or everyone with `person_id` None: linked speakers keep their name as
+/// text typed by the user, and suggestions (of new names too when forgetting everyone) and
+/// rejections of the forgotten go.
+async fn forget_conn(conn: &mut SqliteConnection, person_id: Option<&str>) -> Result<(), SqlxError> {
+    sqlx::query(
+        "UPDATE meeting_speakers SET person_id = NULL, name_source = 'user'
+         WHERE person_id IS NOT NULL AND (?1 IS NULL OR person_id = ?1)",
+    )
+    .bind(person_id)
+    .execute(&mut *conn)
+    .await?;
+    sqlx::query(&format!("UPDATE meeting_speakers SET {CLEAR_SUGGESTION} WHERE ?1 IS NULL OR suggested_person_id = ?1"))
+        .bind(person_id)
+        .execute(&mut *conn)
+        .await?;
+    sqlx::query("DELETE FROM speaker_rejections WHERE ?1 IS NULL OR person_id = ?1")
+        .bind(person_id)
+        .execute(&mut *conn)
+        .await?;
+    sqlx::query("DELETE FROM people WHERE ?1 IS NULL OR id = ?1")
+        .bind(person_id)
+        .execute(&mut *conn)
+        .await?;
+    Ok(())
 }
 
 pub struct PeopleRepository;
@@ -62,6 +111,11 @@ impl PeopleRepository {
             .bind(id)
             .fetch_optional(&mut *conn)
             .await
+    }
+
+    /// The person, or a "Person not found" refusal.
+    async fn require_person(conn: &mut SqliteConnection, id: &str) -> Result<Person, SqlxError> {
+        Self::get_conn(conn, id).await?.ok_or_else(|| refused("Person not found"))
     }
 
     /// The person with this name, created when there is none.
@@ -121,9 +175,7 @@ impl PeopleRepository {
         let name = clean_person_name(name).ok_or_else(|| refused("A name is required"))?;
         let mut conn = pool.acquire().await?;
         let mut tx = conn.begin().await?;
-        if Self::get_conn(&mut tx, id).await?.is_none() {
-            return Err(refused("Person not found"));
-        }
+        Self::require_person(&mut tx, id).await?;
         // Checked here so a collision reads as a sentence, not as a unique-index error.
         if let Some(other) = Self::find_by_name_conn(&mut tx, &name).await?.filter(|p| p.id != id) {
             return Err(refused(format!("A person named {} already exists", other.name)));
@@ -151,19 +203,18 @@ impl PeopleRepository {
 
     /// Fold person `from_id` into `into_id`: linked speakers are relinked and renamed,
     /// suggestions and rejections move, and `from_id` is deleted. A speaker linked to `into_id`
-    /// afterwards keeps no rejection or suggestion of `into_id`. Returns the meetings whose
-    /// display names changed.
+    /// afterwards keeps no rejection or suggestion of `into_id` (the settle step). Returns the
+    /// meetings whose display names changed.
     pub async fn merge(pool: &SqlitePool, from_id: &str, into_id: &str) -> Result<Vec<String>, SqlxError> {
         if from_id == into_id {
             return Err(refused("A person cannot be merged into themselves"));
         }
         let mut conn = pool.acquire().await?;
         let mut tx = conn.begin().await?;
-        if Self::get_conn(&mut tx, from_id).await?.is_none() {
-            return Err(refused("Person not found"));
-        }
-        let into = Self::get_conn(&mut tx, into_id).await?.ok_or_else(|| refused("Person not found"))?;
+        Self::require_person(&mut tx, from_id).await?;
+        let into = Self::require_person(&mut tx, into_id).await?;
         let meetings = linked_meetings(&mut tx, from_id).await?;
+        let touched = meetings_with_person(&mut tx, from_id).await?;
         sqlx::query("UPDATE meeting_speakers SET person_id = ?, display_name = ? WHERE person_id = ?")
             .bind(&into.id)
             .bind(&into.name)
@@ -188,29 +239,10 @@ impl PeopleRepository {
             .bind(from_id)
             .execute(&mut *tx)
             .await?;
-        // A speaker now linked to `into` cannot reject it or be suggested it.
-        sqlx::query(
-            "DELETE FROM speaker_rejections
-             WHERE person_id = ?
-               AND EXISTS (SELECT 1 FROM meeting_speakers ms
-                           WHERE ms.meeting_id = speaker_rejections.meeting_id
-                             AND ms.speaker_key = speaker_rejections.speaker_key
-                             AND ms.person_id = ?)",
-        )
-        .bind(&into.id)
-        .bind(&into.id)
-        .execute(&mut *tx)
-        .await?;
-        sqlx::query(
-            "UPDATE meeting_speakers SET suggested_person_id = NULL, suggested_name = NULL, suggestion_source = NULL,
-                 suggestion_reason = NULL
-             WHERE person_id = ? AND suggested_person_id = ?",
-        )
-        .bind(&into.id)
-        .bind(&into.id)
-        .execute(&mut *tx)
-        .await?;
         sqlx::query("DELETE FROM people WHERE id = ?").bind(from_id).execute(&mut *tx).await?;
+        for meeting_id in &touched {
+            SpeakersRepository::settle_links_conn(&mut tx, meeting_id).await?;
+        }
         tx.commit().await?;
         Ok(meetings)
     }
@@ -230,23 +262,8 @@ impl PeopleRepository {
     pub async fn forget(pool: &SqlitePool, id: &str) -> Result<(), SqlxError> {
         let mut conn = pool.acquire().await?;
         let mut tx = conn.begin().await?;
-        if Self::get_conn(&mut tx, id).await?.is_none() {
-            return Err(refused("Person not found"));
-        }
-        sqlx::query("UPDATE meeting_speakers SET person_id = NULL, name_source = 'user' WHERE person_id = ?")
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(
-            "UPDATE meeting_speakers SET suggested_person_id = NULL, suggested_name = NULL, suggestion_source = NULL,
-                 suggestion_reason = NULL
-             WHERE suggested_person_id = ?",
-        )
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
-        sqlx::query("DELETE FROM speaker_rejections WHERE person_id = ?").bind(id).execute(&mut *tx).await?;
-        sqlx::query("DELETE FROM people WHERE id = ?").bind(id).execute(&mut *tx).await?;
+        Self::require_person(&mut tx, id).await?;
+        forget_conn(&mut tx, Some(id)).await?;
         tx.commit().await
     }
 
@@ -254,17 +271,7 @@ impl PeopleRepository {
     pub async fn forget_all(pool: &SqlitePool) -> Result<(), SqlxError> {
         let mut conn = pool.acquire().await?;
         let mut tx = conn.begin().await?;
-        sqlx::query("UPDATE meeting_speakers SET person_id = NULL, name_source = 'user' WHERE person_id IS NOT NULL")
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(
-            "UPDATE meeting_speakers SET suggested_person_id = NULL, suggested_name = NULL, suggestion_source = NULL,
-                 suggestion_reason = NULL",
-        )
-        .execute(&mut *tx)
-        .await?;
-        sqlx::query("DELETE FROM speaker_rejections").execute(&mut *tx).await?;
-        sqlx::query("DELETE FROM people").execute(&mut *tx).await?;
+        forget_conn(&mut tx, None).await?;
         tx.commit().await
     }
 
@@ -324,8 +331,8 @@ impl PeopleRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::database::repositories::speaker::{embedding_to_blob, MeetingSpeaker, NameSource, SpeakerLink, SpeakersRepository};
-    use crate::database::test_support::{migrated_pool, seed_meeting, seed_person};
+    use crate::database::repositories::speaker::{embedding_to_blob, NameSource, SpeakerLink};
+    use crate::database::test_support::{migrated_pool, people_count, seed_meeting, seed_person, stored_speaker};
 
     async fn people_count_conn(conn: &mut SqliteConnection) -> i64 {
         sqlx::query_scalar("SELECT COUNT(*) FROM people").fetch_one(&mut *conn).await.unwrap()
@@ -371,15 +378,6 @@ mod tests {
         .unwrap();
     }
 
-    async fn speaker(pool: &SqlitePool, meeting_id: &str, key: &str) -> MeetingSpeaker {
-        SpeakersRepository::list(pool, meeting_id)
-            .await
-            .unwrap()
-            .into_iter()
-            .find(|s| s.speaker_key == key)
-            .expect("speaker exists")
-    }
-
     async fn reject(pool: &SqlitePool, meeting_id: &str, key: &str, person_id: &str) {
         let mut conn = pool.acquire().await.unwrap();
         PeopleRepository::add_rejection_conn(&mut conn, meeting_id, key, person_id).await.unwrap();
@@ -393,10 +391,6 @@ mod tests {
     async fn person(pool: &SqlitePool, id: &str) -> Option<Person> {
         let mut conn = pool.acquire().await.unwrap();
         PeopleRepository::get_conn(&mut conn, id).await.unwrap()
-    }
-
-    async fn people_count(pool: &SqlitePool) -> i64 {
-        sqlx::query_scalar("SELECT COUNT(*) FROM people").fetch_one(pool).await.unwrap()
     }
 
     async fn set_created(pool: &SqlitePool, meeting_id: &str, at: &str) {
@@ -455,7 +449,7 @@ mod tests {
 
         assert_eq!(changed, vec!["m1".to_string()]);
         assert_eq!(person(&pool, "person-noah").await.unwrap().name, "noah");
-        assert_eq!(speaker(&pool, "m1", "spk_0").await.display_name.as_deref(), Some("noah"));
+        assert_eq!(stored_speaker(&pool, "m1", "spk_0").await.display_name.as_deref(), Some("noah"));
     }
 
     #[tokio::test]
@@ -471,7 +465,7 @@ mod tests {
             other => panic!("expected a readable refusal, got {other:?}"),
         }
         assert_eq!(person(&pool, "person-ana").await.unwrap().name, "Ana");
-        assert_eq!(speaker(&pool, "m1", "spk_0").await.display_name.as_deref(), Some("Ana"));
+        assert_eq!(stored_speaker(&pool, "m1", "spk_0").await.display_name.as_deref(), Some("Ana"));
         assert_eq!(people_count(&pool).await, 2);
     }
 
@@ -490,9 +484,9 @@ mod tests {
         let changed = PeopleRepository::rename(&pool, "person-noah", "Noah Parker").await.unwrap();
 
         assert_eq!(changed, vec!["m1".to_string(), "m2".to_string()]);
-        assert_eq!(speaker(&pool, "m1", "spk_0").await.display_name.as_deref(), Some("Noah Parker"));
-        assert_eq!(speaker(&pool, "m2", "spk_1").await.display_name.as_deref(), Some("Noah Parker"));
-        assert_eq!(speaker(&pool, "m3", "spk_0").await.link.suggested_name.as_deref(), Some("Noah Parker"));
+        assert_eq!(stored_speaker(&pool, "m1", "spk_0").await.display_name.as_deref(), Some("Noah Parker"));
+        assert_eq!(stored_speaker(&pool, "m2", "spk_1").await.display_name.as_deref(), Some("Noah Parker"));
+        assert_eq!(stored_speaker(&pool, "m3", "spk_0").await.link.suggested_name.as_deref(), Some("Noah Parker"));
     }
 
     #[tokio::test]
@@ -508,7 +502,7 @@ mod tests {
         let changed = PeopleRepository::merge(&pool, "person-noa", "person-noah").await.unwrap();
 
         assert_eq!(changed, vec!["m2".to_string()]);
-        let moved = speaker(&pool, "m2", "spk_0").await;
+        let moved = stored_speaker(&pool, "m2", "spk_0").await;
         assert_eq!(moved.display_name.as_deref(), Some("Noah"));
         assert_eq!(moved.link.person_id.as_deref(), Some("person-noah"));
         assert_eq!(moved.link.name_source, Some(NameSource::User));
@@ -530,7 +524,7 @@ mod tests {
         let changed = PeopleRepository::merge(&pool, "person-noa", "person-noah").await.unwrap();
 
         assert!(changed.is_empty(), "no speaker was linked to Noa");
-        let suggested = speaker(&pool, "m1", "spk_0").await.link;
+        let suggested = stored_speaker(&pool, "m1", "spk_0").await.link;
         assert_eq!(suggested.suggested_person_id.as_deref(), Some("person-noah"));
         assert_eq!(suggested.suggested_name.as_deref(), Some("Noah"));
         assert_eq!(rejections(&pool, "m1").await, HashSet::from([pair("spk_1", "person-noah")]));
@@ -551,9 +545,9 @@ mod tests {
 
         PeopleRepository::merge(&pool, "person-noa", "person-noah").await.unwrap();
 
-        assert_eq!(speaker(&pool, "m1", "spk_0").await.link.person_id.as_deref(), Some("person-noah"));
+        assert_eq!(stored_speaker(&pool, "m1", "spk_0").await.link.person_id.as_deref(), Some("person-noah"));
         assert!(rejections(&pool, "m1").await.is_empty());
-        assert!(!speaker(&pool, "m1", "spk_1").await.link.has_suggestion(), "a suggestion of its own person says nothing");
+        assert!(!stored_speaker(&pool, "m1", "spk_1").await.link.has_suggestion(), "a suggestion of its own person says nothing");
     }
 
     #[tokio::test]
@@ -574,7 +568,7 @@ mod tests {
 
         PeopleRepository::forget(&pool, "person-noah").await.unwrap();
 
-        let s = speaker(&pool, "m1", "spk_0").await;
+        let s = stored_speaker(&pool, "m1", "spk_0").await;
         assert_eq!(s.display_name.as_deref(), Some("Noah"));
         assert_eq!(s.link.person_id, None);
         assert_eq!(s.link.name_source, Some(NameSource::User));
@@ -598,8 +592,8 @@ mod tests {
 
         PeopleRepository::forget(&pool, "person-noah").await.unwrap();
 
-        assert_eq!(speaker(&pool, "m1", "spk_0").await.link, SpeakerLink::default());
-        assert_eq!(speaker(&pool, "m1", "spk_1").await.link.suggested_person_id.as_deref(), Some("person-ana"));
+        assert_eq!(stored_speaker(&pool, "m1", "spk_0").await.link, SpeakerLink::default());
+        assert_eq!(stored_speaker(&pool, "m1", "spk_1").await.link.suggested_person_id.as_deref(), Some("person-ana"));
         assert_eq!(rejections(&pool, "m1").await, HashSet::from([pair("spk_0", "person-ana")]));
     }
 
@@ -616,11 +610,11 @@ mod tests {
         PeopleRepository::forget_all(&pool).await.unwrap();
 
         assert_eq!(people_count(&pool).await, 0);
-        let named = speaker(&pool, "m1", "spk_0").await;
+        let named = stored_speaker(&pool, "m1", "spk_0").await;
         assert_eq!(named.display_name.as_deref(), Some("Noah"));
         assert_eq!(named.link.person_id, None);
         assert_eq!(named.link.name_source, Some(NameSource::User));
-        assert_eq!(speaker(&pool, "m1", "spk_1").await.link, SpeakerLink::default(), "suggestions of new names go too");
+        assert_eq!(stored_speaker(&pool, "m1", "spk_1").await.link, SpeakerLink::default(), "suggestions of new names go too");
         assert!(rejections(&pool, "m1").await.is_empty());
     }
 

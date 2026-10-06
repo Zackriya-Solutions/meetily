@@ -1,5 +1,3 @@
-import type { TranscriptSegmentData } from '@/types';
-
 /**
  * (clock_s, file_s) points from the backend, ascending in both columns. Transcript rows use the
  * clock; the audio element and the WAV clips use container time. The backend sends the identity,
@@ -60,26 +58,6 @@ export function needsMoreRows(rows: ReadonlyArray<{ timestamp: number; endTime?:
   if (!hasMore) return false;
   const last = rows[rows.length - 1];
   return !last || clockS >= (last.endTime ?? last.timestamp);
-}
-
-export const SAMPLE_SECONDS = 8;
-
-/**
- * Up to SAMPLE_SECONDS from the start of the speaker's longest row with a single speaker: rows
- * that kept two speakers under the majority label are skipped.
- */
-export function chooseSpeakerSample(
-  rows: ReadonlyArray<TranscriptSegmentData>,
-  speakerKey: string,
-): { startS: number; endS: number } | null {
-  let best: { startS: number; endS: number } | null = null;
-  for (const row of rows) {
-    if (row.speaker !== speakerKey || row.speakerMixed || row.endTime === undefined || row.endTime <= row.timestamp) continue;
-    if (!best || row.endTime - row.timestamp > best.endS - best.startS) {
-      best = { startS: row.timestamp, endS: row.endTime };
-    }
-  }
-  return best && { startS: best.startS, endS: Math.min(best.startS + SAMPLE_SECONDS, best.endS) };
 }
 
 /** Length of one WAV clip in the fallback mode. */

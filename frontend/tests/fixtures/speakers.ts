@@ -14,6 +14,8 @@ export function makeSpeaker(speaker_key: string, overrides: Partial<MeetingSpeak
     suggested_name: null,
     suggestion_source: null,
     suggestion_reason: null,
+    sample_start_s: null,
+    sample_end_s: null,
     ...overrides,
   };
 }

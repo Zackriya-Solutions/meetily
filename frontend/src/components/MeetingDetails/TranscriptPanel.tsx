@@ -1,14 +1,13 @@
 "use client";
 
-import { MeetingSpeaker, Person, SpeakerJobStatus, Transcript, TranscriptSegmentData } from '@/types';
+import { MeetingSpeaker, SpeakerJobStatus, Transcript, TranscriptSegmentData } from '@/types';
 import { rowSpeakerControl } from '@/lib/speakers';
-import { chooseSpeakerSample, followAlong, needsMoreRows, rowIndexAtTime, type FollowState } from '@/lib/playback';
-import { fetchAllMeetingTranscripts } from '@/lib/transcripts';
+import { followAlong, needsMoreRows, rowIndexAtTime, type FollowState } from '@/lib/playback';
 import { convertTranscriptsToSegments } from '@/hooks/usePaginatedTranscripts';
 import { SpeakerChip } from '@/components/Speakers/SpeakerChip';
 import { SpeakerBar } from '@/components/Speakers/SpeakerBar';
 import { SpeakerJobBanner } from '@/components/Speakers/SpeakerJobBanner';
-import { usePlayback } from '@/hooks/usePlayback';
+import { usePlayback, usePlaybackClockSelector } from '@/hooks/usePlayback';
 import { PlayerBar } from './PlayerBar';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
@@ -19,8 +18,6 @@ export interface SpeakerTools {
   speakers: MeetingSpeaker[];
   names: Record<string, string>;
   editable: boolean;
-  /** Known people for the name autocomplete */
-  people: Person[];
   onRename: (key: string, name: string) => Promise<void>;
   onMerge: (fromKey: string, intoKey: string) => Promise<void>;
   onReassign: (transcriptId: string, key: string | null) => Promise<void>;
@@ -100,17 +97,23 @@ export function TranscriptPanel({
   // The recording plays in the panel; meetings without a folder have no audio.
   const playback = usePlayback(meetingId ?? null, !isRecording && !!meetingId && !!meetingFolderPath);
 
-  // Handlers read the latest controls through this ref, so they keep their identity while the
-  // clock moves and the memoised rows do not re-render.
+  // Handlers read the latest controls through this ref, so they keep their identity when the
+  // controls change and the memoised rows do not re-render.
   const playbackRef = useRef(playback);
   playbackRef.current = playback;
+  const { playing } = playback;
 
   // Follow along: the row playing now is highlighted and kept in view until the user scrolls away.
   const [follow, setFollow] = useState<FollowState>({ following: true, showBack: false });
   useEffect(() => {
-    if (!playback.playing) setFollow((state) => followAlong(state, 'paused'));
-  }, [playback.playing]);
-  const activeIndex = playback.playing ? rowIndexAtTime(convertedSegments, playback.clockS) : -1;
+    if (!playing) setFollow((state) => followAlong(state, 'paused'));
+  }, [playing]);
+  // The panel follows the clock only through these selections, so it re-renders when the playing
+  // row changes or the next page is needed, not on every timeupdate.
+  const activeIndex = usePlaybackClockSelector(
+    playback.clock,
+    (clockS) => (playing ? rowIndexAtTime(convertedSegments, clockS) : -1),
+  );
   const activeSegmentId = follow.following && activeIndex >= 0 ? convertedSegments[activeIndex].id : null;
   const onPlayFrom = useCallback((startS: number) => {
     setFollow((state) => followAlong(state, 'play-from-row'));
@@ -120,41 +123,29 @@ export function TranscriptPanel({
     if (playbackRef.current.playing) setFollow((state) => followAlong(state, 'manual-scroll'));
   }, []);
   // Playback past the last loaded row loads the next page.
-  const needsMore = playback.playing && needsMoreRows(convertedSegments, playback.clockS, !!hasMore);
+  const needsMore = usePlaybackClockSelector(
+    playback.clock,
+    (clockS) => playing && needsMoreRows(convertedSegments, clockS, !!hasMore),
+  );
   useEffect(() => {
     if (needsMore && !isLoadingMore) onLoadMore?.();
   }, [needsMore, isLoadingMore, onLoadMore, convertedSegments.length]);
 
-  // Samples need every row (the view only holds the loaded pages): fetched on the first sample,
-  // again after speakers change.
-  const allRowsRef = useRef<TranscriptSegmentData[] | null>(null);
-  const speakerList = speakerTools?.speakers;
-  useEffect(() => {
-    allRowsRef.current = null;
-  }, [speakerList]);
-  const playSample = useCallback(async (key: string) => {
-    if (!meetingId) return;
-    try {
-      const rows = allRowsRef.current ?? convertTranscriptsToSegments(await fetchAllMeetingTranscripts(meetingId));
-      allRowsRef.current = rows;
-      const sample = chooseSpeakerSample(rows, key);
-      if (!sample) {
+  // The backend picks each speaker's sample from all of its rows, not only the loaded pages.
+  const tools = useMemo<SpeakerTools | undefined>(() => speakerTools && {
+    ...speakerTools,
+    onPlaySample: (key: string) => {
+      const speaker = speakerTools.speakers.find((s) => s.speaker_key === key);
+      if (speaker?.sample_start_s == null || speaker.sample_end_s == null) {
         toast.info('No line of this speaker to play');
         return;
       }
-      playbackRef.current.playFrom(sample.startS, sample.endS);
-    } catch (error) {
-      console.error('Failed to play a speaker sample:', error);
-      toast.error('Failed to play a sample');
-    }
-  }, [meetingId]);
-  const tools = useMemo<SpeakerTools | undefined>(
-    () => speakerTools && { ...speakerTools, onPlaySample: (key: string) => { void playSample(key); } },
-    [speakerTools, playSample],
-  );
+      playbackRef.current.playFrom(speaker.sample_start_s, speaker.sample_end_s);
+    },
+  }, [speakerTools]);
 
-  // Stable for a given speakerTools (which leaves out the job and the clock), so the memoised
-  // rows skip re-rendering while the list scrolls, a job reports progress or playback moves.
+  // Stable for a given speakerTools (which leaves out the job, the clock and the people), so the
+  // memoised rows skip re-rendering while the list scrolls, a job reports progress or playback moves.
   const renderSpeaker = useCallback<RenderSpeaker>((speakerKey, transcriptId, isRunStart) => {
     if (!tools) return null;
     const control = rowSpeakerControl(speakerKey, isRunStart, tools.editable);
@@ -167,7 +158,6 @@ export function TranscriptPanel({
         speakers={tools.speakers}
         names={tools.names}
         editable={tools.editable}
-        people={tools.people}
         onRename={tools.onRename}
         onMerge={tools.onMerge}
         onReassign={tools.onReassign}
@@ -201,7 +191,6 @@ export function TranscriptPanel({
             speakers={tools.speakers}
             names={tools.names}
             editable={tools.editable}
-            people={tools.people}
             onRename={tools.onRename}
             onConfirm={tools.onConfirm}
             onReject={tools.onReject}
@@ -232,7 +221,7 @@ export function TranscriptPanel({
           onPlayFrom={playback.ready ? onPlayFrom : undefined}
           onManualScroll={onManualScroll}
         />
-        {follow.showBack && playback.playing && (
+        {follow.showBack && playing && (
           <button
             type="button"
             className="absolute bottom-6 left-1/2 -translate-x-1/2 rounded-full bg-blue-600 px-3 py-1 text-xs font-medium text-white shadow hover:bg-blue-700"

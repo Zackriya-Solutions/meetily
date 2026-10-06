@@ -227,6 +227,35 @@ pub(crate) struct ResolvedLlm {
     pub app_data_dir: Option<PathBuf>,
 }
 
+impl ResolvedLlm {
+    /// See `is_local_model`.
+    pub(crate) fn is_local(&self) -> bool {
+        is_local_model(&self.provider, self.ollama_endpoint.as_deref(), self.custom_openai_endpoint.as_deref())
+    }
+}
+
+/// True when the model runs on this machine, so a transcript sent to it stays here: the built-in
+/// model, Ollama at its default endpoint or on localhost/127.0.0.1, and a custom endpoint on
+/// localhost/127.0.0.1. Every other provider is a cloud service.
+pub(crate) fn is_local_model(
+    provider: &LLMProvider,
+    ollama_endpoint: Option<&str>,
+    custom_openai_endpoint: Option<&str>,
+) -> bool {
+    let loopback = |endpoint: &str| {
+        url::Url::parse(endpoint.trim())
+            .ok()
+            .is_some_and(|url| matches!(url.host_str(), Some("localhost" | "127.0.0.1")))
+    };
+    match provider {
+        LLMProvider::BuiltInAI => true,
+        // No endpoint means the default local server.
+        LLMProvider::Ollama => ollama_endpoint.map(str::trim).filter(|e| !e.is_empty()).map_or(true, loopback),
+        LLMProvider::CustomOpenAI => custom_openai_endpoint.is_some_and(loopback),
+        _ => false,
+    }
+}
+
 /// Everything needed to call `provider_name`/`model_name`. Err carries the message shown to the user.
 pub(crate) async fn resolve_llm(
     pool: &SqlitePool,
@@ -483,19 +512,6 @@ impl SummaryService {
                 return;
             }
         };
-        // Same names as before the extraction, so the rest of the function is unchanged.
-        let ResolvedLlm {
-            provider,
-            api_key: final_api_key,
-            ollama_endpoint,
-            custom_openai_endpoint,
-            max_tokens: custom_openai_max_tokens,
-            temperature: custom_openai_temperature,
-            top_p: custom_openai_top_p,
-            context_tokens: token_threshold,
-            app_data_dir,
-            ..
-        } = llm;
 
         if let Some(code) = &summary_language {
             info!("📝 Summary language preference: {}", code);
@@ -525,14 +541,14 @@ impl SummaryService {
             &custom_prompt,
             &template_id,
             &template_fingerprint,
-            token_threshold,
+            llm.context_tokens,
             &model_provider,
             &model_name,
-            ollama_endpoint.as_deref(),
-            custom_openai_endpoint.as_deref(),
-            custom_openai_max_tokens,
-            custom_openai_temperature,
-            custom_openai_top_p,
+            llm.ollama_endpoint.as_deref(),
+            llm.custom_openai_endpoint.as_deref(),
+            llm.max_tokens,
+            llm.temperature,
+            llm.top_p,
         );
 
         let cached_english = match SummaryProcessesRepository::get_summary_data(&pool, &meeting_id).await {
@@ -565,20 +581,20 @@ impl SummaryService {
         let client = reqwest::Client::new();
         let result = generate_meeting_summary(
             &client,
-            &provider,
+            &llm.provider,
             &model_name,
-            &final_api_key,
+            &llm.api_key,
             &text,
             &custom_prompt,
             &template_id,
             &template,
-            token_threshold,
-            ollama_endpoint.as_deref(),
-            custom_openai_endpoint.as_deref(),
-            custom_openai_max_tokens,
-            custom_openai_temperature,
-            custom_openai_top_p,
-            app_data_dir.as_ref(),
+            llm.context_tokens,
+            llm.ollama_endpoint.as_deref(),
+            llm.custom_openai_endpoint.as_deref(),
+            llm.max_tokens,
+            llm.temperature,
+            llm.top_p,
+            llm.app_data_dir.as_ref(),
             Some(&cancellation_token),
             summary_language.as_deref(),
             detected_summary_language.as_deref(),
@@ -736,6 +752,7 @@ mod tests {
         assert_eq!((llm.max_tokens, llm.temperature, llm.top_p), (Some(512), Some(0.3), Some(0.9)));
         assert_eq!(llm.ollama_endpoint, None);
         assert_eq!(llm.context_tokens, 100_000);
+        assert!(llm.is_local());
 
         let empty = migrated_pool().await;
         assert_eq!(
@@ -768,6 +785,31 @@ mod tests {
         assert_eq!(builtin.context_tokens, context as usize - 300);
         assert_eq!(builtin.api_key, "");
         assert_eq!(builtin.app_data_dir, Some(PathBuf::from("/data")));
+        assert!(builtin.is_local());
+        assert!(!claude.is_local());
+    }
+
+    #[test]
+    fn only_models_on_this_machine_are_local() {
+        use LLMProvider::*;
+        assert!(is_local_model(&BuiltInAI, None, None));
+        // Ollama: the default server, localhost and 127.0.0.1 are local; another machine is not.
+        assert!(is_local_model(&Ollama, None, None));
+        assert!(is_local_model(&Ollama, Some("  "), None));
+        assert!(is_local_model(&Ollama, Some("http://localhost:11434"), None));
+        assert!(is_local_model(&Ollama, Some("http://127.0.0.1:11434/"), None));
+        assert!(!is_local_model(&Ollama, Some("http://10.0.0.5:11434"), None));
+        assert!(!is_local_model(&Ollama, Some("https://ollama.example.com"), None));
+        // Custom endpoints count only on this machine; the host must match exactly.
+        assert!(is_local_model(&CustomOpenAI, None, Some("http://localhost:8080/v1")));
+        assert!(is_local_model(&CustomOpenAI, None, Some("http://127.0.0.1:8080/v1")));
+        assert!(!is_local_model(&CustomOpenAI, None, Some("http://localhost.example.com/v1")));
+        assert!(!is_local_model(&CustomOpenAI, None, Some("localhost:8080")));
+        assert!(!is_local_model(&CustomOpenAI, None, None));
+        // Cloud providers never are, whatever endpoints are stored.
+        for provider in [OpenAI, Claude, Groq, OpenRouter] {
+            assert!(!is_local_model(&provider, Some("http://localhost:11434"), Some("http://localhost:8080")));
+        }
     }
 
     #[test]

@@ -6,6 +6,7 @@ const originalToast = { ...await import('sonner') };
 afterAll(() => mock.module('sonner', () => originalToast));
 mock.module('sonner', () => ({ toast: { error: () => {}, success: () => {}, info: () => {}, warning: () => {} } }));
 const { SpeakerRenameForm } = await import('../../src/components/Speakers/SpeakerRenameForm');
+const { PeopleContext } = await import('../../src/components/Speakers/PeopleContext');
 
 const people: Person[] = [
   { id: 'person-1', name: 'Noah', meeting_count: 3, last_seen: null },
@@ -16,7 +17,9 @@ async function renderForm(onRename: (key: string, name: string) => Promise<void>
   let renderer!: ReactTestRenderer;
   await act(async () => {
     renderer = create(
-      <SpeakerRenameForm speakerKey="spk_0" initialName="" placeholder="Speaker 1" people={people} onRename={onRename} onSaved={onSaved} />,
+      <PeopleContext.Provider value={people}>
+        <SpeakerRenameForm speakerKey="spk_0" initialName="" placeholder="Speaker 1" onRename={onRename} onSaved={onSaved} />
+      </PeopleContext.Provider>,
     );
   });
   return renderer;

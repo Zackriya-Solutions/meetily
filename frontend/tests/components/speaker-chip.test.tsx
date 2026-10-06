@@ -35,7 +35,7 @@ const suggested: MeetingSpeaker[] = [
 ];
 const noop = async () => {};
 const base = {
-  transcriptId: 't2', editable: true, people: [], onRename: noop, onMerge: noop, onReassign: noop, onConfirm: noop, onReject: noop,
+  transcriptId: 't2', editable: true, onRename: noop, onMerge: noop, onReassign: noop, onConfirm: noop, onReject: noop,
 };
 
 const buttons = (renderer: ReactTestRenderer, label: string) =>

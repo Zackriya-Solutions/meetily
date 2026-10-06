@@ -14,6 +14,10 @@ export function matchPeople(people: Person[], draft: string, limit = 5): Person[
   return [...prefix, ...inside].slice(0, limit);
 }
 
+export function formatMeetingCount(count: number): string {
+  return `${count} meeting${count === 1 ? '' : 's'}`;
+}
+
 /** A person's last meeting as a short local date; 'never' without one, the raw text if unreadable. */
 export function formatLastSeen(lastSeen: string | null): string {
   if (!lastSeen) return 'never';

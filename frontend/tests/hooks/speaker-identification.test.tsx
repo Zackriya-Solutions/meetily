@@ -19,11 +19,12 @@ const listen = mock(async (name: string, handler: Handler) => {
 });
 mock.module('@tauri-apps/api/event', () => ({ ...originalEvent, listen }));
 let guessRefusal: string | null = null;
+let guessQueued = true;
 const invoke = mock(async (command: string, _args?: Record<string, unknown>): Promise<unknown> => {
   if (command === 'get_speaker_identification_status') return null;
   if (command === 'api_guess_speaker_names') {
     if (guessRefusal) throw guessRefusal;
-    return null;
+    return guessQueued;
   }
   throw new Error(`Unexpected command: ${command}`);
 });
@@ -46,6 +47,7 @@ beforeEach(async () => {
   handlers.clear();
   completions.length = 0;
   guessRefusal = null;
+  guessQueued = true;
   invoke.mockClear();
   success.mockClear();
   failure.mockClear();
@@ -95,16 +97,23 @@ describe('speaker job events', () => {
     expect(state.isActive).toBe(false);
   });
 
-  test('an automatic guess sends the provider and endpoint it was judged on', async () => {
-    await act(async () => { await state.guessNames(true, { provider: 'ollama', endpoint: 'http://localhost:11434' }); });
-    expect(invoke).toHaveBeenCalledWith('api_guess_speaker_names', {
-      meetingId: 'meeting-a', automatic: true, expectedProvider: 'ollama', expectedEndpoint: 'http://localhost:11434',
-    });
+  test('an automatic guess sends whether a cloud model is allowed', async () => {
+    await act(async () => { await state.guessNames(true, true); });
+    expect(invoke).toHaveBeenCalledWith('api_guess_speaker_names', { meetingId: 'meeting-a', automatic: true, allowCloud: true });
+    await act(async () => { await state.guessNames(true, false); });
+    expect(invoke).toHaveBeenCalledWith('api_guess_speaker_names', { meetingId: 'meeting-a', automatic: true, allowCloud: false });
+  });
+
+  test('a declined automatic guess ends the pending state at once', async () => {
+    // A cloud model without consent: nothing is queued and no event will follow.
+    guessQueued = false;
+    await act(async () => { await state.guessNames(true, false); });
+    expect(state.autoNamingPending).toBe(false);
   });
 
   test('guess names invokes command and marks job queued', async () => {
     await act(async () => { await state.guessNames(false); });
-    expect(invoke).toHaveBeenCalledWith('api_guess_speaker_names', { meetingId: 'meeting-a', automatic: false });
+    expect(invoke).toHaveBeenCalledWith('api_guess_speaker_names', { meetingId: 'meeting-a', automatic: false, allowCloud: null });
     // A guess the user asked for does not hold the auto-summary.
     expect(state.autoNamingPending).toBe(false);
     // The backend emits the queued status before the command returns.
@@ -117,7 +126,7 @@ describe('speaker job events', () => {
   });
 
   test('automatic guess stays pending until its first naming event', async () => {
-    await act(async () => { await state.guessNames(true); });
+    await act(async () => { await state.guessNames(true, false); });
     // The command has returned but its queued event has not arrived: nothing is active yet.
     expect(state.isActive).toBe(false);
     expect(state.autoNamingPending).toBe(true);
@@ -132,7 +141,7 @@ describe('speaker job events', () => {
   });
 
   test('a naming error or a refused automatic guess ends the pending state', async () => {
-    await act(async () => { await state.guessNames(true); });
+    await act(async () => { await state.guessNames(true, false); });
     await emit('diarization-error', {
       meeting_id: 'meeting-a', kind: 'naming', error: 'No summary model is configured', automatic: true, cancelled: false,
     });
@@ -141,7 +150,7 @@ describe('speaker job events', () => {
 
     guessRefusal = 'Speaker identification is already running for this meeting';
     let thrown: unknown = null;
-    await act(async () => { await state.guessNames(true).catch((error: unknown) => { thrown = error; }); });
+    await act(async () => { await state.guessNames(true, false).catch((error: unknown) => { thrown = error; }); });
     expect(thrown).toBe(guessRefusal);
     expect(state.autoNamingPending).toBe(false);
   });

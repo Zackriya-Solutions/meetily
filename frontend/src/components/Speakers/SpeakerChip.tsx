@@ -2,9 +2,9 @@
 
 import { memo, useState } from 'react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { MeetingSpeaker, Person } from '@/types';
+import { MeetingSpeaker } from '@/types';
 import { speakerColor, speakerLabel, speakerNameState } from '@/lib/speakers';
-import { toast } from 'sonner';
+import { attempt } from '@/lib/errors';
 import { SpeakerRenameForm } from './SpeakerRenameForm';
 import { SpeakerNameBadge } from './SpeakerNameBadge';
 
@@ -14,8 +14,6 @@ interface SpeakerChipProps {
   speakers: MeetingSpeaker[];
   names: Record<string, string>;
   editable: boolean;
-  /** Known people for the name autocomplete; a stable array. */
-  people: Person[];
   /** Small dot trigger for rows inside a same-speaker run. */
   compact?: boolean;
   onRename: (key: string, name: string) => Promise<void>;
@@ -59,7 +57,6 @@ function SpeakerChipImpl({
   speakers,
   names,
   editable,
-  people,
   compact = false,
   onRename,
   onMerge,
@@ -73,14 +70,7 @@ function SpeakerChipImpl({
   const color = speakerColor(speakerKey);
   const current = speakers.find((s) => s.speaker_key === speakerKey);
   const run = async (action: () => Promise<void>, failure: string) => {
-    try {
-      await action();
-      setOpen(false);
-    } catch (error) {
-      console.error(failure, error);
-      // Refusals from the backend (for example while a speaker job runs) are written for the user.
-      toast.error(typeof error === 'string' ? error : failure);
-    }
+    if (await attempt(action, failure)) setOpen(false);
   };
   const chip = (
     <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${color.chip}`}>{label}</span>
@@ -119,7 +109,6 @@ function SpeakerChipImpl({
           initialName={current?.display_name ?? ''}
           placeholder={label}
           label={`Name for everyone labelled ${label}`}
-          people={people}
           onRename={onRename}
           onSaved={() => setOpen(false)}
         />

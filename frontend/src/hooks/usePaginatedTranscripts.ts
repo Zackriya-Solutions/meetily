@@ -39,8 +39,6 @@ export function convertTranscriptsToSegments(transcripts: Transcript[]): Transcr
         text: t.text,
         confidence: t.confidence,
         speaker: t.speaker ?? null,
-        // Only on mixed rows, so other rows keep their shape.
-        ...(t.speaker_mixed ? { speakerMixed: true } : {}),
     }));
 }
 

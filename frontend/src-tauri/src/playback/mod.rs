@@ -1,7 +1,8 @@
-//! Playing a meeting's recording in the app: asset-protocol source, time table and WAV clips.
+//! Playing a meeting's recording in the app: the file for the asset protocol, time table and WAV clips.
 pub mod clip;
 
 use crate::audio::decoder::container_duration_s;
+use crate::database::repositories::meeting::MeetingsRepository;
 use crate::state::AppState;
 use serde::Serialize;
 use sqlx::SqlitePool;
@@ -11,8 +12,9 @@ use tauri::{AppHandle, Manager, Runtime};
 /// What the player needs to play a meeting's recording.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct PlaybackSource {
-    /// Asset-protocol URL of the audio file.
-    pub url: String,
+    /// The audio file, canonical (the path the asset scope allows); the webview loads it
+    /// through `convertFileSrc`.
+    pub path: String,
     /// Length in seconds of container time, which is the recording clock.
     pub duration_s: f64,
     /// (clock_s, file_s) points the player interpolates; see `playback_time_table`.
@@ -23,43 +25,18 @@ const NO_RECORDING: &str = "This meeting has no recording";
 
 /// The meeting's audio file, found in the folder stored for it, with symlinks resolved.
 pub(crate) async fn meeting_audio_path(pool: &SqlitePool, meeting_id: &str) -> Result<PathBuf, String> {
-    let folder: Option<Option<String>> = sqlx::query_scalar("SELECT folder_path FROM meetings WHERE id = ?")
-        .bind(meeting_id)
-        .fetch_optional(pool)
+    let meeting = MeetingsRepository::get_meeting_metadata(pool, meeting_id)
         .await
         .map_err(|e| format!("Failed to read the meeting: {}", e))?;
-    let folder = folder
+    let folder = meeting
         .ok_or_else(|| "Meeting not found".to_string())?
+        .folder_path
         .filter(|f| !f.trim().is_empty())
         .ok_or_else(|| NO_RECORDING.to_string())?;
     let audio =
         crate::audio::retranscription::find_audio_file(Path::new(&folder)).map_err(|_| NO_RECORDING.to_string())?;
     // The asset protocol checks its scope against the resolved path, so grant and serve that one.
     std::fs::canonicalize(&audio).map_err(|_| NO_RECORDING.to_string())
-}
-
-/// `encodeURIComponent`: everything except A-Z a-z 0-9 - _ . ! ~ * ' ( ) as %XX of its UTF-8 bytes.
-fn encode_uri_component(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'!' | b'~' | b'*' | b'\'' | b'(' | b')' => {
-                out.push(b as char)
-            }
-            _ => out.push_str(&format!("%{:02X}", b)),
-        }
-    }
-    out
-}
-
-/// The URL `convertFileSrc(path)` gives in the webview.
-pub fn asset_url(path: &Path) -> String {
-    let encoded = encode_uri_component(&path.to_string_lossy());
-    if cfg!(any(windows, target_os = "android")) {
-        format!("http://asset.localhost/{}", encoded)
-    } else {
-        format!("asset://localhost/{}", encoded)
-    }
 }
 
 /// Transcript clock → playback position. The player seeks the `<audio>` element and the WAV
@@ -74,7 +51,7 @@ fn playback_time_table(duration_s: f64) -> Vec<[f64; 2]> {
 /// Source for `audio`. Reads the file's packet table but does not decode it.
 pub(crate) fn playback_source(audio: &Path) -> anyhow::Result<PlaybackSource> {
     let duration_s = container_duration_s(audio)?;
-    Ok(PlaybackSource { url: asset_url(audio), duration_s, time_table: playback_time_table(duration_s) })
+    Ok(PlaybackSource { path: audio.to_string_lossy().into_owned(), duration_s, time_table: playback_time_table(duration_s) })
 }
 
 /// Lets the webview load exactly this meeting's audio file and returns how to play it.
@@ -167,18 +144,6 @@ mod tests {
         assert_eq!(meeting_audio_path(&pool, "missing").await.unwrap_err(), "Meeting not found");
     }
 
-    #[cfg(not(any(windows, target_os = "android")))]
-    #[test]
-    fn asset_url_matches_convert_file_src() {
-        // encodeURIComponent: everything but A-Z a-z 0-9 - _ . ! ~ * ' ( ) is percent-encoded as UTF-8.
-        assert_eq!(
-            asset_url(Path::new("/home/a b/Réunion/audio (1).mp4")),
-            "asset://localhost/%2Fhome%2Fa%20b%2FR%C3%A9union%2Faudio%20(1).mp4"
-        );
-        assert_eq!(asset_url(Path::new("/x/it's_a-b.~!*.m4a")), "asset://localhost/%2Fx%2Fit's_a-b.~!*.m4a");
-        assert_eq!(asset_url(Path::new("/x/a#b?c&d+e.wav")), "asset://localhost/%2Fx%2Fa%23b%3Fc%26d%2Be.wav");
-    }
-
     #[test]
     fn live_recording_plays_on_the_container_clock() {
         let dir = tempfile::tempdir().unwrap();
@@ -186,7 +151,7 @@ mod tests {
         let source = playback_source(&audio).unwrap();
         // Two 30 s checkpoints plus the first checkpoint's 1024 frames of priming.
         let d = 60.0 + 1024.0 / 48_000.0;
-        assert_eq!(source.url, asset_url(&audio));
+        assert_eq!(source.path, audio.to_string_lossy());
         assert!((source.duration_s - d).abs() < 1e-6, "duration {}", source.duration_s);
         assert_eq!(source.time_table, vec![[0.0, 0.0], [source.duration_s, source.duration_s]]);
     }
@@ -197,7 +162,7 @@ mod tests {
         let audio = dir.path().join("audio.wav");
         write_wav(&audio, 16_000, 1, &vec![0.0; 32_000]);
         let source = playback_source(&audio).unwrap();
-        assert_eq!(source, PlaybackSource { url: asset_url(&audio), duration_s: 2.0, time_table: vec![[0.0, 0.0], [2.0, 2.0]] });
+        assert_eq!(source, PlaybackSource { path: audio.to_string_lossy().into_owned(), duration_s: 2.0, time_table: vec![[0.0, 0.0], [2.0, 2.0]] });
     }
 
     #[test]

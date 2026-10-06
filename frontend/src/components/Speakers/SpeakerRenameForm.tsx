@@ -1,11 +1,11 @@
 'use client';
 
-import { useState } from 'react';
+import { useContext, useState } from 'react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { toast } from 'sonner';
-import type { Person } from '@/types';
-import { matchPeople } from '@/lib/people';
+import { attempt } from '@/lib/errors';
+import { formatMeetingCount, matchPeople } from '@/lib/people';
+import { PeopleContext } from './PeopleContext';
 
 interface SpeakerRenameFormProps {
   speakerKey: string;
@@ -13,25 +13,18 @@ interface SpeakerRenameFormProps {
   initialName: string;
   placeholder: string;
   label?: string;
-  /** Known people offered while typing; picking one names the speaker with that person's stored name. */
-  people: Person[];
   onRename: (key: string, name: string) => Promise<void>;
   onSaved: () => void;
 }
 
-export function SpeakerRenameForm({ speakerKey, initialName, placeholder, label, people, onRename, onSaved }: SpeakerRenameFormProps) {
+export function SpeakerRenameForm({ speakerKey, initialName, placeholder, label, onRename, onSaved }: SpeakerRenameFormProps) {
+  // Known people offered while typing; picking one names the speaker with that person's stored name.
+  const people = useContext(PeopleContext);
   const [draft, setDraft] = useState(initialName);
   // Nothing is offered until the draft differs from the current name.
   const matches = draft.trim() === initialName.trim() ? [] : matchPeople(people, draft);
   const save = async (name: string) => {
-    try {
-      await onRename(speakerKey, name);
-      onSaved();
-    } catch (error) {
-      console.error('Failed to rename speaker', error);
-      // Refusals from the backend (for example while a speaker job runs) are written for the user.
-      toast.error(typeof error === 'string' ? error : 'Failed to rename speaker');
-    }
+    if (await attempt(() => onRename(speakerKey, name), 'Failed to rename speaker')) onSaved();
   };
   const fields = (
     <>
@@ -67,7 +60,7 @@ export function SpeakerRenameForm({ speakerKey, initialName, placeholder, label,
             >
               <span className="truncate">{person.name}</span>
               <span className="ml-2 shrink-0 text-xs text-gray-400">
-                {`${person.meeting_count} meeting${person.meeting_count === 1 ? '' : 's'}`}
+                {formatMeetingCount(person.meeting_count)}
               </span>
             </button>
           ))}

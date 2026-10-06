@@ -1,8 +1,10 @@
 //! Shared fixtures for database tests.
 use crate::api::TranscriptSegment;
+use crate::database::repositories::speaker::{MeetingSpeaker, NewSpeaker, SpeakerWrite, SpeakersRepository};
 use crate::database::repositories::transcript::TranscriptsRepository;
 use sqlx::sqlite::SqlitePoolOptions;
 use sqlx::SqlitePool;
+use std::collections::HashMap;
 
 pub struct SeedRow {
     pub id: &'static str,
@@ -55,6 +57,44 @@ pub async fn seed_meeting(pool: &SqlitePool, meeting_id: &str, rows: &[SeedRow])
             .await
             .expect("insert transcript");
     }
+}
+
+/// Replaces the meeting's speakers.
+pub async fn write_speakers(pool: &SqlitePool, meeting_id: &str, speakers: Vec<NewSpeaker>) {
+    let mut conn = pool.acquire().await.expect("acquire connection");
+    SpeakersRepository::replace_for_meeting(&mut conn, meeting_id, &SpeakerWrite { speakers, ..Default::default() })
+        .await
+        .expect("write speakers");
+}
+
+/// Creates the meeting without rows and writes its speakers.
+pub async fn seed_speakers(pool: &SqlitePool, meeting_id: &str, speakers: Vec<NewSpeaker>) {
+    seed_meeting(pool, meeting_id, &[]).await;
+    write_speakers(pool, meeting_id, speakers).await;
+}
+
+/// The stored speaker with this key.
+pub async fn stored_speaker(pool: &SqlitePool, meeting_id: &str, key: &str) -> MeetingSpeaker {
+    SpeakersRepository::list(pool, meeting_id)
+        .await
+        .expect("list speakers")
+        .into_iter()
+        .find(|s| s.speaker_key == key)
+        .expect("speaker exists")
+}
+
+/// The meeting's stored speakers by key.
+pub async fn speakers_by_key(pool: &SqlitePool, meeting_id: &str) -> HashMap<String, MeetingSpeaker> {
+    SpeakersRepository::list(pool, meeting_id)
+        .await
+        .expect("list speakers")
+        .into_iter()
+        .map(|s| (s.speaker_key.clone(), s))
+        .collect()
+}
+
+pub async fn people_count(pool: &SqlitePool) -> i64 {
+    sqlx::query_scalar("SELECT COUNT(*) FROM people").fetch_one(pool).await.expect("count people")
 }
 
 pub async fn seed_person(pool: &SqlitePool, id: &str, name: &str) {

@@ -11,7 +11,8 @@ let total = rows.length;
 const invoke = mock(async (command: string, args: Record<string, unknown>): Promise<PaginatedTranscriptsResponse> => {
   if (command !== 'api_get_meeting_transcripts') throw new Error(`unexpected command ${command}`);
   requests.push(args);
-  const limit = args.limit as number;
+  // SQLite: a negative LIMIT has no upper bound.
+  const limit = (args.limit as number) < 0 ? total : args.limit as number;
   return { transcripts: rows.slice(0, Math.min(limit, total)), total_count: total, has_more: limit < total };
 });
 mock.module('@tauri-apps/api/core', () => ({ ...originalCore, invoke }));
@@ -25,18 +26,14 @@ beforeEach(() => {
 });
 
 describe('fetchAllMeetingTranscripts', () => {
-  test('reads the count, then every row in one request', async () => {
+  test('reads every row in one request', async () => {
     expect(await fetchAllMeetingTranscripts('m1')).toEqual(rows);
-    expect(requests).toEqual([
-      { meetingId: 'm1', limit: 1, offset: 0 },
-      { meetingId: 'm1', limit: 2, offset: 0 },
-    ]);
+    expect(requests).toEqual([{ meetingId: 'm1', limit: -1, offset: 0 }]);
   });
 
-  test('an empty meeting needs one request', async () => {
+  test('an empty meeting has no rows', async () => {
     total = 0;
     expect(await fetchAllMeetingTranscripts('m1')).toEqual([]);
-    expect(requests).toHaveLength(1);
   });
 
   test('a failed request reaches the caller', async () => {

@@ -1,7 +1,7 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import type { PlaybackSource } from '@/types';
 import { errorMessage } from '@/lib/errors';
 import {
@@ -12,13 +12,20 @@ import {
 export type PlaybackRate = 1 | 1.5 | 2;
 export type PlaybackMode = 'asset' | 'clip';
 
+/**
+ * Position on the transcript clock, in seconds. It moves on every timeupdate, so it is read
+ * through a subscription and only the components that show it re-render.
+ */
+export interface PlaybackClock {
+  get: () => number;
+  subscribe: (listener: () => void) => () => void;
+}
+
 export interface PlaybackControls {
   ready: boolean;
   error: string | null;
-  mode: PlaybackMode;
   playing: boolean;
-  /** Position on the transcript clock, in seconds. */
-  clockS: number;
+  clock: PlaybackClock;
   durationS: number;
   rate: PlaybackRate;
   /** Plays from `clockS`; with `stopAtClockS`, pauses there (speaker samples). */
@@ -47,6 +54,35 @@ function revoke(clip: Clip | null) {
   if (clip) URL.revokeObjectURL(clip.url);
 }
 
+function createClock(): PlaybackClock & { set: (clockS: number) => void } {
+  let value = 0;
+  const listeners = new Set<() => void>();
+  return {
+    get: () => value,
+    set: (clockS) => {
+      value = clockS;
+      listeners.forEach((listener) => listener());
+    },
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => { listeners.delete(listener); };
+    },
+  };
+}
+
+/** Re-renders the caller when `select` of the clock changes; return a primitive from it. */
+export function usePlaybackClockSelector<T>(clock: PlaybackClock, select: (clockS: number) => T): T {
+  const snapshot = () => select(clock.get());
+  return useSyncExternalStore(clock.subscribe, snapshot, snapshot);
+}
+
+const identity = (clockS: number) => clockS;
+
+/** The clock itself: re-renders the caller on every timeupdate. */
+export function usePlaybackClock(clock: PlaybackClock): number {
+  return usePlaybackClockSelector(clock, identity);
+}
+
 /**
  * Plays a meeting's recording on the transcript clock. The file plays directly over the asset
  * protocol; when the webview cannot decode it, 30 s WAV clips rendered by the backend take over.
@@ -55,10 +91,9 @@ function revoke(clip: Clip | null) {
 export function usePlayback(meetingId: string | null, enabled: boolean): PlaybackControls {
   const [source, setSource] = useState<PlaybackSource | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [mode, setModeState] = useState<PlaybackMode>('asset');
   const [playing, setPlaying] = useState(false);
-  const [clockS, setClockS] = useState(0);
   const [rate, setRateState] = useState<PlaybackRate>(1);
+  const [clock] = useState(createClock);
 
   const meetingIdRef = useRef(meetingId);
   meetingIdRef.current = meetingId;
@@ -71,7 +106,6 @@ export function usePlayback(meetingId: string | null, enabled: boolean): Playbac
   const loadIdRef = useRef(0);
   /** A clip-mode seek waiting for the seek bar to stop moving. */
   const seekTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const clockRef = useRef(0);
   const stopAtRef = useRef<number | null>(null);
   /** The user wants sound: set by play, cleared by pause and by the end. */
   const wantPlayRef = useRef(false);
@@ -79,26 +113,20 @@ export function usePlayback(meetingId: string | null, enabled: boolean): Playbac
   const loadingRef = useRef(false);
   const rateRef = useRef<PlaybackRate>(1);
 
-  const setMode = useCallback((next: PlaybackMode) => {
-    modeRef.current = next;
-    setModeState(next);
-  }, []);
-
   const cancelPendingSeek = useCallback(() => {
     if (seekTimerRef.current !== null) clearTimeout(seekTimerRef.current);
     seekTimerRef.current = null;
   }, []);
 
-  const report = useCallback((clock: number) => {
-    clockRef.current = clock;
-    setClockS(clock);
+  const report = useCallback((clockS: number) => {
+    clock.set(clockS);
     const stopAt = stopAtRef.current;
-    if (stopAt !== null && clock >= stopAt) {
+    if (stopAt !== null && clockS >= stopAt) {
       stopAtRef.current = null;
       wantPlayRef.current = false;
       audioRef.current?.pause();
     }
-  }, []);
+  }, [clock]);
 
   const renderClip = useCallback(async (startFileS: number): Promise<Clip | null> => {
     const id = meetingIdRef.current;
@@ -157,17 +185,16 @@ export function usePlayback(meetingId: string | null, enabled: boolean): Playbac
     }
   }, [dropNextClip, renderClip, showClip]);
 
-  const playFrom = useCallback((clock: number, stopAtClockS?: number) => {
+  const playFrom = useCallback((clockS: number, stopAtClockS?: number) => {
     const audio = audioRef.current;
     const src = sourceRef.current;
     if (!audio || !src) return;
     cancelPendingSeek();
-    const target = Math.min(Math.max(0, clock), src.duration_s);
+    const target = Math.min(Math.max(0, clockS), src.duration_s);
     setError(null);
     stopAtRef.current = stopAtClockS ?? null;
     wantPlayRef.current = true;
-    clockRef.current = target;
-    setClockS(target);
+    clock.set(target);
     const fileS = clockToFile(src.time_table, target);
     if (modeRef.current === 'asset') {
       audio.currentTime = fileS;
@@ -175,7 +202,7 @@ export function usePlayback(meetingId: string | null, enabled: boolean): Playbac
     } else {
       void loadClipAt(fileS, true);
     }
-  }, [cancelPendingSeek, loadClipAt]);
+  }, [cancelPendingSeek, clock, loadClipAt]);
 
   const toggle = useCallback(() => {
     const audio = audioRef.current;
@@ -201,18 +228,17 @@ export function usePlayback(meetingId: string | null, enabled: boolean): Playbac
       wantPlayRef.current = true;
       void audio.play().catch(() => {});
     } else {
-      playFrom(clockRef.current);
+      playFrom(clock.get());
     }
-  }, [cancelPendingSeek, dropNextClip, playFrom]);
+  }, [cancelPendingSeek, clock, dropNextClip, playFrom]);
 
-  const seek = useCallback((clock: number) => {
+  const seek = useCallback((clockS: number) => {
     const audio = audioRef.current;
     const src = sourceRef.current;
     if (!audio || !src) return;
-    const target = Math.min(Math.max(0, clock), src.duration_s);
+    const target = Math.min(Math.max(0, clockS), src.duration_s);
     stopAtRef.current = null;
-    clockRef.current = target;
-    setClockS(target);
+    clock.set(target);
     const fileS = clockToFile(src.time_table, target);
     cancelPendingSeek();
     if (modeRef.current === 'asset') {
@@ -231,7 +257,7 @@ export function usePlayback(meetingId: string | null, enabled: boolean): Playbac
       revoke(clipRef.current);
       clipRef.current = null;
     }
-  }, [cancelPendingSeek, dropNextClip, loadClipAt]);
+  }, [cancelPendingSeek, clock, dropNextClip, loadClipAt]);
 
   const setRate = useCallback((next: PlaybackRate) => {
     rateRef.current = next;
@@ -248,8 +274,7 @@ export function usePlayback(meetingId: string | null, enabled: boolean): Playbac
     setSource(null);
     setError(null);
     setPlaying(false);
-    clockRef.current = 0;
-    setClockS(0);
+    clock.set(0);
     if (!enabled || !meetingId || typeof Audio === 'undefined') return;
 
     let alive = true;
@@ -258,7 +283,7 @@ export function usePlayback(meetingId: string | null, enabled: boolean): Playbac
     audio.defaultPlaybackRate = rateRef.current;
     audio.playbackRate = rateRef.current;
     audioRef.current = audio;
-    setMode(choosePlaybackMode({ canPlayAac: audio.canPlayType(AAC), forced: readForceClipPlayback(), mediaErrorCode: null }));
+    modeRef.current = choosePlaybackMode({ canPlayAac: audio.canPlayType(AAC), forced: readForceClipPlayback(), mediaErrorCode: null });
 
     const table = () => sourceRef.current?.time_table ?? [];
     const continuesWithNextClip = () => modeRef.current === 'clip' && (clipRef.current?.lengthS ?? 0) >= FULL_CLIP_SECONDS;
@@ -313,9 +338,9 @@ export function usePlayback(meetingId: string | null, enabled: boolean): Playbac
         canPlayAac: audio.canPlayType(AAC), forced: false, mediaErrorCode: audio.error?.code ?? null,
       }) === 'clip';
       if (fallback) {
-        setMode('clip');
+        modeRef.current = 'clip';
         const src = sourceRef.current;
-        if (wantPlayRef.current && src) void loadClipAt(clockToFile(src.time_table, clockRef.current), true);
+        if (wantPlayRef.current && src) void loadClipAt(clockToFile(src.time_table, clock.get()), true);
         return;
       }
       wantPlayRef.current = false;
@@ -333,7 +358,7 @@ export function usePlayback(meetingId: string | null, enabled: boolean): Playbac
         if (!alive) return;
         sourceRef.current = prepared;
         setSource(prepared);
-        if (modeRef.current === 'asset') audio.src = prepared.url;
+        if (modeRef.current === 'asset') audio.src = convertFileSrc(prepared.path);
       })
       .catch((e) => {
         console.warn('Meeting playback is not available:', e);
@@ -355,7 +380,7 @@ export function usePlayback(meetingId: string | null, enabled: boolean): Playbac
       clipRef.current = null;
       audioRef.current = null;
     };
-  }, [enabled, meetingId, cancelPendingSeek, dropNextClip, loadClipAt, renderClip, report, setMode, showClip]);
+  }, [enabled, meetingId, cancelPendingSeek, clock, dropNextClip, loadClipAt, renderClip, report, showClip]);
 
   // Space toggles playback unless focus is in a text field (the seek bar and buttons included).
   useEffect(() => {
@@ -373,9 +398,8 @@ export function usePlayback(meetingId: string | null, enabled: boolean): Playbac
   return {
     ready: source !== null,
     error,
-    mode,
     playing,
-    clockS,
+    clock,
     durationS: source?.duration_s ?? 0,
     rate,
     playFrom,

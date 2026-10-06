@@ -6,15 +6,16 @@ import { useSidebar } from '@/components/Sidebar/SidebarProvider';
 import Analytics from '@/lib/analytics';
 import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
+import { errorMessage } from '@/lib/errors';
 import { TranscriptPanel, type SpeakerToolsInput } from '@/components/MeetingDetails/TranscriptPanel';
 import { useMeetingSpeakers } from '@/hooks/useMeetingSpeakers';
 import { usePeople } from '@/hooks/usePeople';
-import { decideAutoGuessNames, isWaitingForSpeakers, type AutoGuessApproval } from '@/lib/speakerNaming';
+import { PeopleContext } from '@/components/Speakers/PeopleContext';
+import { decideAutoGuessNames, isWaitingForSpeakers } from '@/lib/speakerNaming';
 import { useSpeakerIdentification } from '@/hooks/useSpeakerIdentification';
 import { SummaryPanel } from '@/components/MeetingDetails/SummaryPanel';
 import { MeetingDetailsSplitView, type MeetingDetailsTab } from '@/components/MeetingDetails/MeetingDetailsSplitView';
 import { ModelConfig } from '@/components/ModelSettingsModal';
-import { configService, type ModelConfig as SavedModelConfig } from '@/services/configService';
 
 // Custom hooks
 import { useMeetingData } from '@/hooks/meeting-details/useMeetingData';
@@ -23,14 +24,6 @@ import { useTemplates } from '@/hooks/meeting-details/useTemplates';
 import { useCopyOperations } from '@/hooks/meeting-details/useCopyOperations';
 import { useMeetingOperations } from '@/hooks/meeting-details/useMeetingOperations';
 import { useConfig } from '@/contexts/ConfigContext';
-
-/** The summary model as saved, with the custom endpoint that lives in its own setting. */
-async function readSavedSummaryModel(): Promise<SavedModelConfig> {
-  const saved = await configService.getModelConfig();
-  if (saved.provider !== 'custom-openai') return saved;
-  const custom = await configService.getCustomOpenAIConfig();
-  return { ...saved, customOpenAIEndpoint: custom?.endpoint ?? null };
-}
 
 export default function PageContent({
   meeting,
@@ -86,7 +79,7 @@ export default function PageContent({
   const { serverAddress } = useSidebar();
 
   // Get model config from ConfigContext
-  const { modelConfig, setModelConfig, isModelConfigLoading, modelConfigLoaded, betaFeatures, isAutoSummary } = useConfig();
+  const { modelConfig, setModelConfig, isModelConfigLoading, betaFeatures, isAutoSummary } = useConfig();
 
   // Custom hooks
   const meetingData = useMeetingData({ meeting, summaryData, onMeetingUpdated });
@@ -104,7 +97,7 @@ export default function PageContent({
     reject: rejectSpeaker,
     merge: mergeSpeakers,
     reassign: reassignSpeaker,
-  } = useMeetingSpeakers(meeting.id);
+  } = useMeetingSpeakers(meeting.id, refreshPeople);
   // Enhance (retranscription) and Identify both replace the meeting's speakers, so reload them with
   // the rows. Returns the fresh speakers for callers that decide on them.
   const refetchTranscriptsAndSpeakers = useCallback(async (): Promise<MeetingSpeaker[]> => {
@@ -115,18 +108,10 @@ export default function PageContent({
   const onRefetchTranscriptsAndSpeakers = useCallback(async () => {
     await refetchTranscriptsAndSpeakers();
   }, [refetchTranscriptsAndSpeakers]);
-  const onRenameSpeaker = useCallback(async (key: string, name: string) => {
-    await nameSpeaker(key, name);
-    void refreshPeople();
-  }, [nameSpeaker, refreshPeople]);
-  const onConfirmSpeaker = useCallback(async (key: string) => {
-    await confirmSpeaker(key);
-    void refreshPeople();
-  }, [confirmSpeaker, refreshPeople]);
   // True from an Identify completion until its automatic name guess is requested or skipped; from
   // the request on, the hook's `autoNamingPending` holds the wait until the job's first event.
   const [namingDecisionPending, setNamingDecisionPending] = useState(false);
-  const guessNamesRef = useRef<(automatic: boolean, approval?: AutoGuessApproval) => Promise<void>>(async () => {});
+  const guessNamesRef = useRef<(automatic: boolean, allowCloud?: boolean) => Promise<void>>(async () => {});
   const onSpeakerJobComplete = useCallback(async (result: SpeakerJobComplete) => {
     if (result.kind === 'naming') {
       await Promise.all([refetchSpeakers(), refreshPeople()]);
@@ -135,23 +120,20 @@ export default function PageContent({
     setNamingDecisionPending(true);
     try {
       const fresh = await refetchTranscriptsAndSpeakers();
-      const approval = await decideAutoGuessNames({
+      const request = decideAutoGuessNames({
         speakerIdentification: betaFeatures.speakerIdentification,
-        // Until the saved config has loaded, nothing counts as local.
-        modelConfigLoaded,
         isAutoSummary,
         speakers: fresh,
-        readSavedModel: readSavedSummaryModel,
       });
-      if (approval) {
-        await guessNamesRef.current(true, approval);
+      if (request) {
+        await guessNamesRef.current(true, request.allowCloud);
       }
     } catch (error) {
       console.error('Automatic name guessing did not start:', error);
     } finally {
       setNamingDecisionPending(false);
     }
-  }, [refetchTranscriptsAndSpeakers, refetchSpeakers, refreshPeople, betaFeatures.speakerIdentification, modelConfigLoaded, isAutoSummary]);
+  }, [refetchTranscriptsAndSpeakers, refetchSpeakers, refreshPeople, betaFeatures.speakerIdentification, isAutoSummary]);
   const speakerIdentification = useSpeakerIdentification(meeting.id, onSpeakerJobComplete);
   guessNamesRef.current = speakerIdentification.guessNames;
   const {
@@ -178,7 +160,7 @@ export default function PageContent({
     try {
       await guessNames(false);
     } catch (error) {
-      toast.error(typeof error === 'string' ? error : 'Failed to guess names');
+      toast.error(errorMessage(error, 'Failed to guess names'));
     }
   }, [guessNames]);
   const onMergeSpeakers = useCallback(async (fromKey: string, intoKey: string) => {
@@ -194,17 +176,17 @@ export default function PageContent({
     [startSpeakerIdentification, meeting.folder_path],
   );
   // Stable references let the memoised transcript rows skip re-rendering while the list scrolls;
-  // the job stays out because it changes on every progress event.
+  // the job stays out because it changes on every progress event, and the people list (it reaches
+  // the name form through PeopleContext) because a refresh must not re-render the rows.
   const speakerTools = useMemo<SpeakerToolsInput>(() => ({
     speakers,
     names: speakerNames,
-    people,
     // Edits made while a job runs would be overwritten by its final write.
     editable: betaFeatures.speakerIdentification && !speakerJobActive,
-    onRename: onRenameSpeaker,
+    onRename: nameSpeaker,
     onMerge: onMergeSpeakers,
     onReassign: onReassignSpeaker,
-    onConfirm: onConfirmSpeaker,
+    onConfirm: confirmSpeaker,
     onReject: rejectSpeaker,
     onCancelJob: cancelSpeakerIdentification,
     onStartIdentify,
@@ -212,13 +194,12 @@ export default function PageContent({
   }), [
     speakers,
     speakerNames,
-    people,
     betaFeatures.speakerIdentification,
     speakerJobActive,
-    onRenameSpeaker,
+    nameSpeaker,
     onMergeSpeakers,
     onReassignSpeaker,
-    onConfirmSpeaker,
+    confirmSpeaker,
     rejectSpeaker,
     cancelSpeakerIdentification,
     onStartIdentify,
@@ -352,27 +333,29 @@ export default function PageContent({
             setActiveTab(tab);
           }}
           transcript={
-            <TranscriptPanel
-              transcripts={meetingData.transcripts}
-              customPrompt={customPrompt}
-              onPromptChange={setCustomPrompt}
-              onCopyTranscript={copyOperations.handleCopyTranscript}
-              onOpenMeetingFolder={meetingOperations.handleOpenMeetingFolder}
-              isRecording={isRecording}
-              disableAutoScroll={true}
-              usePagination={true}
-              segments={segments}
-              hasMore={hasMore}
-              isLoadingMore={isLoadingMore}
-              totalCount={totalCount}
-              loadedCount={loadedCount}
-              onLoadMore={onLoadMore}
-              meetingId={meeting.id}
-              meetingFolderPath={meeting.folder_path}
-              onRefetchTranscripts={onRefetchTranscriptsAndSpeakers}
-              speakerTools={speakerTools}
-              speakerJob={speakerJob}
-            />
+            <PeopleContext.Provider value={people}>
+              <TranscriptPanel
+                transcripts={meetingData.transcripts}
+                customPrompt={customPrompt}
+                onPromptChange={setCustomPrompt}
+                onCopyTranscript={copyOperations.handleCopyTranscript}
+                onOpenMeetingFolder={meetingOperations.handleOpenMeetingFolder}
+                isRecording={isRecording}
+                disableAutoScroll={true}
+                usePagination={true}
+                segments={segments}
+                hasMore={hasMore}
+                isLoadingMore={isLoadingMore}
+                totalCount={totalCount}
+                loadedCount={loadedCount}
+                onLoadMore={onLoadMore}
+                meetingId={meeting.id}
+                meetingFolderPath={meeting.folder_path}
+                onRefetchTranscripts={onRefetchTranscriptsAndSpeakers}
+                speakerTools={speakerTools}
+                speakerJob={speakerJob}
+              />
+            </PeopleContext.Provider>
           }
           summary={
             <SummaryPanel

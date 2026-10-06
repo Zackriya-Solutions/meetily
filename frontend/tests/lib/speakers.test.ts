@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import {
   buildSpeakerNameMap, defaultSpeakerLabel, formatPropagationMessage, formatSpeakerCount, formatTranscriptLine,
-  isSpeakerRunStart, propagatedMeetingCount, rowSpeakerControl, speakerNameState,
+  isSpeakerRunStart, rowSpeakerControl, speakerNameState,
 } from '../../src/lib/speakers';
-import type { MeetingSpeaker, PropagatedLink, Transcript } from '../../src/types';
+import type { MeetingSpeaker, Transcript } from '../../src/types';
 import { makeSpeaker } from '../fixtures/speakers';
 
 const speaker = (speaker_key: string, display_name: string | null): MeetingSpeaker => makeSpeaker(speaker_key, { display_name });
@@ -45,20 +45,9 @@ describe('speaker helpers', () => {
 });
 
 describe('propagation toast', () => {
-  const link = (meeting_id: string, speaker_key = 'spk_0'): PropagatedLink => ({ meeting_id, speaker_key, person_id: 'person-1' });
-
   test('formatPropagationMessage is singular for one meeting and plural otherwise', () => {
     expect(formatPropagationMessage(1)).toBe('Also named in 1 other meeting');
     expect(formatPropagationMessage(3)).toBe('Also named in 3 other meetings');
-  });
-
-  test('propagatedMeetingCount counts distinct other meetings', () => {
-    expect(propagatedMeetingCount([link('b'), link('b', 'spk_2'), link('c')], 'a')).toBe(2);
-  });
-
-  test('propagatedMeetingCount ignores the current meeting', () => {
-    expect(propagatedMeetingCount([link('a'), link('b')], 'a')).toBe(1);
-    expect(propagatedMeetingCount([], 'a')).toBe(0);
   });
 });
 

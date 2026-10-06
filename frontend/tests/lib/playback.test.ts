@@ -1,10 +1,9 @@
 import { afterAll, describe, expect, test } from 'bun:test';
 import {
-  CLIP_PREFETCH_SECONDS, CLIP_SECONDS, FORCE_CLIP_KEY, SAMPLE_SECONDS, chooseSpeakerSample, choosePlaybackMode,
+  CLIP_PREFETCH_SECONDS, CLIP_SECONDS, FORCE_CLIP_KEY, choosePlaybackMode,
   clockToFile, fileToClock, followAlong, isTypingTarget, needsMoreRows, readForceClipPlayback, rowIndexAtTime,
   shouldPrefetchNextClip, type FollowState, type TimeTable,
 } from '../../src/lib/playback';
-import type { TranscriptSegmentData } from '../../src/types';
 
 afterAll(() => { Reflect.deleteProperty(globalThis, 'localStorage'); });
 
@@ -60,34 +59,6 @@ describe('rows at a time', () => {
     expect(needsMoreRows(loaded, 20, false)).toBe(false);
     expect(needsMoreRows([{ timestamp: 4 }], 4, true)).toBe(true);
     expect(needsMoreRows([], 0, true)).toBe(true);
-  });
-});
-
-describe('speaker samples', () => {
-  const row = (id: string, speaker: string, timestamp: number, endTime?: number): TranscriptSegmentData =>
-    ({ id, speaker, timestamp, endTime, text: id });
-  const rows = [
-    row('a', 'spk_0', 0, 3), row('b', 'spk_1', 3, 20), row('c', 'spk_0', 20, 26), row('d', 'spk_0', 30), row('e', 'spk_0', 40, 45),
-  ];
-
-  test('chooseSpeakerSample picks the longest row of that speaker', () => {
-    expect(chooseSpeakerSample(rows, 'spk_0')).toEqual({ startS: 20, endS: 26 });
-  });
-
-  test('a sample lasts at most eight seconds', () => {
-    expect(SAMPLE_SECONDS).toBe(8);
-    expect(chooseSpeakerSample(rows, 'spk_1')).toEqual({ startS: 3, endS: 11 });
-  });
-
-  test('rows without an end are ignored and a speaker without rows has no sample', () => {
-    expect(chooseSpeakerSample([row('x', 'spk_3', 5)], 'spk_3')).toBeNull();
-    expect(chooseSpeakerSample(rows, 'spk_2')).toBeNull();
-  });
-
-  test('rows that kept two speakers are never sampled', () => {
-    const mixed: TranscriptSegmentData = { ...row('m', 'spk_0', 50, 80), speakerMixed: true };
-    expect(chooseSpeakerSample([...rows, mixed], 'spk_0')).toEqual({ startS: 20, endS: 26 });
-    expect(chooseSpeakerSample([mixed], 'spk_0')).toBeNull();
   });
 });
 

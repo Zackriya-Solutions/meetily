@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import type { RecordingPreferences } from '@/components/RecordingSettings';
 import type { Person } from '@/types';
 import { usePeople } from '@/hooks/usePeople';
-import { formatLastSeen } from '@/lib/people';
+import { formatLastSeen, formatMeetingCount } from '@/lib/people';
 import { errorMessage } from '@/lib/errors';
 
 function PersonRow({ person, others, onChanged }: { person: Person; others: Person[]; onChanged: () => Promise<void> }) {
@@ -56,7 +56,7 @@ function PersonRow({ person, others, onChanged }: { person: Person; others: Pers
         <div className="min-w-0">
           <div className="truncate font-medium">{person.name}</div>
           <div className="text-xs text-gray-500">
-            {`${person.meeting_count} meeting${person.meeting_count === 1 ? '' : 's'} · last seen ${formatLastSeen(person.last_seen)}`}
+            {`${formatMeetingCount(person.meeting_count)} · last seen ${formatLastSeen(person.last_seen)}`}
           </div>
         </div>
         <div className="flex shrink-0 gap-1">

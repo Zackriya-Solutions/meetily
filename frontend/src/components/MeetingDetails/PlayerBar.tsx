@@ -1,7 +1,7 @@
 'use client';
 
 import { Pause, Play } from 'lucide-react';
-import type { PlaybackControls } from '@/hooks/usePlayback';
+import { usePlaybackClock, type PlaybackControls } from '@/hooks/usePlayback';
 
 const RATES = [1, 1.5, 2] as const;
 
@@ -13,10 +13,14 @@ function formatClock(seconds: number): string {
   return hours > 0 ? `${hours}:${minutes}:${secs}` : `${minutes}:${secs}`;
 }
 
-/** Play/pause, seek bar, time and speed for the meeting's recording; nothing without audio. */
+/**
+ * Play/pause, seek bar, time and speed for the meeting's recording; nothing without audio.
+ * The only component that follows the clock on every timeupdate.
+ */
 export function PlayerBar({ playback }: { playback: PlaybackControls }) {
+  const clockS = usePlaybackClock(playback.clock);
   if (!playback.ready) return null;
-  const { playing, clockS, durationS, rate, error } = playback;
+  const { playing, durationS, rate, error } = playback;
   const nextRate = RATES[(RATES.indexOf(rate) + 1) % RATES.length];
   return (
     <div className="flex items-center gap-3 border-t border-gray-200 px-4 py-2 text-xs text-gray-600">

@@ -1,13 +1,13 @@
 //! Speaker names from the conversation: the prompt for the summary model, reading its JSON
 //! answer, and the checks that keep only names grounded in a quote from the transcript.
-use crate::database::repositories::person::clean_person_name;
+use crate::database::repositories::person::{clean_person_name, name_key};
 use crate::summary::chunk_text;
 use crate::summary::processor::{clean_llm_markdown_detailed, rough_token_count};
 use serde::Deserialize;
 use serde_json::Value;
 use crate::database::repositories::setting::SettingsRepository;
-use crate::summary::llm_client::generate_summary;
-use crate::summary::service::{resolve_llm, ResolvedLlm};
+use crate::summary::llm_client::{generate_summary, LLMProvider};
+use crate::summary::service::{is_local_model, resolve_llm, ResolvedLlm};
 use sqlx::SqlitePool;
 use std::collections::{BTreeSet, HashSet};
 use std::path::PathBuf;
@@ -54,12 +54,24 @@ pub struct NamingInput {
     pub rejected_names: HashSet<(String, String)>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+/// How the conversation names a speaker, weakest first: the order decides between proposals.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProposalKind {
-    SelfIntro,
-    Addressed,
     Mentioned,
+    Addressed,
+    SelfIntro,
+}
+
+impl ProposalKind {
+    /// How the reason shown to the user puts it ("introduced as Noah at 00:05").
+    fn verb(self) -> &'static str {
+        match self {
+            ProposalKind::SelfIntro => "introduced",
+            ProposalKind::Addressed => "addressed",
+            ProposalKind::Mentioned => "mentioned",
+        }
+    }
 }
 
 /// One entry of the model's answer.
@@ -181,16 +193,6 @@ pub fn parse_proposals(raw: &str) -> Result<Vec<Proposal>, String> {
     Ok(items.into_iter().filter_map(|item| serde_json::from_value(item).ok()).collect())
 }
 
-/// Lowercase, single spaces, typographic quotes as plain ones.
-pub(super) fn normalize(s: &str) -> String {
-    s.replace(['\u{2018}', '\u{2019}'], "'")
-        .replace(['\u{201C}', '\u{201D}'], "\"")
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_lowercase()
-}
-
 /// `needle` occurs in `haystack` (both normalised) with no letter or digit right before or after.
 fn contains_word(haystack: &str, needle: &str) -> bool {
     if needle.is_empty() {
@@ -206,14 +208,6 @@ fn contains_word(haystack: &str, needle: &str) -> bool {
 /// A name as stored for a person; None when empty or longer than MAX_NAME_CHARS.
 fn clean_name(name: &str) -> Option<String> {
     clean_person_name(name).filter(|n| (1..=MAX_NAME_CHARS).contains(&n.chars().count()))
-}
-
-fn kind_rank(kind: ProposalKind) -> u8 {
-    match kind {
-        ProposalKind::SelfIntro => 3,
-        ProposalKind::Addressed => 2,
-        ProposalKind::Mentioned => 1,
-    }
 }
 
 /// A proposal that passed every check.
@@ -233,12 +227,12 @@ fn verify(input: &NamingInput, lines: &[String], summary: Option<&str>, p: &Prop
         return None;
     }
     let name = clean_name(&p.name)?;
-    let name_norm = normalize(&name);
+    let name_norm = name_key(&name);
     if !lines.iter().any(|l| contains_word(l, &name_norm)) && !summary.is_some_and(|s| contains_word(s, &name_norm)) {
         return None;
     }
     let quote_marks: &[char] = &['"', '\'', '\u{201C}', '\u{201D}', '\u{2018}', '\u{2019}'];
-    let evidence = normalize(p.evidence.trim().trim_matches(quote_marks));
+    let evidence = name_key(p.evidence.trim().trim_matches(quote_marks));
     if evidence.is_empty() {
         return None;
     }
@@ -253,7 +247,7 @@ fn verify(input: &NamingInput, lines: &[String], summary: Option<&str>, p: &Prop
     if input.rejected_names.contains(&(p.key.clone(), name_norm.clone())) {
         return None;
     }
-    let person = input.people.iter().find(|k| normalize(&k.name) == name_norm);
+    let person = input.people.iter().find(|k| name_key(&k.name) == name_norm);
     let name = person.map(|k| k.name.clone()).unwrap_or(name);
     // The kind's rule for the proposed speaker, at transcript line `i`.
     let fits = |i: usize| {
@@ -271,14 +265,9 @@ fn verify(input: &NamingInput, lines: &[String], summary: Option<&str>, p: &Prop
     let said = &input.lines[line];
     let high = p.confidence.trim().eq_ignore_ascii_case("high");
     let apply = high && fits(line);
-    let verb = match p.kind {
-        ProposalKind::SelfIntro => "introduced",
-        ProposalKind::Addressed => "addressed",
-        ProposalKind::Mentioned => "mentioned",
-    };
     Some(Verified {
         key: p.key.clone(),
-        reason: format!("{verb} as {name} at {}", clock(said.start_s)),
+        reason: format!("{} as {name} at {}", p.kind.verb(), clock(said.start_s)),
         person_id: person.map(|k| k.id.clone()),
         name,
         kind: p.kind,
@@ -298,8 +287,7 @@ struct Merged {
 impl Merged {
     fn add(&mut self, v: Verified) {
         self.quote_lines.insert(v.line);
-        let better = kind_rank(v.kind) > kind_rank(self.best.kind)
-            || (kind_rank(v.kind) == kind_rank(self.best.kind) && v.apply && !self.best.apply);
+        let better = v.kind > self.best.kind || (v.kind == self.best.kind && v.apply && !self.best.apply);
         if better {
             self.best = v;
         }
@@ -309,11 +297,11 @@ impl Merged {
 /// Checks every proposal (spec §5.3) and picks one name per speaker and one speaker per name:
 /// `self_intro` over `addressed` over `mentioned`, then the number of verified quotes.
 pub fn decide(input: &NamingInput, proposals: &[Proposal]) -> Vec<NamingDecision> {
-    let lines: Vec<String> = input.lines.iter().map(|l| normalize(&l.text)).collect();
-    let summary = input.summary.as_deref().map(normalize);
+    let lines: Vec<String> = input.lines.iter().map(|l| name_key(&l.text)).collect();
+    let summary = input.summary.as_deref().map(name_key);
     let mut merged: Vec<Merged> = Vec::new();
     for v in proposals.iter().filter_map(|p| verify(input, &lines, summary.as_deref(), p)) {
-        let name_key = normalize(&v.name);
+        let name_key = name_key(&v.name);
         match merged.iter_mut().find(|m| m.key == v.key && m.name_key == name_key) {
             Some(m) => m.add(v),
             None => merged.push(Merged {
@@ -325,8 +313,8 @@ pub fn decide(input: &NamingInput, proposals: &[Proposal]) -> Vec<NamingDecision
         }
     }
     merged.sort_by(|a, b| {
-        kind_rank(b.best.kind)
-            .cmp(&kind_rank(a.best.kind))
+        b.best.kind
+            .cmp(&a.best.kind)
             .then(b.quote_lines.len().cmp(&a.quote_lines.len()))
             .then(b.best.apply.cmp(&a.best.apply))
             .then(a.quote_lines.first().cmp(&b.quote_lines.first()))
@@ -334,7 +322,7 @@ pub fn decide(input: &NamingInput, proposals: &[Proposal]) -> Vec<NamingDecision
     let mut keys = HashSet::new();
     // Names already on speakers of the meeting are taken: no second speaker gets them.
     let mut names: HashSet<String> =
-        input.speakers.iter().filter_map(|s| s.display_name.as_deref()).map(normalize).collect();
+        input.speakers.iter().filter_map(|s| s.display_name.as_deref()).map(name_key).collect();
     let mut decisions = Vec::new();
     for m in merged {
         if keys.contains(&m.key) || names.contains(&m.name_key) {
@@ -400,6 +388,13 @@ pub struct SummaryModel {
     client: reqwest::Client,
 }
 
+impl SummaryModel {
+    /// The transcript stays on this machine (see `is_local_model`).
+    pub fn is_local(&self) -> bool {
+        self.llm.is_local()
+    }
+}
+
 #[async_trait::async_trait]
 impl NamingModel for SummaryModel {
     async fn complete(&self, system: &str, user: &str) -> Result<String, String> {
@@ -453,6 +448,32 @@ pub async fn summary_model_from_settings(pool: &SqlitePool, app_data_dir: Option
     }
     let llm = resolve_llm(pool, &provider, &model, app_data_dir).await?;
     Ok(SummaryModel { llm, client: reqwest::Client::new() })
+}
+
+/// Whether the saved summary model is local, from the same settings `resolve_llm` reads, without
+/// resolving the model. False when no model is saved or the settings cannot be read.
+pub async fn saved_model_is_local(pool: &SqlitePool) -> bool {
+    let setting = match SettingsRepository::get_model_config(pool).await {
+        Ok(Some(setting)) => setting,
+        Ok(None) => return false,
+        Err(e) => {
+            log::warn!("Failed to read the summary model settings: {}", e);
+            return false;
+        }
+    };
+    let Ok(provider) = LLMProvider::from_str(setting.provider.trim()) else { return false };
+    let custom_endpoint = if provider == LLMProvider::CustomOpenAI {
+        match SettingsRepository::get_custom_openai_config(pool).await {
+            Ok(config) => config.map(|c| c.endpoint),
+            Err(e) => {
+                log::warn!("Failed to read the custom OpenAI settings: {}", e);
+                return false;
+            }
+        }
+    } else {
+        None
+    };
+    is_local_model(&provider, setting.ollama_endpoint.as_deref(), custom_endpoint.as_deref())
 }
 #[cfg(test)]
 pub(crate) mod test_support {

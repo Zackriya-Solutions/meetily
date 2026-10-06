@@ -299,9 +299,11 @@ fn needs_ffmpeg_conversion(path: &Path) -> bool {
 ///
 /// Returns a `TempPath` that auto-deletes the temporary WAV file when dropped.
 /// The caller must keep the `TempPath` alive until decoding of the WAV is complete.
+/// `range` (start, seconds) converts only that part of the input.
 fn convert_to_wav_with_ffmpeg(
     input_path: &Path,
     progress_callback: Option<&ProgressCallback>,
+    range: Option<(f64, f64)>,
 ) -> Result<tempfile::TempPath> {
     let ffmpeg_path = find_ffmpeg_path().ok_or_else(|| {
         anyhow!(
@@ -346,9 +348,14 @@ fn convert_to_wav_with_ffmpeg(
         .ok_or_else(|| anyhow!("Invalid temp path (non-UTF8)"))?;
 
     let mut command = Command::new(&ffmpeg_path);
+    command.args(["-i", input_str]);
+    if let Some((start_s, seconds)) = range {
+        // After -i: decoded audio is cut at the exact sample (seeking the input lands on a
+        // container timestamp) and decoding stops at the end of the range.
+        command.args(["-ss", &format!("{start_s:.6}"), "-t", &format!("{seconds:.6}")]);
+    }
     command
         .args([
-            "-i", input_str,
             "-vn",                  // Strip video tracks
             "-acodec", "pcm_s16le", // Output PCM WAV (Symphonia handles natively)
             "-y",                   // Overwrite without prompt
@@ -439,54 +446,22 @@ pub fn decode_audio_file_with_progress(
                     .and_then(|e| e.to_str())
                     .unwrap_or("unknown")
             );
-            let temp_path = convert_to_wav_with_ffmpeg(path, progress_callback.as_ref())?;
+            let temp_path = convert_to_wav_with_ffmpeg(path, progress_callback.as_ref(), None)?;
             let wav_path = temp_path.to_path_buf();
             (Some(temp_path), Cow::Owned(wav_path))
         } else {
             (None, Cow::Borrowed(path))
         };
 
-    // Open the file (use decode_path which may be the temp WAV)
-    let file = std::fs::File::open(decode_path.as_ref())
-        .map_err(|e| anyhow!("Failed to open audio file '{}': {}", decode_path.display(), e))?;
-
-    let mss = MediaSourceStream::new(Box::new(file), Default::default());
-
-    // Set up format hint based on file extension
-    let mut hint = Hint::new();
-    if let Some(ext) = decode_path.extension().and_then(|e| e.to_str()) {
-        hint.with_extension(ext);
-    }
-
-    // Probe the file format
-    let probed = symphonia::default::get_probe()
-        .format(
-            &hint,
-            mss,
-            &FormatOptions::default(),
-            &MetadataOptions::default(),
-        )
-        .map_err(|e| anyhow!("Failed to probe audio format: {}", e))?;
-
-    let mut format = probed.format;
-
-    // Find the first audio track
-    let track = format
-        .tracks()
-        .iter()
-        .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
-        .ok_or_else(|| anyhow!("No audio track found in file"))?;
-
-    let track_id = track.id;
+    // Open the file (use decode_path which may be the temp WAV) at its first audio track
+    let (mut format, track_id, params) = open_format(decode_path.as_ref())?;
 
     // Get audio parameters
-    let mut sample_rate = track
-        .codec_params
+    let mut sample_rate = params
         .sample_rate
         .ok_or_else(|| anyhow!("Unknown sample rate"))?;
 
-    let mut channels = track
-        .codec_params
+    let mut channels = params
         .channels
         .map(|c| c.count() as u16)
         .unwrap_or(1);
@@ -498,11 +473,11 @@ pub fn decode_audio_file_with_progress(
 
     // Create the decoder
     let mut decoder = symphonia::default::get_codecs()
-        .make(&track.codec_params, &DecoderOptions::default())
+        .make(&params, &DecoderOptions::default())
         .map_err(|e| anyhow!("Failed to create decoder: {}", e))?;
 
     // Calculate expected samples for progress tracking (and to size the buffer once)
-    let expected_duration = track.codec_params.n_frames
+    let expected_duration = params.n_frames
         .map(|frames| frames as f64 / sample_rate as f64);
     let expected_samples = expected_duration
         .map(|dur| (dur * sample_rate as f64 * channels as f64) as usize);
@@ -624,7 +599,7 @@ pub fn decode_audio_file_with_progress(
 }
 
 /// The file's demuxer, at the start, with the id and parameters of its first audio track.
-fn open_format(path: &Path) -> Result<(Box<dyn FormatReader>, u32, CodecParameters)> {
+pub(crate) fn open_format(path: &Path) -> Result<(Box<dyn FormatReader>, u32, CodecParameters)> {
     let file = std::fs::File::open(path).map_err(|e| anyhow!("Failed to open audio file '{}': {}", path.display(), e))?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
     let mut hint = Hint::new();
@@ -655,8 +630,16 @@ fn ts_seconds(time_base: Option<TimeBase>, ts: u64, rate: u32) -> f64 {
     }
 }
 
+/// An MP4/M4A file, whose track lengths come from its sample tables.
+fn has_sample_table(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|ext| ["mp4", "m4a"].contains(&ext.to_lowercase().as_str()))
+}
+
 /// Length of the first audio track on the container timeline: the sum of its packet durations.
-/// Only demuxes, so a long recording is read in well under a second. For a live recording this
+/// Read from the MP4 header, else by demuxing (well under a second for a long recording); never
+/// decoded. For a live recording this
 /// is the recording clock (plus the first checkpoint's 21 ms of encoder priming): the joined
 /// checkpoints advance the container by exactly 30 s each, while decoding yields 1792 more frames
 /// per checkpoint.
@@ -669,6 +652,12 @@ pub fn container_duration_s(path: &Path) -> Result<f64> {
     let rate = params.sample_rate.unwrap_or(0);
     if params.time_base.is_none() && rate == 0 {
         return Err(anyhow!("Unknown sample rate"));
+    }
+    // An MP4 track's frame count is its sample table's total, the same sum without reading the
+    // packets. Other headers can lie (a streamed WAV declares u32::MAX bytes, MP3 counts are
+    // unchecked), so their packets are walked.
+    if let (Some(n_frames), true) = (params.n_frames, has_sample_table(path)) {
+        return Ok(ts_seconds(params.time_base, n_frames, rate));
     }
     let mut duration_ts: u64 = 0;
     loop {
@@ -698,20 +687,9 @@ pub fn decode_audio_range(path: &Path, start_s: f64, seconds: f64) -> Result<Dec
     let start_s = start_s.max(0.0);
     let seconds = seconds.max(0.0);
     if needs_ffmpeg_conversion(path) {
-        // Rare formats symphonia cannot demux: decode the whole file and cut the range out.
-        let whole = decode_audio_file(path)?;
-        let channels = whole.channels.max(1) as usize;
-        let rate = whole.sample_rate as f64;
-        let total = whole.samples.len() / channels;
-        let first = ((start_s * rate).round() as usize).min(total);
-        let last = (((start_s + seconds) * rate).round() as usize).min(total);
-        let samples = whole.samples[first * channels..last * channels].to_vec();
-        return Ok(DecodedAudio {
-            duration_seconds: (last - first) as f64 / rate,
-            samples,
-            sample_rate: whole.sample_rate,
-            channels: whole.channels,
-        });
+        // Rare formats symphonia cannot demux: ffmpeg converts only the range to WAV.
+        let wav = convert_to_wav_with_ffmpeg(path, None, Some((start_s, seconds)))?;
+        return decode_audio_range(&wav, 0.0, seconds);
     }
 
     let (mut format, track_id, mut params) = open_format(path)?;
@@ -730,6 +708,7 @@ pub fn decode_audio_range(path: &Path, start_s: f64, seconds: f64) -> Result<Dec
     let mut channels = params.channels.map(|c| c.count() as u16).unwrap_or(1);
     let end_s = start_s + seconds;
     let mut out: Vec<f32> = Vec::new();
+    let mut sample_buf: Option<SampleBuffer<f32>> = None;
     // Frames of `out` up to the last one written; gaps before it stay silent.
     let mut filled = 0usize;
     loop {
@@ -760,7 +739,11 @@ pub fn decode_audio_range(path: &Path, start_s: f64, seconds: f64) -> Result<Dec
         rate = spec.rate;
         channels = spec.channels.count() as u16;
         let ch = channels.max(1) as usize;
-        let mut buf = SampleBuffer::<f32>::new(decoded.capacity() as u64, spec);
+        // One buffer for the whole range, replaced only when a packet needs more room.
+        if sample_buf.as_ref().is_some_and(|b| b.capacity() < decoded.capacity() * ch) {
+            sample_buf = None;
+        }
+        let buf = sample_buf.get_or_insert_with(|| SampleBuffer::<f32>::new(decoded.capacity() as u64, spec));
         buf.copy_interleaved_ref(decoded);
         let decoded_frames = buf.samples().len() / ch;
         let wanted = (seconds * rate as f64).round() as usize;
@@ -817,6 +800,29 @@ mod tests {
         assert_eq!(range.samples, full.samples[48_000 * 2..72_000 * 2].to_vec());
         assert!((range.duration_seconds - 0.5).abs() < 1e-9);
         assert!(decode_audio_range(&path, 5.0, 1.0).unwrap().samples.is_empty());
+    }
+
+    #[test]
+    fn range_decode_of_an_ffmpeg_only_format_matches_full_decode() {
+        use super::test_audio::{silence_then_tone, write_wav};
+        let dir = tempfile::tempdir().unwrap();
+        let wav = dir.path().join("speech.wav");
+        write_wav(&wav, 48_000, 1, &silence_then_tone(48_000, 0.5, 3.0));
+        let mkv = dir.path().join("speech.mkv");
+        let ffmpeg = crate::audio::ffmpeg::find_ffmpeg_path().expect("ffmpeg is needed for this test");
+        let status = std::process::Command::new(ffmpeg)
+            .args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
+            .arg(&wav)
+            .args(["-c:a", "pcm_s16le"])
+            .arg(&mkv)
+            .status()
+            .expect("run ffmpeg");
+        assert!(status.success());
+        let full = decode_audio_file(&mkv).unwrap();
+        let range = decode_audio_range(&mkv, 1.0, 0.5).unwrap();
+        assert_eq!((range.sample_rate, range.channels), (48_000, 1));
+        assert_eq!(range.samples, full.samples[48_000..72_000].to_vec());
+        assert!(decode_audio_range(&mkv, 5.0, 1.0).unwrap().samples.is_empty());
     }
 
     #[test]

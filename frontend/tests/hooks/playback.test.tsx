@@ -1,45 +1,10 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import type { PlaybackSource } from '../../src/types';
-import type { PlaybackControls } from '../../src/hooks/usePlayback';
+import type { PlaybackClock, PlaybackControls } from '../../src/hooks/usePlayback';
 import { FORCE_CLIP_KEY } from '../../src/lib/playback';
+import { FakeAudio, audios } from '../fixtures/audio';
 
-type Listener = () => void;
-const audios: FakeAudio[] = [];
-/** Just enough of HTMLAudioElement: tests set currentTime/error and emit the events. */
-class FakeAudio {
-  static canPlay = 'maybe';
-  src = '';
-  currentTime = 0;
-  playbackRate = 1;
-  defaultPlaybackRate = 1;
-  paused = true;
-  ended = false;
-  preload = '';
-  error: { code: number } | null = null;
-  private listeners = new Map<string, Set<Listener>>();
-  constructor() { audios.push(this); }
-  canPlayType() { return FakeAudio.canPlay; }
-  addEventListener(type: string, listener: Listener) {
-    if (!this.listeners.has(type)) this.listeners.set(type, new Set());
-    this.listeners.get(type)!.add(listener);
-  }
-  removeEventListener(type: string, listener: Listener) { this.listeners.get(type)?.delete(listener); }
-  removeAttribute(name: string) { if (name === 'src') this.src = ''; }
-  load() {}
-  play() {
-    this.paused = false;
-    this.ended = false;
-    this.emit('play');
-    return Promise.resolve();
-  }
-  pause() {
-    if (this.paused) return;
-    this.paused = true;
-    this.emit('pause');
-  }
-  emit(type: string) { for (const listener of [...(this.listeners.get(type) ?? [])]) listener(); }
-}
 Object.defineProperty(globalThis, 'Audio', { configurable: true, value: FakeAudio });
 
 const originalCore = { ...await import('@tauri-apps/api/core') };
@@ -49,7 +14,7 @@ afterAll(() => {
 });
 /** What the backend sends: container time is the recording clock, so the table is the identity. */
 const IDENTITY_SOURCE: PlaybackSource = {
-  url: 'asset://localhost/%2Frecordings%2Fmeeting%2Faudio.mp4',
+  path: '/recordings/meeting/audio.mp4',
   duration_s: 60,
   time_table: [[0, 0], [60, 60]],
 };
@@ -66,13 +31,29 @@ const invoke = mock(async (command: string, _args?: Record<string, unknown>): Pr
   }
   throw new Error(`Unexpected command: ${command}`);
 });
-mock.module('@tauri-apps/api/core', () => ({ ...originalCore, invoke }));
-const { usePlayback, CLIP_SEEK_DELAY_MS } = await import('../../src/hooks/usePlayback');
+const convertFileSrc = (path: string) => `asset://localhost/${encodeURIComponent(path)}`;
+mock.module('@tauri-apps/api/core', () => ({ ...originalCore, invoke, convertFileSrc }));
+const { usePlayback, usePlaybackClock, usePlaybackClockSelector, CLIP_SEEK_DELAY_MS } = await import('../../src/hooks/usePlayback');
 
 let controls: PlaybackControls;
-function Player() {
-  controls = usePlayback('meeting-a', true);
+/** Renders of the component that owns the hook, and of the clock subscribers below it. */
+const renders = { player: 0, clock: 0, tens: 0 };
+let shownClock = -1;
+let shownTens = -1;
+function ClockView({ clock }: { clock: PlaybackClock }) {
+  renders.clock += 1;
+  shownClock = usePlaybackClock(clock);
   return null;
+}
+function TensView({ clock }: { clock: PlaybackClock }) {
+  renders.tens += 1;
+  shownTens = usePlaybackClockSelector(clock, (clockS) => Math.floor(clockS / 10));
+  return null;
+}
+function Player() {
+  renders.player += 1;
+  controls = usePlayback('meeting-a', true);
+  return <><ClockView clock={controls.clock} /><TensView clock={controls.clock} /></>;
 }
 let renderer: ReactTestRenderer | undefined;
 async function settle() {
@@ -108,16 +89,15 @@ describe('usePlayback', () => {
     const audio = await mount();
     expect(invoke).toHaveBeenCalledWith('api_prepare_meeting_playback', { meetingId: 'meeting-a' });
     expect(controls.ready).toBe(true);
-    expect(controls.mode).toBe('asset');
     expect(controls.durationS).toBe(60);
-    expect(audio.src).toBe(source.url);
+    expect(audio.src).toBe('asset://localhost/%2Frecordings%2Fmeeting%2Faudio.mp4');
     await act(async () => { controls.playFrom(45); });
     near(audio.currentTime, 45);
     expect(audio.paused).toBe(false);
     expect(controls.playing).toBe(true);
     audio.currentTime = 50;
     await act(async () => { audio.emit('timeupdate'); });
-    near(controls.clockS, 50);
+    near(controls.clock.get(), 50);
   });
 
   test('positions go through the time table the backend sends', async () => {
@@ -127,7 +107,7 @@ describe('usePlayback', () => {
     near(audio.currentTime, 45.06);
     audio.currentTime = 50.06;
     await act(async () => { audio.emit('timeupdate'); });
-    near(controls.clockS, 50);
+    near(controls.clock.get(), 50);
   });
 
   test('switches to clip mode on src not supported', async () => {
@@ -136,7 +116,6 @@ describe('usePlayback', () => {
     audio.error = { code: 4 };
     await act(async () => { audio.emit('error'); });
     await settle();
-    expect(controls.mode).toBe('clip');
     expect(clipStarts()).toHaveLength(1);
     near(clipStarts()[0], 45);
     expect(invoke).toHaveBeenCalledWith('api_render_playback_clip', expect.objectContaining({ meetingId: 'meeting-a', seconds: 30 }));
@@ -149,7 +128,6 @@ describe('usePlayback', () => {
       configurable: true, value: { getItem: (key: string) => (key === FORCE_CLIP_KEY ? '1' : null) },
     });
     const audio = await mount();
-    expect(controls.mode).toBe('clip');
     expect(controls.ready).toBe(true);
     expect(audio.src).toBe('');
   });
@@ -157,7 +135,7 @@ describe('usePlayback', () => {
   test('clip mode prefetches the next clip', async () => {
     FakeAudio.canPlay = '';
     const audio = await mount();
-    expect(controls.mode).toBe('clip');
+    expect(audio.src).toBe('');
     await act(async () => { controls.playFrom(0); });
     await settle();
     near(clipStarts()[0], 0);
@@ -187,7 +165,7 @@ describe('usePlayback', () => {
       controls.seek(45);
       controls.seek(50);
     });
-    near(controls.clockS, 50);
+    near(controls.clock.get(), 50);
     expect(clipStarts()).toHaveLength(before); // nothing rendered while the drag goes on
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, CLIP_SEEK_DELAY_MS + 50)); });
     await settle();
@@ -286,6 +264,26 @@ describe('usePlayback', () => {
     await act(async () => { audio.emit('timeupdate'); });
     expect(audio.paused).toBe(true);
     expect(controls.playing).toBe(false);
+  });
+
+  test('the clock moves without re-rendering the player; only its subscribers follow', async () => {
+    const audio = await mount();
+    await act(async () => { controls.playFrom(10); });
+    const before = { ...renders };
+    for (const time of [10.25, 10.5, 10.75]) {
+      audio.currentTime = time;
+      await act(async () => { audio.emit('timeupdate'); });
+    }
+    expect(renders.player).toBe(before.player);
+    expect(renders.clock).toBe(before.clock + 3);
+    near(shownClock, 10.75);
+    // A selector re-renders only when what it selects changes.
+    expect(renders.tens).toBe(before.tens);
+    audio.currentTime = 21;
+    await act(async () => { audio.emit('timeupdate'); });
+    expect(renders.tens).toBe(before.tens + 1);
+    expect(shownTens).toBe(2);
+    expect(renders.player).toBe(before.player);
   });
 
   test('speed changes playback rate', async () => {

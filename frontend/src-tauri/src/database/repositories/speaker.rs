@@ -1,5 +1,5 @@
 //! Per-meeting speakers: names, voice centroids, merges and row reassignment.
-use super::person::{clean_person_name, PeopleRepository, Person};
+use super::person::{clean_person_name, name_key, PeopleRepository, Person};
 use super::transcript::TranscriptsRepository;
 use crate::api::TranscriptSegment;
 use crate::diarization::cluster::weighted_centroid;
@@ -8,7 +8,7 @@ use crate::diarization::naming::{DecisionKind, NamingDecision};
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Connection, Error as SqlxError, Row, SqliteConnection, SqlitePool};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use uuid::Uuid;
 
 /// Who gave a speaker its current name.
@@ -107,6 +107,10 @@ pub struct MeetingSpeaker {
     pub row_count: i64,
     /// Seconds covered by those rows (the speaker's share in the speaker bar).
     pub row_seconds: f64,
+    /// A sample of the voice in transcript time: the speaker's longest row with one speaker,
+    /// capped to SAMPLE_SECONDS from its start. None without such a row.
+    pub sample_start_s: Option<f64>,
+    pub sample_end_s: Option<f64>,
     #[serde(flatten)]
     pub link: SpeakerLink,
 }
@@ -201,9 +205,27 @@ fn not_found(what: &str) -> SqlxError {
     SqlxError::Protocol(format!("{what} not found"))
 }
 
+/// Longest voice sample offered for a speaker, in seconds.
+const SAMPLE_SECONDS: f64 = 8.0;
+
+/// SET list that removes a speaker's suggestion.
+pub(crate) const CLEAR_SUGGESTION: &str =
+    "suggested_person_id = NULL, suggested_name = NULL, suggestion_source = NULL, suggestion_reason = NULL";
+/// SET list that removes a speaker's name and person link.
+pub(crate) const CLEAR_NAME: &str = "display_name = NULL, person_id = NULL, name_source = NULL";
+
 /// A name given by voice matching or the conversation, not yet confirmed by the user.
 fn is_auto_name(link: &SpeakerLink) -> bool {
     matches!(link.name_source, Some(NameSource::Voice) | Some(NameSource::Conversation))
+}
+
+/// What confirming or rejecting acts on: the auto name, else the suggestion, as (person id, name,
+/// is the auto name). None when the speaker has neither.
+fn pending_name(display_name: Option<String>, link: SpeakerLink) -> Option<(Option<String>, String, bool)> {
+    match display_name.filter(|_| is_auto_name(&link)) {
+        Some(name) => Some((link.person_id, name, true)),
+        None => link.suggested_name.map(|name| (link.suggested_person_id, name, false)),
+    }
 }
 
 pub struct SpeakersRepository;
@@ -214,28 +236,40 @@ impl SpeakersRepository {
         Self::list_conn(&mut conn, meeting_id).await
     }
 
-    /// Speakers with row-based stats, read through `conn` so callers can read inside their own
-    /// transaction.
+    /// Speakers with row-based stats and a voice sample, read through `conn` so callers can read
+    /// inside their own transaction.
     pub async fn list_conn(conn: &mut SqliteConnection, meeting_id: &str) -> Result<Vec<MeetingSpeaker>, SqlxError> {
+        // The sample row: longest first, the earlier one on a tie; rows kept whole with two
+        // speakers would play someone else.
         let rows = sqlx::query(
             "SELECT ms.speaker_key, ms.display_name, ms.speech_seconds, ms.embedding,
                     ms.person_id, ms.name_source, ms.suggested_person_id, ms.suggested_name,
                     ms.suggestion_source, ms.suggestion_reason,
                     COALESCE(r.row_count, 0) AS row_count,
-                    CAST(COALESCE(r.row_seconds, 0) AS REAL) AS row_seconds
+                    CAST(COALESCE(r.row_seconds, 0) AS REAL) AS row_seconds,
+                    s.sample_start_s, s.sample_end_s
              FROM meeting_speakers ms
              LEFT JOIN (
                  SELECT speaker,
                         COUNT(*) AS row_count,
                         SUM(COALESCE(audio_end_time - audio_start_time, duration, 0)) AS row_seconds
                  FROM transcripts
-                 WHERE meeting_id = ?
+                 WHERE meeting_id = ?1
                  GROUP BY speaker
              ) r ON r.speaker = ms.speaker_key
-             WHERE ms.meeting_id = ?",
+             LEFT JOIN (
+                 SELECT speaker, audio_start_time AS sample_start_s,
+                        MIN(audio_end_time, audio_start_time + ?2) AS sample_end_s,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY speaker ORDER BY audio_end_time - audio_start_time DESC, audio_start_time
+                        ) AS sample_rank
+                 FROM transcripts
+                 WHERE meeting_id = ?1 AND speaker_mixed = 0 AND audio_end_time > audio_start_time
+             ) s ON s.speaker = ms.speaker_key AND s.sample_rank = 1
+             WHERE ms.meeting_id = ?1",
         )
         .bind(meeting_id)
-        .bind(meeting_id)
+        .bind(SAMPLE_SECONDS)
         .fetch_all(&mut *conn)
         .await?;
         let mut speakers: Vec<MeetingSpeaker> = rows
@@ -247,6 +281,8 @@ impl SpeakersRepository {
                 embedding: r.get::<Option<Vec<u8>>, _>("embedding").map(|b| blob_to_embedding(&b)),
                 row_count: r.get("row_count"),
                 row_seconds: r.get("row_seconds"),
+                sample_start_s: r.get("sample_start_s"),
+                sample_end_s: r.get("sample_end_s"),
                 link: link_from_row(&r),
             })
             .collect();
@@ -297,11 +333,10 @@ impl SpeakersRepository {
         name: &str,
         person_id: Option<&str>,
     ) -> Result<(), SqlxError> {
-        sqlx::query(
-            "UPDATE meeting_speakers SET display_name = ?, person_id = ?, name_source = 'user',
-                 suggested_person_id = NULL, suggested_name = NULL, suggestion_source = NULL, suggestion_reason = NULL
-             WHERE meeting_id = ? AND speaker_key = ?",
-        )
+        sqlx::query(&format!(
+            "UPDATE meeting_speakers SET display_name = ?, person_id = ?, name_source = 'user', {CLEAR_SUGGESTION}
+             WHERE meeting_id = ? AND speaker_key = ?"
+        ))
         .bind(name)
         .bind(person_id)
         .bind(meeting_id)
@@ -341,21 +376,14 @@ impl SpeakersRepository {
         Self::name_state_conn(&mut tx, meeting_id, key).await?;
         let person_id = match clean_person_name(name) {
             None => {
-                sqlx::query(
-                    "UPDATE meeting_speakers SET display_name = NULL, person_id = NULL, name_source = NULL
-                     WHERE meeting_id = ? AND speaker_key = ?",
-                )
-                .bind(meeting_id)
-                .bind(key)
-                .execute(&mut *tx)
-                .await?;
+                Self::clear_columns_conn(&mut tx, meeting_id, key, CLEAR_NAME).await?;
                 None
             }
             Some(cleaned) if remember_voices => {
+                // Typing a name the user once rejected for this speaker overrides that rejection
+                // (the settle step lifts it).
                 let person = PeopleRepository::find_or_create_conn(&mut tx, &cleaned).await?;
                 Self::set_user_name_conn(&mut tx, meeting_id, key, &person.name, Some(&person.id)).await?;
-                // Typing a name the user once rejected for this speaker overrides that rejection.
-                PeopleRepository::remove_rejection_conn(&mut tx, meeting_id, key, &person.id).await?;
                 Some(person.id)
             }
             Some(cleaned) => {
@@ -363,8 +391,80 @@ impl SpeakersRepository {
                 None
             }
         };
+        Self::settle_links_conn(&mut tx, meeting_id).await?;
         tx.commit().await?;
         Ok(person_id)
+    }
+
+    /// Sets the columns of `set` (CLEAR_NAME or CLEAR_SUGGESTION) on one speaker.
+    async fn clear_columns_conn(
+        conn: &mut SqliteConnection,
+        meeting_id: &str,
+        key: &str,
+        set: &str,
+    ) -> Result<(), SqlxError> {
+        sqlx::query(&format!("UPDATE meeting_speakers SET {set} WHERE meeting_id = ? AND speaker_key = ?"))
+            .bind(meeting_id)
+            .bind(key)
+            .execute(&mut *conn)
+            .await?;
+        Ok(())
+    }
+
+    /// Enforces the link rules for every speaker of the meeting: a speaker never rejects the
+    /// person it is linked to, and its suggestion never names that person or a person it rejected
+    /// (compared by person id, or by name when the suggestion has no person). Every speaker or
+    /// person write calls it before committing.
+    pub async fn settle_links_conn(conn: &mut SqliteConnection, meeting_id: &str) -> Result<(), SqlxError> {
+        sqlx::query(
+            "DELETE FROM speaker_rejections
+             WHERE meeting_id = ?
+               AND EXISTS (SELECT 1 FROM meeting_speakers ms
+                           WHERE ms.meeting_id = speaker_rejections.meeting_id
+                             AND ms.speaker_key = speaker_rejections.speaker_key
+                             AND ms.person_id = speaker_rejections.person_id)",
+        )
+        .bind(meeting_id)
+        .execute(&mut *conn)
+        .await?;
+        let suggested: Vec<(String, Option<String>, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
+            "SELECT ms.speaker_key, ms.person_id, p.name, ms.suggested_person_id, ms.suggested_name
+             FROM meeting_speakers ms LEFT JOIN people p ON p.id = ms.person_id
+             WHERE ms.meeting_id = ? AND (ms.suggested_person_id IS NOT NULL OR ms.suggested_name IS NOT NULL)",
+        )
+        .bind(meeting_id)
+        .fetch_all(&mut *conn)
+        .await?;
+        if suggested.is_empty() {
+            return Ok(());
+        }
+        let rejected: Vec<(String, String, Option<String>)> = sqlx::query_as(
+            "SELECT r.speaker_key, r.person_id, p.name
+             FROM speaker_rejections r LEFT JOIN people p ON p.id = r.person_id
+             WHERE r.meeting_id = ?",
+        )
+        .bind(meeting_id)
+        .fetch_all(&mut *conn)
+        .await?;
+        for (key, person_id, person_name, suggested_id, suggested_name) in suggested {
+            // (person id, person name) of the speaker's own person and of every person it rejected.
+            let own = person_id.map(|id| (id, person_name));
+            let excluded: Vec<(String, Option<String>)> = own
+                .into_iter()
+                .chain(rejected.iter().filter(|r| r.0 == key).map(|r| (r.1.clone(), r.2.clone())))
+                .collect();
+            let names_excluded = match &suggested_id {
+                Some(id) => excluded.iter().any(|(p, _)| p == id),
+                None => {
+                    let suggested_key = suggested_name.as_deref().map(name_key);
+                    excluded.iter().any(|(_, name)| name.as_deref().map(name_key) == suggested_key)
+                }
+            };
+            if names_excluded {
+                Self::clear_columns_conn(&mut *conn, meeting_id, &key, CLEAR_SUGGESTION).await?;
+            }
+        }
+        Ok(())
     }
 
     /// The auto name, else the suggestion, becomes a name typed by the user (so it teaches the
@@ -378,13 +478,7 @@ impl SpeakersRepository {
         let mut conn = pool.acquire().await?;
         let mut tx = conn.begin().await?;
         let (display_name, link) = Self::name_state_conn(&mut tx, meeting_id, key).await?;
-        let (person_id, name) = match display_name.filter(|_| is_auto_name(&link)) {
-            Some(name) => (link.person_id.clone(), name),
-            None => match link.suggested_name.clone() {
-                Some(name) => (link.suggested_person_id.clone(), name),
-                None => return Err(not_found("name to confirm")),
-            },
-        };
+        let (person_id, name, _) = pending_name(display_name, link).ok_or_else(|| not_found("name to confirm"))?;
         let person = if remember_voices {
             Some(Self::resolve_person_conn(&mut tx, person_id.as_deref(), &name).await?)
         } else {
@@ -392,62 +486,23 @@ impl SpeakersRepository {
         };
         let stored = person.as_ref().map_or(name.as_str(), |p| p.name.as_str());
         Self::set_user_name_conn(&mut tx, meeting_id, key, stored, person.as_ref().map(|p| p.id.as_str())).await?;
-        if let Some(p) = &person {
-            PeopleRepository::remove_rejection_conn(&mut tx, meeting_id, key, &p.id).await?;
-        }
+        Self::settle_links_conn(&mut tx, meeting_id).await?;
         tx.commit().await?;
         Ok(person.map(|p| p.id))
     }
 
     /// "Not <name>": records the rejection and clears the auto name, else the suggestion. A name
-    /// without a person gets one, so the rejection has a stable id.
+    /// without a person gets one, so the rejection has a stable id. A suggestion of the rejected
+    /// person goes too (the settle step), so the name does not come straight back.
     pub async fn reject(pool: &SqlitePool, meeting_id: &str, key: &str) -> Result<(), SqlxError> {
         let mut conn = pool.acquire().await?;
         let mut tx = conn.begin().await?;
         let (display_name, link) = Self::name_state_conn(&mut tx, meeting_id, key).await?;
-        if let Some(name) = display_name.filter(|_| is_auto_name(&link)) {
-            let person = Self::resolve_person_conn(&mut tx, link.person_id.as_deref(), &name).await?;
-            PeopleRepository::add_rejection_conn(&mut tx, meeting_id, key, &person.id).await?;
-            sqlx::query(
-                "UPDATE meeting_speakers SET display_name = NULL, person_id = NULL, name_source = NULL
-                 WHERE meeting_id = ? AND speaker_key = ?",
-            )
-            .bind(meeting_id)
-            .bind(key)
-            .execute(&mut *tx)
-            .await?;
-            // A suggestion of the same person would bring the rejected name straight back.
-            let same_name = |a: &str, b: &str| {
-                matches!((clean_person_name(a), clean_person_name(b)), (Some(a), Some(b)) if a.to_lowercase() == b.to_lowercase())
-            };
-            let suggests_rejected = link.suggested_person_id.as_deref() == Some(person.id.as_str())
-                || link.suggested_name.as_deref().is_some_and(|s| same_name(s, &name));
-            if suggests_rejected {
-                sqlx::query(
-                    "UPDATE meeting_speakers SET suggested_person_id = NULL, suggested_name = NULL, suggestion_source = NULL,
-                         suggestion_reason = NULL
-                     WHERE meeting_id = ? AND speaker_key = ?",
-                )
-                .bind(meeting_id)
-                .bind(key)
-                .execute(&mut *tx)
-                .await?;
-            }
-        } else if let Some(name) = link.suggested_name.clone() {
-            let person = Self::resolve_person_conn(&mut tx, link.suggested_person_id.as_deref(), &name).await?;
-            PeopleRepository::add_rejection_conn(&mut tx, meeting_id, key, &person.id).await?;
-            sqlx::query(
-                "UPDATE meeting_speakers SET suggested_person_id = NULL, suggested_name = NULL, suggestion_source = NULL,
-                     suggestion_reason = NULL
-                 WHERE meeting_id = ? AND speaker_key = ?",
-            )
-            .bind(meeting_id)
-            .bind(key)
-            .execute(&mut *tx)
-            .await?;
-        } else {
-            return Err(not_found("name to reject"));
-        }
+        let (person_id, name, is_auto) = pending_name(display_name, link).ok_or_else(|| not_found("name to reject"))?;
+        let person = Self::resolve_person_conn(&mut tx, person_id.as_deref(), &name).await?;
+        PeopleRepository::add_rejection_conn(&mut tx, meeting_id, key, &person.id).await?;
+        Self::clear_columns_conn(&mut tx, meeting_id, key, if is_auto { CLEAR_NAME } else { CLEAR_SUGGESTION }).await?;
+        Self::settle_links_conn(&mut tx, meeting_id).await?;
         tx.commit().await
     }
 
@@ -464,13 +519,10 @@ impl SpeakersRepository {
         for d in decisions {
             match d.kind {
                 DecisionKind::Apply => {
-                    let result = sqlx::query(
-                        "UPDATE meeting_speakers
-                         SET display_name = ?, person_id = ?, name_source = ?,
-                             suggested_person_id = NULL, suggested_name = NULL,
-                             suggestion_source = NULL, suggestion_reason = NULL
-                         WHERE meeting_id = ? AND speaker_key = ? AND display_name IS NULL",
-                    )
+                    let result = sqlx::query(&format!(
+                        "UPDATE meeting_speakers SET display_name = ?, person_id = ?, name_source = ?, {CLEAR_SUGGESTION}
+                         WHERE meeting_id = ? AND speaker_key = ? AND display_name IS NULL"
+                    ))
                     .bind(&d.name)
                     .bind(&d.person_id)
                     .bind(NameSource::Conversation.as_str())
@@ -500,13 +552,15 @@ impl SpeakersRepository {
                 }
             }
         }
+        Self::settle_links_conn(&mut *conn, meeting_id).await?;
         Ok((named, suggested))
     }
 
     /// Fold `from` into `into`: rows and rejections move, centroids combine weighted by speech
     /// time, `into` keeps its name and person link (or takes `from`'s when it has no name) and its
     /// suggestion (or takes `from`'s). The suggestion goes when the merged name was typed by the
-    /// user or names the merged person, and no rejection of the merged person stays on `into`.
+    /// user; the settle step drops a suggestion of the merged person or of a person either
+    /// speaker rejected, and any rejection of the merged person.
     pub async fn merge(pool: &SqlitePool, meeting_id: &str, from: &str, into: &str) -> Result<(), SqlxError> {
         if from == into {
             return Err(SqlxError::Protocol("cannot merge a speaker into itself".into()));
@@ -533,16 +587,12 @@ impl SpeakersRepository {
             .execute(&mut *tx)
             .await?;
         let (name, link) = if b.display_name.is_some() { (&b.display_name, &b.link) } else { (&a.display_name, &a.link) };
-        let suggestion = if b.link.has_suggestion() { &b.link } else { &a.link };
-        let own_person = suggestion.suggested_person_id.is_some() && suggestion.suggested_person_id == link.person_id;
-        let rejections = PeopleRepository::rejections_conn(&mut tx, meeting_id).await?;
-        let rejected_by_either = suggestion.suggested_person_id.as_ref().is_some_and(|p| {
-            [from, into].iter().any(|k| rejections.contains(&((*k).to_string(), p.clone())))
-        });
-        let suggestion = if link.name_source == Some(NameSource::User) || own_person || rejected_by_either {
+        let suggestion = if link.name_source == Some(NameSource::User) {
             SpeakerLink::default()
+        } else if b.link.has_suggestion() {
+            b.link.clone()
         } else {
-            suggestion.clone()
+            a.link.clone()
         };
         sqlx::query(
             "UPDATE meeting_speakers SET embedding = ?, speech_seconds = ?, display_name = ?, person_id = ?, name_source = ?,
@@ -562,17 +612,13 @@ impl SpeakersRepository {
         .bind(into)
         .execute(&mut *tx)
         .await?;
-        // A speaker never rejects its own person: `from`'s rejection of the merged person is not
-        // moved, and `into`'s is lifted.
         sqlx::query(
             "INSERT OR IGNORE INTO speaker_rejections (meeting_id, speaker_key, person_id)
-             SELECT meeting_id, ?, person_id FROM speaker_rejections
-             WHERE meeting_id = ? AND speaker_key = ? AND person_id IS NOT ?",
+             SELECT meeting_id, ?, person_id FROM speaker_rejections WHERE meeting_id = ? AND speaker_key = ?",
         )
         .bind(into)
         .bind(meeting_id)
         .bind(from)
-        .bind(link.person_id.as_deref())
         .execute(&mut *tx)
         .await?;
         sqlx::query("DELETE FROM speaker_rejections WHERE meeting_id = ? AND speaker_key = ?")
@@ -580,14 +626,12 @@ impl SpeakersRepository {
             .bind(from)
             .execute(&mut *tx)
             .await?;
-        if let Some(person_id) = link.person_id.as_deref() {
-            PeopleRepository::remove_rejection_conn(&mut tx, meeting_id, into, person_id).await?;
-        }
         sqlx::query("DELETE FROM meeting_speakers WHERE meeting_id = ? AND speaker_key = ?")
             .bind(meeting_id)
             .bind(from)
             .execute(&mut *tx)
             .await?;
+        Self::settle_links_conn(&mut tx, meeting_id).await?;
         tx.commit().await
     }
 
@@ -706,10 +750,11 @@ impl SpeakersRepository {
             .execute(&mut *conn)
             .await?;
         }
+        let mixed: HashSet<&str> = write.mixed_rows.iter().map(String::as_str).collect();
         for (id, key) in &write.row_labels {
             sqlx::query("UPDATE transcripts SET speaker = ?, speaker_mixed = ? WHERE meeting_id = ? AND id = ?")
                 .bind(key)
-                .bind(write.mixed_rows.iter().any(|m| m == id))
+                .bind(mixed.contains(id.as_str()))
                 .bind(meeting_id)
                 .bind(id)
                 .execute(&mut *conn)
@@ -741,14 +786,16 @@ impl SpeakersRepository {
                 TranscriptsRepository::insert_row(&mut *conn, &row.id, meeting_id, &row).await?;
             }
         }
-        Ok(())
+        Self::settle_links_conn(&mut *conn, meeting_id).await
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::database::test_support::{migrated_pool, seed_meeting, seed_person, SeedRow};
+    use crate::database::test_support::{
+        migrated_pool, people_count, seed_meeting, seed_person, stored_speaker, write_speakers, SeedRow,
+    };
 
     const M: &str = "meeting-1";
 
@@ -764,21 +811,15 @@ mod tests {
             ],
         )
         .await;
-        let mut conn = pool.acquire().await.unwrap();
-        SpeakersRepository::replace_for_meeting(
-            &mut conn,
+        write_speakers(
+            &pool,
             M,
-            &SpeakerWrite {
-                speakers: vec![
-                    NewSpeaker { key: "spk_0".into(), display_name: None, embedding: vec![1.0, 0.0], speech_seconds: 3.0, ..Default::default() },
-                    NewSpeaker { key: "spk_1".into(), display_name: Some("Ana".into()), embedding: vec![0.0, 1.0], speech_seconds: 1.0, ..Default::default() },
-                ],
-                ..Default::default()
-            },
+            vec![
+                NewSpeaker { key: "spk_0".into(), display_name: None, embedding: vec![1.0, 0.0], speech_seconds: 3.0, ..Default::default() },
+                NewSpeaker { key: "spk_1".into(), display_name: Some("Ana".into()), embedding: vec![0.0, 1.0], speech_seconds: 1.0, ..Default::default() },
+            ],
         )
-        .await
-        .unwrap();
-        drop(conn);
+        .await;
         pool
     }
 
@@ -793,29 +834,9 @@ mod tests {
     use crate::database::repositories::person::PeopleRepository;
     use std::collections::HashSet;
 
-    async fn one(pool: &SqlitePool, key: &str) -> MeetingSpeaker {
-        SpeakersRepository::list(pool, M)
-            .await
-            .unwrap()
-            .into_iter()
-            .find(|s| s.speaker_key == key)
-            .expect("speaker exists")
-    }
-
-    async fn write(pool: &SqlitePool, speakers: Vec<NewSpeaker>) {
-        let mut conn = pool.acquire().await.unwrap();
-        SpeakersRepository::replace_for_meeting(&mut conn, M, &SpeakerWrite { speakers, ..Default::default() })
-            .await
-            .unwrap();
-    }
-
     async fn rejected(pool: &SqlitePool) -> HashSet<(String, String)> {
         let mut conn = pool.acquire().await.unwrap();
         PeopleRepository::rejections_conn(&mut conn, M).await.unwrap()
-    }
-
-    async fn people_count(pool: &SqlitePool) -> i64 {
-        sqlx::query_scalar("SELECT COUNT(*) FROM people").fetch_one(pool).await.unwrap()
     }
 
     /// spk_0 named Noah by a voice match.
@@ -841,7 +862,7 @@ mod tests {
         let person = SpeakersRepository::name(&pool, M, "spk_0", " noah ", true).await.unwrap();
 
         assert_eq!(person.as_deref(), Some("person-noah"));
-        let s = one(&pool, "spk_0").await;
+        let s = stored_speaker(&pool, M, "spk_0").await;
         assert_eq!(s.display_name.as_deref(), Some("Noah"), "the stored spelling is used");
         assert_eq!(s.link.person_id.as_deref(), Some("person-noah"));
         assert_eq!(s.link.name_source, Some(NameSource::User));
@@ -856,7 +877,7 @@ mod tests {
         let mut conn = pool.acquire().await.unwrap();
         assert_eq!(PeopleRepository::get_conn(&mut conn, &person).await.unwrap().unwrap().name, "Sam");
         drop(conn);
-        assert_eq!(one(&pool, "spk_0").await.link.person_id.as_deref(), Some(person.as_str()));
+        assert_eq!(stored_speaker(&pool, M, "spk_0").await.link.person_id.as_deref(), Some(person.as_str()));
     }
 
     #[tokio::test]
@@ -865,7 +886,7 @@ mod tests {
         SpeakersRepository::name(&pool, M, "spk_0", "Sam", true).await.unwrap();
         let person = SpeakersRepository::name(&pool, M, "spk_0", "   ", true).await.unwrap();
         assert_eq!(person, None);
-        let s = one(&pool, "spk_0").await;
+        let s = stored_speaker(&pool, M, "spk_0").await;
         assert_eq!(s.display_name, None);
         assert_eq!(s.link.person_id, None);
         assert_eq!(s.link.name_source, None);
@@ -876,7 +897,7 @@ mod tests {
         let pool = seeded().await;
         let person = SpeakersRepository::name(&pool, M, "spk_0", " Sam  Lee ", false).await.unwrap();
         assert_eq!(person, None);
-        let s = one(&pool, "spk_0").await;
+        let s = stored_speaker(&pool, M, "spk_0").await;
         assert_eq!(s.display_name.as_deref(), Some("Sam Lee"));
         assert_eq!(s.link.person_id, None);
         assert_eq!(s.link.name_source, Some(NameSource::User));
@@ -900,12 +921,12 @@ mod tests {
     async fn confirm_turns_an_auto_name_into_user() {
         let pool = seeded().await;
         seed_person(&pool, "person-noah", "Noah").await;
-        write(&pool, vec![auto_noah()]).await;
+        write_speakers(&pool, M, vec![auto_noah()]).await;
 
         let person = SpeakersRepository::confirm(&pool, M, "spk_0", true).await.unwrap();
 
         assert_eq!(person.as_deref(), Some("person-noah"));
-        let s = one(&pool, "spk_0").await;
+        let s = stored_speaker(&pool, M, "spk_0").await;
         assert_eq!(s.display_name.as_deref(), Some("Noah"));
         assert_eq!(s.link.name_source, Some(NameSource::User));
     }
@@ -913,8 +934,9 @@ mod tests {
     #[tokio::test]
     async fn confirm_takes_a_suggestion_and_creates_its_person() {
         let pool = seeded().await;
-        write(
+        write_speakers(
             &pool,
+            M,
             vec![NewSpeaker {
                 key: "spk_0".into(),
                 embedding: vec![1.0, 0.0],
@@ -932,7 +954,7 @@ mod tests {
 
         let person = SpeakersRepository::confirm(&pool, M, "spk_0", true).await.unwrap().expect("linked");
 
-        let s = one(&pool, "spk_0").await;
+        let s = stored_speaker(&pool, M, "spk_0").await;
         assert_eq!(s.display_name.as_deref(), Some("Priya"));
         assert_eq!(s.link.person_id.as_deref(), Some(person.as_str()));
         assert_eq!(s.link.name_source, Some(NameSource::User));
@@ -947,18 +969,18 @@ mod tests {
         assert!(SpeakersRepository::confirm(&pool, M, "spk_0", true).await.is_err());
         assert!(SpeakersRepository::confirm(&pool, M, "spk_1", true).await.is_err());
         assert!(SpeakersRepository::confirm(&pool, M, "spk_9", true).await.is_err());
-        assert_eq!(one(&pool, "spk_1").await.link.name_source, None);
+        assert_eq!(stored_speaker(&pool, M, "spk_1").await.link.name_source, None);
     }
 
     #[tokio::test]
     async fn reject_auto_name_records_rejection_and_clears_it() {
         let pool = seeded().await;
         seed_person(&pool, "person-noah", "Noah").await;
-        write(&pool, vec![auto_noah()]).await;
+        write_speakers(&pool, M, vec![auto_noah()]).await;
 
         SpeakersRepository::reject(&pool, M, "spk_0").await.unwrap();
 
-        let s = one(&pool, "spk_0").await;
+        let s = stored_speaker(&pool, M, "spk_0").await;
         assert_eq!(s.display_name, None);
         assert_eq!(s.link, SpeakerLink::default());
         assert_eq!(rejected(&pool).await, HashSet::from([("spk_0".to_string(), "person-noah".to_string())]));
@@ -968,7 +990,7 @@ mod tests {
     async fn reject_auto_name_also_clears_a_suggestion_of_the_same_person() {
         let pool = seeded().await;
         seed_person(&pool, "person-noah", "Noah").await;
-        write(&pool, vec![auto_noah()]).await;
+        write_speakers(&pool, M, vec![auto_noah()]).await;
         sqlx::query(
             "UPDATE meeting_speakers SET suggested_person_id = 'person-noah', suggested_name = 'Noah',
                  suggestion_source = 'voice', suggestion_reason = 'sounds like Noah'
@@ -981,10 +1003,10 @@ mod tests {
 
         SpeakersRepository::reject(&pool, M, "spk_0").await.unwrap();
 
-        assert_eq!(one(&pool, "spk_0").await.link, SpeakerLink::default());
+        assert_eq!(stored_speaker(&pool, M, "spk_0").await.link, SpeakerLink::default());
 
         // A suggestion of someone else stays.
-        write(&pool, vec![auto_noah()]).await;
+        write_speakers(&pool, M, vec![auto_noah()]).await;
         sqlx::query(
             "UPDATE meeting_speakers SET suggested_name = ' ana ', suggestion_source = 'conversation'
              WHERE meeting_id = ? AND speaker_key = 'spk_0'",
@@ -994,15 +1016,16 @@ mod tests {
         .await
         .unwrap();
         SpeakersRepository::reject(&pool, M, "spk_0").await.unwrap();
-        assert_eq!(one(&pool, "spk_0").await.link.suggested_name.as_deref(), Some(" ana "));
+        assert_eq!(stored_speaker(&pool, M, "spk_0").await.link.suggested_name.as_deref(), Some(" ana "));
     }
 
     #[tokio::test]
     async fn reject_suggestion_keeps_the_existing_name() {
         let pool = seeded().await;
         seed_person(&pool, "person-noah", "Noah").await;
-        write(
+        write_speakers(
             &pool,
+            M,
             vec![NewSpeaker {
                 key: "spk_1".into(),
                 display_name: Some("Ana".into()),
@@ -1021,7 +1044,7 @@ mod tests {
 
         SpeakersRepository::reject(&pool, M, "spk_1").await.unwrap();
 
-        let s = one(&pool, "spk_1").await;
+        let s = stored_speaker(&pool, M, "spk_1").await;
         assert_eq!(s.display_name.as_deref(), Some("Ana"));
         assert!(!s.link.has_suggestion());
         assert_eq!(rejected(&pool).await, HashSet::from([("spk_1".to_string(), "person-noah".to_string())]));
@@ -1039,7 +1062,7 @@ mod tests {
 
         SpeakersRepository::merge(&pool, M, "spk_1", "spk_0").await.unwrap();
 
-        let s = one(&pool, "spk_0").await;
+        let s = stored_speaker(&pool, M, "spk_0").await;
         assert_eq!(s.display_name.as_deref(), Some("Ana"));
         assert_eq!(s.link.person_id.as_deref(), Some(ana.as_str()));
         assert_eq!(s.link.name_source, Some(NameSource::User));
@@ -1062,7 +1085,7 @@ mod tests {
 
         SpeakersRepository::merge(&pool, M, "spk_1", "spk_0").await.unwrap();
 
-        let s = one(&pool, "spk_0").await;
+        let s = stored_speaker(&pool, M, "spk_0").await;
         assert_eq!(s.display_name.as_deref(), Some("Noah"));
         assert_eq!(s.link.name_source, Some(NameSource::User));
         assert!(!s.link.has_suggestion());
@@ -1072,8 +1095,9 @@ mod tests {
     async fn merging_drops_the_suggestion_and_rejection_of_the_merged_person() {
         let pool = seeded().await;
         seed_person(&pool, "person-noah", "Noah").await;
-        write(
+        write_speakers(
             &pool,
+            M,
             vec![
                 auto_noah(),
                 NewSpeaker {
@@ -1098,7 +1122,7 @@ mod tests {
 
         SpeakersRepository::merge(&pool, M, "spk_1", "spk_0").await.unwrap();
 
-        let s = one(&pool, "spk_0").await;
+        let s = stored_speaker(&pool, M, "spk_0").await;
         assert_eq!(s.link.person_id.as_deref(), Some("person-noah"));
         assert_eq!(s.link.name_source, Some(NameSource::Voice));
         assert!(!s.link.has_suggestion(), "a suggestion of its own person says nothing");
@@ -1109,8 +1133,9 @@ mod tests {
     async fn merge_drops_a_suggestion_the_target_rejected() {
         let pool = seeded().await;
         seed_person(&pool, "person-noah", "Noah").await;
-        write(
+        write_speakers(
             &pool,
+            M,
             vec![
                 NewSpeaker { key: "spk_0".into(), embedding: vec![1.0, 0.0], speech_seconds: 3.0, ..Default::default() },
                 NewSpeaker {
@@ -1135,7 +1160,7 @@ mod tests {
 
         SpeakersRepository::merge(&pool, M, "spk_1", "spk_0").await.unwrap();
 
-        assert!(!one(&pool, "spk_0").await.link.has_suggestion());
+        assert!(!stored_speaker(&pool, M, "spk_0").await.link.has_suggestion());
         assert_eq!(rejected(&pool).await, HashSet::from([("spk_0".to_string(), "person-noah".to_string())]));
     }
 
@@ -1151,7 +1176,7 @@ mod tests {
         // spk_0 is unnamed, so it takes spk_1's name and link.
         SpeakersRepository::merge(&pool, M, "spk_1", "spk_0").await.unwrap();
 
-        assert_eq!(one(&pool, "spk_0").await.link.person_id.as_deref(), Some("person-noah"));
+        assert_eq!(stored_speaker(&pool, M, "spk_0").await.link.person_id.as_deref(), Some("person-noah"));
         assert!(rejected(&pool).await.is_empty());
     }
 
@@ -1179,6 +1204,56 @@ mod tests {
         assert_eq!(speakers[1].embedding.as_deref(), Some(&[0.0f32, 1.0][..]));
         assert_eq!((speakers[0].row_count, speakers[1].row_count), (1, 2));
         assert_eq!(speakers[1].row_seconds, 4.0);
+    }
+
+    #[tokio::test]
+    async fn speaker_sample_is_the_longest_single_speaker_row_capped() {
+        let pool = migrated_pool().await;
+        seed_meeting(
+            &pool,
+            M,
+            &[
+                SeedRow { id: "a1", start: Some(0.0), end: Some(3.0), speaker: Some("spk_0"), text: "short" },
+                SeedRow { id: "a2", start: Some(10.0), end: Some(30.0), speaker: Some("spk_0"), text: "mixed" },
+                SeedRow { id: "a3", start: Some(40.0), end: Some(52.0), speaker: Some("spk_0"), text: "longest" },
+                SeedRow { id: "a4", start: Some(60.0), end: Some(72.0), speaker: Some("spk_0"), text: "as long, later" },
+                SeedRow { id: "b1", start: Some(5.0), end: Some(7.5), speaker: Some("spk_1"), text: "under 8 s" },
+                SeedRow { id: "c1", start: Some(8.0), end: Some(9.0), speaker: Some("spk_2"), text: "only mixed" },
+                SeedRow { id: "c2", start: None, end: None, speaker: Some("spk_2"), text: "no times" },
+            ],
+        )
+        .await;
+        let mut conn = pool.acquire().await.unwrap();
+        SpeakersRepository::replace_for_meeting(
+            &mut conn,
+            M,
+            &SpeakerWrite {
+                speakers: ["spk_0", "spk_1", "spk_2", "spk_3"]
+                    .into_iter()
+                    .map(|key| NewSpeaker { key: key.into(), embedding: vec![1.0, 0.0], speech_seconds: 1.0, ..Default::default() })
+                    .collect(),
+                row_labels: vec![("a2".into(), Some("spk_0".into())), ("c1".into(), Some("spk_2".into()))],
+                mixed_rows: vec!["a2".into(), "c1".into()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        drop(conn);
+
+        let samples: Vec<(Option<f64>, Option<f64>)> = SpeakersRepository::list(&pool, M)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|s| (s.sample_start_s, s.sample_end_s))
+            .collect();
+        assert_eq!(
+            samples,
+            vec![(Some(40.0), Some(48.0)), (Some(5.0), Some(7.5)), (None, None), (None, None)],
+            "longest unmixed row, first on a tie, capped at 8 s; none without such a row"
+        );
+        let json = serde_json::to_value(stored_speaker(&pool, M, "spk_0").await).unwrap();
+        assert_eq!((json["sample_start_s"].as_f64(), json["sample_end_s"].as_f64()), (Some(40.0), Some(48.0)));
     }
 
     #[tokio::test]

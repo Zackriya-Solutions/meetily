@@ -30,7 +30,7 @@ pub async fn diarization_delete_models() -> Result<ModelsStatus, String> {
     Ok(models::status(&dir))
 }
 
-use super::jobs::{self, ExpectedModel, IdentifyRequest, JobKind, JobStatus};
+use super::jobs::{self, IdentifyRequest, JobKind, JobStatus};
 use super::people::{self, PropagatedLink};
 use crate::audio::common::speaker_count_from_command;
 use crate::database::repositories::person::{PeopleRepository, PersonSummary};
@@ -53,11 +53,11 @@ pub async fn start_speaker_identification<R: Runtime>(
         &app,
         IdentifyRequest {
             meeting_id,
-            folder_path: PathBuf::from(meeting_folder_path),
-            num_speakers: speaker_count_from_command(num_speakers),
             automatic: false,
-            kind: JobKind::Identify,
-            expected_model: None,
+            kind: JobKind::Identify {
+                folder_path: PathBuf::from(meeting_folder_path),
+                num_speakers: speaker_count_from_command(num_speakers),
+            },
         },
     )
 }
@@ -82,11 +82,10 @@ pub async fn api_list_meeting_speakers(
         .map_err(|e| format!("Failed to load speakers: {}", e))
 }
 
-/// What naming or confirming a speaker did: the person it is linked to, and the speakers of other
-/// meetings that were named after them (what Undo reverts).
+/// What naming or confirming a speaker did: the speakers of other meetings that were named after
+/// the same person (what Undo reverts).
 #[derive(Debug, Clone, Default, Serialize, PartialEq)]
 pub struct NameOutcome {
-    pub person_id: Option<String>,
     pub propagated: Vec<PropagatedLink>,
 }
 
@@ -105,8 +104,8 @@ fn user_error(action: &str, e: sqlx::Error) -> String {
 }
 
 /// Applies the action, then names the person's voice in other meetings when voices are
-/// remembered and a person is linked; rewrites transcripts.json for the meeting and every
-/// changed meeting.
+/// remembered and a person is linked; transcripts.json of the meeting and every changed meeting
+/// is rewritten in the background.
 async fn name_and_propagate(
     pool: &SqlitePool,
     meeting_id: &str,
@@ -123,7 +122,7 @@ async fn name_and_propagate(
             .map_err(|e| user_error("confirm the name", e))?,
     };
     let propagated = match person_id.as_deref() {
-        Some(person_id) if remember_voices => people::propagate_person(pool, person_id, &jobs::is_busy, people::VOICE_STRONG)
+        Some(person_id) if remember_voices => people::propagate_person(pool, person_id, &jobs::is_busy)
             .await
             .unwrap_or_else(|e| {
                 // The name itself is saved; other meetings simply keep their names.
@@ -132,13 +131,11 @@ async fn name_and_propagate(
             }),
         _ => Vec::new(),
     };
-    jobs::rewrite_transcripts_json(pool, meeting_id, None).await;
     // Propagation never touches this meeting (the person is linked here) and makes at most one
     // link per meeting, so each link is a distinct other meeting.
-    for link in &propagated {
-        jobs::rewrite_transcripts_json(pool, &link.meeting_id, None).await;
-    }
-    Ok(NameOutcome { person_id, propagated })
+    let changed = std::iter::once(meeting_id.to_string()).chain(propagated.iter().map(|l| l.meeting_id.clone()));
+    jobs::rewrite_transcripts_json_later(pool, changed);
+    Ok(NameOutcome { propagated })
 }
 
 #[tauri::command]
@@ -177,7 +174,7 @@ pub async fn api_reject_meeting_speaker_name(
     SpeakersRepository::reject(pool, &meeting_id, &speaker_key)
         .await
         .map_err(|e| user_error("reject the name", e))?;
-    jobs::rewrite_transcripts_json(pool, &meeting_id, None).await;
+    jobs::rewrite_transcripts_json_later(pool, [meeting_id]);
     Ok(())
 }
 
@@ -191,9 +188,7 @@ pub async fn api_undo_name_propagation(
     let changed = people::undo_propagation(pool, &links)
         .await
         .map_err(|e| user_error("undo the names", e))?;
-    for meeting_id in &changed {
-        jobs::rewrite_transcripts_json(pool, meeting_id, None).await;
-    }
+    jobs::rewrite_transcripts_json_later(pool, changed.clone());
     Ok(changed)
 }
 
@@ -214,9 +209,7 @@ pub async fn api_rename_person(
     let changed = PeopleRepository::rename(pool, &person_id, &name)
         .await
         .map_err(|e| user_error("rename the person", e))?;
-    for meeting_id in &changed {
-        jobs::rewrite_transcripts_json(pool, meeting_id, None).await;
-    }
+    jobs::rewrite_transcripts_json_later(pool, changed);
     Ok(())
 }
 
@@ -230,9 +223,7 @@ pub async fn api_merge_people(
     let changed = PeopleRepository::merge(pool, &from_id, &into_id)
         .await
         .map_err(|e| user_error("merge people", e))?;
-    for meeting_id in &changed {
-        jobs::rewrite_transcripts_json(pool, meeting_id, None).await;
-    }
+    jobs::rewrite_transcripts_json_later(pool, changed);
     Ok(())
 }
 
@@ -261,8 +252,8 @@ pub async fn api_merge_meeting_speakers(
     jobs::ensure_idle(&meeting_id)?;
     SpeakersRepository::merge(state.db_manager.pool(), &meeting_id, &from_key, &into_key)
         .await
-        .map_err(|e| format!("Failed to merge speakers: {}", e))?;
-    jobs::rewrite_transcripts_json(state.db_manager.pool(), &meeting_id, None).await;
+        .map_err(|e| user_error("merge speakers", e))?;
+    jobs::rewrite_transcripts_json_later(state.db_manager.pool(), [meeting_id]);
     Ok(())
 }
 
@@ -281,25 +272,16 @@ pub async fn api_set_transcript_speaker(
     };
     let key = SpeakersRepository::reassign_row(state.db_manager.pool(), &meeting_id, &transcript_id, target)
         .await
-        .map_err(|e| format!("Failed to change speaker: {}", e))?;
-    jobs::rewrite_transcripts_json(state.db_manager.pool(), &meeting_id, None).await;
+        .map_err(|e| user_error("change speaker", e))?;
+    jobs::rewrite_transcripts_json_later(state.db_manager.pool(), [meeting_id]);
     Ok(key)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::database::repositories::speaker::{NameSource, NewSpeaker, SpeakerLink, SpeakerWrite};
-    use crate::database::test_support::{migrated_pool, seed_meeting, seed_person};
-    use sqlx::SqlitePool;
-
-    async fn meeting(pool: &SqlitePool, id: &str, speakers: Vec<NewSpeaker>) {
-        seed_meeting(pool, id, &[]).await;
-        let mut conn = pool.acquire().await.unwrap();
-        SpeakersRepository::replace_for_meeting(&mut conn, id, &SpeakerWrite { speakers, ..Default::default() })
-            .await
-            .unwrap();
-    }
+    use crate::database::repositories::speaker::{NameSource, NewSpeaker, SpeakerLink};
+    use crate::database::test_support::{migrated_pool, seed_person, seed_speakers};
 
     fn voice(key: &str, embedding: &[f32]) -> NewSpeaker {
         NewSpeaker { key: key.into(), embedding: embedding.to_vec(), speech_seconds: 1.0, ..Default::default() }
@@ -321,12 +303,13 @@ mod tests {
     #[tokio::test]
     async fn name_and_propagate_returns_links_from_other_meetings() {
         let pool = migrated_pool().await;
-        meeting(&pool, "cmd-a", vec![voice("spk_0", &[1.0, 0.0])]).await;
-        meeting(&pool, "cmd-b", vec![voice("spk_0", &[0.99, 0.1]), voice("spk_1", &[0.0, 1.0])]).await;
+        seed_speakers(&pool, "cmd-a", vec![voice("spk_0", &[1.0, 0.0])]).await;
+        seed_speakers(&pool, "cmd-b", vec![voice("spk_0", &[0.99, 0.1]), voice("spk_1", &[0.0, 1.0])]).await;
 
         let outcome = name_and_propagate(&pool, "cmd-a", "spk_0", NameAction::Name("Noah".into()), true).await.unwrap();
 
-        let person_id = outcome.person_id.clone().expect("linked to a person");
+        let a = SpeakersRepository::list(&pool, "cmd-a").await.unwrap();
+        let person_id = a[0].link.person_id.clone().expect("linked to a person");
         assert_eq!(outcome.propagated, vec![link("cmd-b", "spk_0", &person_id)]);
         let b = SpeakersRepository::list(&pool, "cmd-b").await.unwrap();
         assert_eq!(b[0].display_name.as_deref(), Some("Noah"));
@@ -337,8 +320,8 @@ mod tests {
     #[tokio::test]
     async fn name_and_propagate_with_remember_off_links_nothing() {
         let pool = migrated_pool().await;
-        meeting(&pool, "cmd-a", vec![voice("spk_0", &[1.0, 0.0])]).await;
-        meeting(&pool, "cmd-b", vec![voice("spk_0", &[0.99, 0.1])]).await;
+        seed_speakers(&pool, "cmd-a", vec![voice("spk_0", &[1.0, 0.0])]).await;
+        seed_speakers(&pool, "cmd-b", vec![voice("spk_0", &[0.99, 0.1])]).await;
 
         let outcome = name_and_propagate(&pool, "cmd-a", "spk_0", NameAction::Name("Noah".into()), false).await.unwrap();
 
@@ -359,30 +342,29 @@ mod tests {
             link: SpeakerLink { person_id: Some("person-noah".into()), name_source: Some(NameSource::Voice), ..Default::default() },
             ..voice("spk_0", &[1.0, 0.0])
         };
-        meeting(&pool, "cmd-c", vec![auto]).await;
-        meeting(&pool, "cmd-d", vec![voice("spk_0", &[0.99, 0.1])]).await;
+        seed_speakers(&pool, "cmd-c", vec![auto]).await;
+        seed_speakers(&pool, "cmd-d", vec![voice("spk_0", &[0.99, 0.1])]).await;
 
         let outcome = name_and_propagate(&pool, "cmd-c", "spk_0", NameAction::Confirm, true).await.unwrap();
 
-        assert_eq!(outcome.person_id.as_deref(), Some("person-noah"));
         assert_eq!(outcome.propagated, vec![link("cmd-d", "spk_0", "person-noah")]);
     }
 }
 
-/// Queues a search for names said in the meeting. `automatic` runs are started by the app after
-/// Identify and show no toast; they carry the provider (and endpoint) the app judged local, and
-/// are skipped if the saved model differs when the job runs.
+/// Queues a search for names said in the meeting; returns whether a job was queued. `automatic`
+/// runs are started by the app after Identify and show no toast. They send the transcript only
+/// to a local summary model unless `allow_cloud` is true: otherwise nothing is queued and the
+/// result is false, and the job checks again when it runs.
 #[tauri::command]
 pub async fn api_guess_speaker_names<R: Runtime>(
     app: AppHandle<R>,
+    state: tauri::State<'_, AppState>,
     meeting_id: String,
     automatic: bool,
-    expected_provider: Option<String>,
-    expected_endpoint: Option<String>,
-) -> Result<(), String> {
-    let expected_model = expected_provider.map(|provider| ExpectedModel { provider, endpoint: expected_endpoint });
-    jobs::enqueue(
-        &app,
-        IdentifyRequest { meeting_id, folder_path: PathBuf::new(), num_speakers: None, automatic, kind: JobKind::Naming, expected_model },
-    )
+    allow_cloud: Option<bool>,
+) -> Result<bool, String> {
+    match jobs::naming_request(state.db_manager.pool(), meeting_id, automatic, allow_cloud).await {
+        Some(req) => jobs::enqueue(&app, req).map(|()| true),
+        None => Ok(false),
+    }
 }

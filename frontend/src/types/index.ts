@@ -17,8 +17,6 @@ export interface Transcript {
   audio_end_time?: number;   // Seconds from recording start (e.g., 128.6)
   duration?: number;          // Segment duration in seconds (e.g., 3.3)
   speaker?: string | null;
-  /** Identify kept this row whole although it holds a speaker change */
-  speaker_mixed?: boolean;
 }
 
 export interface TranscriptUpdate {
@@ -145,8 +143,6 @@ export interface TranscriptSegmentData {
   text: string;
   confidence?: number;
   speaker?: string | null;
-  /** The row holds two speakers under its majority label; speaker samples skip it */
-  speakerMixed?: boolean;
 }
 
 export type NameSource = 'user' | 'voice' | 'conversation';
@@ -170,6 +166,9 @@ export interface MeetingSpeaker {
   suggestion_source: SuggestionSource | null;
   /** Why the name is suggested, e.g. "voice match 0.68" or "addressed as Noah at 01:12" */
   suggestion_reason: string | null;
+  /** Up to 8 s from the start of the speaker's longest single-speaker row; null without one */
+  sample_start_s: number | null;
+  sample_end_s: number | null;
 }
 
 export interface SpeakerJobStatus {
@@ -200,7 +199,6 @@ export interface PropagatedLink {
 }
 
 export interface NameOutcome {
-  person_id: string | null;
   propagated: PropagatedLink[];
 }
 
@@ -226,8 +224,8 @@ export interface DiarizationModelsStatus {
 
 /** How to play a meeting's recording (`api_prepare_meeting_playback`). */
 export interface PlaybackSource {
-  /** Asset-protocol URL of the audio file. */
-  url: string;
+  /** The audio file; played over the asset protocol. */
+  path: string;
   /** Length in seconds of container time, which is the recording clock. */
   duration_s: number;
   /** (clock_s, file_s) points; the identity for every recording today. */
