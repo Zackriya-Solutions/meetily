@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import {
-  buildSpeakerNameMap, defaultSpeakerLabel, formatPropagationMessage, formatSpeakerCount, formatTranscriptLine,
+  buildSpeakerNameMap, defaultSpeakerLabel, formatPropagationMessage, formatSpeakerCount,
   isSpeakerRunStart, rowSpeakerControl, speakerNameState,
 } from '../../src/lib/speakers';
-import type { MeetingSpeaker, Transcript } from '../../src/types';
+import type { MeetingSpeaker } from '../../src/types';
 import { makeSpeaker } from '../fixtures/speakers';
 
 const speaker = (speaker_key: string, display_name: string | null): MeetingSpeaker => makeSpeaker(speaker_key, { display_name });
@@ -17,13 +17,6 @@ describe('speaker helpers', () => {
 
   test('blank names fall back to the default label', () => {
     expect(buildSpeakerNameMap([speaker('spk_0', '  '), speaker('spk_1', 'Ana')])).toEqual({ spk_0: 'Speaker 1', spk_1: 'Ana' });
-  });
-
-  test('lines carry the speaker name only when the row has a speaker', () => {
-    const row = { id: 't1', text: 'hello', timestamp: '10:00', audio_start_time: 65 } as Transcript;
-    expect(formatTranscriptLine({ ...row, speaker: 'spk_1' }, { spk_1: 'Ana' })).toBe('[01:05] Ana: hello');
-    expect(formatTranscriptLine({ ...row, speaker: null }, {})).toBe('[01:05] hello');
-    expect(formatTranscriptLine({ ...row, audio_start_time: undefined }, {})).toBe('10:00 hello');
   });
 
   test('only the first row of a same-speaker run starts a run', () => {

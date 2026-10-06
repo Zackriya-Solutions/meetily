@@ -1,18 +1,18 @@
 "use client";
 
 import { MeetingSpeaker, SpeakerJobStatus, Transcript, TranscriptSegmentData } from '@/types';
+import { TranscriptView } from '@/components/TranscriptView';
+import { VirtualizedTranscriptView, type RenderSpeaker } from '@/components/VirtualizedTranscriptView';
+import { TranscriptButtonGroup } from './TranscriptButtonGroup';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { toast } from 'sonner';
 import { rowSpeakerControl } from '@/lib/speakers';
 import { followAlong, needsMoreRows, rowIndexAtTime, type FollowState } from '@/lib/playback';
-import { convertTranscriptsToSegments } from '@/hooks/usePaginatedTranscripts';
 import { SpeakerChip } from '@/components/Speakers/SpeakerChip';
 import { SpeakerBar } from '@/components/Speakers/SpeakerBar';
 import { SpeakerJobBanner } from '@/components/Speakers/SpeakerJobBanner';
 import { usePlayback, usePlaybackClockSelector } from '@/hooks/usePlayback';
 import { PlayerBar } from './PlayerBar';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { toast } from 'sonner';
-import { VirtualizedTranscriptView, type RenderSpeaker } from '@/components/VirtualizedTranscriptView';
-import { TranscriptButtonGroup } from './TranscriptButtonGroup';
 
 export interface SpeakerTools {
   speakers: MeetingSpeaker[];
@@ -91,7 +91,14 @@ export function TranscriptPanel({
       return segments;
     }
     // Convert transcripts to segments for virtualization
-    return convertTranscriptsToSegments(transcripts);
+    return transcripts.map(t => ({
+      id: t.id,
+      timestamp: t.audio_start_time ?? 0,
+      endTime: t.audio_end_time,
+      text: t.text,
+      confidence: t.confidence,
+      speaker: t.speaker ?? null,
+    }));
   }, [transcripts, usePagination, segments]);
 
   // The recording plays in the panel; meetings without a folder have no audio.

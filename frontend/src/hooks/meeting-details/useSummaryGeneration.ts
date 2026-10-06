@@ -18,8 +18,7 @@ import {
   readCachedDetectedSummaryLanguage,
 } from '@/lib/summary-language-preferences';
 import { parseSummaryContent, readSummaryMetadata } from '@/lib/summary-content';
-import { fetchSpeakerNames, formatTranscriptLine } from '@/lib/speakers';
-import { fetchAllMeetingTranscripts } from '@/lib/transcripts';
+import { fetchSpeakerNames, speakerLabel } from '@/lib/speakers';
 
 async function resolveSummaryLanguage(
   meetingId: string,
@@ -403,10 +402,34 @@ export function useSummaryGeneration({
     updateMeetingTitle,
   ]);
 
-  // Every row for summary generation, not only the loaded pages
+  // Helper function to fetch ALL transcripts for summary generation
   const fetchAllTranscripts = useCallback(async (meetingId: string): Promise<Transcript[]> => {
     try {
-      return await fetchAllMeetingTranscripts(meetingId);
+      console.log('📊 Fetching all transcripts for meeting:', meetingId);
+
+      // First, get total count by fetching first page
+      const firstPage = await invokeTauri('api_get_meeting_transcripts', {
+        meetingId,
+        limit: 1,
+        offset: 0,
+      }) as { transcripts: Transcript[]; total_count: number; has_more: boolean };
+
+      const totalCount = firstPage.total_count;
+      console.log(`📊 Total transcripts in database: ${totalCount}`);
+
+      if (totalCount === 0) {
+        return [];
+      }
+
+      // Fetch all transcripts in one call
+      const allData = await invokeTauri('api_get_meeting_transcripts', {
+        meetingId,
+        limit: totalCount,
+        offset: 0,
+      }) as { transcripts: Transcript[]; total_count: number; has_more: boolean };
+
+      console.log(`✅ Fetched ${allData.transcripts.length} transcripts from database`);
+      return allData.transcripts;
     } catch (error) {
       console.error('❌ Error fetching all transcripts:', error);
       toast.error('Failed to fetch transcripts for summary generation');
@@ -414,10 +437,22 @@ export function useSummaryGeneration({
     }
   }, []);
 
-  const buildSummaryTranscriptPayload = useCallback((allTranscripts: Transcript[], names: Record<string, string>) => ({
-    transcriptText: allTranscripts.map((t) => formatTranscriptLine(t, names)).join('\n'),
-    transcriptTexts: allTranscripts.map((t) => t.text),
-  }), []);
+  const buildSummaryTranscriptPayload = useCallback((allTranscripts: Transcript[], names: Record<string, string>) => {
+    const formatTime = (seconds: number | undefined, fallbackTimestamp: string): string => {
+      if (seconds == null) {
+        return fallbackTimestamp;
+      }
+      const totalSecs = Math.floor(seconds);
+      return `[${Math.floor(totalSecs / 60).toString().padStart(2, '0')}:${(totalSecs % 60).toString().padStart(2, '0')}]`;
+    };
+
+    return {
+      transcriptText: allTranscripts
+        .map((transcript) => `${formatTime(transcript.audio_start_time, transcript.timestamp)} ${transcript.speaker ? `${speakerLabel(transcript.speaker, names)}: ` : ''}${transcript.text}`)
+        .join('\n'),
+      transcriptTexts: allTranscripts.map((transcript) => transcript.text),
+    };
+  }, []);
 
   const showPreflightError = useCallback((message: string) => {
     setSummaryError(message);

@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import { MeetingSpeaker, SuggestionSource, Transcript } from '@/types';
+import { MeetingSpeaker, SuggestionSource } from '@/types';
 
 const PALETTE = [
   { chip: 'bg-blue-100 text-blue-800 border-blue-200', dot: 'bg-blue-500' },
@@ -35,18 +35,6 @@ export function speakerLabel(key: string, names: Record<string, string>): string
 export function speakerColor(key: string): { chip: string; dot: string } {
   const index = keyIndex(key) ?? 0;
   return PALETTE[index % PALETTE.length];
-}
-
-export function formatRecordingTime(seconds: number | undefined, fallback: string): string {
-  if (seconds === undefined || seconds === null) return fallback;
-  const total = Math.floor(seconds);
-  return `[${Math.floor(total / 60).toString().padStart(2, '0')}:${(total % 60).toString().padStart(2, '0')}]`;
-}
-
-/** `[MM:SS] Name: text`, or `[MM:SS] text` when the row has no speaker. */
-export function formatTranscriptLine(t: Transcript, names: Record<string, string>): string {
-  const time = formatRecordingTime(t.audio_start_time, t.timestamp);
-  return t.speaker ? `${time} ${speakerLabel(t.speaker, names)}: ${t.text}` : `${time} ${t.text}`;
 }
 
 export async function fetchSpeakerNames(meetingId: string): Promise<Record<string, string>> {

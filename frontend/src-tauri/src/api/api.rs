@@ -1003,6 +1003,7 @@ pub async fn api_save_transcript<R: Runtime>(
             format!("Invalid transcript data format: {}. Please check the data structure.", e)
         })?;
 
+
     let pool = state.db_manager.pool();
     let folder_for_speakers = folder_path.clone().filter(|f| !f.trim().is_empty());
 

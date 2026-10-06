@@ -15,7 +15,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
@@ -224,7 +224,7 @@ pub(crate) struct ResolvedLlm {
     /// Tokens one request may carry: the model's context minus 300 for the prompt, or 100 000
     /// for cloud and custom providers.
     pub context_tokens: usize,
-    pub app_data_dir: Option<PathBuf>,
+    pub app_data_dir: Option<std::path::PathBuf>,
 }
 
 impl ResolvedLlm {
@@ -261,7 +261,7 @@ pub(crate) async fn resolve_llm(
     pool: &SqlitePool,
     provider_name: &str,
     model_name: &str,
-    app_data_dir: Option<PathBuf>,
+    app_data_dir: Option<std::path::PathBuf>,
 ) -> Result<ResolvedLlm, String> {
     let provider = LLMProvider::from_str(provider_name)?;
 
@@ -505,7 +505,19 @@ impl SummaryService {
             meeting_id
         );
 
-        let llm = match resolve_llm(&pool, &model_provider, &model_name, _app.path().app_data_dir().ok()).await {
+        // Parse provider
+        let ResolvedLlm {
+            provider,
+            api_key: final_api_key,
+            ollama_endpoint,
+            custom_openai_endpoint,
+            max_tokens: custom_openai_max_tokens,
+            temperature: custom_openai_temperature,
+            top_p: custom_openai_top_p,
+            context_tokens: token_threshold,
+            app_data_dir,
+            ..
+        } = match resolve_llm(&pool, &model_provider, &model_name, _app.path().app_data_dir().ok()).await {
             Ok(llm) => llm,
             Err(e) => {
                 Self::fail_and_cleanup(&pool, &meeting_id, started_at, &e).await;
@@ -541,14 +553,14 @@ impl SummaryService {
             &custom_prompt,
             &template_id,
             &template_fingerprint,
-            llm.context_tokens,
+            token_threshold,
             &model_provider,
             &model_name,
-            llm.ollama_endpoint.as_deref(),
-            llm.custom_openai_endpoint.as_deref(),
-            llm.max_tokens,
-            llm.temperature,
-            llm.top_p,
+            ollama_endpoint.as_deref(),
+            custom_openai_endpoint.as_deref(),
+            custom_openai_max_tokens,
+            custom_openai_temperature,
+            custom_openai_top_p,
         );
 
         let cached_english = match SummaryProcessesRepository::get_summary_data(&pool, &meeting_id).await {
@@ -581,20 +593,20 @@ impl SummaryService {
         let client = reqwest::Client::new();
         let result = generate_meeting_summary(
             &client,
-            &llm.provider,
+            &provider,
             &model_name,
-            &llm.api_key,
+            &final_api_key,
             &text,
             &custom_prompt,
             &template_id,
             &template,
-            llm.context_tokens,
-            llm.ollama_endpoint.as_deref(),
-            llm.custom_openai_endpoint.as_deref(),
-            llm.max_tokens,
-            llm.temperature,
-            llm.top_p,
-            llm.app_data_dir.as_ref(),
+            token_threshold,
+            ollama_endpoint.as_deref(),
+            custom_openai_endpoint.as_deref(),
+            custom_openai_max_tokens,
+            custom_openai_temperature,
+            custom_openai_top_p,
+            app_data_dir.as_ref(),
             Some(&cancellation_token),
             summary_language.as_deref(),
             detected_summary_language.as_deref(),
@@ -780,11 +792,11 @@ mod tests {
         assert_eq!(claude.context_tokens, 100_000);
         assert_eq!(claude.api_key, "sk-ant");
 
-        let builtin = resolve_llm(&pool, "builtin-ai", "gemma3:1b", Some(PathBuf::from("/data"))).await.unwrap();
+        let builtin = resolve_llm(&pool, "builtin-ai", "gemma3:1b", Some(std::path::PathBuf::from("/data"))).await.unwrap();
         let context = crate::summary::summary_engine::models::get_model_by_name("gemma3:1b").unwrap().context_size;
         assert_eq!(builtin.context_tokens, context as usize - 300);
         assert_eq!(builtin.api_key, "");
-        assert_eq!(builtin.app_data_dir, Some(PathBuf::from("/data")));
+        assert_eq!(builtin.app_data_dir, Some(std::path::PathBuf::from("/data")));
         assert!(builtin.is_local());
         assert!(!claude.is_local());
     }

@@ -121,6 +121,9 @@ async fn start_retranscription<R: Runtime>(
     super::common::unload_engine_after_batch(use_parakeet).await;
     drop(batch_guard);
 
+    // Guard will automatically clear flag on drop
+    // No need for manual: RETRANSCRIPTION_IN_PROGRESS.store(false, Ordering::SeqCst);
+
     match &result {
         Ok(res) => {
             let _ = app.emit(
@@ -232,11 +235,11 @@ async fn run_retranscription<R: Runtime>(
     }
 
     // Convert to 16kHz mono format (CPU-intensive, run in blocking task)
-    let audio_samples = Arc::new(
-        tokio::task::spawn_blocking(move || decoded.into_whisper_format())
-            .await
-            .map_err(|e| anyhow!("Resample task panicked: {}", e))?,
-    );
+    let audio_samples = tokio::task::spawn_blocking(move || {
+        decoded.into_whisper_format()
+    })
+    .await
+    .map_err(|e| anyhow!("Resample task panicked: {}", e))?;
     info!("Converted to 16kHz mono format: {} samples", audio_samples.len());
 
     emit_progress(&app, &meeting_id, "vad", 20, "Detecting speech segments...");
@@ -250,12 +253,13 @@ async fn run_retranscription<R: Runtime>(
     // IMPORTANT: Run VAD in a blocking task to avoid blocking the async runtime
     // For large files (35+ minutes), VAD processing can take several minutes
     let app_for_vad = app.clone();
-    let samples_for_vad = audio_samples.clone();
+    let audio_samples = Arc::new(audio_samples);
+    let samples_for_speakers = audio_samples.clone();
     let meeting_id_for_vad = meeting_id.clone();
 
     let speech_segments = tokio::task::spawn_blocking(move || {
         get_speech_chunks_with_progress(
-            &samples_for_vad,
+            &audio_samples,
             VAD_REDEMPTION_TIME_MS,
             |vad_progress, segments_found| {
                 // Map VAD progress (0-100) to overall progress (20-25)
@@ -316,7 +320,7 @@ async fn run_retranscription<R: Runtime>(
         let report = move |message: &str| emit_progress(&app_p, &id_p, "speakers", 25, message);
         crate::diarization::jobs::diarize_for_batch(
             &app,
-            audio_samples.clone(),
+            samples_for_speakers.clone(),
             speakers.num_speakers,
             report,
             || RETRANSCRIPTION_CANCELLED.load(Ordering::SeqCst),
@@ -327,7 +331,7 @@ async fn run_retranscription<R: Runtime>(
         (None, None)
     };
     // The full-length 16 kHz buffer is no longer needed; VAD segments carry their own samples.
-    drop(audio_samples);
+    drop(samples_for_speakers);
 
     emit_progress(&app, &meeting_id, "transcribing", 25, "Loading transcription engine...");
 

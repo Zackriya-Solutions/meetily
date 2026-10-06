@@ -6,7 +6,7 @@
  * ## Adding a New Beta Feature
  * 1. Add property to BetaFeatures interface
  * 2. Add default value in DEFAULT_BETA_FEATURES
- * 3. Add the key to featureOrder in components/BetaSettings.tsx so it gets a toggle
+ * 3. Add analytics mapping in BETA_FEATURE_ANALYTICS_MAP
  * 4. Add UI strings in BETA_FEATURE_NAMES and BETA_FEATURE_DESCRIPTIONS
  * 5. Use in components: `betaFeatures.yourFeatureName`
  *

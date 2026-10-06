@@ -1,6 +1,6 @@
 use crate::api::{TranscriptSearchResult, TranscriptSegment};
 use chrono::Utc;
-use sqlx::{Connection, Error as SqlxError, SqliteConnection, SqlitePool};
+use sqlx::{Connection, Error as SqlxError, SqlitePool};
 use log::{error, info};
 use uuid::Uuid;
 
@@ -46,7 +46,20 @@ impl TranscriptsRepository {
         // 2. Save each transcript segment with audio timing fields
         for segment in transcripts {
             let transcript_id = format!("transcript-{}", Uuid::new_v4());
-            let result = Self::insert_row(&mut transaction, &transcript_id, &meeting_id, segment).await;
+            let result = sqlx::query(
+                "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration, speaker)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+            )
+            .bind(&transcript_id)
+            .bind(&meeting_id)
+            .bind(&segment.text)
+            .bind(&segment.timestamp)
+            .bind(segment.audio_start_time)
+            .bind(segment.audio_end_time)
+            .bind(segment.duration)
+            .bind(&segment.speaker)
+            .execute(&mut *transaction)
+            .await;
 
             if let Err(e) = result {
                 error!("Failed to save transcript segment for meeting {}", meeting_id);
@@ -69,7 +82,7 @@ impl TranscriptsRepository {
 
     /// Inserts `segment` as the transcript row `id` of the meeting.
     pub async fn insert_row(
-        conn: &mut SqliteConnection,
+        conn: &mut sqlx::SqliteConnection,
         id: &str,
         meeting_id: &str,
         segment: &TranscriptSegment,

@@ -3,9 +3,9 @@ import { MeetingSummary, Transcript } from '@/types';
 import { BlockNoteSummaryViewRef } from '@/components/AISummary/BlockNoteSummaryView';
 import { toast } from 'sonner';
 import Analytics from '@/lib/analytics';
-import { fetchAllMeetingTranscripts } from '@/lib/transcripts';
+import { invoke as invokeTauri } from '@tauri-apps/api/core';
 import { hasVisibleSummaryContent } from '@/lib/summary-content';
-import { fetchSpeakerNames, formatTranscriptLine } from '@/lib/speakers';
+import { fetchSpeakerNames, speakerLabel } from '@/lib/speakers';
 
 interface UseCopyOperationsProps {
   meeting: any;
@@ -26,10 +26,34 @@ export function useCopyOperations({
   speakerNames,
 }: UseCopyOperationsProps) {
 
-  // Every row for copying, not only the loaded pages
+  // Helper function to fetch ALL transcripts for copying (not just paginated data)
   const fetchAllTranscripts = useCallback(async (meetingId: string): Promise<Transcript[]> => {
     try {
-      return await fetchAllMeetingTranscripts(meetingId);
+      console.log('📊 Fetching all transcripts for copying:', meetingId);
+
+      // First, get total count by fetching first page
+      const firstPage = await invokeTauri('api_get_meeting_transcripts', {
+        meetingId,
+        limit: 1,
+        offset: 0,
+      }) as { transcripts: Transcript[]; total_count: number; has_more: boolean };
+
+      const totalCount = firstPage.total_count;
+      console.log(`📊 Total transcripts in database: ${totalCount}`);
+
+      if (totalCount === 0) {
+        return [];
+      }
+
+      // Fetch all transcripts in one call
+      const allData = await invokeTauri('api_get_meeting_transcripts', {
+        meetingId,
+        limit: totalCount,
+        offset: 0,
+      }) as { transcripts: Transcript[]; total_count: number; has_more: boolean };
+
+      console.log(`✅ Fetched ${allData.transcripts.length} transcripts from database for copying`);
+      return allData.transcripts;
     } catch (error) {
       console.error('❌ Error fetching all transcripts:', error);
       toast.error('Failed to fetch transcripts for copying');
@@ -52,11 +76,23 @@ export function useCopyOperations({
 
     console.log(`✅ Copying ${allTranscripts.length} transcripts to clipboard`);
 
+    // Format timestamps as recording-relative [MM:SS] instead of wall-clock time
+    const formatTime = (seconds: number | undefined, fallbackTimestamp: string): string => {
+      if (seconds == null) {
+        // For old transcripts without audio_start_time, use wall-clock time
+        return fallbackTimestamp;
+      }
+      const totalSecs = Math.floor(seconds);
+      const mins = Math.floor(totalSecs / 60);
+      const secs = totalSecs % 60;
+      return `[${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}]`;
+    };
+
     const header = `# Transcript of the Meeting: ${meeting.id} - ${meetingTitle ?? meeting.title}\n\n`;
     const date = `## Date: ${new Date(meeting.created_at).toLocaleDateString()}\n\n`;
     const names = speakerNames ?? await fetchSpeakerNames(meeting.id);
     const fullTranscript = allTranscripts
-      .map(t => `${formatTranscriptLine(t, names)}  `)
+      .map(t => `${formatTime(t.audio_start_time, t.timestamp)} ${t.speaker ? `${speakerLabel(t.speaker, names)}: ` : ''}${t.text}  `)
       .join('\n');
 
     await navigator.clipboard.writeText(header + date + fullTranscript);

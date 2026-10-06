@@ -4,7 +4,6 @@ use crate::api::TranscriptSegment;
 use crate::audio::decoder::{decode_audio_file, decode_audio_file_with_progress};
 use crate::audio::vad::get_speech_chunks_with_progress;
 use crate::config::{DEFAULT_WHISPER_MODEL, DEFAULT_PARAKEET_MODEL};
-use crate::database::repositories::transcript::TranscriptsRepository;
 use crate::parakeet_engine::ParakeetEngine;
 use crate::state::AppState;
 use crate::whisper_engine::WhisperEngine;
@@ -200,15 +199,51 @@ pub fn validate_audio_file(path: &Path) -> Result<AudioFileInfo> {
 /// Extract duration from audio file metadata without full decode
 /// Returns error if metadata is unavailable, triggering fallback to full decode
 fn extract_duration_from_metadata(path: &Path) -> Result<f64> {
-    // Probe the file format and find the first audio track (lightweight operation)
-    let (_, _, params) = crate::audio::decoder::open_format(path)?;
+    use symphonia::core::formats::FormatOptions;
+    use symphonia::core::io::MediaSourceStream;
+    use symphonia::core::meta::MetadataOptions;
+    use symphonia::core::probe::Hint;
+
+    // Open the file
+    let file = std::fs::File::open(path)
+        .map_err(|e| anyhow!("Failed to open audio file: {}", e))?;
+
+    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+
+    // Set up format hint based on file extension
+    let mut hint = Hint::new();
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        hint.with_extension(ext);
+    }
+
+    // Probe the file format (lightweight operation)
+    let probed = symphonia::default::get_probe()
+        .format(
+            &hint,
+            mss,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
+        .map_err(|e| anyhow!("Failed to probe audio format: {}", e))?;
+
+    let format = probed.format;
+
+    // Find the first audio track
+    use symphonia::core::codecs::CODEC_TYPE_NULL;
+    let track = format
+        .tracks()
+        .iter()
+        .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
+        .ok_or_else(|| anyhow!("No audio track found in file"))?;
 
     // Extract duration from metadata
-    let sample_rate = params
+    let sample_rate = track
+        .codec_params
         .sample_rate
         .ok_or_else(|| anyhow!("Unknown sample rate"))?;
 
-    let n_frames = params
+    let n_frames = track
+        .codec_params
         .n_frames
         .ok_or_else(|| anyhow!("Frame count not available in metadata"))?;
 
@@ -393,13 +428,11 @@ async fn run_import<R: Runtime>(
         emit_progress(&app_for_resample, "resampling", overall_progress, msg);
     });
 
-    let audio_samples = Arc::new(
-        tokio::task::spawn_blocking(move || {
-            decoded.into_whisper_format_with_progress(Some(resample_progress))
-        })
-        .await
-        .map_err(|e| anyhow!("Resample task join error: {}", e))?,
-    );
+    let audio_samples = tokio::task::spawn_blocking(move || {
+        decoded.into_whisper_format_with_progress(Some(resample_progress))
+    })
+    .await
+    .map_err(|e| anyhow!("Resample task join error: {}", e))?;
     info!(
         "Converted to 16kHz mono format: {} samples",
         audio_samples.len()
@@ -415,11 +448,12 @@ async fn run_import<R: Runtime>(
 
     // Use VAD to find speech segments
     let app_for_vad = app.clone();
-    let samples_for_vad = audio_samples.clone();
+    let audio_samples = Arc::new(audio_samples);
+    let samples_for_speakers = audio_samples.clone();
 
     let speech_segments = tokio::task::spawn_blocking(move || {
         get_speech_chunks_with_progress(
-            &samples_for_vad,
+            &audio_samples,
             VAD_REDEMPTION_TIME_MS,
             |vad_progress, segments_found| {
                 let overall_progress = 25 + (vad_progress as f32 * 0.05) as u32;
@@ -498,7 +532,7 @@ async fn run_import<R: Runtime>(
             let report = move |message: &str| emit_progress(&app_p, "speakers", 30, message);
             match crate::diarization::jobs::diarize_for_batch(
                 &app,
-                audio_samples.clone(),
+                samples_for_speakers.clone(),
                 speakers.num_speakers,
                 report,
                 || IMPORT_CANCELLED.load(Ordering::SeqCst),
@@ -515,7 +549,7 @@ async fn run_import<R: Runtime>(
             (None, None)
         };
     // The full-length 16 kHz buffer is no longer needed; VAD segments carry their own samples.
-    drop(audio_samples);
+    drop(samples_for_speakers);
 
     emit_progress(&app, "transcribing", 30, "Loading transcription engine...");
 
@@ -749,9 +783,21 @@ async fn create_meeting_with_transcripts(
 
     // Insert transcripts
     for segment in segments {
-        TranscriptsRepository::insert_row(&mut tx, &segment.id, &meeting_id, segment)
-            .await
-            .map_err(|e| anyhow!("Failed to insert transcript: {}", e))?;
+        sqlx::query(
+            "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration, speaker)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&segment.id)
+        .bind(&meeting_id)
+        .bind(&segment.text)
+        .bind(&segment.timestamp)
+        .bind(segment.audio_start_time)
+        .bind(segment.audio_end_time)
+        .bind(segment.duration)
+        .bind(&segment.speaker)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| anyhow!("Failed to insert transcript: {}", e))?;
     }
 
     let (linked, suggested) =
@@ -1013,16 +1059,7 @@ pub async fn start_import_audio_command<R: Runtime>(
 
     // Spawn import in background
     tauri::async_runtime::spawn(async move {
-        let result = start_import(
-            app,
-            source_path,
-            title,
-            language,
-            model,
-            provider,
-            super::common::SpeakerOptions::from_command(identify_speakers, num_speakers),
-        )
-        .await;
+        let result = start_import(app, source_path, title, language, model, provider, super::common::SpeakerOptions::from_command(identify_speakers, num_speakers)).await;
 
         if let Err(e) = result {
             error!("Import failed: {}", e);
