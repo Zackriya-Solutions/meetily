@@ -208,6 +208,22 @@ about 37 ms per checkpoint. The existing `TimeMap` is exported as a piecewise-li
 `(clock_s, file_s)` points (identity: two points). The frontend interpolates with
 `clockToFile`/`fileToClock`; both directions are unit-tested against the Rust conversion.
 
+**Note (measured 2026-10-05):**
+
+- **Container time is the recording clock.** Joining checkpoints with `-c copy` advances the
+  container timeline by exactly 30 s per checkpoint. In a real 62 min recording, checkpoint k
+  starts at pts `1024 + k × 1 440 000` at 48 kHz on all 124 boundaries.
+- **The drift exists only in decoded frames.** The ~37 ms per checkpoint appears only when decoded
+  frames are counted from the start of the file, as diarization does through `TimeMap`.
+- **So playback uses the identity table.** The `<audio>` element and the WAV clips are both
+  positioned in container time, so playback uses the identity table for every recording.
+- **The table interface stays.** If a webview turns out to follow decoded frames, a checkpoint
+  table can be returned instead.
+- **How to verify in the manual pass:** click a line at about 40 min of a live recording, and at
+  about 55 min, and listen.
+  - The words must match the line.
+  - A steady lag of about 3 s at 40 min (4 s at 55 min) means the webview counts decoded frames.
+
 ### 6.3 Player
 
 - A player bar at the bottom of the transcript panel: play/pause, seek bar, current time and
