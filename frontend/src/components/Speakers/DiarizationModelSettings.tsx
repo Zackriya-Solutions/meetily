@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { DiarizationModelsStatus } from '@/types';
 
-const mb = (bytes: number) => `${Math.round(bytes / 1_000_000)} MB`;
+export const formatMegabytes = (bytes: number) => `${Math.round(bytes / 1_000_000)} MB`;
 
 export function useDiarizationModels() {
   const [status, setStatus] = useState<DiarizationModelsStatus | null>(null);
@@ -66,9 +66,9 @@ export function DiarizationModelSettings() {
             <Progress value={progress} />
           </div>
         ) : status.installed ? (
-          `Speaker models downloaded (${mb(status.total_bytes)})`
+          `Speaker models downloaded (${formatMegabytes(status.total_bytes)})`
         ) : (
-          `Speaker models not downloaded (${mb(status.total_bytes)}); they download on first use`
+          `Speaker models not downloaded (${formatMegabytes(status.total_bytes)}); they download on first use`
         )}
       </div>
       {!downloading && (status.installed

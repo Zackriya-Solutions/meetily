@@ -13,6 +13,8 @@ interface UseCopyOperationsProps {
   meetingTitle: string;
   aiSummary: MeetingSummary | null;
   blockNoteSummaryRef: RefObject<BlockNoteSummaryViewRef>;
+  /** Names the caller already holds; fetched per copy when absent. */
+  speakerNames?: Record<string, string>;
 }
 
 export function useCopyOperations({
@@ -21,6 +23,7 @@ export function useCopyOperations({
   meetingTitle,
   aiSummary,
   blockNoteSummaryRef,
+  speakerNames,
 }: UseCopyOperationsProps) {
 
   // Helper function to fetch ALL transcripts for copying (not just paginated data)
@@ -75,7 +78,7 @@ export function useCopyOperations({
 
     const header = `# Transcript of the Meeting: ${meeting.id} - ${meetingTitle ?? meeting.title}\n\n`;
     const date = `## Date: ${new Date(meeting.created_at).toLocaleDateString()}\n\n`;
-    const names = await fetchSpeakerNames(meeting.id);
+    const names = speakerNames ?? await fetchSpeakerNames(meeting.id);
     const fullTranscript = allTranscripts
       .map(t => `${formatTranscriptLine(t, names)}  `)
       .join('\n');
@@ -93,7 +96,7 @@ export function useCopyOperations({
       transcript_length: allTranscripts.length.toString(),
       word_count: wordCount.toString()
     });
-  }, [meeting, meetingTitle, fetchAllTranscripts]);
+  }, [meeting, meetingTitle, fetchAllTranscripts, speakerNames]);
 
   // Copy summary to clipboard
   const handleCopySummary = useCallback(async () => {

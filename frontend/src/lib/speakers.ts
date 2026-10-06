@@ -63,3 +63,20 @@ export function isSpeakerRunStart(segments: ReadonlyArray<{ speaker?: string | n
   const current = segments[index]?.speaker;
   return !!current && current !== segments[index - 1]?.speaker;
 }
+
+/**
+ * The speaker control a transcript row shows: the chip where a speaker's run starts, a compact
+ * control on the run's other rows while editing is possible, otherwise none.
+ */
+export function rowSpeakerControl(
+  speakerKey: string | null | undefined,
+  isRunStart: boolean,
+  editable: boolean,
+): { speakerKey: string; compact: boolean } | null {
+  if (!speakerKey || (!isRunStart && !editable)) return null;
+  return { speakerKey, compact: !isRunStart };
+}
+
+export function formatSpeakerCount(count: number): string {
+  return `${count} speaker${count === 1 ? '' : 's'}`;
+}

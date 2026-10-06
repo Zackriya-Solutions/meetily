@@ -92,8 +92,7 @@ export default function PageContent({
   } = useMeetingSpeakers(meeting.id);
   // Enhance (retranscription) and Identify both replace the meeting's speakers, so reload them with the rows.
   const refetchTranscriptsAndSpeakers = useCallback(async () => {
-    await onRefetchTranscripts?.();
-    await refetchSpeakers();
+    await Promise.all([onRefetchTranscripts?.(), refetchSpeakers()]);
   }, [onRefetchTranscripts, refetchSpeakers]);
   const speakerIdentification = useSpeakerIdentification(meeting.id, refetchTranscriptsAndSpeakers);
   const {
@@ -123,13 +122,13 @@ export default function PageContent({
     (numSpeakers: number | null) => startSpeakerIdentification(meeting.folder_path, numSpeakers),
     [startSpeakerIdentification, meeting.folder_path],
   );
-  // Stable references let the memoised speaker chips skip re-rendering while the list scrolls.
+  // Stable references let the memoised transcript rows skip re-rendering while the list scrolls;
+  // the job stays out because it changes on every progress event.
   const speakerTools = useMemo<SpeakerTools>(() => ({
     speakers,
     names: speakerNames,
     // Edits made while a job runs would be overwritten by its final write.
     editable: betaFeatures.speakerIdentification && !speakerJobActive,
-    job: speakerJob,
     onRename: renameSpeaker,
     onMerge: onMergeSpeakers,
     onReassign: onReassignSpeaker,
@@ -140,7 +139,6 @@ export default function PageContent({
     speakerNames,
     betaFeatures.speakerIdentification,
     speakerJobActive,
-    speakerJob,
     renameSpeaker,
     onMergeSpeakers,
     onReassignSpeaker,
@@ -198,6 +196,7 @@ export default function PageContent({
     updateMeetingTitle: meetingData.updateMeetingTitle,
     setAiSummary: meetingData.setAiSummary,
     onOpenModelSettings: handleOpenModelSettings,
+    speakerNames,
   });
 
   const copyOperations = useCopyOperations({
@@ -206,6 +205,7 @@ export default function PageContent({
     meetingTitle: meetingData.meetingTitle,
     aiSummary: meetingData.aiSummary,
     blockNoteSummaryRef: meetingData.blockNoteSummaryRef,
+    speakerNames,
   });
 
   const meetingOperations = useMeetingOperations({
@@ -292,6 +292,7 @@ export default function PageContent({
               meetingFolderPath={meeting.folder_path}
               onRefetchTranscripts={refetchTranscriptsAndSpeakers}
               speakerTools={speakerTools}
+              speakerJob={speakerJob}
             />
           }
           summary={

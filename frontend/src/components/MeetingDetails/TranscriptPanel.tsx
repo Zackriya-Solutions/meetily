@@ -2,18 +2,19 @@
 
 import { TranscriptView } from '@/components/TranscriptView';
 import { MeetingSpeaker, SpeakerJobStatus, Transcript, TranscriptSegmentData } from '@/types';
+import { rowSpeakerControl } from '@/lib/speakers';
+import { convertTranscriptsToSegments } from '@/hooks/usePaginatedTranscripts';
 import { SpeakerChip } from '@/components/Speakers/SpeakerChip';
 import { SpeakerBar } from '@/components/Speakers/SpeakerBar';
 import { SpeakerJobBanner } from '@/components/Speakers/SpeakerJobBanner';
 import { useCallback, useMemo } from 'react';
-import { VirtualizedTranscriptView } from '@/components/VirtualizedTranscriptView';
+import { VirtualizedTranscriptView, type RenderSpeaker } from '@/components/VirtualizedTranscriptView';
 import { TranscriptButtonGroup } from './TranscriptButtonGroup';
 
 export interface SpeakerTools {
   speakers: MeetingSpeaker[];
   names: Record<string, string>;
   editable: boolean;
-  job: SpeakerJobStatus | null;
   onRename: (key: string, name: string) => Promise<void>;
   onMerge: (fromKey: string, intoKey: string) => Promise<void>;
   onReassign: (transcriptId: string, key: string | null) => Promise<void>;
@@ -46,6 +47,8 @@ interface TranscriptPanelProps {
   onRefetchTranscripts?: () => Promise<void>;
 
   speakerTools?: SpeakerTools;
+  /** Kept out of speakerTools: it changes on every progress event, and the rows must not. */
+  speakerJob?: SpeakerJobStatus | null;
 }
 
 export function TranscriptPanel({
@@ -67,6 +70,7 @@ export function TranscriptPanel({
   meetingFolderPath,
   onRefetchTranscripts,
   speakerTools,
+  speakerJob = null,
 }: TranscriptPanelProps) {
   // Convert transcripts to segments if pagination is not used but we want virtualization
   const convertedSegments = useMemo(() => {
@@ -74,26 +78,20 @@ export function TranscriptPanel({
       return segments;
     }
     // Convert transcripts to segments for virtualization
-    return transcripts.map(t => ({
-      id: t.id,
-      timestamp: t.audio_start_time ?? 0,
-      endTime: t.audio_end_time,
-      text: t.text,
-      confidence: t.confidence,
-      speaker: t.speaker ?? null,
-    }));
+    return convertTranscriptsToSegments(transcripts);
   }, [transcripts, usePagination, segments]);
 
-  // Stable for a given speakerTools, so the memoised chips skip re-rendering while the list scrolls.
-  const renderSpeaker = useCallback((segment: TranscriptSegmentData, isRunStart: boolean) => {
-    if (!speakerTools || !segment.speaker) return null;
-    // Rows inside a run only get the hover control, and only while editing is possible.
-    if (!isRunStart && !speakerTools.editable) return null;
+  // Stable for a given speakerTools (which leaves out the job), so the memoised rows skip
+  // re-rendering while the list scrolls or a speaker job reports progress.
+  const renderSpeaker = useCallback<RenderSpeaker>((speakerKey, transcriptId, isRunStart) => {
+    if (!speakerTools) return null;
+    const control = rowSpeakerControl(speakerKey, isRunStart, speakerTools.editable);
+    if (!control) return null;
     return (
       <SpeakerChip
-        compact={!isRunStart}
-        speakerKey={segment.speaker}
-        transcriptId={segment.id}
+        compact={control.compact}
+        speakerKey={control.speakerKey}
+        transcriptId={transcriptId}
         speakers={speakerTools.speakers}
         names={speakerTools.names}
         editable={speakerTools.editable}
@@ -117,13 +115,13 @@ export function TranscriptPanel({
           onRefetchTranscripts={onRefetchTranscripts}
           onIdentifySpeakers={speakerTools?.onStartIdentify}
           hasSpeakers={(speakerTools?.speakers.length ?? 0) > 0}
-          speakerJobActive={!!speakerTools?.job}
+          speakerJobActive={!!speakerJob}
         />
       </div>
 
       {speakerTools && (
         <>
-          <SpeakerJobBanner job={speakerTools.job} onCancel={() => void speakerTools.onCancelJob()} />
+          <SpeakerJobBanner job={speakerJob} onCancel={() => void speakerTools.onCancelJob()} />
           <SpeakerBar speakers={speakerTools.speakers} names={speakerTools.names} editable={speakerTools.editable} onRename={speakerTools.onRename} />
         </>
       )}

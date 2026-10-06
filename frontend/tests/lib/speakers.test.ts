@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test';
-import { buildSpeakerNameMap, defaultSpeakerLabel, formatTranscriptLine, isSpeakerRunStart } from '../../src/lib/speakers';
+import {
+  buildSpeakerNameMap, defaultSpeakerLabel, formatSpeakerCount, formatTranscriptLine, isSpeakerRunStart, rowSpeakerControl,
+} from '../../src/lib/speakers';
 import type { MeetingSpeaker, Transcript } from '../../src/types';
 
 const speaker = (speaker_key: string, display_name: string | null): MeetingSpeaker => ({
@@ -27,5 +29,17 @@ describe('speaker helpers', () => {
   test('only the first row of a same-speaker run starts a run', () => {
     const rows = [{ speaker: 'spk_0' }, { speaker: 'spk_0' }, { speaker: 'spk_0' }, { speaker: null }, { speaker: 'spk_1' }];
     expect(rows.map((_, i) => isSpeakerRunStart(rows, i))).toEqual([true, false, false, false, true]);
+  });
+
+  test('rows inside a run get the compact control only while editing is possible', () => {
+    expect(rowSpeakerControl('spk_0', true, false)).toEqual({ speakerKey: 'spk_0', compact: false });
+    expect(rowSpeakerControl('spk_0', false, true)).toEqual({ speakerKey: 'spk_0', compact: true });
+    expect(rowSpeakerControl('spk_0', false, false)).toBeNull();
+    expect(rowSpeakerControl(null, true, true)).toBeNull();
+  });
+
+  test('speaker counts are pluralised', () => {
+    expect(formatSpeakerCount(1)).toBe('1 speaker');
+    expect(formatSpeakerCount(3)).toBe('3 speakers');
   });
 });

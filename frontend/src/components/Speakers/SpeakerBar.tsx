@@ -2,11 +2,9 @@
 
 import { useState } from 'react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { Input } from '@/components/ui/input';
-import { Button } from '@/components/ui/button';
 import { MeetingSpeaker } from '@/types';
 import { speakerColor, speakerLabel } from '@/lib/speakers';
-import { toast } from 'sonner';
+import { SpeakerRenameForm } from './SpeakerRenameForm';
 
 interface SpeakerBarProps {
   speakers: MeetingSpeaker[];
@@ -17,30 +15,20 @@ interface SpeakerBarProps {
 
 function RenameButton({ speaker, names, onRename }: { speaker: MeetingSpeaker; names: Record<string, string>; onRename: SpeakerBarProps['onRename'] }) {
   const [open, setOpen] = useState(false);
-  const [draft, setDraft] = useState('');
   const label = speakerLabel(speaker.speaker_key, names);
   return (
-    <Popover open={open} onOpenChange={(next) => { setOpen(next); if (next) setDraft(speaker.display_name ?? ''); }}>
+    <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <button type="button" className="hover:underline">{label}</button>
       </PopoverTrigger>
       <PopoverContent className="w-60" align="start">
-        <form
-          className="flex gap-2"
-          onSubmit={async (e) => {
-            e.preventDefault();
-            try {
-              await onRename(speaker.speaker_key, draft);
-              setOpen(false);
-            } catch (error) {
-              console.error('Failed to rename speaker', error);
-              toast.error('Failed to rename speaker');
-            }
-          }}
-        >
-          <Input value={draft} onChange={(e) => setDraft(e.target.value)} placeholder={label} autoFocus />
-          <Button type="submit" size="sm">Save</Button>
-        </form>
+        <SpeakerRenameForm
+          speakerKey={speaker.speaker_key}
+          initialName={speaker.display_name ?? ''}
+          placeholder={label}
+          onRename={onRename}
+          onSaved={() => setOpen(false)}
+        />
       </PopoverContent>
     </Popover>
   );

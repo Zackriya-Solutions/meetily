@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import { toast } from 'sonner';
 import { SpeakerJobStatus } from '@/types';
+import { formatSpeakerCount } from '@/lib/speakers';
 
 interface CompletePayload { meeting_id: string; speaker_count: number; automatic: boolean; warning?: string | null }
 interface ErrorPayload { meeting_id: string; error: string; automatic: boolean; cancelled?: boolean }
@@ -35,7 +36,7 @@ export function useSpeakerIdentification(meetingId: string | null, onComplete: (
           setJob(null);
           await onCompleteRef.current();
           if (payload.automatic) return;
-          const identified = `Identified ${payload.speaker_count} speaker${payload.speaker_count === 1 ? '' : 's'}`;
+          const identified = `Identified ${formatSpeakerCount(payload.speaker_count)}`;
           if (payload.warning) {
             toast.warning(identified, { description: payload.warning });
           } else {

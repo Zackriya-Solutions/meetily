@@ -5,7 +5,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { SpeakerCountSelect } from './SpeakerCountSelect';
-import { useDiarizationModels } from './DiarizationModelSettings';
+import { formatMegabytes, useDiarizationModels } from './DiarizationModelSettings';
 
 interface IdentifySpeakersDialogProps {
   open: boolean;
@@ -56,7 +56,7 @@ export function IdentifySpeakersDialog({ open, onOpenChange, hasSpeakers, onRun 
         </div>
         {needsDownload && (
           <div className="space-y-1 text-sm text-gray-600">
-            <div>Speaker models ({Math.round((models.status?.total_bytes ?? 0) / 1_000_000)} MB) will be downloaded first.</div>
+            <div>Speaker models ({formatMegabytes(models.status?.total_bytes ?? 0)}) will be downloaded first.</div>
             {models.downloading && <Progress value={models.progress} />}
           </div>
         )}

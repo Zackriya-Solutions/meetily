@@ -36,9 +36,12 @@ export interface VirtualizedTranscriptViewProps {
     loadedCount?: number;
     onLoadMore?: () => void;
     /** Renders a row's speaker control: the chip where a new speaker starts talking (isRunStart),
-     *  a hover-only compact control on the other rows of a run so any single row can be reassigned */
-    renderSpeaker?: (segment: TranscriptSegmentData, isRunStart: boolean) => React.ReactNode;
+     *  a hover-only compact control on the other rows of a run so any single row can be reassigned.
+     *  Keep it stable: rows re-render when it changes. */
+    renderSpeaker?: RenderSpeaker;
 }
+
+export type RenderSpeaker = (speakerKey: string | null, transcriptId: string, isRunStart: boolean) => React.ReactNode;
 
 // Threshold for enabling virtualization (below this, use simple rendering)
 const VIRTUALIZATION_THRESHOLD = 10;
@@ -75,8 +78,9 @@ const TranscriptSegment = memo(function TranscriptSegment({
     confidence,
     isStreaming,
     showConfidence,
-    speakerSlot,
+    speakerKey = null,
     speakerRunStart = false,
+    renderSpeaker,
 }: {
     id: string;
     timestamp: number;
@@ -84,11 +88,13 @@ const TranscriptSegment = memo(function TranscriptSegment({
     confidence?: number;
     isStreaming: boolean;
     showConfidence: boolean;
-    /** Speaker chip (run start) or compact speaker control (other rows of a run) */
-    speakerSlot?: React.ReactNode;
+    speakerKey?: string | null;
     speakerRunStart?: boolean;
+    renderSpeaker?: RenderSpeaker;
 }) {
     const displayText = cleanStopWords(text) || (text.trim() === '' ? '[Silence]' : text);
+    // Speaker chip (run start) or compact speaker control (other rows of a run); null when there is none
+    const speakerSlot = renderSpeaker?.(speakerKey, id, speakerRunStart) ?? null;
 
     return (
         <div id={`segment-${id}`} className="mb-3 group">
@@ -235,14 +241,6 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
         return () => scrollElement.removeEventListener('scroll', handleScroll);
     }, [onLoadMore, hasMore, isLoadingMore, isRecording]);
 
-    // Chip where a new speaker starts talking; a hover-only compact control on the other rows.
-    const speakerSlotFor = (index: number): { slot: React.ReactNode; runStart: boolean } => {
-        const segment = segments[index];
-        if (!renderSpeaker || !segment?.speaker) return { slot: null, runStart: false };
-        const runStart = isSpeakerRunStart(segments, index);
-        return { slot: renderSpeaker(segment, runStart), runStart };
-    };
-
     // Use simple rendering for small lists, virtualization for large lists
     const useVirtualization = segments.length >= VIRTUALIZATION_THRESHOLD;
 
@@ -298,7 +296,6 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                         {virtualizer.getVirtualItems().map((virtualRow) => {
                             const segment = segments[virtualRow.index];
                             const isStreaming = streamingSegmentId === segment.id;
-                            const { slot, runStart } = speakerSlotFor(virtualRow.index);
 
                             return (
                                 <div
@@ -320,8 +317,9 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                         confidence={segment.confidence}
                                         isStreaming={isStreaming}
                                         showConfidence={showConfidence}
-                                        speakerSlot={slot}
-                                        speakerRunStart={runStart}
+                                        speakerKey={segment.speaker ?? null}
+                                        speakerRunStart={isSpeakerRunStart(segments, virtualRow.index)}
+                                        renderSpeaker={renderSpeaker}
                                     />
                                 </div>
                             );
@@ -363,7 +361,6 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                     <div className="space-y-1">
                         {segments.map((segment, index) => {
                             const isStreaming = streamingSegmentId === segment.id;
-                            const { slot, runStart } = speakerSlotFor(index);
 
                             return (
                                 <motion.div
@@ -379,8 +376,9 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                         confidence={segment.confidence}
                                         isStreaming={isStreaming}
                                         showConfidence={showConfidence}
-                                        speakerSlot={slot}
-                                        speakerRunStart={runStart}
+                                        speakerKey={segment.speaker ?? null}
+                                        speakerRunStart={isSpeakerRunStart(segments, index)}
+                                        renderSpeaker={renderSpeaker}
                                     />
                                 </motion.div>
                             );

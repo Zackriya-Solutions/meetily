@@ -39,14 +39,28 @@ describe('compact speaker control', () => {
     expect(onReassign).toHaveBeenCalledWith('t2', 'spk_1');
   });
 
-  test('renders nothing when editing is off', async () => {
+  test('offers no edit controls when editing is off', async () => {
     let renderer!: ReactTestRenderer;
     await act(async () => {
       renderer = create(
-        <SpeakerChip compact speakerKey="spk_0" transcriptId="t2" speakers={speakers} names={{}}
+        <SpeakerChip speakerKey="spk_0" transcriptId="t2" speakers={speakers} names={{}}
           editable={false} onRename={noop} onMerge={noop} onReassign={noop} />,
       );
     });
-    expect(renderer.toJSON()).toBeNull();
+    expect(renderer.root.findAll((n) => n.type === 'button')).toHaveLength(0);
+  });
+
+  test('renames from the chip with the shared form', async () => {
+    const onRename = mock(async (_key: string, _name: string) => {});
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(
+        <SpeakerChip speakerKey="spk_1" transcriptId="t2" speakers={speakers} names={{ spk_1: 'Ana' }}
+          editable onRename={onRename} onMerge={noop} onReassign={noop} />,
+      );
+    });
+    const form = renderer.root.find((n) => n.type === 'form');
+    await act(async () => { await form.props.onSubmit({ preventDefault: () => {} }); });
+    expect(onRename).toHaveBeenCalledWith('spk_1', 'Ana');
   });
 });

@@ -32,8 +32,7 @@ import {
 } from '../ui/select';
 import { toast } from 'sonner';
 import { useConfig } from '@/contexts/ConfigContext';
-import { Switch } from '../ui/switch';
-import { SpeakerCountSelect } from '@/components/Speakers/SpeakerCountSelect';
+import { IdentifySpeakersOption, useSpeakerOptions } from '@/components/Speakers/IdentifySpeakersOption';
 import { useImportAudio, ImportResult } from '@/hooks/useImportAudio';
 import { useRouter } from 'next/navigation';
 import { useSidebar } from '../Sidebar/SidebarProvider';
@@ -74,12 +73,11 @@ export function ImportAudioDialog({
 }: ImportAudioDialogProps) {
   const router = useRouter();
   const { refetchMeetings } = useSidebar();
-  const { selectedLanguage, transcriptModelConfig, betaFeatures } = useConfig();
+  const { selectedLanguage, transcriptModelConfig } = useConfig();
 
   const [title, setTitle] = useState('');
   const [selectedLang, setSelectedLang] = useState(selectedLanguage || 'auto');
-  const [identifySpeakers, setIdentifySpeakers] = useState(true);
-  const [speakerCount, setSpeakerCount] = useState<number | null>(null);
+  const speakerOptions = useSpeakerOptions();
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [titleModifiedByUser, setTitleModifiedByUser] = useState(false);
 
@@ -197,7 +195,7 @@ export function ImportAudioDialog({
       isParakeetModel ? null : selectedLang === 'auto' ? null : selectedLang,
       selectedModel?.name || null,
       selectedModel?.provider || null,
-      { identify: betaFeatures.speakerIdentification && identifySpeakers, numSpeakers: speakerCount }
+      speakerOptions.request
     );
   };
 
@@ -411,18 +409,7 @@ export function ImportAudioDialog({
                   )}
                 </div>
               )}
-              {fileInfo && betaFeatures.speakerIdentification && (
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className="text-sm font-medium">Identify speakers</div>
-                    <div className="text-xs text-gray-500">Label who said each line</div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {identifySpeakers && <SpeakerCountSelect value={speakerCount} onChange={setSpeakerCount} />}
-                    <Switch checked={identifySpeakers} onCheckedChange={setIdentifySpeakers} />
-                  </div>
-                </div>
-              )}
+              {fileInfo && <IdentifySpeakersOption options={speakerOptions} />}
             </>
           )}
 
