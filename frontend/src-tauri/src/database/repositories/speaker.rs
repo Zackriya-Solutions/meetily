@@ -416,6 +416,23 @@ impl SpeakersRepository {
             .bind(key)
             .execute(&mut *tx)
             .await?;
+            // A suggestion of the same person would bring the rejected name straight back.
+            let same_name = |a: &str, b: &str| {
+                matches!((clean_person_name(a), clean_person_name(b)), (Some(a), Some(b)) if a.to_lowercase() == b.to_lowercase())
+            };
+            let suggests_rejected = link.suggested_person_id.as_deref() == Some(person.id.as_str())
+                || link.suggested_name.as_deref().is_some_and(|s| same_name(s, &name));
+            if suggests_rejected {
+                sqlx::query(
+                    "UPDATE meeting_speakers SET suggested_person_id = NULL, suggested_name = NULL, suggestion_source = NULL,
+                         suggestion_reason = NULL
+                     WHERE meeting_id = ? AND speaker_key = ?",
+                )
+                .bind(meeting_id)
+                .bind(key)
+                .execute(&mut *tx)
+                .await?;
+            }
         } else if let Some(name) = link.suggested_name.clone() {
             let person = Self::resolve_person_conn(&mut tx, link.suggested_person_id.as_deref(), &name).await?;
             PeopleRepository::add_rejection_conn(&mut tx, meeting_id, key, &person.id).await?;
@@ -945,6 +962,39 @@ mod tests {
         assert_eq!(s.display_name, None);
         assert_eq!(s.link, SpeakerLink::default());
         assert_eq!(rejected(&pool).await, HashSet::from([("spk_0".to_string(), "person-noah".to_string())]));
+    }
+
+    #[tokio::test]
+    async fn reject_auto_name_also_clears_a_suggestion_of_the_same_person() {
+        let pool = seeded().await;
+        seed_person(&pool, "person-noah", "Noah").await;
+        write(&pool, vec![auto_noah()]).await;
+        sqlx::query(
+            "UPDATE meeting_speakers SET suggested_person_id = 'person-noah', suggested_name = 'Noah',
+                 suggestion_source = 'voice', suggestion_reason = 'sounds like Noah'
+             WHERE meeting_id = ? AND speaker_key = 'spk_0'",
+        )
+        .bind(M)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        SpeakersRepository::reject(&pool, M, "spk_0").await.unwrap();
+
+        assert_eq!(one(&pool, "spk_0").await.link, SpeakerLink::default());
+
+        // A suggestion of someone else stays.
+        write(&pool, vec![auto_noah()]).await;
+        sqlx::query(
+            "UPDATE meeting_speakers SET suggested_name = ' ana ', suggestion_source = 'conversation'
+             WHERE meeting_id = ? AND speaker_key = 'spk_0'",
+        )
+        .bind(M)
+        .execute(&pool)
+        .await
+        .unwrap();
+        SpeakersRepository::reject(&pool, M, "spk_0").await.unwrap();
+        assert_eq!(one(&pool, "spk_0").await.link.suggested_name.as_deref(), Some(" ana "));
     }
 
     #[tokio::test]

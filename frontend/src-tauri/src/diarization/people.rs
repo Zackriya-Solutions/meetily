@@ -223,8 +223,12 @@ pub async fn propagate_person(
         let rejected = PeopleRepository::rejections_conn(&mut tx, &meeting_id).await?;
         for m in assign_voices(&speakers, std::slice::from_ref(&voice), &rejected, strong, strong) {
             let result = sqlx::query(
-                "UPDATE meeting_speakers SET display_name = ?, person_id = ?, name_source = 'voice'
-                 WHERE meeting_id = ? AND speaker_key = ? AND display_name IS NULL",
+                "UPDATE meeting_speakers SET display_name = ?1, person_id = ?2, name_source = 'voice',
+                     suggested_person_id = CASE WHEN (suggested_person_id = ?2 OR lower(trim(suggested_name)) = lower(trim(?1))) THEN NULL ELSE suggested_person_id END,
+                     suggested_name = CASE WHEN (suggested_person_id = ?2 OR lower(trim(suggested_name)) = lower(trim(?1))) THEN NULL ELSE suggested_name END,
+                     suggestion_source = CASE WHEN (suggested_person_id = ?2 OR lower(trim(suggested_name)) = lower(trim(?1))) THEN NULL ELSE suggestion_source END,
+                     suggestion_reason = CASE WHEN (suggested_person_id = ?2 OR lower(trim(suggested_name)) = lower(trim(?1))) THEN NULL ELSE suggestion_reason END
+                 WHERE meeting_id = ?3 AND speaker_key = ?4 AND display_name IS NULL",
             )
             .bind(&voice.name)
             .bind(person_id)
@@ -512,6 +516,35 @@ mod tests {
         let b0 = stored_speaker(&pool, "b", "spk_0").await;
         assert_eq!(b0.display_name.as_deref(), Some("Noah"));
         assert_eq!(b0.link.name_source, Some(NameSource::User));
+    }
+
+    #[tokio::test]
+    async fn a_rejected_propagated_person_does_not_return_as_a_suggestion() {
+        let pool = migrated_pool().await;
+        noah_named_in_a(&pool).await;
+        meeting(&pool, "b", vec![unnamed("spk_0", &[1.0, 0.0, 0.0])]).await;
+        sqlx::query(
+            "UPDATE meeting_speakers SET suggested_person_id = ?, suggested_name = 'Noah', suggestion_source = 'voice',
+                 suggestion_reason = 'sounds like Noah'
+             WHERE meeting_id = 'b' AND speaker_key = 'spk_0'",
+        )
+        .bind(NOAH)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        propagate_person(&pool, NOAH, &idle, VOICE_STRONG).await.unwrap();
+        let linked = stored_speaker(&pool, "b", "spk_0").await;
+        assert_eq!(linked.link.suggested_name, None, "the suggestion naming the linked person is cleared");
+        assert_eq!(linked.link.suggested_person_id, None);
+
+        SpeakersRepository::reject(&pool, "b", "spk_0").await.unwrap();
+
+        let b0 = stored_speaker(&pool, "b", "spk_0").await;
+        assert_eq!((b0.display_name, b0.link), (None, SpeakerLink::default()));
+        let mut conn = pool.acquire().await.unwrap();
+        let rejected = PeopleRepository::rejections_conn(&mut conn, "b").await.unwrap();
+        assert!(rejected.contains(&("spk_0".to_string(), NOAH.to_string())), "{rejected:?}");
     }
 
     #[tokio::test]
