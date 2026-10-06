@@ -26,6 +26,8 @@ export interface SpeakerTools {
   onReject: (key: string) => Promise<void>;
   onCancelJob: () => Promise<void>;
   onStartIdentify: (numSpeakers: number | null) => Promise<void>;
+  /** Queues the naming stage; progress shows in the job banner. */
+  onGuessNames: () => Promise<void>;
 }
 
 
@@ -139,6 +141,7 @@ export function TranscriptPanel({
             onRename={speakerTools.onRename}
             onConfirm={speakerTools.onConfirm}
             onReject={speakerTools.onReject}
+            onGuessNames={speakerTools.onGuessNames}
           />
         </>
       )}

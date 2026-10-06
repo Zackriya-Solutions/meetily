@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { motion } from 'framer-motion';
-import { MeetingSummary, SummaryProcessResponse } from '@/types';
+import { MeetingSpeaker, MeetingSummary, SpeakerJobComplete, SummaryProcessResponse } from '@/types';
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
 import Analytics from '@/lib/analytics';
 import { invoke } from '@tauri-apps/api/core';
@@ -9,6 +9,7 @@ import { toast } from 'sonner';
 import { TranscriptPanel, type SpeakerTools } from '@/components/MeetingDetails/TranscriptPanel';
 import { useMeetingSpeakers } from '@/hooks/useMeetingSpeakers';
 import { usePeople } from '@/hooks/usePeople';
+import { isWaitingForSpeakers, shouldAutoGuessNames } from '@/lib/speakerNaming';
 import { useSpeakerIdentification } from '@/hooks/useSpeakerIdentification';
 import { SummaryPanel } from '@/components/MeetingDetails/SummaryPanel';
 import { MeetingDetailsSplitView, type MeetingDetailsTab } from '@/components/MeetingDetails/MeetingDetailsSplitView';
@@ -76,7 +77,7 @@ export default function PageContent({
   const { serverAddress } = useSidebar();
 
   // Get model config from ConfigContext
-  const { modelConfig, setModelConfig, isModelConfigLoading, betaFeatures } = useConfig();
+  const { modelConfig, setModelConfig, isModelConfigLoading, modelConfigLoaded, betaFeatures, isAutoSummary } = useConfig();
 
   // Custom hooks
   const meetingData = useMeetingData({ meeting, summaryData, onMeetingUpdated });
@@ -95,10 +96,16 @@ export default function PageContent({
     merge: mergeSpeakers,
     reassign: reassignSpeaker,
   } = useMeetingSpeakers(meeting.id);
-  // Enhance (retranscription) and Identify both replace the meeting's speakers, so reload them with the rows.
-  const refetchTranscriptsAndSpeakers = useCallback(async () => {
-    await Promise.all([onRefetchTranscripts?.(), refetchSpeakers()]);
+  // Enhance (retranscription) and Identify both replace the meeting's speakers, so reload them with
+  // the rows. Returns the fresh speakers for callers that decide on them.
+  const refetchTranscriptsAndSpeakers = useCallback(async (): Promise<MeetingSpeaker[]> => {
+    const [, fresh] = await Promise.all([onRefetchTranscripts?.(), refetchSpeakers()]);
+    return fresh;
   }, [onRefetchTranscripts, refetchSpeakers]);
+  // The panel's refetch prop returns nothing.
+  const onRefetchTranscriptsAndSpeakers = useCallback(async () => {
+    await refetchTranscriptsAndSpeakers();
+  }, [refetchTranscriptsAndSpeakers]);
   const onRenameSpeaker = useCallback(async (key: string, name: string) => {
     await nameSpeaker(key, name);
     void refreshPeople();
@@ -107,22 +114,64 @@ export default function PageContent({
     await confirmSpeaker(key);
     void refreshPeople();
   }, [confirmSpeaker, refreshPeople]);
-  const speakerIdentification = useSpeakerIdentification(meeting.id, refetchTranscriptsAndSpeakers);
+  // True from an Identify completion until its automatic name guess is requested or skipped; from
+  // the request on, the hook's `autoNamingPending` holds the wait until the job's first event.
+  const [namingDecisionPending, setNamingDecisionPending] = useState(false);
+  const guessNamesRef = useRef<(automatic: boolean) => Promise<void>>(async () => {});
+  const onSpeakerJobComplete = useCallback(async (result: SpeakerJobComplete) => {
+    if (result.kind === 'naming') {
+      await Promise.all([refetchSpeakers(), refreshPeople()]);
+      return;
+    }
+    setNamingDecisionPending(true);
+    try {
+      const fresh = await refetchTranscriptsAndSpeakers();
+      if (shouldAutoGuessNames({
+        speakerIdentification: betaFeatures.speakerIdentification,
+        modelConfig,
+        // Only the saved config counts: the placeholder shown while loading, or after a failed
+        // load, must not pass for a local model.
+        modelConfigLoaded,
+        isAutoSummary,
+        speakers: fresh,
+      })) {
+        await guessNamesRef.current(true);
+      }
+    } catch (error) {
+      console.error('Automatic name guessing did not start:', error);
+    } finally {
+      setNamingDecisionPending(false);
+    }
+  }, [refetchTranscriptsAndSpeakers, refetchSpeakers, refreshPeople, betaFeatures.speakerIdentification, modelConfig, modelConfigLoaded, isAutoSummary]);
+  const speakerIdentification = useSpeakerIdentification(meeting.id, onSpeakerJobComplete);
+  guessNamesRef.current = speakerIdentification.guessNames;
   const {
     job: speakerJob,
     isActive: speakerJobActive,
     start: startSpeakerIdentification,
     cancel: cancelSpeakerIdentification,
+    guessNames,
   } = speakerIdentification;
-  // Give automatic speaker identification up to 120 s before auto-summarising.
+  // Give automatic speaker identification, and the name guess after it, up to 120 s before auto-summarising.
   const [speakerWaitExpired, setSpeakerWaitExpired] = useState(false);
   useEffect(() => {
     if (!shouldAutoGenerate) return;
     const timer = setTimeout(() => setSpeakerWaitExpired(true), 120_000);
     return () => clearTimeout(timer);
   }, [shouldAutoGenerate]);
-  const waitingForSpeakers = !speakerWaitExpired
-    && (!speakerIdentification.statusKnown || speakerIdentification.isActive);
+  const waitingForSpeakers = isWaitingForSpeakers({
+    expired: speakerWaitExpired,
+    statusKnown: speakerIdentification.statusKnown,
+    isActive: speakerIdentification.isActive,
+    autoNamingPending: namingDecisionPending || speakerIdentification.autoNamingPending,
+  });
+  const onGuessNames = useCallback(async () => {
+    try {
+      await guessNames(false);
+    } catch (error) {
+      toast.error(typeof error === 'string' ? error : 'Failed to guess names');
+    }
+  }, [guessNames]);
   const onMergeSpeakers = useCallback(async (fromKey: string, intoKey: string) => {
     await mergeSpeakers(fromKey, intoKey);
     onSpeakerChange?.({ fromKey, toKey: intoKey });
@@ -150,6 +199,7 @@ export default function PageContent({
     onReject: rejectSpeaker,
     onCancelJob: cancelSpeakerIdentification,
     onStartIdentify,
+    onGuessNames,
   }), [
     speakers,
     speakerNames,
@@ -163,6 +213,7 @@ export default function PageContent({
     rejectSpeaker,
     cancelSpeakerIdentification,
     onStartIdentify,
+    onGuessNames,
   ]);
 
   // Callback to register the modal open function
@@ -309,7 +360,7 @@ export default function PageContent({
               onLoadMore={onLoadMore}
               meetingId={meeting.id}
               meetingFolderPath={meeting.folder_path}
-              onRefetchTranscripts={refetchTranscriptsAndSpeakers}
+              onRefetchTranscripts={onRefetchTranscriptsAndSpeakers}
               speakerTools={speakerTools}
               speakerJob={speakerJob}
             />

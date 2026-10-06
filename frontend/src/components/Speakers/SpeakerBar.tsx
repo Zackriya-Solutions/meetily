@@ -1,6 +1,8 @@
 'use client';
 
 import { useState } from 'react';
+import { Sparkles } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { MeetingSpeaker, Person } from '@/types';
 import { speakerColor, speakerLabel, speakerNameState } from '@/lib/speakers';
@@ -16,6 +18,8 @@ interface SpeakerBarProps {
   onRename: (key: string, name: string) => Promise<void>;
   onConfirm: (key: string) => Promise<void>;
   onReject: (key: string) => Promise<void>;
+  /** Asks the summary model for names said in the conversation. */
+  onGuessNames?: () => Promise<void>;
 }
 
 function RenameButton({ speaker, names, people, onRename }: { speaker: MeetingSpeaker; names: Record<string, string>; people: Person[]; onRename: SpeakerBarProps['onRename'] }) {
@@ -50,7 +54,7 @@ async function attempt(action: () => Promise<void>, failure: string) {
   }
 }
 
-export function SpeakerBar({ speakers, names, editable, people, onRename, onConfirm, onReject }: SpeakerBarProps) {
+export function SpeakerBar({ speakers, names, editable, people, onRename, onConfirm, onReject, onGuessNames }: SpeakerBarProps) {
   // Shares come from the rows each speaker has now, so reassignments show up; speakers left
   // without rows are hidden.
   const present = speakers.filter((s) => s.row_count > 0);
@@ -75,6 +79,12 @@ export function SpeakerBar({ speakers, names, editable, people, onRename, onConf
           </span>
         );
       })}
+      {editable && onGuessNames && (
+        <Button size="sm" variant="ghost" className="ml-auto h-7" onClick={() => void onGuessNames()}>
+          <Sparkles className="h-3.5 w-3.5" />
+          Guess names
+        </Button>
+      )}
     </div>
   );
 }

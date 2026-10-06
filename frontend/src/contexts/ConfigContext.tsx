@@ -47,6 +47,9 @@ interface ConfigContextType {
   modelConfig: ModelConfig;
   setModelConfig: (config: ModelConfig | ((prev: ModelConfig) => ModelConfig)) => void;
   isModelConfigLoading: boolean;
+  /** The saved model config was read and applied. False while loading and after a failed load,
+   *  when `modelConfig` still holds its Ollama placeholder rather than the user's choice. */
+  modelConfigLoaded: boolean;
 
   // Transcript model configuration
   transcriptModelConfig: TranscriptModelProps;
@@ -106,6 +109,7 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     ollamaEndpoint: null
   });
   const [isModelConfigLoading, setIsModelConfigLoading] = useState(true);
+  const [modelConfigLoaded, setModelConfigLoaded] = useState(false);
 
 
   // Transcript model configuration state
@@ -264,6 +268,7 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
                   localStorage.setItem('providerModelMap', JSON.stringify(map));
                 }
 
+                setModelConfigLoaded(true);
                 return; // Early return
               }
             } catch (err) {
@@ -279,6 +284,7 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
             whisperModel: data.whisperModel || prev.whisperModel,
             ollamaEndpoint: data.ollamaEndpoint,
           }));
+          setModelConfigLoaded(true);
 
           // Seed per-provider model cache from DB
           if (data.model) {
@@ -491,6 +497,7 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     modelConfig,
     setModelConfig,
     isModelConfigLoading,
+    modelConfigLoaded,
     isAutoSummary,
     toggleIsAutoSummary,
     providerApiKeys,
@@ -516,6 +523,7 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
   }), [
     modelConfig,
     isModelConfigLoading,
+    modelConfigLoaded,
     isAutoSummary,
     toggleIsAutoSummary,
     providerApiKeys,

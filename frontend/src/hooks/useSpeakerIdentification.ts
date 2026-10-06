@@ -2,15 +2,21 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import { toast } from 'sonner';
-import { SpeakerJobStatus } from '@/types';
+import { SpeakerJobComplete, SpeakerJobStatus } from '@/types';
 import { formatSpeakerCount } from '@/lib/speakers';
+import { formatNamingResult } from '@/lib/speakerNaming';
 
-interface CompletePayload { meeting_id: string; speaker_count: number; automatic: boolean; warning?: string | null }
-interface ErrorPayload { meeting_id: string; error: string; automatic: boolean; cancelled?: boolean }
+interface ErrorPayload { meeting_id: string; kind?: SpeakerJobComplete['kind']; error: string; automatic: boolean; cancelled?: boolean }
 
-export function useSpeakerIdentification(meetingId: string | null, onComplete: () => void | Promise<void>) {
+export function useSpeakerIdentification(
+  meetingId: string | null,
+  onComplete: (result: SpeakerJobComplete) => void | Promise<void>,
+) {
   const [job, setJob] = useState<SpeakerJobStatus | null>(null);
   const [statusKnown, setStatusKnown] = useState(false);
+  // An automatic guess holds the auto-summary from its request until its first event: the
+  // command can resolve before the queued event arrives, and `job` is still null in between.
+  const [autoNamingPending, setAutoNamingPending] = useState(false);
   const onCompleteRef = useRef(onComplete);
   onCompleteRef.current = onComplete;
 
@@ -19,6 +25,7 @@ export function useSpeakerIdentification(meetingId: string | null, onComplete: (
   useEffect(() => {
     setJob(null);
     setStatusKnown(false);
+    setAutoNamingPending(false);
     if (!meetingId) return;
     let alive = true;
     let eventSeen = false;
@@ -28,14 +35,20 @@ export function useSpeakerIdentification(meetingId: string | null, onComplete: (
         listen<SpeakerJobStatus>('diarization-progress', ({ payload }) => {
           if (payload.meeting_id !== meetingId) return;
           eventSeen = true;
+          if (payload.kind === 'naming') setAutoNamingPending(false);
           setJob(payload);
         }),
-        listen<CompletePayload>('diarization-complete', async ({ payload }) => {
+        listen<SpeakerJobComplete>('diarization-complete', async ({ payload }) => {
           if (payload.meeting_id !== meetingId) return;
           eventSeen = true;
+          if (payload.kind === 'naming') setAutoNamingPending(false);
           setJob(null);
-          await onCompleteRef.current();
+          await onCompleteRef.current(payload);
           if (payload.automatic) return;
+          if (payload.kind === 'naming') {
+            toast.success(formatNamingResult(payload.named, payload.suggested));
+            return;
+          }
           const identified = `Identified ${formatSpeakerCount(payload.speaker_count)}`;
           if (payload.warning) {
             toast.warning(identified, { description: payload.warning });
@@ -46,10 +59,11 @@ export function useSpeakerIdentification(meetingId: string | null, onComplete: (
         listen<ErrorPayload>('diarization-error', ({ payload }) => {
           if (payload.meeting_id !== meetingId) return;
           eventSeen = true;
+          if (payload.kind === 'naming') setAutoNamingPending(false);
           setJob(null);
           if (payload.automatic) return;
           if (payload.cancelled) {
-            toast.info('Speaker identification cancelled');
+            toast.info(payload.kind === 'naming' ? 'Name guessing cancelled' : 'Speaker identification cancelled');
           } else {
             toast.error(payload.error);
           }
@@ -97,5 +111,18 @@ export function useSpeakerIdentification(meetingId: string | null, onComplete: (
     }
   }, [meetingId]);
 
-  return { job, isActive: job !== null, statusKnown, start, cancel };
+  // Queues the naming stage; like `start`, the job state comes from the events.
+  const guessNames = useCallback(async (automatic: boolean) => {
+    if (!meetingId) return;
+    if (automatic) setAutoNamingPending(true);
+    try {
+      await invoke('api_guess_speaker_names', { meetingId, automatic });
+    } catch (error) {
+      // Refused (for example another job runs): no event will follow.
+      if (automatic) setAutoNamingPending(false);
+      throw error;
+    }
+  }, [meetingId]);
+
+  return { job, isActive: job !== null, statusKnown, start, cancel, guessNames, autoNamingPending };
 }
