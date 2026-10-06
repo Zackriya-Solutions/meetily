@@ -7,6 +7,8 @@ import { convertTranscriptsToSegments } from '@/hooks/usePaginatedTranscripts';
 import { SpeakerChip } from '@/components/Speakers/SpeakerChip';
 import { SpeakerBar } from '@/components/Speakers/SpeakerBar';
 import { SpeakerJobBanner } from '@/components/Speakers/SpeakerJobBanner';
+import { usePlayback } from '@/hooks/usePlayback';
+import { PlayerBar } from './PlayerBar';
 import { useCallback, useMemo } from 'react';
 import { VirtualizedTranscriptView, type RenderSpeaker } from '@/components/VirtualizedTranscriptView';
 import { TranscriptButtonGroup } from './TranscriptButtonGroup';
@@ -89,6 +91,9 @@ export function TranscriptPanel({
     return convertTranscriptsToSegments(transcripts);
   }, [transcripts, usePagination, segments]);
 
+  // The recording plays in the panel; meetings without a folder have no audio.
+  const playback = usePlayback(meetingId ?? null, !isRecording && !!meetingId && !!meetingFolderPath);
+
   // Stable for a given speakerTools (which leaves out the job), so the memoised rows skip
   // re-rendering while the list scrolls or a speaker job reports progress.
   const renderSpeaker = useCallback<RenderSpeaker>((speakerKey, transcriptId, isRunStart) => {
@@ -165,6 +170,8 @@ export function TranscriptPanel({
           renderSpeaker={speakerTools ? renderSpeaker : undefined}
         />
       </div>
+
+      <PlayerBar playback={playback} />
 
       {/* Custom prompt input at bottom of transcript section */}
       {!isRecording && convertedSegments.length > 0 && (

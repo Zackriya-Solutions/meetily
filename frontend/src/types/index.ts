@@ -219,3 +219,13 @@ export interface DiarizationModelsStatus {
   downloaded_bytes: number;
   directory: string;
 }
+
+/** How to play a meeting's recording (`api_prepare_meeting_playback`). */
+export interface PlaybackSource {
+  /** Asset-protocol URL of the audio file. */
+  url: string;
+  /** Length in seconds of container time, which is the recording clock. */
+  duration_s: number;
+  /** (clock_s, file_s) points; the identity for every recording today. */
+  time_table: [number, number][];
+}

@@ -1,0 +1,363 @@
+'use client';
+
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
+import type { PlaybackSource } from '@/types';
+import { errorMessage } from '@/lib/errors';
+import {
+  CLIP_SECONDS, choosePlaybackMode, clockToFile, fileToClock, isTypingTarget, readForceClipPlayback,
+  shouldPrefetchNextClip,
+} from '@/lib/playback';
+
+export type PlaybackRate = 1 | 1.5 | 2;
+export type PlaybackMode = 'asset' | 'clip';
+
+export interface PlaybackControls {
+  ready: boolean;
+  error: string | null;
+  mode: PlaybackMode;
+  playing: boolean;
+  /** Position on the transcript clock, in seconds. */
+  clockS: number;
+  durationS: number;
+  rate: PlaybackRate;
+  /** Plays from `clockS`; with `stopAtClockS`, pauses there (speaker samples). */
+  playFrom: (clockS: number, stopAtClockS?: number) => void;
+  toggle: () => void;
+  seek: (clockS: number) => void;
+  setRate: (rate: PlaybackRate) => void;
+}
+
+/** In clip mode a seek renders its clip only after the seek bar has been still this long. */
+export const CLIP_SEEK_DELAY_MS = 150;
+
+const AAC = 'audio/mp4; codecs="mp4a.40.2"';
+const WAV_HEADER_BYTES = 44;
+const WAV_BYTES_PER_SECOND = 16_000 * 2;
+/** A clip shorter than this was cut by the end of the file. */
+const FULL_CLIP_SECONDS = CLIP_SECONDS - 0.01;
+
+interface Clip {
+  startFileS: number;
+  lengthS: number;
+  url: string;
+}
+
+function revoke(clip: Clip | null) {
+  if (clip) URL.revokeObjectURL(clip.url);
+}
+
+/**
+ * Plays a meeting's recording on the transcript clock. The file plays directly over the asset
+ * protocol; when the webview cannot decode it, 30 s WAV clips rendered by the backend take over.
+ * Both are positioned in container time, which the backend's time table maps to the clock.
+ */
+export function usePlayback(meetingId: string | null, enabled: boolean): PlaybackControls {
+  const [source, setSource] = useState<PlaybackSource | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [mode, setModeState] = useState<PlaybackMode>('asset');
+  const [playing, setPlaying] = useState(false);
+  const [clockS, setClockS] = useState(0);
+  const [rate, setRateState] = useState<PlaybackRate>(1);
+
+  const meetingIdRef = useRef(meetingId);
+  meetingIdRef.current = meetingId;
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const sourceRef = useRef<PlaybackSource | null>(null);
+  const modeRef = useRef<PlaybackMode>('asset');
+  const clipRef = useRef<Clip | null>(null);
+  const nextClipRef = useRef<Promise<Clip | null> | null>(null);
+  /** Only the newest clip request may change what plays. */
+  const loadIdRef = useRef(0);
+  /** A clip-mode seek waiting for the seek bar to stop moving. */
+  const seekTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clockRef = useRef(0);
+  const stopAtRef = useRef<number | null>(null);
+  /** The user wants sound: set by play, cleared by pause and by the end. */
+  const wantPlayRef = useRef(false);
+  const rateRef = useRef<PlaybackRate>(1);
+
+  const setMode = useCallback((next: PlaybackMode) => {
+    modeRef.current = next;
+    setModeState(next);
+  }, []);
+
+  const cancelPendingSeek = useCallback(() => {
+    if (seekTimerRef.current !== null) clearTimeout(seekTimerRef.current);
+    seekTimerRef.current = null;
+  }, []);
+
+  const report = useCallback((clock: number) => {
+    clockRef.current = clock;
+    setClockS(clock);
+    const stopAt = stopAtRef.current;
+    if (stopAt !== null && clock >= stopAt) {
+      stopAtRef.current = null;
+      wantPlayRef.current = false;
+      audioRef.current?.pause();
+    }
+  }, []);
+
+  const renderClip = useCallback(async (startFileS: number): Promise<Clip | null> => {
+    const id = meetingIdRef.current;
+    if (!id) return null;
+    const bytes = await invoke<ArrayBuffer>('api_render_playback_clip', { meetingId: id, startFileS, seconds: CLIP_SECONDS });
+    const lengthS = Math.max(0, bytes.byteLength - WAV_HEADER_BYTES) / WAV_BYTES_PER_SECOND;
+    if (lengthS <= 0) return null; // past the end of the file
+    return { startFileS, lengthS, url: URL.createObjectURL(new Blob([bytes], { type: 'audio/wav' })) };
+  }, []);
+
+  const dropNextClip = useCallback(() => {
+    const pending = nextClipRef.current;
+    nextClipRef.current = null;
+    void pending?.then(revoke);
+  }, []);
+
+  const showClip = useCallback((clip: Clip, play: boolean) => {
+    const audio = audioRef.current;
+    if (!audio) {
+      revoke(clip);
+      return;
+    }
+    revoke(clipRef.current);
+    clipRef.current = clip;
+    audio.src = clip.url;
+    audio.defaultPlaybackRate = rateRef.current;
+    audio.playbackRate = rateRef.current;
+    audio.currentTime = 0;
+    if (play) void audio.play().catch(() => {});
+  }, []);
+
+  const loadClipAt = useCallback(async (fileS: number, play: boolean) => {
+    const id = ++loadIdRef.current;
+    dropNextClip();
+    try {
+      const clip = await renderClip(Math.max(0, fileS));
+      if (id !== loadIdRef.current) {
+        revoke(clip);
+        return;
+      }
+      if (!clip) {
+        wantPlayRef.current = false;
+        audioRef.current?.pause();
+        setPlaying(false);
+        return;
+      }
+      showClip(clip, play);
+    } catch (e) {
+      if (id !== loadIdRef.current) return;
+      setError(errorMessage(e, 'Failed to play the recording'));
+      setPlaying(false);
+    }
+  }, [dropNextClip, renderClip, showClip]);
+
+  const playFrom = useCallback((clock: number, stopAtClockS?: number) => {
+    const audio = audioRef.current;
+    const src = sourceRef.current;
+    if (!audio || !src) return;
+    cancelPendingSeek();
+    const target = Math.min(Math.max(0, clock), src.duration_s);
+    setError(null);
+    stopAtRef.current = stopAtClockS ?? null;
+    wantPlayRef.current = true;
+    clockRef.current = target;
+    setClockS(target);
+    const fileS = clockToFile(src.time_table, target);
+    if (modeRef.current === 'asset') {
+      audio.currentTime = fileS;
+      void audio.play().catch(() => {});
+    } else {
+      void loadClipAt(fileS, true);
+    }
+  }, [cancelPendingSeek, loadClipAt]);
+
+  const toggle = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio || !sourceRef.current) return;
+    if (!audio.paused) {
+      wantPlayRef.current = false;
+      audio.pause();
+      return;
+    }
+    stopAtRef.current = null;
+    if (modeRef.current === 'asset' || clipRef.current) {
+      wantPlayRef.current = true;
+      void audio.play().catch(() => {});
+    } else {
+      playFrom(clockRef.current);
+    }
+  }, [playFrom]);
+
+  const seek = useCallback((clock: number) => {
+    const audio = audioRef.current;
+    const src = sourceRef.current;
+    if (!audio || !src) return;
+    const target = Math.min(Math.max(0, clock), src.duration_s);
+    stopAtRef.current = null;
+    clockRef.current = target;
+    setClockS(target);
+    const fileS = clockToFile(src.time_table, target);
+    cancelPendingSeek();
+    if (modeRef.current === 'asset') {
+      audio.currentTime = fileS;
+    } else if (!audio.paused) {
+      // Dragging the seek bar seeks on every step; one clip is rendered where the drag stops.
+      seekTimerRef.current = setTimeout(() => {
+        seekTimerRef.current = null;
+        void loadClipAt(fileS, true);
+      }, CLIP_SEEK_DELAY_MS);
+    } else {
+      // Paused: the clip at the new position is rendered when playback resumes.
+      loadIdRef.current += 1;
+      dropNextClip();
+      revoke(clipRef.current);
+      clipRef.current = null;
+    }
+  }, [cancelPendingSeek, dropNextClip, loadClipAt]);
+
+  const setRate = useCallback((next: PlaybackRate) => {
+    rateRef.current = next;
+    setRateState(next);
+    const audio = audioRef.current;
+    if (audio) {
+      audio.defaultPlaybackRate = next;
+      audio.playbackRate = next;
+    }
+  }, []);
+
+  useEffect(() => {
+    sourceRef.current = null;
+    setSource(null);
+    setError(null);
+    setPlaying(false);
+    clockRef.current = 0;
+    setClockS(0);
+    if (!enabled || !meetingId || typeof Audio === 'undefined') return;
+
+    let alive = true;
+    const audio = new Audio();
+    audio.preload = 'metadata';
+    audio.defaultPlaybackRate = rateRef.current;
+    audio.playbackRate = rateRef.current;
+    audioRef.current = audio;
+    setMode(choosePlaybackMode({ canPlayAac: audio.canPlayType(AAC), forced: readForceClipPlayback(), mediaErrorCode: null }));
+
+    const table = () => sourceRef.current?.time_table ?? [];
+    const continuesWithNextClip = () => modeRef.current === 'clip' && (clipRef.current?.lengthS ?? 0) >= FULL_CLIP_SECONDS;
+
+    const onTimeUpdate = () => {
+      if (modeRef.current === 'asset') {
+        report(fileToClock(table(), audio.currentTime));
+        return;
+      }
+      // A seek is about to replace this clip; its position would pull the seek bar back.
+      if (seekTimerRef.current !== null) return;
+      const clip = clipRef.current;
+      if (!clip) return;
+      report(fileToClock(table(), clip.startFileS + audio.currentTime));
+      if (!nextClipRef.current && continuesWithNextClip() && shouldPrefetchNextClip(audio.currentTime, clip.lengthS)) {
+        nextClipRef.current = renderClip(clip.startFileS + clip.lengthS).catch(() => null);
+      }
+    };
+    const onPlay = () => setPlaying(true);
+    const onPause = () => {
+      // A clip that ends hands over to the next one; playback has not stopped.
+      if (audio.ended && wantPlayRef.current && continuesWithNextClip()) return;
+      setPlaying(false);
+    };
+    const onEnded = async () => {
+      const clip = clipRef.current;
+      if (!clip || !wantPlayRef.current || !continuesWithNextClip()) {
+        wantPlayRef.current = false;
+        setPlaying(false);
+        return;
+      }
+      const pending = nextClipRef.current ?? renderClip(clip.startFileS + clip.lengthS).catch(() => null);
+      nextClipRef.current = null;
+      const id = ++loadIdRef.current;
+      const next = await pending;
+      if (!alive || id !== loadIdRef.current) {
+        revoke(next);
+        return;
+      }
+      if (next) {
+        showClip(next, true);
+      } else {
+        wantPlayRef.current = false;
+        setPlaying(false);
+      }
+    };
+    const onError = () => {
+      const fallback = modeRef.current === 'asset' && choosePlaybackMode({
+        canPlayAac: audio.canPlayType(AAC), forced: false, mediaErrorCode: audio.error?.code ?? null,
+      }) === 'clip';
+      if (fallback) {
+        setMode('clip');
+        const src = sourceRef.current;
+        if (wantPlayRef.current && src) void loadClipAt(clockToFile(src.time_table, clockRef.current), true);
+        return;
+      }
+      setError('The recording could not be played');
+      setPlaying(false);
+    };
+    const onEndedEvent = () => { void onEnded(); };
+    const listeners: Array<[string, () => void]> = [
+      ['timeupdate', onTimeUpdate], ['play', onPlay], ['pause', onPause], ['ended', onEndedEvent], ['error', onError],
+    ];
+    listeners.forEach(([type, listener]) => audio.addEventListener(type, listener));
+
+    invoke<PlaybackSource>('api_prepare_meeting_playback', { meetingId })
+      .then((prepared) => {
+        if (!alive) return;
+        sourceRef.current = prepared;
+        setSource(prepared);
+        if (modeRef.current === 'asset') audio.src = prepared.url;
+      })
+      .catch((e) => {
+        if (alive) setError(errorMessage(e, 'The recording is not available'));
+      });
+
+    return () => {
+      alive = false;
+      loadIdRef.current += 1;
+      cancelPendingSeek();
+      wantPlayRef.current = false;
+      stopAtRef.current = null;
+      listeners.forEach(([type, listener]) => audio.removeEventListener(type, listener));
+      audio.pause();
+      audio.removeAttribute('src');
+      audio.load();
+      dropNextClip();
+      revoke(clipRef.current);
+      clipRef.current = null;
+      audioRef.current = null;
+    };
+  }, [enabled, meetingId, cancelPendingSeek, dropNextClip, loadClipAt, renderClip, report, setMode, showClip]);
+
+  // Space toggles playback unless focus is in a text field (the seek bar and buttons included).
+  useEffect(() => {
+    if (!source || typeof document === 'undefined') return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.code !== 'Space' && event.key !== ' ') || event.repeat || event.defaultPrevented) return;
+      if (isTypingTarget(event.target as HTMLElement | null)) return;
+      event.preventDefault();
+      toggle();
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [source, toggle]);
+
+  return {
+    ready: source !== null,
+    error,
+    mode,
+    playing,
+    clockS,
+    durationS: source?.duration_s ?? 0,
+    rate,
+    playFrom,
+    toggle,
+    seek,
+    setRate,
+  };
+}
