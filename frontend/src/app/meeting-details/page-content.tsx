@@ -86,7 +86,7 @@ export default function PageContent({
     speakers,
     names: speakerNames,
     refetch: refetchSpeakers,
-    rename: renameSpeaker,
+    name: nameSpeaker,
     merge: mergeSpeakers,
     reassign: reassignSpeaker,
   } = useMeetingSpeakers(meeting.id);
@@ -94,6 +94,9 @@ export default function PageContent({
   const refetchTranscriptsAndSpeakers = useCallback(async () => {
     await Promise.all([onRefetchTranscripts?.(), refetchSpeakers()]);
   }, [onRefetchTranscripts, refetchSpeakers]);
+  const onRenameSpeaker = useCallback(async (key: string, name: string) => {
+    await nameSpeaker(key, name);
+  }, [nameSpeaker]);
   const speakerIdentification = useSpeakerIdentification(meeting.id, refetchTranscriptsAndSpeakers);
   const {
     job: speakerJob,
@@ -129,7 +132,7 @@ export default function PageContent({
     names: speakerNames,
     // Edits made while a job runs would be overwritten by its final write.
     editable: betaFeatures.speakerIdentification && !speakerJobActive,
-    onRename: renameSpeaker,
+    onRename: onRenameSpeaker,
     onMerge: onMergeSpeakers,
     onReassign: onReassignSpeaker,
     onCancelJob: cancelSpeakerIdentification,
@@ -139,7 +142,7 @@ export default function PageContent({
     speakerNames,
     betaFeatures.speakerIdentification,
     speakerJobActive,
-    renameSpeaker,
+    onRenameSpeaker,
     onMergeSpeakers,
     onReassignSpeaker,
     cancelSpeakerIdentification,

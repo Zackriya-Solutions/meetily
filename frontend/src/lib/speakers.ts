@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import { MeetingSpeaker, Transcript } from '@/types';
+import { MeetingSpeaker, PropagatedLink, Transcript } from '@/types';
 
 const PALETTE = [
   { chip: 'bg-blue-100 text-blue-800 border-blue-200', dot: 'bg-blue-500' },
@@ -79,4 +79,13 @@ export function rowSpeakerControl(
 
 export function formatSpeakerCount(count: number): string {
   return `${count} speaker${count === 1 ? '' : 's'}`;
+}
+
+/** Other meetings that received a name by voice after a name was typed or confirmed here. */
+export function propagatedMeetingCount(links: PropagatedLink[], currentMeetingId: string): number {
+  return new Set(links.filter((l) => l.meeting_id !== currentMeetingId).map((l) => l.meeting_id)).size;
+}
+
+export function formatPropagationMessage(count: number): string {
+  return `Also named in ${count} other meeting${count === 1 ? '' : 's'}`;
 }

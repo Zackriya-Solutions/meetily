@@ -145,6 +145,9 @@ export interface TranscriptSegmentData {
   speaker?: string | null;
 }
 
+export type NameSource = 'user' | 'voice' | 'conversation';
+export type SuggestionSource = 'voice' | 'conversation';
+
 export interface MeetingSpeaker {
   speaker_key: string;
   display_name: string | null;
@@ -153,15 +156,61 @@ export interface MeetingSpeaker {
   row_count: number;
   /** Seconds covered by those rows */
   row_seconds: number;
+  /** The person this speaker is linked to */
+  person_id: string | null;
+  /** Who set display_name: typed or confirmed by the user, matched by voice, or found in the
+   *  conversation. Null for names set before people existed (treated as typed). */
+  name_source: NameSource | null;
+  suggested_person_id: string | null;
+  suggested_name: string | null;
+  suggestion_source: SuggestionSource | null;
+  /** Why the name is suggested, e.g. "voice match 0.68" or "addressed as Noah at 01:12" */
+  suggestion_reason: string | null;
 }
 
 export interface SpeakerJobStatus {
   meeting_id: string;
+  /** Which job: identifying speakers, or finding names in the conversation */
+  kind: 'identify' | 'naming';
   state: 'queued' | 'running';
-  /** 'audio' | 'waiting' | 'download' | 'segmentation' | 'embeddings' | 'clustering' | 'splitting' | 'saving' | 'done'; null while queued */
+  /** 'audio' | 'waiting' | 'download' | 'segmentation' | 'embeddings' | 'clustering' | 'splitting' | 'saving' | 'naming' | 'done'; null while queued */
   stage: string | null;
   percent: number;
   message: string;
+}
+
+/** A person whose voice is remembered across meetings (Settings → Speakers). */
+export interface Person {
+  id: string;
+  name: string;
+  meeting_count: number;
+  /** Creation time of the newest meeting the person is linked in */
+  last_seen: string | null;
+}
+
+/** A speaker of another meeting that was named by voice after a name was typed or confirmed. */
+export interface PropagatedLink {
+  meeting_id: string;
+  speaker_key: string;
+  person_id: string;
+}
+
+export interface NameOutcome {
+  person_id: string | null;
+  propagated: PropagatedLink[];
+}
+
+/** Payload of `diarization-complete`, for both job kinds. */
+export interface SpeakerJobComplete {
+  meeting_id: string;
+  kind: 'identify' | 'naming';
+  speaker_count: number;
+  automatic: boolean;
+  warning?: string | null;
+  /** Naming: speakers given an auto name */
+  named: number;
+  /** Naming: speakers given a suggestion */
+  suggested: number;
 }
 
 export interface DiarizationModelsStatus {

@@ -2,6 +2,7 @@ import { afterAll, describe, expect, mock, test } from 'bun:test';
 import type { ReactNode } from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import type { MeetingSpeaker } from '../../src/types';
+import { makeSpeaker } from '../fixtures/speakers';
 
 const originalPopover = { ...await import('../../src/components/ui/popover') };
 const originalToast = { ...await import('sonner') };
@@ -18,8 +19,8 @@ mock.module('sonner', () => ({ toast: { error: () => {}, success: () => {}, info
 const { SpeakerChip } = await import('../../src/components/Speakers/SpeakerChip');
 
 const speakers: MeetingSpeaker[] = [
-  { speaker_key: 'spk_0', display_name: null, speech_seconds: 6, row_count: 3, row_seconds: 6 },
-  { speaker_key: 'spk_1', display_name: 'Ana', speech_seconds: 2, row_count: 1, row_seconds: 2 },
+  makeSpeaker('spk_0', { speech_seconds: 6, row_count: 3, row_seconds: 6 }),
+  makeSpeaker('spk_1', { display_name: 'Ana', speech_seconds: 2, row_count: 1, row_seconds: 2 }),
 ];
 const noop = async () => {};
 
