@@ -697,12 +697,14 @@ async fn run_import<R: Runtime>(
         .try_state::<AppState>()
         .ok_or_else(|| anyhow!("App state not available"))?;
 
+    let remember_voices = super::recording_preferences::remember_voices(&app).await;
     let meeting_id = create_meeting_with_transcripts(
         app_state.db_manager.pool(),
         &title,
         &segments,
         meeting_folder.to_string_lossy().to_string(),
         new_speakers,
+        remember_voices,
     )
     .await?;
 
@@ -748,13 +750,15 @@ fn emit_progress<R: Runtime>(app: &AppHandle<R>, stage: &str, progress: u32, mes
 }
 
 
-/// Create a new meeting with transcripts in the database
+/// Create a new meeting with transcripts in the database. Its speakers are matched against people
+/// named in other meetings when `remember_voices` is on.
 async fn create_meeting_with_transcripts(
     pool: &sqlx::SqlitePool,
     title: &str,
     segments: &[TranscriptSegment],
     folder_path: String,
-    speakers: Vec<crate::database::repositories::speaker::NewSpeaker>,
+    mut speakers: Vec<crate::database::repositories::speaker::NewSpeaker>,
+    remember_voices: bool,
 ) -> Result<String> {
     let meeting_id = format!("meeting-{}", Uuid::new_v4());
     let now = chrono::Utc::now();
@@ -786,6 +790,13 @@ async fn create_meeting_with_transcripts(
             .map_err(|e| anyhow!("Failed to insert transcript: {}", e))?;
     }
 
+    let (linked, suggested) =
+        crate::diarization::people::match_new_speakers_conn(&mut tx, &meeting_id, &mut speakers, remember_voices)
+            .await
+            .map_err(|e| anyhow!("Failed to match voices: {}", e))?;
+    if linked + suggested > 0 {
+        info!("Voice matching for {}: {} linked, {} suggested", meeting_id, linked, suggested);
+    }
     crate::database::repositories::speaker::SpeakersRepository::replace_for_meeting(
         &mut tx,
         &meeting_id,
@@ -1391,5 +1402,42 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[tokio::test]
+    async fn imported_meeting_is_matched() {
+        use crate::database::repositories::speaker::{NameSource, NewSpeaker, SpeakerLink, SpeakerWrite, SpeakersRepository};
+        use crate::database::test_support::{migrated_pool, seed_meeting, seed_person};
+        let pool = migrated_pool().await;
+        seed_person(&pool, "person-noah", "Noah").await;
+        seed_meeting(&pool, "a", &[]).await;
+        let mut conn = pool.acquire().await.unwrap();
+        SpeakersRepository::replace_for_meeting(
+            &mut conn,
+            "a",
+            &SpeakerWrite {
+                speakers: vec![NewSpeaker {
+                    key: "spk_0".into(),
+                    display_name: Some("Noah".into()),
+                    embedding: vec![1.0, 0.0],
+                    speech_seconds: 1.0,
+                    link: SpeakerLink { person_id: Some("person-noah".into()), name_source: Some(NameSource::User), ..Default::default() },
+                }],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        drop(conn);
+
+        let speakers = vec![NewSpeaker { key: "spk_0".into(), embedding: vec![0.98, 0.2], speech_seconds: 1.0, ..Default::default() }];
+        let id = create_meeting_with_transcripts(&pool, "Imported", &[], "/tmp/imported-meeting".into(), speakers, true)
+            .await
+            .unwrap();
+
+        let listed = SpeakersRepository::list(&pool, &id).await.unwrap();
+        assert_eq!(listed[0].display_name.as_deref(), Some("Noah"));
+        assert_eq!(listed[0].link.person_id.as_deref(), Some("person-noah"));
+        assert_eq!(listed[0].link.name_source, Some(NameSource::Voice));
     }
 }

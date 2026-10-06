@@ -467,7 +467,8 @@ async fn run_retranscription<R: Runtime>(
         .ok_or_else(|| anyhow!("App state not available"))?;
 
     let pool = app_state.db_manager.pool();
-    save_retranscribed_rows(pool, &meeting_id, &segments, diarization.as_ref()).await?;
+    let remember_voices = super::recording_preferences::remember_voices(&app).await;
+    save_retranscribed_rows(pool, &meeting_id, &segments, diarization.as_ref(), remember_voices).await?;
 
     info!(
         "Updated {} transcripts for meeting {} in transaction",
@@ -509,13 +510,15 @@ async fn run_retranscription<R: Runtime>(
 }
 
 /// Replace the meeting's transcript rows in one transaction. With `diarization`, the meeting's
-/// speakers are replaced too (names carried over by voice); without it the previous speakers,
-/// with their names and voice centroids, are kept for a later identification.
+/// speakers are replaced too (names carried over by voice, then matched against people named in
+/// other meetings when `remember_voices` is on); without it the previous speakers, with their
+/// names and voice centroids, are kept for a later identification.
 pub(crate) async fn save_retranscribed_rows(
     pool: &sqlx::SqlitePool,
     meeting_id: &str,
     segments: &[crate::api::TranscriptSegment],
     diarization: Option<&crate::diarization::diarizer::Diarization>,
+    remember_voices: bool,
 ) -> Result<()> {
     let mut conn = pool.acquire().await.map_err(|e| anyhow!("DB error: {}", e))?;
     let mut tx = sqlx::Connection::begin(&mut *conn)
@@ -535,7 +538,7 @@ pub(crate) async fn save_retranscribed_rows(
     }
 
     if let Some(d) = diarization {
-        let speakers = crate::diarization::jobs::speaker_write_names(&mut tx, meeting_id, d).await?;
+        let speakers = crate::diarization::jobs::speaker_write_names(&mut tx, meeting_id, d, remember_voices).await?;
         crate::database::repositories::speaker::SpeakersRepository::replace_for_meeting(
             &mut tx,
             meeting_id,
@@ -1147,7 +1150,7 @@ mod tests {
     async fn retranscription_without_speakers_keeps_previous_speakers() {
         let pool = meeting_with_named_speaker().await;
         let segments = create_transcript_segments(&[("new".to_string(), 0.0, 1000.0)]);
-        save_retranscribed_rows(&pool, "m1", &segments, None).await.unwrap();
+        save_retranscribed_rows(&pool, "m1", &segments, None, true).await.unwrap();
         let speakers = crate::database::repositories::speaker::SpeakersRepository::list(&pool, "m1").await.unwrap();
         assert_eq!(speakers.len(), 1);
         assert_eq!(speakers[0].display_name.as_deref(), Some("Noah"));
@@ -1167,7 +1170,7 @@ mod tests {
             turns: vec![],
             speakers: vec![crate::diarization::diarizer::SpeakerCentroid { key: "spk_0".into(), embedding: vec![0.9, 0.1], speech_seconds: 1.0 }],
         };
-        save_retranscribed_rows(&pool, "m1", &segments, Some(&d)).await.unwrap();
+        save_retranscribed_rows(&pool, "m1", &segments, Some(&d), true).await.unwrap();
         let speakers = crate::database::repositories::speaker::SpeakersRepository::list(&pool, "m1").await.unwrap();
         assert_eq!(speakers.len(), 1);
         assert_eq!(speakers[0].display_name.as_deref(), Some("Noah"));

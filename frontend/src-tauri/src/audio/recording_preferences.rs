@@ -23,12 +23,19 @@ pub struct RecordingPreferences {
     /// Run speaker identification when a recording is saved.
     #[serde(default = "default_identify_speakers")]
     pub identify_speakers_after_recording: bool,
+    /// Recognise voices named in other meetings and remember voices the user names.
+    #[serde(default = "default_remember_voices")]
+    pub remember_voices: bool,
     #[cfg(target_os = "macos")]
     #[serde(default)]
     pub system_audio_backend: Option<String>,
 }
 
 fn default_identify_speakers() -> bool {
+    true
+}
+
+fn default_remember_voices() -> bool {
     true
 }
 
@@ -41,6 +48,7 @@ impl Default for RecordingPreferences {
             preferred_mic_device: None,
             preferred_system_device: None,
             identify_speakers_after_recording: true,
+            remember_voices: true,
             #[cfg(target_os = "macos")]
             system_audio_backend: Some("coreaudio".to_string()),
         }
@@ -98,6 +106,11 @@ pub fn generate_recording_filename(format: &str) -> String {
     let now = chrono::Utc::now();
     let timestamp = now.format("%Y%m%d_%H%M%S");
     format!("recording_{}.{}", timestamp, format)
+}
+
+/// Whether voices are remembered across meetings; on when the preferences cannot be read.
+pub async fn remember_voices<R: Runtime>(app: &AppHandle<R>) -> bool {
+    load_recording_preferences(app).await.map(|p| p.remember_voices).unwrap_or(true)
 }
 
 /// Load recording preferences from store
@@ -408,5 +421,27 @@ mod tests {
         let prefs: RecordingPreferences = serde_json::from_value(json).unwrap();
         assert!(prefs.identify_speakers_after_recording);
         assert!(RecordingPreferences::default().identify_speakers_after_recording);
+    }
+
+    #[test]
+    fn remember_voices_defaults_to_true_for_old_preference_files() {
+        let old = serde_json::json!({
+            "save_folder": "/tmp/rec",
+            "auto_save": true,
+            "file_format": "mp4",
+            "identify_speakers_after_recording": false
+        });
+        let prefs: RecordingPreferences = serde_json::from_value(old).unwrap();
+        assert!(prefs.remember_voices);
+        assert!(RecordingPreferences::default().remember_voices);
+
+        let off = serde_json::json!({
+            "save_folder": "/tmp/rec",
+            "auto_save": true,
+            "file_format": "mp4",
+            "remember_voices": false
+        });
+        let prefs: RecordingPreferences = serde_json::from_value(off).unwrap();
+        assert!(!prefs.remember_voices);
     }
 }

@@ -1,7 +1,10 @@
 //! Voice matching: recognises people the user named in other meetings by their stored voices.
 
+use crate::database::repositories::person::PeopleRepository;
+use crate::database::repositories::speaker::{blob_to_embedding, NameSource, NewSpeaker, SuggestionSource};
 use crate::diarization::assign::greedy_pairs;
 use crate::diarization::cluster::cosine;
+use sqlx::{Error as SqlxError, SqliteConnection};
 use std::collections::HashSet;
 
 /// Score at or above which a voice is linked to a person automatically (shown as "auto").
@@ -91,6 +94,86 @@ pub fn assign_voices(
             strength: if score >= strong { MatchStrength::Strong } else { MatchStrength::Weak },
         })
         .collect()
+}
+
+/// Exemplars of every person: speakers the user named (or confirmed) that are linked to the
+/// person and have a stored voice. Automatic names never teach a voice. `exclude_meeting` leaves
+/// out the meeting whose speakers are being replaced.
+pub async fn exemplars_conn(conn: &mut SqliteConnection, exclude_meeting: Option<&str>) -> Result<Vec<PersonVoice>, SqlxError> {
+    let rows: Vec<(String, String, Vec<u8>)> = sqlx::query_as(
+        "SELECT p.id, p.name, ms.embedding
+         FROM meeting_speakers ms
+         JOIN people p ON p.id = ms.person_id
+         WHERE ms.name_source = 'user' AND ms.embedding IS NOT NULL AND (? IS NULL OR ms.meeting_id <> ?)
+         ORDER BY p.id",
+    )
+    .bind(exclude_meeting)
+    .bind(exclude_meeting)
+    .fetch_all(&mut *conn)
+    .await?;
+    let mut people: Vec<PersonVoice> = Vec::new();
+    for (person_id, name, blob) in rows {
+        let exemplar = blob_to_embedding(&blob);
+        if exemplar.is_empty() {
+            continue;
+        }
+        match people.last_mut() {
+            Some(p) if p.person_id == person_id => p.exemplars.push(exemplar),
+            _ => people.push(PersonVoice { person_id, name, exemplars: vec![exemplar] }),
+        }
+    }
+    Ok(people)
+}
+
+/// Match a speaker write against the people named in other meetings: a strong match links the
+/// speaker (name shown as auto), a weak one becomes a voice suggestion unless the speaker already
+/// has a suggestion. Named speakers, rejected pairs and people already in the meeting are left
+/// alone. Does nothing with `remember_voices` off. Returns (linked, suggested).
+pub async fn match_new_speakers_conn(
+    conn: &mut SqliteConnection,
+    meeting_id: &str,
+    speakers: &mut [NewSpeaker],
+    remember_voices: bool,
+) -> Result<(usize, usize), SqlxError> {
+    if !remember_voices || speakers.is_empty() {
+        return Ok((0, 0));
+    }
+    let people = exemplars_conn(&mut *conn, Some(meeting_id)).await?;
+    if people.is_empty() {
+        return Ok((0, 0));
+    }
+    let rejected = PeopleRepository::rejections_conn(&mut *conn, meeting_id).await?;
+    let voices: Vec<VoiceSpeaker> = speakers
+        .iter()
+        .map(|s| VoiceSpeaker {
+            key: s.key.clone(),
+            embedding: Some(s.embedding.clone()),
+            display_name: s.display_name.clone(),
+            person_id: s.link.person_id.clone(),
+        })
+        .collect();
+    let (mut linked, mut suggested) = (0, 0);
+    for m in assign_voices(&voices, &people, &rejected, VOICE_STRONG, VOICE_WEAK) {
+        let Some(s) = speakers.iter_mut().find(|s| s.key == m.key) else { continue };
+        match m.strength {
+            MatchStrength::Strong => {
+                s.display_name = Some(m.name);
+                s.link.person_id = Some(m.person_id);
+                s.link.name_source = Some(NameSource::Voice);
+                s.link.clear_suggestion();
+                linked += 1;
+            }
+            MatchStrength::Weak if !s.link.has_suggestion() => {
+                s.link.suggested_person_id = Some(m.person_id);
+                s.link.suggested_name = Some(m.name);
+                s.link.suggestion_source = Some(SuggestionSource::Voice);
+                s.link.suggestion_reason = Some(voice_reason(m.score));
+                suggested += 1;
+            }
+            MatchStrength::Weak => {}
+        }
+    }
+    Ok((linked, suggested))
 }
 
 #[cfg(test)]
