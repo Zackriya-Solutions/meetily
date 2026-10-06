@@ -1,6 +1,6 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, spyOn, test } from 'bun:test';
 import {
-  formatNamingResult, hasUnnamedSpeaker, isLocalSummaryModel, isWaitingForSpeakers, shouldAutoGuessNames,
+  decideAutoGuessNames, formatNamingResult, hasUnnamedSpeaker, isLocalSummaryModel, isWaitingForSpeakers, shouldAutoGuessNames,
 } from '../../src/lib/speakerNaming';
 import { makeSpeaker } from '../fixtures/speakers';
 
@@ -32,6 +32,48 @@ describe('local summary model', () => {
   test('cloud providers and a missing config are not local', () => {
     expect(isLocalSummaryModel({ provider: 'claude', customOpenAIEndpoint: 'http://localhost:8080' })).toBe(false);
     expect(isLocalSummaryModel(null)).toBe(false);
+  });
+});
+
+describe('ollama endpoint', () => {
+  const ollama = (ollamaEndpoint: string | null | undefined) => ({ provider: 'ollama' as const, ollamaEndpoint });
+
+  test('a remote endpoint is not local', () => {
+    expect(isLocalSummaryModel(ollama('http://192.168.1.20:11434'))).toBe(false);
+    expect(isLocalSummaryModel(ollama('not a url'))).toBe(false);
+  });
+
+  test('the default and a loopback endpoint are local', () => {
+    expect(isLocalSummaryModel(ollama(null))).toBe(true);
+    expect(isLocalSummaryModel(ollama(undefined))).toBe(true);
+    expect(isLocalSummaryModel(ollama(''))).toBe(true);
+    expect(isLocalSummaryModel(ollama('http://localhost:11434'))).toBe(true);
+    expect(isLocalSummaryModel(ollama('http://127.0.0.1:11434'))).toBe(true);
+  });
+});
+
+describe('automatic naming decision from the saved config', () => {
+  const input = {
+    speakerIdentification: true, modelConfigLoaded: true, isAutoSummary: false, speakers: unnamed,
+  };
+  const saved = (provider: string) => async () => ({ provider, model: 'm', whisperModel: 'w' }) as never;
+
+  test('the saved model decides, not an unsaved pick in the dialog', async () => {
+    // The context may hold Ollama from an unsaved dialog pick while Claude is saved.
+    expect(await decideAutoGuessNames({ ...input, readSavedModel: saved('claude') })).toBe(false);
+    expect(await decideAutoGuessNames({ ...input, readSavedModel: saved('ollama') })).toBe(true);
+  });
+
+  test('a failed read counts as a cloud model', async () => {
+    const logged = spyOn(console, 'error').mockImplementation(() => {});
+    const failing = async () => { throw new Error('boom'); };
+    expect(await decideAutoGuessNames({ ...input, readSavedModel: failing })).toBe(false);
+    expect(await decideAutoGuessNames({ ...input, isAutoSummary: true, readSavedModel: failing })).toBe(true);
+    logged.mockRestore();
+  });
+
+  test('the read is skipped when the config never loaded', async () => {
+    expect(await decideAutoGuessNames({ ...input, modelConfigLoaded: false, readSavedModel: saved('ollama') })).toBe(false);
   });
 });
 

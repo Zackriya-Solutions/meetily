@@ -1,21 +1,31 @@
 import type { MeetingSpeaker } from '@/types';
 import type { ModelConfig } from '@/services/configService';
 
-type SummaryModelChoice = Pick<ModelConfig, 'provider' | 'customOpenAIEndpoint'> | null;
+type SummaryModelChoice = Pick<ModelConfig, 'provider'> & Partial<Pick<ModelConfig, 'customOpenAIEndpoint' | 'ollamaEndpoint'>> | null;
 
-const LOCAL_PROVIDERS: ReadonlyArray<ModelConfig['provider']> = ['ollama', 'builtin-ai'];
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1']);
 
-/** True when the summary model runs on this machine, so the transcript does not leave it. */
-export function isLocalSummaryModel(config: SummaryModelChoice): boolean {
-  if (!config) return false;
-  if (LOCAL_PROVIDERS.includes(config.provider)) return true;
-  if (config.provider !== 'custom-openai' || !config.customOpenAIEndpoint) return false;
+function isLoopbackUrl(url: string): boolean {
   try {
-    return LOCAL_HOSTS.has(new URL(config.customOpenAIEndpoint).hostname);
+    return LOCAL_HOSTS.has(new URL(url).hostname);
   } catch {
     return false;
   }
+}
+
+/**
+ * True when the summary model runs on this machine, so the transcript does not leave it. Ollama
+ * and custom endpoints count only when they point at this machine.
+ */
+export function isLocalSummaryModel(config: SummaryModelChoice): boolean {
+  if (!config) return false;
+  if (config.provider === 'builtin-ai') return true;
+  if (config.provider === 'ollama') {
+    // An unset endpoint means the default local server.
+    return !config.ollamaEndpoint?.trim() || isLoopbackUrl(config.ollamaEndpoint);
+  }
+  if (config.provider !== 'custom-openai' || !config.customOpenAIEndpoint) return false;
+  return isLoopbackUrl(config.customOpenAIEndpoint);
 }
 
 /** A speaker who still talks in the transcript and has no name. */
@@ -41,6 +51,35 @@ export function shouldAutoGuessNames(input: {
   return input.speakerIdentification
     && hasUnnamedSpeaker(input.speakers)
     && (local || input.isAutoSummary);
+}
+
+/**
+ * Decides the automatic guess from the model that is saved, which is what the backend names with.
+ * The in-memory config can hold an unsaved pick from the model dialog, so it is not consulted;
+ * a read that fails counts as a cloud model.
+ */
+export async function decideAutoGuessNames(input: {
+  speakerIdentification: boolean;
+  modelConfigLoaded: boolean;
+  isAutoSummary: boolean;
+  speakers: MeetingSpeaker[];
+  readSavedModel: () => Promise<NonNullable<SummaryModelChoice>>;
+}): Promise<boolean> {
+  let saved: SummaryModelChoice = null;
+  if (input.modelConfigLoaded) {
+    try {
+      saved = await input.readSavedModel();
+    } catch (error) {
+      console.error('Could not read the saved summary model; treating it as a cloud model:', error);
+    }
+  }
+  return shouldAutoGuessNames({
+    speakerIdentification: input.speakerIdentification,
+    modelConfig: saved,
+    modelConfigLoaded: input.modelConfigLoaded,
+    isAutoSummary: input.isAutoSummary,
+    speakers: input.speakers,
+  });
 }
 
 export function formatNamingResult(named: number, suggested: number): string {

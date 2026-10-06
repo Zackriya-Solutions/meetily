@@ -9,11 +9,12 @@ import { toast } from 'sonner';
 import { TranscriptPanel, type SpeakerTools } from '@/components/MeetingDetails/TranscriptPanel';
 import { useMeetingSpeakers } from '@/hooks/useMeetingSpeakers';
 import { usePeople } from '@/hooks/usePeople';
-import { isWaitingForSpeakers, shouldAutoGuessNames } from '@/lib/speakerNaming';
+import { decideAutoGuessNames, isWaitingForSpeakers } from '@/lib/speakerNaming';
 import { useSpeakerIdentification } from '@/hooks/useSpeakerIdentification';
 import { SummaryPanel } from '@/components/MeetingDetails/SummaryPanel';
 import { MeetingDetailsSplitView, type MeetingDetailsTab } from '@/components/MeetingDetails/MeetingDetailsSplitView';
 import { ModelConfig } from '@/components/ModelSettingsModal';
+import { configService, type ModelConfig as SavedModelConfig } from '@/services/configService';
 
 // Custom hooks
 import { useMeetingData } from '@/hooks/meeting-details/useMeetingData';
@@ -22,6 +23,14 @@ import { useTemplates } from '@/hooks/meeting-details/useTemplates';
 import { useCopyOperations } from '@/hooks/meeting-details/useCopyOperations';
 import { useMeetingOperations } from '@/hooks/meeting-details/useMeetingOperations';
 import { useConfig } from '@/contexts/ConfigContext';
+
+/** The summary model as saved, with the custom endpoint that lives in its own setting. */
+async function readSavedSummaryModel(): Promise<SavedModelConfig> {
+  const saved = await configService.getModelConfig();
+  if (saved.provider !== 'custom-openai') return saved;
+  const custom = await configService.getCustomOpenAIConfig();
+  return { ...saved, customOpenAIEndpoint: custom?.endpoint ?? null };
+}
 
 export default function PageContent({
   meeting,
@@ -126,14 +135,13 @@ export default function PageContent({
     setNamingDecisionPending(true);
     try {
       const fresh = await refetchTranscriptsAndSpeakers();
-      if (shouldAutoGuessNames({
+      if (await decideAutoGuessNames({
         speakerIdentification: betaFeatures.speakerIdentification,
-        modelConfig,
-        // Only the saved config counts: the placeholder shown while loading, or after a failed
-        // load, must not pass for a local model.
+        // Until the saved config has loaded, nothing counts as local.
         modelConfigLoaded,
         isAutoSummary,
         speakers: fresh,
+        readSavedModel: readSavedSummaryModel,
       })) {
         await guessNamesRef.current(true);
       }
@@ -142,7 +150,7 @@ export default function PageContent({
     } finally {
       setNamingDecisionPending(false);
     }
-  }, [refetchTranscriptsAndSpeakers, refetchSpeakers, refreshPeople, betaFeatures.speakerIdentification, modelConfig, modelConfigLoaded, isAutoSummary]);
+  }, [refetchTranscriptsAndSpeakers, refetchSpeakers, refreshPeople, betaFeatures.speakerIdentification, modelConfigLoaded, isAutoSummary]);
   const speakerIdentification = useSpeakerIdentification(meeting.id, onSpeakerJobComplete);
   guessNamesRef.current = speakerIdentification.guessNames;
   const {
