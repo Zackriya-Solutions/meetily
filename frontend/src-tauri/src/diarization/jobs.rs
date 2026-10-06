@@ -20,6 +20,7 @@ use crate::whisper_engine::WhisperCompiledBackend;
 use anyhow::{anyhow, Result};
 use once_cell::sync::Lazy;
 use serde::Serialize;
+use crate::database::repositories::setting::SettingsRepository;
 use sqlx::{SqliteConnection, SqlitePool};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
@@ -57,6 +58,16 @@ pub struct IdentifyRequest {
     pub num_speakers: Option<usize>,
     pub automatic: bool,
     pub kind: JobKind,
+    /// The summary model an automatic naming job was approved for; the job is skipped if the
+    /// saved model differs when it runs. None for manual runs and for unchecked automatic ones.
+    pub expected_model: Option<ExpectedModel>,
+}
+
+/// The provider and endpoint the app judged safe to send the transcript to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExpectedModel {
+    pub provider: String,
+    pub endpoint: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
@@ -681,11 +692,36 @@ async fn run_naming<R: Runtime>(app: &AppHandle<R>, req: &IdentifyRequest) -> Re
         .db_manager
         .pool()
         .clone();
+    if let (true, Some(expected)) = (req.automatic, &req.expected_model) {
+        ensure_saved_model_is(&pool, expected).await?;
+    }
     emit_progress(app, &req.meeting_id, "naming", 10, "Finding names…");
     let model = summary_model_from_settings(&pool, app.path().app_data_dir().ok()).await.map_err(|e| anyhow!(e))?;
     let outcome = name_from_conversation(&pool, &req.meeting_id, &model, until_cancelled()).await?;
     emit_progress(app, &req.meeting_id, "done", 100, "Done");
     Ok(outcome)
+}
+
+fn same_endpoint(a: Option<&str>, b: Option<&str>) -> bool {
+    let clean = |e: Option<&str>| e.map(|e| e.trim().trim_end_matches('/').to_lowercase()).filter(|e| !e.is_empty());
+    clean(a) == clean(b)
+}
+
+/// Err unless the saved summary model is the one an automatic naming job was approved for: the
+/// transcript must not go to a model the user switched to while the job waited.
+async fn ensure_saved_model_is(pool: &SqlitePool, expected: &ExpectedModel) -> Result<()> {
+    let saved = SettingsRepository::get_model_config(pool).await?;
+    let provider = saved.as_ref().map(|s| s.provider.trim().to_string()).unwrap_or_default();
+    let endpoint = match provider.as_str() {
+        "ollama" => saved.and_then(|s| s.ollama_endpoint),
+        "custom-openai" => SettingsRepository::get_custom_openai_config(pool).await?.map(|c| c.endpoint),
+        _ => None,
+    };
+    if provider == expected.provider.trim() && same_endpoint(endpoint.as_deref(), expected.endpoint.as_deref()) {
+        return Ok(());
+    }
+    log::info!("Skipping the automatic name guess: the summary model changed while it waited");
+    Err(anyhow!("The summary model changed, so names were not guessed automatically. Use Guess names to run it."))
 }
 
 /// The meeting's summary markdown, when a summary was generated.
@@ -1148,6 +1184,7 @@ mod tests {
             num_speakers: None,
             automatic: false,
             kind: JobKind::Identify,
+            expected_model: None,
         }
     }
 
@@ -1688,6 +1725,36 @@ mod tests {
     }
 
     use crate::diarization::naming::test_support::{answer, FakeNamingModel};
+
+    fn expected(provider: &str, endpoint: Option<&str>) -> ExpectedModel {
+        ExpectedModel { provider: provider.into(), endpoint: endpoint.map(str::to_string) }
+    }
+
+    #[tokio::test]
+    async fn an_automatic_naming_job_is_skipped_when_the_saved_model_changed() {
+        let pool = crate::database::test_support::migrated_pool().await;
+        SettingsRepository::save_model_config(&pool, "ollama", "llama3", "large-v3", Some("http://localhost:11434")).await.unwrap();
+        let local = expected("ollama", Some("http://localhost:11434"));
+        assert!(ensure_saved_model_is(&pool, &local).await.is_ok());
+        assert!(ensure_saved_model_is(&pool, &expected("ollama", Some("http://localhost:11434/"))).await.is_ok());
+
+        // Switched to a cloud provider while the job waited.
+        SettingsRepository::save_model_config(&pool, "claude", "sonnet", "large-v3", None).await.unwrap();
+        assert!(ensure_saved_model_is(&pool, &local).await.is_err());
+        assert!(ensure_saved_model_is(&pool, &expected("claude", None)).await.is_ok());
+
+        // Same provider, endpoint moved to another machine.
+        SettingsRepository::save_model_config(&pool, "ollama", "llama3", "large-v3", Some("http://10.0.0.5:11434")).await.unwrap();
+        assert!(ensure_saved_model_is(&pool, &local).await.is_err());
+    }
+
+    #[test]
+    fn a_skipped_automatic_job_reports_an_automatic_error() {
+        let naming = IdentifyRequest { kind: JobKind::Naming, automatic: true, ..req("m") };
+        let payload = error_payload(&naming, "The summary model changed", false);
+        assert_eq!(payload["automatic"], true);
+        assert_eq!(payload["kind"], "naming");
+    }
 
     #[test]
     fn naming_and_identify_share_the_queue() {

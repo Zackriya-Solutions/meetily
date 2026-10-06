@@ -60,20 +60,32 @@ describe('automatic naming decision from the saved config', () => {
 
   test('the saved model decides, not an unsaved pick in the dialog', async () => {
     // The context may hold Ollama from an unsaved dialog pick while Claude is saved.
-    expect(await decideAutoGuessNames({ ...input, readSavedModel: saved('claude') })).toBe(false);
-    expect(await decideAutoGuessNames({ ...input, readSavedModel: saved('ollama') })).toBe(true);
+    expect(await decideAutoGuessNames({ ...input, readSavedModel: saved('claude') })).toBeNull();
+    expect(await decideAutoGuessNames({ ...input, readSavedModel: saved('ollama') })).not.toBeNull();
+  });
+
+  test('the approval names the judged provider and endpoint', async () => {
+    const withEndpoint = (extra: object) => async () => ({ provider: 'ollama', model: 'm', whisperModel: 'w', ...extra }) as never;
+    expect(await decideAutoGuessNames({ ...input, readSavedModel: withEndpoint({ ollamaEndpoint: 'http://localhost:11434' }) }))
+      .toEqual({ provider: 'ollama', endpoint: 'http://localhost:11434' });
+    expect(await decideAutoGuessNames({ ...input, readSavedModel: withEndpoint({}) }))
+      .toEqual({ provider: 'ollama', endpoint: null });
+    const custom = async () => ({ provider: 'custom-openai', model: 'm', whisperModel: 'w', customOpenAIEndpoint: 'http://127.0.0.1:8000/v1' }) as never;
+    expect(await decideAutoGuessNames({ ...input, readSavedModel: custom }))
+      .toEqual({ provider: 'custom-openai', endpoint: 'http://127.0.0.1:8000/v1' });
   });
 
   test('a failed read counts as a cloud model', async () => {
     const logged = spyOn(console, 'error').mockImplementation(() => {});
     const failing = async () => { throw new Error('boom'); };
-    expect(await decideAutoGuessNames({ ...input, readSavedModel: failing })).toBe(false);
-    expect(await decideAutoGuessNames({ ...input, isAutoSummary: true, readSavedModel: failing })).toBe(true);
+    expect(await decideAutoGuessNames({ ...input, readSavedModel: failing })).toBeNull();
+    // Cloud is accepted by auto-summary; the read failed, so there is no judged model to pin.
+    expect(await decideAutoGuessNames({ ...input, isAutoSummary: true, readSavedModel: failing })).toEqual({ provider: null, endpoint: null });
     logged.mockRestore();
   });
 
   test('the read is skipped when the config never loaded', async () => {
-    expect(await decideAutoGuessNames({ ...input, modelConfigLoaded: false, readSavedModel: saved('ollama') })).toBe(false);
+    expect(await decideAutoGuessNames({ ...input, modelConfigLoaded: false, readSavedModel: saved('ollama') })).toBeNull();
   });
 });
 

@@ -1047,6 +1047,7 @@ pub async fn api_save_transcript<R: Runtime>(
                             num_speakers: None,
                             automatic: true,
                             kind: crate::diarization::jobs::JobKind::Identify,
+                            expected_model: None,
                         },
                     ) {
                         Ok(()) => speaker_identification_queued = true,

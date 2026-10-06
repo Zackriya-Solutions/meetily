@@ -30,7 +30,7 @@ pub async fn diarization_delete_models() -> Result<ModelsStatus, String> {
     Ok(models::status(&dir))
 }
 
-use super::jobs::{self, IdentifyRequest, JobKind, JobStatus};
+use super::jobs::{self, ExpectedModel, IdentifyRequest, JobKind, JobStatus};
 use super::people::{self, PropagatedLink};
 use crate::audio::common::speaker_count_from_command;
 use crate::database::repositories::person::{PeopleRepository, PersonSummary};
@@ -57,6 +57,7 @@ pub async fn start_speaker_identification<R: Runtime>(
             num_speakers: speaker_count_from_command(num_speakers),
             automatic: false,
             kind: JobKind::Identify,
+            expected_model: None,
         },
     )
 }
@@ -369,11 +370,19 @@ mod tests {
 }
 
 /// Queues a search for names said in the meeting. `automatic` runs are started by the app after
-/// Identify and show no toast.
+/// Identify and show no toast; they carry the provider (and endpoint) the app judged local, and
+/// are skipped if the saved model differs when the job runs.
 #[tauri::command]
-pub async fn api_guess_speaker_names<R: Runtime>(app: AppHandle<R>, meeting_id: String, automatic: bool) -> Result<(), String> {
+pub async fn api_guess_speaker_names<R: Runtime>(
+    app: AppHandle<R>,
+    meeting_id: String,
+    automatic: bool,
+    expected_provider: Option<String>,
+    expected_endpoint: Option<String>,
+) -> Result<(), String> {
+    let expected_model = expected_provider.map(|provider| ExpectedModel { provider, endpoint: expected_endpoint });
     jobs::enqueue(
         &app,
-        IdentifyRequest { meeting_id, folder_path: PathBuf::new(), num_speakers: None, automatic, kind: JobKind::Naming },
+        IdentifyRequest { meeting_id, folder_path: PathBuf::new(), num_speakers: None, automatic, kind: JobKind::Naming, expected_model },
     )
 }

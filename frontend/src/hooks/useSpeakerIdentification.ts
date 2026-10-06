@@ -4,7 +4,7 @@ import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import { toast } from 'sonner';
 import { SpeakerJobComplete, SpeakerJobStatus } from '@/types';
 import { formatSpeakerCount } from '@/lib/speakers';
-import { formatNamingResult } from '@/lib/speakerNaming';
+import { formatNamingResult, type AutoGuessApproval } from '@/lib/speakerNaming';
 
 interface ErrorPayload { meeting_id: string; kind?: SpeakerJobComplete['kind']; error: string; automatic: boolean; cancelled?: boolean }
 
@@ -112,11 +112,19 @@ export function useSpeakerIdentification(
   }, [meetingId]);
 
   // Queues the naming stage; like `start`, the job state comes from the events.
-  const guessNames = useCallback(async (automatic: boolean) => {
+  // An automatic guess carries the model it was approved for; the backend skips it if the saved
+  // model differs when the job runs.
+  const guessNames = useCallback(async (automatic: boolean, approval?: AutoGuessApproval) => {
     if (!meetingId) return;
     if (automatic) setAutoNamingPending(true);
     try {
-      await invoke('api_guess_speaker_names', { meetingId, automatic });
+      await invoke('api_guess_speaker_names', {
+        meetingId,
+        automatic,
+        ...(automatic && approval?.provider
+          ? { expectedProvider: approval.provider, expectedEndpoint: approval.endpoint }
+          : {}),
+      });
     } catch (error) {
       // Refused (for example another job runs): no event will follow.
       if (automatic) setAutoNamingPending(false);

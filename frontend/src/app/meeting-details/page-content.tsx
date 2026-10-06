@@ -9,7 +9,7 @@ import { toast } from 'sonner';
 import { TranscriptPanel, type SpeakerToolsInput } from '@/components/MeetingDetails/TranscriptPanel';
 import { useMeetingSpeakers } from '@/hooks/useMeetingSpeakers';
 import { usePeople } from '@/hooks/usePeople';
-import { decideAutoGuessNames, isWaitingForSpeakers } from '@/lib/speakerNaming';
+import { decideAutoGuessNames, isWaitingForSpeakers, type AutoGuessApproval } from '@/lib/speakerNaming';
 import { useSpeakerIdentification } from '@/hooks/useSpeakerIdentification';
 import { SummaryPanel } from '@/components/MeetingDetails/SummaryPanel';
 import { MeetingDetailsSplitView, type MeetingDetailsTab } from '@/components/MeetingDetails/MeetingDetailsSplitView';
@@ -126,7 +126,7 @@ export default function PageContent({
   // True from an Identify completion until its automatic name guess is requested or skipped; from
   // the request on, the hook's `autoNamingPending` holds the wait until the job's first event.
   const [namingDecisionPending, setNamingDecisionPending] = useState(false);
-  const guessNamesRef = useRef<(automatic: boolean) => Promise<void>>(async () => {});
+  const guessNamesRef = useRef<(automatic: boolean, approval?: AutoGuessApproval) => Promise<void>>(async () => {});
   const onSpeakerJobComplete = useCallback(async (result: SpeakerJobComplete) => {
     if (result.kind === 'naming') {
       await Promise.all([refetchSpeakers(), refreshPeople()]);
@@ -135,15 +135,16 @@ export default function PageContent({
     setNamingDecisionPending(true);
     try {
       const fresh = await refetchTranscriptsAndSpeakers();
-      if (await decideAutoGuessNames({
+      const approval = await decideAutoGuessNames({
         speakerIdentification: betaFeatures.speakerIdentification,
         // Until the saved config has loaded, nothing counts as local.
         modelConfigLoaded,
         isAutoSummary,
         speakers: fresh,
         readSavedModel: readSavedSummaryModel,
-      })) {
-        await guessNamesRef.current(true);
+      });
+      if (approval) {
+        await guessNamesRef.current(true, approval);
       }
     } catch (error) {
       console.error('Automatic name guessing did not start:', error);

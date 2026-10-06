@@ -53,10 +53,17 @@ export function shouldAutoGuessNames(input: {
     && (local || input.isAutoSummary);
 }
 
+/** The model an automatic guess was approved for; the backend skips the job if it changed. */
+export interface AutoGuessApproval {
+  /** Null when the saved model could not be read (the user accepted cloud via auto-summary). */
+  provider: string | null;
+  endpoint: string | null;
+}
+
 /**
  * Decides the automatic guess from the model that is saved, which is what the backend names with.
  * The in-memory config can hold an unsaved pick from the model dialog, so it is not consulted;
- * a read that fails counts as a cloud model.
+ * a read that fails counts as a cloud model. Returns the approved model, or null for no guess.
  */
 export async function decideAutoGuessNames(input: {
   speakerIdentification: boolean;
@@ -64,7 +71,7 @@ export async function decideAutoGuessNames(input: {
   isAutoSummary: boolean;
   speakers: MeetingSpeaker[];
   readSavedModel: () => Promise<NonNullable<SummaryModelChoice>>;
-}): Promise<boolean> {
+}): Promise<AutoGuessApproval | null> {
   let saved: SummaryModelChoice = null;
   if (input.modelConfigLoaded) {
     try {
@@ -73,13 +80,19 @@ export async function decideAutoGuessNames(input: {
       console.error('Could not read the saved summary model; treating it as a cloud model:', error);
     }
   }
-  return shouldAutoGuessNames({
+  const approved = shouldAutoGuessNames({
     speakerIdentification: input.speakerIdentification,
     modelConfig: saved,
     modelConfigLoaded: input.modelConfigLoaded,
     isAutoSummary: input.isAutoSummary,
     speakers: input.speakers,
   });
+  if (!approved) return null;
+  if (!saved) return { provider: null, endpoint: null };
+  const endpoint = saved.provider === 'ollama'
+    ? saved.ollamaEndpoint
+    : saved.provider === 'custom-openai' ? saved.customOpenAIEndpoint : null;
+  return { provider: saved.provider, endpoint: endpoint ?? null };
 }
 
 export function formatNamingResult(named: number, suggested: number): string {

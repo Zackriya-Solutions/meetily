@@ -95,6 +95,13 @@ describe('speaker job events', () => {
     expect(state.isActive).toBe(false);
   });
 
+  test('an automatic guess sends the provider and endpoint it was judged on', async () => {
+    await act(async () => { await state.guessNames(true, { provider: 'ollama', endpoint: 'http://localhost:11434' }); });
+    expect(invoke).toHaveBeenCalledWith('api_guess_speaker_names', {
+      meetingId: 'meeting-a', automatic: true, expectedProvider: 'ollama', expectedEndpoint: 'http://localhost:11434',
+    });
+  });
+
   test('guess names invokes command and marks job queued', async () => {
     await act(async () => { await state.guessNames(false); });
     expect(invoke).toHaveBeenCalledWith('api_guess_speaker_names', { meetingId: 'meeting-a', automatic: false });
