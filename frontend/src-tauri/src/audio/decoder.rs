@@ -11,11 +11,11 @@ use std::process::{Command, Stdio};
 
 use symphonia::core::audio::SampleBuffer;
 use symphonia::core::codecs::{CodecParameters, DecoderOptions, CODEC_TYPE_NULL};
-use symphonia::core::formats::{FormatOptions, FormatReader};
+use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
-use symphonia::core::units::TimeBase;
+use symphonia::core::units::{Time, TimeBase};
 
 use super::audio_processing::{audio_to_mono, resample, resample_audio};
 use super::ffmpeg::find_ffmpeg_path;
@@ -685,9 +685,159 @@ pub fn container_duration_s(path: &Path) -> Result<f64> {
     Ok(ts_seconds(params.time_base, duration_ts, rate))
 }
 
+/// Decoded before the requested start and dropped: after a seek, an AAC packet needs the one
+/// before it to decode cleanly.
+const RANGE_PREROLL_S: f64 = 0.1;
+
+/// Decodes only [start_s, start_s + seconds) of the file's container time (the recording clock
+/// for live recordings). Each packet's audio is placed at its timestamp and limited to its
+/// container duration, so the priming and padding of joined checkpoints, which decode to more
+/// frames than the container gives them, never shift later audio. Past the end the result has
+/// no samples. A file that cannot seek is decoded from its start.
+pub fn decode_audio_range(path: &Path, start_s: f64, seconds: f64) -> Result<DecodedAudio> {
+    let start_s = start_s.max(0.0);
+    let seconds = seconds.max(0.0);
+    if needs_ffmpeg_conversion(path) {
+        // Rare formats symphonia cannot demux: decode the whole file and cut the range out.
+        let whole = decode_audio_file(path)?;
+        let channels = whole.channels.max(1) as usize;
+        let rate = whole.sample_rate as f64;
+        let total = whole.samples.len() / channels;
+        let first = ((start_s * rate).round() as usize).min(total);
+        let last = (((start_s + seconds) * rate).round() as usize).min(total);
+        let samples = whole.samples[first * channels..last * channels].to_vec();
+        return Ok(DecodedAudio {
+            duration_seconds: (last - first) as f64 / rate,
+            samples,
+            sample_rate: whole.sample_rate,
+            channels: whole.channels,
+        });
+    }
+
+    let (mut format, track_id, mut params) = open_format(path)?;
+    let seek_to = (start_s - RANGE_PREROLL_S).max(0.0);
+    if seek_to > 0.0 {
+        let seeked = format.seek(SeekMode::Accurate, SeekTo::Time { time: Time::from(seek_to), track_id: Some(track_id) });
+        if let Err(e) = seeked {
+            debug!("Seek to {:.2}s in {} failed ({}); decoding from the start", seek_to, path.display(), e);
+            (format, _, params) = open_format(path)?;
+        }
+    }
+    let mut decoder = symphonia::default::get_codecs()
+        .make(&params, &DecoderOptions::default())
+        .map_err(|e| anyhow!("Failed to create decoder: {}", e))?;
+    let mut rate = params.sample_rate.unwrap_or(16_000);
+    let mut channels = params.channels.map(|c| c.count() as u16).unwrap_or(1);
+    let end_s = start_s + seconds;
+    let mut out: Vec<f32> = Vec::new();
+    // Frames of `out` up to the last one written; gaps before it stay silent.
+    let mut filled = 0usize;
+    loop {
+        let packet = match format.next_packet() {
+            Ok(packet) => packet,
+            Err(symphonia::core::errors::Error::IoError(ref e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            Err(e) => {
+                warn!("Error reading packet: {}", e);
+                break;
+            }
+        };
+        if packet.track_id() != track_id {
+            continue;
+        }
+        let packet_start = ts_seconds(params.time_base, packet.ts(), rate);
+        if packet_start >= end_s {
+            break;
+        }
+        let decoded = match decoder.decode(&packet) {
+            Ok(decoded) => decoded,
+            Err(e) => {
+                warn!("Error decoding packet: {}", e);
+                continue;
+            }
+        };
+        let spec = *decoded.spec();
+        // The decoder's rate wins over the container's (HE-AAC declares twice its decoded rate).
+        rate = spec.rate;
+        channels = spec.channels.count() as u16;
+        let ch = channels.max(1) as usize;
+        let mut buf = SampleBuffer::<f32>::new(decoded.capacity() as u64, spec);
+        buf.copy_interleaved_ref(decoded);
+        let decoded_frames = buf.samples().len() / ch;
+        let wanted = (seconds * rate as f64).round() as usize;
+        if out.len() < wanted * ch {
+            out.resize(wanted * ch, 0.0);
+        }
+        // A packet plays for its container duration: the trimmed packets at the end of each
+        // joined checkpoint decode to a full AAC frame but last only a few samples.
+        let keep = if packet.dur() > 0 {
+            ((ts_seconds(params.time_base, packet.dur(), rate) * rate as f64).round() as usize).min(decoded_frames)
+        } else {
+            decoded_frames
+        };
+        let first = ((packet_start - start_s) * rate as f64).round() as i64;
+        for j in 0..keep {
+            let at = first + j as i64;
+            if at < 0 {
+                continue;
+            }
+            let at = at as usize;
+            if at >= wanted {
+                break;
+            }
+            out[at * ch..(at + 1) * ch].copy_from_slice(&buf.samples()[j * ch..(j + 1) * ch]);
+            filled = filled.max(at + 1);
+        }
+        if filled >= wanted {
+            break;
+        }
+    }
+    out.truncate(filled * channels.max(1) as usize);
+    Ok(DecodedAudio {
+        samples: out,
+        sample_rate: rate,
+        channels,
+        duration_seconds: filled as f64 / rate.max(1) as f64,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn range_decode_matches_full_decode() {
+        use super::test_audio::{silence_then_tone, write_wav};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("stereo.wav");
+        let stereo: Vec<f32> = silence_then_tone(48_000, 0.5, 3.0).into_iter().flat_map(|s| [s, -s]).collect();
+        write_wav(&path, 48_000, 2, &stereo);
+        let full = decode_audio_file(&path).unwrap();
+        let range = decode_audio_range(&path, 1.0, 0.5).unwrap();
+        assert_eq!((range.sample_rate, range.channels), (48_000, 2));
+        assert_eq!(range.samples, full.samples[48_000 * 2..72_000 * 2].to_vec());
+        assert!((range.duration_seconds - 0.5).abs() < 1e-9);
+        assert!(decode_audio_range(&path, 5.0, 1.0).unwrap().samples.is_empty());
+    }
+
+    #[test]
+    fn range_decode_follows_container_time_in_a_live_recording() {
+        use super::test_audio::{joined_checkpoints, onset_s};
+        let dir = tempfile::tempdir().unwrap();
+        let tone = |t: f64| (30.5..31.0).contains(&t) || (120.5..121.0).contains(&t);
+        let path = joined_checkpoints(dir.path(), 5, tone);
+        // Across the first boundary and inside the fifth checkpoint, after four boundaries: the
+        // tone is where the clock puts it, 21 ms of first-checkpoint priming later. Decoded-frame
+        // positions would be 37 ms later per boundary crossed inside the range.
+        for (start, seconds, tone_at) in [(29.0, 2.0, 1.5), (120.0, 1.0, 0.5)] {
+            let range = decode_audio_range(&path, start, seconds).unwrap();
+            assert_eq!(range.samples.len(), (seconds * 48_000.0) as usize, "length of the range from {start} s");
+            let onset = onset_s(&range.samples, 48_000).expect("the tone is in the range");
+            assert!((tone_at..tone_at + 0.04).contains(&onset), "tone at {onset} s into the range from {start} s");
+        }
+        // The last checkpoint ends at 150 s of clock, 150.021 s of container time.
+        let tail = decode_audio_range(&path, 149.0, 2.0).unwrap();
+        assert_eq!(tail.samples.len(), 49_024, "the range stops at the container end");
+    }
 
     #[test]
     fn test_decode_he_aac_uses_decoded_rate_not_container_rate() {
