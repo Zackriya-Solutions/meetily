@@ -439,13 +439,33 @@ impl RecordingManager {
         self.state.is_recording()
     }
 
-    /// Pause the current recording session
+    /// Pause the current recording session.
+    ///
+    /// Beyond flipping the pause flag (which stops new audio from being
+    /// queued, see `RecordingState::send_audio_chunk`), this also signals the
+    /// still-running pipeline to close whatever VAD speech segment is
+    /// currently open and reset for resume. Without that, pausing mid-sentence
+    /// would leave the segment open indefinitely (it only closes on silence),
+    /// and a later resume would splice pre-pause audio onto post-resume audio
+    /// in the same segment. Takes `&self` and never awaits, so it's safe to
+    /// call from inside a brief `RECORDING_MANAGER.lock()` scope.
     pub fn pause_recording(&self) -> Result<()> {
         info!("Pausing recording");
-        self.state.pause_recording()
+        self.state.pause_recording()?;
+        self.pipeline_manager.signal_pause_flush();
+        Ok(())
     }
 
-    /// Resume the current recording session
+    /// Resume the current recording session.
+    ///
+    /// No pipeline-side action is needed here: `pause_recording()` already
+    /// flushed the open VAD segment and installed a fresh `ContinuousVadProcessor`
+    /// at pause time (see `AudioPipeline::reset_vad_processor`). Because the
+    /// audio channel is FIFO and the pause-flush signal is enqueued strictly
+    /// before this call can ever run, the pipeline is guaranteed to have already
+    /// reset by the time new post-resume audio starts flowing through
+    /// `RecordingState::send_audio_chunk` again - so the next segment always
+    /// starts clean, with no splicing of pre-pause and post-resume audio.
     pub fn resume_recording(&self) -> Result<()> {
         info!("Resuming recording");
         self.state.resume_recording()

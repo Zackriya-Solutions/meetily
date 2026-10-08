@@ -1122,28 +1122,40 @@ pub async fn pause_recording<R: Runtime>(app: AppHandle<R>) -> Result<(), String
         return Err("No recording is currently active".to_string());
     }
 
-    // Access the recording manager and pause it
-    let manager_guard = RECORDING_MANAGER.lock().unwrap();
-    if let Some(manager) = manager_guard.as_ref() {
-        manager.pause_recording().map_err(|e| e.to_string())?;
+    // Access the recording manager and pause it. `manager.pause_recording()` is
+    // synchronous (flips the pause flag, enqueues a pause-flush control chunk -
+    // no I/O, no `.await`), so the lock only needs to be held for this scope.
+    // Never extend this block across an `.await`: RECORDING_MANAGER is a
+    // std::sync::Mutex and stop_recording() needs it too - holding it over an
+    // await would risk stalling shutdown behind this command.
+    {
+        let manager_guard = RECORDING_MANAGER.lock().unwrap();
+        if let Some(manager) = manager_guard.as_ref() {
+            manager.pause_recording().map_err(|e| e.to_string())?;
+        } else {
+            return Err("No recording manager found".to_string());
+        }
+    } // lock released here
 
-        // Emit pause event to frontend
-        app.emit(
-            "recording-paused",
-            serde_json::json!({
-                "message": "Recording paused"
-            }),
-        )
-        .map_err(|e| e.to_string())?;
+    // Bounded wait for the pipeline to process the pause-flush signal and close
+    // the open VAD segment before telling the frontend pause is complete. This
+    // mirrors the wait force_flush_and_stop() uses for the stop-flush path.
+    tokio::time::sleep(tokio::time::Duration::from_millis(30)).await;
 
-        // Update tray menu to reflect paused state
-        crate::tray::update_tray_menu(&app);
+    // Emit pause event to frontend
+    app.emit(
+        "recording-paused",
+        serde_json::json!({
+            "message": "Recording paused"
+        }),
+    )
+    .map_err(|e| e.to_string())?;
 
-        info!("Recording paused successfully");
-        Ok(())
-    } else {
-        Err("No recording manager found".to_string())
-    }
+    // Update tray menu to reflect paused state
+    crate::tray::update_tray_menu(&app);
+
+    info!("Recording paused successfully");
+    Ok(())
 }
 
 /// Resume the current recording

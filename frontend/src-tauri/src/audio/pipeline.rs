@@ -24,6 +24,17 @@ use super::vad::{ContinuousVadProcessor};
 /// during continuous speech is tracked separately in #756.
 const VAD_REDEMPTION_TIME_MS: u32 = 500;
 
+/// Chunk-ID sentinel ranges used as pipeline control signals. The audio
+/// channel only carries `AudioChunk`, so control signals piggyback on
+/// `chunk_id` with empty `data` — real audio chunk IDs never approach
+/// `u64::MAX`. STOP_FLUSH drains the pipeline before it shuts down for good;
+/// PAUSE_FLUSH closes the currently-open VAD segment and resets the VAD
+/// processor for a clean resume, but leaves the pipeline task (and the
+/// transcription workers downstream) running. The two ranges never overlap.
+const STOP_FLUSH_THRESHOLD: u64 = u64::MAX - 10;
+const PAUSE_FLUSH_THRESHOLD: u64 = u64::MAX - 21;
+const PAUSE_FLUSH_SIGNAL_ID: u64 = u64::MAX - 11;
+
 /// Ring buffer for synchronized audio mixing
 /// Accumulates samples from mic and system streams until we have aligned windows
 struct AudioMixerRingBuffer {
@@ -838,10 +849,23 @@ impl AudioPipeline {
                 Ok(Some(chunk)) => {
                     // PERFORMANCE: Check for flush signal (special chunk with ID >= u64::MAX - 10)
                     // Multiple flush signals may be sent to ensure processing
-                    if chunk.chunk_id >= u64::MAX - 10 {
+                    if chunk.chunk_id >= STOP_FLUSH_THRESHOLD {
                         info!("📥 Received FLUSH signal #{} - flushing VAD processor", u64::MAX - chunk.chunk_id);
                         self.flush_remaining_audio()?;
                         // Continue processing to handle any remaining chunks
+                        continue;
+                    }
+
+                    // PAUSE-FLUSH: pause_recording() sends this so the pipeline closes
+                    // whatever speech segment is currently open instead of leaving it to
+                    // drain on silence (which can be indefinite if the user was mid-sentence).
+                    // Unlike STOP_FLUSH, the pipeline task and transcription workers keep running —
+                    // only the VAD processor is replaced so the next audio after resume starts a
+                    // clean segment instead of splicing pre-pause and post-resume audio together.
+                    if chunk.chunk_id >= PAUSE_FLUSH_THRESHOLD {
+                        info!("📥 Received PAUSE-FLUSH signal - closing open VAD segment and resetting for resume");
+                        self.flush_remaining_audio()?;
+                        self.reset_vad_processor();
                         continue;
                     }
 
@@ -968,6 +992,27 @@ impl AudioPipeline {
         self.last_summary_time = std::time::Instant::now();
     }
 
+    /// Replace the VAD processor with a fresh instance. Called after a
+    /// pause-flush so the recording can resume with a clean speech segment
+    /// instead of continuing to accumulate on top of whatever `in_speech`/
+    /// `current_speech` state was left over from before the pause. Not used
+    /// on stop — the pipeline is torn down right after, so there is nothing
+    /// left to reset.
+    fn reset_vad_processor(&mut self) {
+        match ContinuousVadProcessor::new(self.sample_rate, VAD_REDEMPTION_TIME_MS) {
+            Ok(processor) => {
+                self.vad_processor = processor;
+                info!("VAD processor reset after pause - next audio starts a fresh segment");
+            }
+            Err(e) => {
+                // Keep the existing (already-flushed, now-idle) processor rather than
+                // crashing the pipeline task over a pause. Worst case, its internal
+                // state was already cleared by flush_remaining_audio() above.
+                error!("Failed to recreate VAD processor after pause: {} - keeping existing instance", e);
+            }
+        }
+    }
+
 }
 
 /// Simple audio pipeline manager
@@ -1051,6 +1096,36 @@ impl AudioPipelineManager {
             }
         } else {
             Ok(())
+        }
+    }
+
+    /// Signal the running pipeline to close its open VAD segment and reset
+    /// for a clean resume, without tearing anything down. Unlike
+    /// `force_flush_and_stop`, this does NOT drop `audio_sender` or await
+    /// `pipeline_handle` — the pipeline task keeps running so it can accept
+    /// audio again as soon as the recording resumes.
+    ///
+    /// Takes `&self` (not `&mut self`) and does not `.await` anything —
+    /// `UnboundedSender::send` is synchronous. This lets callers invoke it
+    /// from inside a brief `RECORDING_MANAGER.lock()` scope without ever
+    /// holding that guard across an await point.
+    pub fn signal_pause_flush(&self) {
+        if let Some(sender) = &self.audio_sender {
+            let pause_flush_chunk = AudioChunk {
+                data: vec![], // Empty data - this is a control signal, not audio
+                sample_rate: 16000,
+                timestamp: 0.0,
+                chunk_id: PAUSE_FLUSH_SIGNAL_ID,
+                device_type: super::recording_state::DeviceType::Microphone,
+            };
+
+            if let Err(e) = sender.send(pause_flush_chunk) {
+                warn!("Failed to send pause-flush signal: {}", e);
+            } else {
+                info!("📤 Sent pause-flush signal to pipeline");
+            }
+        } else {
+            debug!("No audio sender available - pipeline not running, nothing to pause-flush");
         }
     }
 
@@ -1145,6 +1220,181 @@ impl Default for AudioPipelineManager {
 #[cfg(test)]
 mod policy_tests {
     use super::*;
+    use crate::audio::device_detection::InputDeviceKind;
+
+    /// Synthetic speech-like audio (multi-harmonic sine bursts with amplitude
+    /// modulation) - the same construction `audio::vad`'s own tests rely on to
+    /// get Silero to reliably detect speech, duplicated here (smaller scale)
+    /// since that helper is private to the vad module. Unlike vad's version,
+    /// this one has no silence cycling: every sample is "speech", which is
+    /// exactly the "still mid-sentence when pause was hit" scenario TKT-1670
+    /// covers - there is no natural gap for the VAD to close the segment on.
+    fn generate_continuous_speech(duration_seconds: f32, sample_rate: u32) -> Vec<f32> {
+        let total_samples = (duration_seconds * sample_rate as f32) as usize;
+        (0..total_samples)
+            .map(|i| {
+                let time = i as f32 / sample_rate as f32;
+                let freq1 = 200.0 + (time * 50.0).sin() * 100.0;
+                let freq2 = freq1 * 2.0;
+                let freq3 = freq1 * 3.0;
+                let amplitude = 0.3 + 0.1 * (time * 5.0).sin();
+                amplitude
+                    * (0.5 * (2.0 * std::f32::consts::PI * freq1 * time).sin()
+                        + 0.3 * (2.0 * std::f32::consts::PI * freq2 * time).sin()
+                        + 0.2 * (2.0 * std::f32::consts::PI * freq3 * time).sin())
+            })
+            .collect()
+    }
+
+    /// Builds a pipeline wired to a fresh channel pair, matching how
+    /// `AudioPipelineManager::start` wires a real one - just without cpal
+    /// devices behind it, since these tests only exercise VAD/flush behavior.
+    ///
+    /// Uses a 16kHz pipeline sample rate (real recordings run at 48kHz) so the
+    /// synthetic test audio reaches Silero without going through
+    /// `resample_to_16k`'s anti-aliasing filter first. That filter is
+    /// unrelated to this fix, but its moving-average + linear interpolation
+    /// smooths away enough of the synthetic harmonic content that Silero
+    /// stops recognizing it as speech at all (confirmed experimentally: the
+    /// same waveform reliably produces a segment at native 16kHz but produces
+    /// zero segments after a 48kHz->16kHz round trip, at every duration up to
+    /// 12s). Every other code path exercised here - the ring buffer, mixing,
+    /// the PAUSE_FLUSH sentinel branch, flush_remaining_audio, and
+    /// reset_vad_processor - runs identically regardless of the configured
+    /// sample rate.
+    fn make_test_pipeline() -> (
+        mpsc::UnboundedSender<AudioChunk>,
+        mpsc::UnboundedReceiver<AudioChunk>,
+        AudioPipeline,
+    ) {
+        let (audio_sender, audio_receiver) = mpsc::unbounded_channel::<AudioChunk>();
+        let (transcription_sender, transcription_receiver) = mpsc::unbounded_channel::<AudioChunk>();
+        let state = RecordingState::new();
+        let pipeline = AudioPipeline::new(
+            audio_receiver,
+            transcription_sender,
+            state,
+            0,
+            16000,
+            "Test Mic".to_string(),
+            InputDeviceKind::Unknown,
+            "Test System".to_string(),
+            InputDeviceKind::Unknown,
+        )
+        .expect("test pipeline should build");
+        (audio_sender, transcription_receiver, pipeline)
+    }
+
+    /// Regression test for TKT-1670. Pausing mid-sentence must not let the VAD
+    /// splice pre-pause audio onto post-resume audio in one segment with
+    /// corrupted timestamps. `pause_recording()` sends a PAUSE_FLUSH_SIGNAL_ID
+    /// sentinel through the SAME channel real audio travels on (see
+    /// `AudioPipelineManager::signal_pause_flush`); the pipeline must react by
+    /// (a) force-closing whatever segment is open, exactly like a stop-flush
+    /// would, and (b) - unlike stop - handing the *next* segment a freshly
+    /// reset VAD session, so its timestamps start near zero instead of
+    /// continuing to accumulate from before the pause.
+    #[tokio::test]
+    async fn pause_flush_closes_open_segment_and_resets_timestamps_for_next_segment() {
+        let (audio_sender, mut transcription_receiver, pipeline) = make_test_pipeline();
+        let handle = tokio::spawn(pipeline.run());
+
+        // ~2s of continuous speech with no trailing silence: the VAD has no
+        // natural gap to close the segment on, so without a forced flush it
+        // would stay open indefinitely (the original bug).
+        audio_sender
+            .send(AudioChunk {
+                data: generate_continuous_speech(2.0, 16000),
+                sample_rate: 16000,
+                timestamp: 0.0,
+                chunk_id: 0,
+                device_type: DeviceType::Microphone,
+            })
+            .expect("pipeline receiver still open");
+
+        // Same sentinel pause_recording() sends via signal_pause_flush().
+        audio_sender
+            .send(AudioChunk {
+                data: vec![],
+                sample_rate: 16000,
+                timestamp: 0.0,
+                chunk_id: PAUSE_FLUSH_SIGNAL_ID,
+                device_type: DeviceType::Microphone,
+            })
+            .expect("pipeline receiver still open");
+
+        // The forced-closed pre-pause segment must show up promptly - it must
+        // not wait for silence that, in this scenario, never comes.
+        let pre_pause_segment = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            transcription_receiver.recv(),
+        )
+        .await
+        .expect("pause-flush should close the open segment promptly, not hang")
+        .expect("transcription channel closed unexpectedly");
+        assert!(
+            !pre_pause_segment.data.is_empty(),
+            "expected a real speech segment to be flushed on pause, not an empty control chunk"
+        );
+
+        // Simulate resume: new audio arrives on the same channel. If the VAD
+        // processor were merely flushed (not replaced), it would still be
+        // carrying ~2s of processed_samples from before the pause, so this
+        // segment's start timestamp would be large; with a full reset it must
+        // start fresh, near zero.
+        audio_sender
+            .send(AudioChunk {
+                data: generate_continuous_speech(1.0, 16000),
+                sample_rate: 16000,
+                timestamp: 0.0,
+                chunk_id: 1,
+                device_type: DeviceType::Microphone,
+            })
+            .expect("pipeline receiver still open");
+
+        // Close the channel so run() flushes whatever's left and returns,
+        // mirroring how stop_recording() drops the sender.
+        drop(audio_sender);
+
+        let mut post_resume_segments = Vec::new();
+        while let Some(chunk) = transcription_receiver.recv().await {
+            post_resume_segments.push(chunk);
+        }
+
+        handle
+            .await
+            .expect("pipeline task panicked")
+            .expect("pipeline run() returned Err");
+
+        assert!(
+            !post_resume_segments.is_empty(),
+            "expected the post-resume speech to still produce at least one segment"
+        );
+
+        let first_post_resume_timestamp_ms = post_resume_segments[0].timestamp * 1000.0;
+        assert!(
+            first_post_resume_timestamp_ms < 500.0,
+            "post-resume segment should start near zero after a VAD reset, got {:.1}ms - \
+             this is the exact symptom of the pre-fix bug: the VAD kept accumulating \
+             across the pause instead of starting a clean segment on resume",
+            first_post_resume_timestamp_ms
+        );
+    }
+
+    /// Sanity check that the two sentinel ranges pause_flush and stop_flush
+    /// rely on can never collide - if they did, a pause could be silently
+    /// upgraded into a pipeline teardown or vice versa.
+    #[test]
+    fn pause_and_stop_flush_ranges_do_not_overlap() {
+        assert!(
+            PAUSE_FLUSH_SIGNAL_ID < STOP_FLUSH_THRESHOLD,
+            "pause-flush signal id must sit below the stop-flush threshold"
+        );
+        assert!(
+            PAUSE_FLUSH_THRESHOLD <= PAUSE_FLUSH_SIGNAL_ID,
+            "pause-flush signal id must fall within its own reserved range"
+        );
+    }
 
     #[test]
     fn test_live_vad_redemption_matches_pro_policy() {
