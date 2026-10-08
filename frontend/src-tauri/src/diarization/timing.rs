@@ -1,17 +1,19 @@
 //! Map between the transcript clock of a live recording and positions in its decoded audio file.
 //!
 //! Transcript times count mixed pipeline samples. The decoder (symphonia) returns every AAC frame,
-//! including encoder priming and end padding, because it ignores the MP4 edit list. Recordings are
-//! joined from 30 s AAC checkpoints without re-encoding, so every checkpoint adds 1024 priming and
-//! 768 padding samples at 48 kHz.
+//! including encoder priming and end padding, because it ignores the MP4 edit list. A file encoded
+//! once therefore leads the clock by the 1024-sample priming. Older recordings were joined from
+//! 30 s AAC checkpoints without re-encoding, so every checkpoint adds 1024 priming and 768 padding
+//! samples at 48 kHz.
+use crate::audio::incremental_saver::{AUDIO_LAYOUT_FIELD, AUDIO_LAYOUT_SINGLE_STREAM};
 use serde_json::Value;
 use std::path::Path;
 
 /// Encoder priming of one AAC stream, in samples.
 pub const AAC_PRIMING_SAMPLES: usize = 1024;
-/// Audio samples in one full recording checkpoint (30 s at 48 kHz).
+/// Audio samples in one full legacy recording checkpoint (30 s at 48 kHz).
 pub const CHECKPOINT_SAMPLES_48K: usize = 1_440_000;
-/// Decoded samples of one full recording checkpoint: 1408 AAC frames of 1024.
+/// Decoded samples of one full legacy recording checkpoint: 1408 AAC frames of 1024.
 pub const CHECKPOINT_FRAMES_48K: usize = 1_441_792;
 const AAC_FRAME: usize = 1024;
 const RATE_48K: f64 = 48_000.0;
@@ -20,7 +22,9 @@ const RATE_48K: f64 = 48_000.0;
 pub enum TimeMap {
     /// Transcript rows were produced from the decoded file itself (retranscribed or imported).
     Identity,
-    /// Live recording joined from 30 s AAC checkpoints without re-encoding.
+    /// One AAC stream: the file leads the transcript clock by a constant.
+    Offset { seconds: f64 },
+    /// Legacy recording joined from 30 s AAC checkpoints without re-encoding.
     Checkpoints,
     /// Layout not recognised: times are used as they are and rows are never cut.
     Unknown,
@@ -31,6 +35,7 @@ impl TimeMap {
     pub fn file_s(&self, clock_s: f64) -> f64 {
         match *self {
             TimeMap::Identity | TimeMap::Unknown => clock_s,
+            TimeMap::Offset { seconds } => clock_s + seconds,
             TimeMap::Checkpoints => {
                 let n = (clock_s.max(0.0) * RATE_48K).round();
                 let k = (n / CHECKPOINT_SAMPLES_48K as f64).floor();
@@ -45,6 +50,7 @@ impl TimeMap {
     pub fn clock_s(&self, file_s: f64) -> f64 {
         match *self {
             TimeMap::Identity | TimeMap::Unknown => file_s,
+            TimeMap::Offset { seconds } => (file_s - seconds).max(0.0),
             TimeMap::Checkpoints => {
                 let f = (file_s.max(0.0) * RATE_48K).round();
                 let k = (f / CHECKPOINT_FRAMES_48K as f64).floor();
@@ -73,6 +79,9 @@ pub fn recording_time_map(metadata: Option<&Value>, native_rate: u32, native_fra
         let source = m.get("source").and_then(Value::as_str);
         if m.get("retranscribed_at").is_some() || matches!(source, Some("retranscription") | Some("import")) {
             return TimeMap::Identity;
+        }
+        if m.get(AUDIO_LAYOUT_FIELD).and_then(Value::as_str) == Some(AUDIO_LAYOUT_SINGLE_STREAM) {
+            return TimeMap::Offset { seconds: AAC_PRIMING_SAMPLES as f64 / native_rate.max(1) as f64 };
         }
     }
     if native_rate == 48_000 && fits_checkpoint_layout(native_frames) {
@@ -109,7 +118,7 @@ mod tests {
 
     #[test]
     fn clock_s_inverts_file_s() {
-        for m in [TimeMap::Checkpoints, TimeMap::Identity] {
+        for m in [TimeMap::Checkpoints, TimeMap::Offset { seconds: 1024.0 / 48_000.0 }, TimeMap::Identity] {
             for t in [0.0, 12.3, 29.99, 30.0, 31.5, 75.0, 3599.0] {
                 assert!((m.clock_s(m.file_s(t)) - t).abs() < 1e-4, "{m:?} at {t}");
             }
@@ -126,10 +135,18 @@ mod tests {
     }
 
     #[test]
+    fn single_stream_offset_is_the_encoder_priming() {
+        let m = recording_time_map(Some(&json!({ "audio_layout": "single_stream" })), 48_000, 4_321_280);
+        assert_eq!(m, TimeMap::Offset { seconds: 1024.0 / 48_000.0 });
+        assert!((m.file_s(10.0) - (10.0 + 1024.0 / 48_000.0)).abs() < EPS);
+        assert!(m.allows_splitting());
+    }
+
+    #[test]
     fn metadata_selects_the_map() {
         let checkpoint_frames = 1_441_792 * 2 + 4096;
         assert_eq!(
-            recording_time_map(Some(&json!({ "retranscribed_at": "2026-09-27T10:00:00Z" })), 48_000, checkpoint_frames),
+            recording_time_map(Some(&json!({ "retranscribed_at": "2026-09-27T10:00:00Z", "audio_layout": "single_stream" })), 48_000, checkpoint_frames),
             TimeMap::Identity
         );
         assert_eq!(recording_time_map(Some(&json!({ "source": "import" })), 44_100, 12_345), TimeMap::Identity);
