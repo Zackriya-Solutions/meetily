@@ -191,6 +191,9 @@ pub struct RecordingManager {
     recording_saver: RecordingSaver,
     device_monitor: Option<AudioDeviceMonitor>,
     device_event_receiver: Option<mpsc::UnboundedReceiver<DeviceEvent>>,
+    /// Active recording duration captured when streams stop, because the
+    /// state cleanup that follows clears the recording start time.
+    final_duration: Option<f64>,
 }
 
 // SAFETY: RecordingManager contains types that we've marked as Send
@@ -211,6 +214,7 @@ impl RecordingManager {
             recording_saver: RecordingSaver::new(),
             device_monitor: Some(device_monitor),
             device_event_receiver: Some(device_event_receiver),
+            final_duration: None,
         }
     }
 
@@ -356,6 +360,11 @@ impl RecordingManager {
             error!("Error during force flush: {}", e);
         }
 
+        // Capture the duration now: cleanup() below clears recording_start, and the
+        // save step that runs afterwards would otherwise get None (and fall back to
+        // the last live-transcript timestamp, or nothing when there was none).
+        self.final_duration = self.state.get_active_recording_duration();
+
         // CRITICAL: Full cleanup to release all Arc references and resources
         // This ensures microphone is released even if Drop is delayed
         self.state.cleanup();
@@ -369,7 +378,7 @@ impl RecordingManager {
         debug!("Saving recording with transcript chunks");
 
         // Get actual recording duration from state
-        let recording_duration = self.state.get_active_recording_duration();
+        let recording_duration = self.state.get_active_recording_duration().or(self.final_duration);
         info!("Recording duration from state: {:?}s", recording_duration);
 
         // Save the recording with actual duration
@@ -395,7 +404,7 @@ impl RecordingManager {
         info!("Stopping recording manager");
 
         // Get recording duration BEFORE stopping (important!)
-        let recording_duration = self.state.get_active_recording_duration();
+        let recording_duration = self.state.get_active_recording_duration().or(self.final_duration);
         info!("Recording duration before stop: {:?}s", recording_duration);
 
         // Stop recording state first
