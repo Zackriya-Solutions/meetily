@@ -7,10 +7,6 @@ use serde::{Serialize, Deserialize};
 
 use super::ffmpeg::find_ffmpeg_path;
 
-/// Checkpoints written by this version: lossless, so the recording is encoded to AAC once.
-pub const CHECKPOINT_EXTENSION: &str = "flac";
-/// AAC checkpoints left by older versions; still merged when recovering a crashed recording.
-pub const LEGACY_CHECKPOINT_EXTENSION: &str = "mp4";
 /// metadata.json field that records how audio.mp4 was produced.
 pub const AUDIO_LAYOUT_FIELD: &str = "audio_layout";
 /// audio.mp4 is a single AAC stream: only the encoder's 1024-sample priming precedes the audio.
@@ -22,6 +18,11 @@ struct AudioData {
     data: Vec<f32>,
     // sample_rate: u32,
 }
+
+/// Checkpoints written by this version: lossless, so the recording is encoded to AAC once.
+pub const CHECKPOINT_EXTENSION: &str = "flac";
+/// AAC checkpoints left by older versions; still merged when recovering a crashed recording.
+pub const LEGACY_CHECKPOINT_EXTENSION: &str = "mp4";
 
 /// Incremental audio saver that writes lossless checkpoints every 30 seconds
 /// to minimize memory usage and enable crash recovery
