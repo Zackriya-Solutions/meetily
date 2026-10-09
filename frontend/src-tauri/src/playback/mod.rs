@@ -170,5 +170,10 @@ mod tests {
         let conf: serde_json::Value =
             serde_json::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tauri.conf.json"))).unwrap();
         assert_eq!(conf["app"]["security"]["csp"]["media-src"], "'self' asset: http://asset.localhost blob:");
+        // Clips arrive as raw bytes only over the IPC protocol; without it Tauri falls back to
+        // postMessage, which delivers them as a JSON array of numbers.
+        let connect = conf["app"]["security"]["csp"]["connect-src"].as_str().unwrap();
+        assert!(connect.split_whitespace().any(|s| s == "ipc:"), "{connect}");
+        assert!(connect.split_whitespace().any(|s| s == "http://ipc.localhost"), "{connect}");
     }
 }

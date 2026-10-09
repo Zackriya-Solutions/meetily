@@ -22,7 +22,7 @@ let source: PlaybackSource = IDENTITY_SOURCE;
 const fullClip = () => new ArrayBuffer(44 + 30 * 16_000 * 2);
 /** While set, clip renders wait for it, which keeps a clip "loading" for the test. */
 let renderGate: Promise<void> | null = null;
-let renderResult: () => ArrayBuffer = fullClip;
+let renderResult: () => ArrayBuffer | number[] = fullClip;
 const invoke = mock(async (command: string, _args?: Record<string, unknown>): Promise<unknown> => {
   if (command === 'api_prepare_meeting_playback') return source;
   if (command === 'api_render_playback_clip') {
@@ -121,6 +121,29 @@ describe('usePlayback', () => {
     expect(invoke).toHaveBeenCalledWith('api_render_playback_clip', expect.objectContaining({ meetingId: 'meeting-a', seconds: 30 }));
     expect(audio.src.startsWith('blob:')).toBe(true);
     expect(audio.paused).toBe(false);
+  });
+
+  test('a clip delivered as a number array still plays as audio', async () => {
+    // Tauri's postMessage fallback delivers raw command bytes as a JSON array of numbers.
+    const wav = new Uint8Array(fullClip());
+    wav.set([82, 73, 70, 70]); // RIFF
+    renderResult = () => Array.from(wav);
+    const blobs: Blob[] = [];
+    const createObjectURL = URL.createObjectURL;
+    URL.createObjectURL = (blob: Blob) => { blobs.push(blob); return createObjectURL(blob); };
+    try {
+      const audio = await mount();
+      await act(async () => { controls.playFrom(45); });
+      audio.error = { code: 4 };
+      await act(async () => { audio.emit('error'); });
+      await settle();
+      expect(blobs).toHaveLength(1);
+      expect(blobs[0].size).toBe(wav.length);
+      expect(new Uint8Array(await blobs[0].arrayBuffer()).slice(0, 4)).toEqual(new Uint8Array([82, 73, 70, 70]));
+      expect(audio.paused).toBe(false);
+    } finally {
+      URL.createObjectURL = createObjectURL;
+    }
   });
 
   test('forced clip mode from local storage', async () => {

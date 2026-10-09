@@ -131,7 +131,10 @@ export function usePlayback(meetingId: string | null, enabled: boolean): Playbac
   const renderClip = useCallback(async (startFileS: number): Promise<Clip | null> => {
     const id = meetingIdRef.current;
     if (!id) return null;
-    const bytes = await invoke<ArrayBuffer>('api_render_playback_clip', { meetingId: id, startFileS, seconds: CLIP_SECONDS });
+    const raw = await invoke<ArrayBuffer | number[]>('api_render_playback_clip', { meetingId: id, startFileS, seconds: CLIP_SECONDS });
+    // Raw bytes arrive as an ArrayBuffer over the IPC protocol, as an array of numbers when
+    // Tauri has fallen back to postMessage.
+    const bytes = raw instanceof ArrayBuffer ? raw : new Uint8Array(raw).buffer;
     const lengthS = Math.max(0, bytes.byteLength - WAV_HEADER_BYTES) / WAV_BYTES_PER_SECOND;
     if (lengthS <= 0) return null; // past the end of the file
     return { startFileS, lengthS, url: URL.createObjectURL(new Blob([bytes], { type: 'audio/wav' })) };
