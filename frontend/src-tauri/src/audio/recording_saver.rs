@@ -38,6 +38,10 @@ pub struct MeetingMetadata {
     pub transcript_file: String,
     pub sample_rate: u32,
     pub status: String,  // "recording", "completed", "error"
+    /// How audio.mp4 was produced (`single_stream` since recordings are encoded once);
+    /// absent for recordings made by older versions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_layout: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -253,6 +257,7 @@ impl RecordingSaver {
             transcript_file: "transcripts.json".to_string(),
             sample_rate: 48000,
             status: "recording".to_string(),
+            audio_layout: None,
         };
 
         // Write initial metadata.json
@@ -410,6 +415,8 @@ impl RecordingSaver {
         if let (Some(folder), Some(mut metadata)) = (&self.meeting_folder, self.metadata.clone()) {
             metadata.status = "completed".to_string();
             metadata.completed_at = Some(chrono::Utc::now().to_rfc3339());
+            // finalize() encoded audio.mp4 once from lossless checkpoints.
+            metadata.audio_layout = Some(super::incremental_saver::AUDIO_LAYOUT_SINGLE_STREAM.to_string());
 
             // Use actual recording duration from RecordingState (more accurate than transcript segments)
             // Falls back to last transcript segment if duration not provided
