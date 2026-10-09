@@ -80,6 +80,17 @@ pub fn recording_time_map(metadata: Option<&Value>, native_rate: u32, native_fra
         if m.get("retranscribed_at").is_some() || matches!(source, Some("retranscription") | Some("import")) {
             return TimeMap::Identity;
         }
+    }
+    recording_layout(metadata, native_rate, native_frames)
+}
+
+/// How the decoded file relates to the recording clock, whatever its transcript was timed by: the
+/// map a live transcript of this file would need. An imported file has no recording clock.
+pub fn recording_layout(metadata: Option<&Value>, native_rate: u32, native_frames: usize) -> TimeMap {
+    if let Some(m) = metadata {
+        if m.get("source").and_then(Value::as_str) == Some("import") {
+            return TimeMap::Identity;
+        }
         if m.get(AUDIO_LAYOUT_FIELD).and_then(Value::as_str) == Some(AUDIO_LAYOUT_SINGLE_STREAM) {
             return TimeMap::Offset { seconds: AAC_PRIMING_SAMPLES as f64 / native_rate.max(1) as f64 };
         }
@@ -140,6 +151,20 @@ mod tests {
         assert_eq!(m, TimeMap::Offset { seconds: 1024.0 / 48_000.0 });
         assert!((m.file_s(10.0) - (10.0 + 1024.0 / 48_000.0)).abs() < EPS);
         assert!(m.allows_splitting());
+    }
+
+    #[test]
+    fn layout_ignores_where_the_transcript_came_from() {
+        let checkpoint_frames = 1_441_792 * 2 + 4096;
+        let retranscribed = json!({ "retranscribed_at": "2026-10-05T19:28:56Z" });
+        assert_eq!(recording_layout(Some(&retranscribed), 48_000, checkpoint_frames), TimeMap::Checkpoints);
+        assert_eq!(recording_layout(Some(&json!({ "source": "retranscription" })), 48_000, checkpoint_frames), TimeMap::Checkpoints);
+        assert_eq!(recording_layout(Some(&json!({ "source": "import" })), 48_000, checkpoint_frames), TimeMap::Identity);
+        assert_eq!(
+            recording_layout(Some(&json!({ "retranscribed_at": "x", "audio_layout": "single_stream" })), 48_000, 4_321_280),
+            TimeMap::Offset { seconds: 1024.0 / 48_000.0 }
+        );
+        assert_eq!(recording_layout(None, 44_100, 1024 * 3000), TimeMap::Unknown);
     }
 
     #[test]

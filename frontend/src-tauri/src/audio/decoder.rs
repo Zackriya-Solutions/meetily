@@ -10,7 +10,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use symphonia::core::audio::SampleBuffer;
-use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
+use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_AAC, CODEC_TYPE_NULL};
 use symphonia::core::formats::FormatOptions;
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
@@ -689,6 +689,33 @@ pub fn container_duration_s(path: &Path) -> Result<f64> {
     Ok(ts_seconds(params.time_base, duration_ts, rate))
 }
 
+/// Frames a full decode of an AAC file yields, counted from its packets without decoding: every
+/// AAC packet decodes to 1024 frames, encoder priming and padding included. `None` for other
+/// codecs.
+pub fn aac_decoded_frames(path: &Path) -> Result<Option<(u32, usize)>> {
+    if needs_ffmpeg_conversion(path) {
+        return Ok(None);
+    }
+    let (mut format, track_id, params) = open_format(path)?;
+    if params.codec != CODEC_TYPE_AAC {
+        return Ok(None);
+    }
+    let rate = params.sample_rate.ok_or_else(|| anyhow!("Unknown sample rate"))?;
+    let mut packets = 0usize;
+    loop {
+        match format.next_packet() {
+            Ok(packet) if packet.track_id() == track_id => packets += 1,
+            Ok(_) => {}
+            Err(symphonia::core::errors::Error::IoError(ref e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            Err(e) => {
+                warn!("Error reading packet while counting frames of {}: {}", path.display(), e);
+                break;
+            }
+        }
+    }
+    Ok(Some((rate, packets * 1024)))
+}
+
 /// Decoded before the requested start and dropped: after a seek, an AAC packet needs the one
 /// before it to decode cleanly.
 const RANGE_PREROLL_S: f64 = 0.1;
@@ -1170,6 +1197,20 @@ mod tests {
         let decoded = decode_audio_file(&live).unwrap();
         let decoded_s = decoded.samples.len() as f64 / decoded.channels.max(1) as f64 / decoded.sample_rate as f64;
         assert!(decoded_s - duration > 0.07, "decoded {decoded_s} s vs container {duration} s");
+    }
+
+    #[test]
+    fn aac_frames_are_counted_without_decoding() {
+        use super::test_audio::{joined_checkpoints, write_wav};
+        let dir = tempfile::tempdir().unwrap();
+        let live = joined_checkpoints(dir.path(), 3, |_| false);
+        let decoded = decode_audio_file(&live).unwrap();
+        let frames = decoded.samples.len() / decoded.channels.max(1) as usize;
+        assert_eq!(aac_decoded_frames(&live).unwrap(), Some((48_000, frames)));
+
+        let wav = dir.path().join("speech.wav");
+        write_wav(&wav, 16_000, 1, &[0.0; 1600]);
+        assert_eq!(aac_decoded_frames(&wav).unwrap(), None);
     }
 }
 

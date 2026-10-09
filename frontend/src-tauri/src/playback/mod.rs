@@ -1,10 +1,15 @@
 //! Playing a meeting's recording in the app: the file for the asset protocol, time table and WAV clips.
 pub mod clip;
 
-use crate::audio::decoder::container_duration_s;
+use crate::audio::decoder::{aac_decoded_frames, container_duration_s};
 use crate::database::repositories::meeting::MeetingsRepository;
+use crate::diarization::timing::{
+    read_metadata, recording_layout, recording_time_map, TimeMap, AAC_PRIMING_SAMPLES, CHECKPOINT_FRAMES_48K,
+    CHECKPOINT_SAMPLES_48K,
+};
 use crate::state::AppState;
 use serde::Serialize;
+use serde_json::Value;
 use sqlx::SqlitePool;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, Runtime};
@@ -41,17 +46,43 @@ pub(crate) async fn meeting_audio_path(pool: &SqlitePool, meeting_id: &str) -> R
 
 /// Transcript clock → playback position. The player seeks the `<audio>` element and the WAV
 /// clips in container time, and container time is the recording clock: joined 30 s checkpoints
-/// advance the container by exactly 30 s each. The checkpoint drift of `TimeMap` exists only
-/// when decoded frames are counted, so the table is the identity for every recording. If a
-/// webview is ever found to follow decoded frames, return the checkpoint table here.
-fn playback_time_table(duration_s: f64) -> Vec<[f64; 2]> {
-    vec![[0.0, 0.0], [duration_s, duration_s]]
+/// advance the container by exactly 30 s each. Rows of a live recording count that clock, so their
+/// table is the identity. Rows timed from the decoded file (`rows` is the identity, as after a
+/// retranscription) count decoded frames, which a checkpoint-joined file has 1792 more of per
+/// checkpoint; their table maps each checkpoint's decoded audio back onto its 30 s. A single-stream
+/// file is off by its 21 ms of priming at most, which the identity leaves.
+fn playback_time_table(duration_s: f64, rows: TimeMap, layout: TimeMap, decoded_s: f64) -> Vec<[f64; 2]> {
+    if rows != TimeMap::Identity || layout != TimeMap::Checkpoints {
+        return vec![[0.0, 0.0], [duration_s, duration_s]];
+    }
+    let mut table = vec![[0.0, 0.0]];
+    for k in 0.. {
+        let audio_start = k * CHECKPOINT_FRAMES_48K + AAC_PRIMING_SAMPLES;
+        let start_s = audio_start as f64 / 48_000.0;
+        if start_s >= decoded_s {
+            break;
+        }
+        let end_s = ((audio_start + CHECKPOINT_SAMPLES_48K) as f64 / 48_000.0).min(decoded_s);
+        table.push([start_s, layout.clock_s(start_s)]);
+        table.push([end_s, layout.clock_s(end_s)]);
+    }
+    table
 }
 
-/// Source for `audio`. Reads the file's packet table but does not decode it.
-pub(crate) fn playback_source(audio: &Path) -> anyhow::Result<PlaybackSource> {
+/// Source for `audio`, whose folder's metadata.json is `metadata`. Reads the file's packet table
+/// but does not decode it.
+pub(crate) fn playback_source(audio: &Path, metadata: Option<&Value>) -> anyhow::Result<PlaybackSource> {
     let duration_s = container_duration_s(audio)?;
-    Ok(PlaybackSource { path: audio.to_string_lossy().into_owned(), duration_s, time_table: playback_time_table(duration_s) })
+    let time_table = match aac_decoded_frames(audio) {
+        Ok(Some((rate, frames))) => playback_time_table(
+            duration_s,
+            recording_time_map(metadata, rate, frames),
+            recording_layout(metadata, rate, frames),
+            frames as f64 / rate as f64,
+        ),
+        _ => playback_time_table(duration_s, TimeMap::Unknown, TimeMap::Unknown, duration_s),
+    };
+    Ok(PlaybackSource { path: audio.to_string_lossy().into_owned(), duration_s, time_table })
 }
 
 /// Lets the webview load exactly this meeting's audio file and returns how to play it.
@@ -65,7 +96,8 @@ pub async fn api_prepare_meeting_playback<R: Runtime>(
     app.asset_protocol_scope()
         .allow_file(&audio)
         .map_err(|e| format!("Failed to allow playback of the recording: {}", e))?;
-    tokio::task::spawn_blocking(move || playback_source(&audio))
+    let metadata = audio.parent().and_then(read_metadata);
+    tokio::task::spawn_blocking(move || playback_source(&audio, metadata.as_ref()))
         .await
         .map_err(|e| format!("Reading the recording failed: {}", e))?
         .map_err(|e| format!("Failed to read the recording: {:#}", e))
@@ -148,7 +180,7 @@ mod tests {
     fn live_recording_plays_on_the_container_clock() {
         let dir = tempfile::tempdir().unwrap();
         let audio = joined_checkpoints(dir.path(), 2, |_| false);
-        let source = playback_source(&audio).unwrap();
+        let source = playback_source(&audio, None).unwrap();
         // Two 30 s checkpoints plus the first checkpoint's 1024 frames of priming.
         let d = 60.0 + 1024.0 / 48_000.0;
         assert_eq!(source.path, audio.to_string_lossy());
@@ -157,11 +189,39 @@ mod tests {
     }
 
     #[test]
+    fn retranscribed_live_recording_plays_each_checkpoint_on_the_container_clock() {
+        use crate::diarization::timing::{TimeMap, AAC_PRIMING_SAMPLES, CHECKPOINT_FRAMES_48K};
+        let dir = tempfile::tempdir().unwrap();
+        let audio = joined_checkpoints(dir.path(), 3, |_| false);
+        // A retranscription times its rows by decoded frames, which every checkpoint's priming
+        // and padding push 1792 frames further from the container clock.
+        let source = playback_source(&audio, Some(&serde_json::json!({ "retranscribed_at": "2026-10-05T19:28:56Z" }))).unwrap();
+        let file_at = |clock_s: f64| {
+            let t = &source.time_table;
+            let i = t.iter().rposition(|p| p[0] <= clock_s).unwrap();
+            if i + 1 == t.len() || t[i + 1][0] == t[i][0] {
+                return t[i][1];
+            }
+            t[i][1] + (clock_s - t[i][0]) * (t[i + 1][1] - t[i][1]) / (t[i + 1][0] - t[i][0])
+        };
+        for k in 0..3 {
+            let decoded_s = (k * CHECKPOINT_FRAMES_48K + AAC_PRIMING_SAMPLES) as f64 / 48_000.0;
+            for into in [0.0, 12.5, 29.9] {
+                let expected = TimeMap::Checkpoints.clock_s(decoded_s + into);
+                assert!((file_at(decoded_s + into) - expected).abs() < 1e-6, "checkpoint {k} at {into} s");
+                assert!((expected - (k as f64 * 30.0 + into)).abs() < 1e-6);
+            }
+        }
+        // A live recording's rows already count the container clock.
+        assert_eq!(playback_source(&audio, None).unwrap().time_table, vec![[0.0, 0.0], [source.duration_s, source.duration_s]]);
+    }
+
+    #[test]
     fn imported_meeting_source_is_identity() {
         let dir = tempfile::tempdir().unwrap();
         let audio = dir.path().join("audio.wav");
         write_wav(&audio, 16_000, 1, &vec![0.0; 32_000]);
-        let source = playback_source(&audio).unwrap();
+        let source = playback_source(&audio, Some(&serde_json::json!({ "source": "import" }))).unwrap();
         assert_eq!(source, PlaybackSource { path: audio.to_string_lossy().into_owned(), duration_s: 2.0, time_table: vec![[0.0, 0.0], [2.0, 2.0]] });
     }
 
