@@ -385,6 +385,9 @@ pub(crate) async fn generate_meeting_summary(
         return Err("Summary generation was cancelled".to_string());
     }
     info!("Starting summary generation with provider: {:?}, model: {}", provider, model_name);
+    // One stable conversation id for every LLM call of this summary
+    // (chunks, combine, translation) so OpenCode Go can route and cache it.
+    let session_id = uuid::Uuid::new_v4().to_string();
 
     let total_tokens = rough_token_count(text);
     let (mut english_markdown, successful_chunk_count, mut reasoning_stripped) =
@@ -411,7 +414,7 @@ pub(crate) async fn generate_meeting_summary(
                         let result = match generate_summary(
                             client, provider, model_name, api_key, "You are an expert meeting summarizer.",
                             &prompt, ollama_endpoint, custom_openai_endpoint, max_tokens, temperature,
-                            top_p, app_data_dir, cancellation_token,
+                            top_p, app_data_dir, cancellation_token, Some(&session_id),
                         )
                         .await
                         {
@@ -474,7 +477,7 @@ pub(crate) async fn generate_meeting_summary(
                         client, provider, model_name, api_key,
                         "You are an expert at synthesizing meeting summaries.", &prompt,
                         ollama_endpoint, custom_openai_endpoint, max_tokens, temperature, top_p,
-                        app_data_dir, cancellation_token,
+                        app_data_dir, cancellation_token, Some(&session_id),
                     )
                     .await?;
                     let cleaned = clean_llm_markdown_detailed(&completion.content);
@@ -502,7 +505,7 @@ pub(crate) async fn generate_meeting_summary(
             let completion = generate_summary(
                 client, provider, model_name, api_key, &final_system_prompt, &final_user_prompt,
                 ollama_endpoint, custom_openai_endpoint, max_tokens, temperature, top_p,
-                app_data_dir, cancellation_token,
+                app_data_dir, cancellation_token, Some(&session_id),
             )
             .await?;
             let cleaned = clean_llm_markdown_detailed(&completion.content);
@@ -517,7 +520,7 @@ pub(crate) async fn generate_meeting_summary(
                 let translated = translate_markdown(
                     client, provider, model_name, api_key, &english_markdown, language,
                     ollama_endpoint, custom_openai_endpoint, max_tokens, temperature, top_p,
-                    app_data_dir, cancellation_token,
+                    app_data_dir, cancellation_token, Some(&session_id),
                 )
                 .await
                 .map_err(|error| format!("Translation to {language} failed: {error}"))?;
@@ -530,7 +533,7 @@ pub(crate) async fn generate_meeting_summary(
                     normalize_markdown_to_english(
                         client, provider, model_name, api_key, &english_markdown, ollama_endpoint,
                         custom_openai_endpoint, max_tokens, temperature, top_p, app_data_dir,
-                        cancellation_token,
+                        cancellation_token, Some(&session_id),
                     )
                     .await,
                     cancellation_token,
@@ -567,6 +570,7 @@ async fn run_markdown_transform(
     top_p: Option<f32>,
     app_data_dir: Option<&PathBuf>,
     cancellation_token: Option<&CancellationToken>,
+    session_id: Option<&str>,
 ) -> Result<CleanedLlmMarkdown, String> {
     if cancellation_token.is_some_and(CancellationToken::is_cancelled) {
         return Err("Summary generation was cancelled".to_string());
@@ -574,6 +578,7 @@ async fn run_markdown_transform(
     let completion = generate_summary(
         client, provider, model_name, api_key, system_prompt, user_prompt, ollama_endpoint,
         custom_openai_endpoint, max_tokens, temperature, top_p, app_data_dir, cancellation_token,
+        session_id,
     )
     .await
     .map_err(|error| format!("{failure_label} failed: {error}"))?;
@@ -597,6 +602,7 @@ async fn translate_markdown(
     top_p: Option<f32>,
     app_data_dir: Option<&PathBuf>,
     cancellation_token: Option<&CancellationToken>,
+    session_id: Option<&str>,
 ) -> Result<CleanedLlmMarkdown, String> {
     let system_prompt = translation_system_prompt(target_language);
     let user_prompt = format!(
@@ -605,7 +611,7 @@ async fn translate_markdown(
     let cleaned = run_markdown_transform(
         client, provider, model_name, api_key, &system_prompt, &user_prompt, "Translation pass",
         ollama_endpoint, custom_openai_endpoint, max_tokens, temperature, top_p, app_data_dir,
-        cancellation_token,
+        cancellation_token, session_id,
     )
     .await?;
     require_visible_markdown("Translation", &cleaned)?;
@@ -626,6 +632,7 @@ async fn normalize_markdown_to_english(
     top_p: Option<f32>,
     app_data_dir: Option<&PathBuf>,
     cancellation_token: Option<&CancellationToken>,
+    session_id: Option<&str>,
 ) -> Result<CleanedLlmMarkdown, String> {
     let user_prompt = format!(
         "Convert the following Markdown document into English. Return ONLY the English Markdown, nothing else.\n\n<document>\n{markdown}\n</document>"
@@ -633,7 +640,7 @@ async fn normalize_markdown_to_english(
     run_markdown_transform(
         client, provider, model_name, api_key, english_normalization_system_prompt(), &user_prompt,
         "English normalization pass", ollama_endpoint, custom_openai_endpoint, max_tokens,
-        temperature, top_p, app_data_dir, cancellation_token,
+        temperature, top_p, app_data_dir, cancellation_token, session_id,
     )
     .await
 }
