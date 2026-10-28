@@ -36,11 +36,14 @@ This branch is based on the current upstream devtest. Its logging conflict resol
 | Production frontend (pnpm build) | Passed. |
 | Frontend tests (Bun 1.4.4, bun test tests) | 54 passed, 0 failed, including isolated recording-start and reload fixtures. |
 | Rust syntax parsing (rustfmt --emit stdout) | Passed for changed Rust sources; this is not a type check or native build. |
-| Native build and Rust tests | Pending: the local Xcode toolchain refuses SDK access until its license is accepted. |
+| macOS native build and Rust tests | Desktop executable build passed. Library suite: 263 passed, two unchanged upstream device-detection tests failed, four ignored. All application-capture regressions passed. |
 | Windows/Linux compilation | Pending platform CI. |
-| Live application isolation and reconnection | Pending; no microphone, meeting, or application audio was recorded during PR preparation. |
+| Native application discovery | Passed against running applications; nonexistent app resolves to no capture processes. No audio was recorded. |
+| Live application isolation and reconnection | Pending; no microphone, meeting, or application audio was recorded during validation. |
 
-Automated coverage includes saved selection compatibility, source propagation, ownership matching, mic-off selection, waiting without a tap, worker cancellation, shared timing, and empty-allowlist rejection. The Rust cases still need execution on this rebased branch.
+Automated coverage includes saved selection compatibility, source propagation, ownership matching, mic-off selection, waiting without a tap, worker cancellation, shared timing, and empty-allowlist rejection. The source, ownership, supervisor, timing, and empty-allowlist regressions passed on this rebased branch. Native discovery also passed when explicitly enabled.
+
+The two full-suite failures are test_builtin_mic_detection and test_calculate_buffer_timeout_bluetooth in unchanged audio/device_detection.rs. Both reproduce on current upstream devtest (251 passed, two failed, three ignored). They are not treated as new regressions in this feature. Native validation uses TAURI_CONFIG with externalBin/resources empty to exclude installer-only sidecars; it does not validate release packaging or code signing.
 
 The following are interactive acceptance checks, not claims established by unit tests:
 
