@@ -10,6 +10,7 @@ import { useRecordingState } from '@/contexts/RecordingStateContext';
 import { useConfig } from '@/contexts/ConfigContext';
 
 export interface RecordingPreferences {
+  device_selection_version: [number, number];
   save_folder: string;
   auto_save: boolean;
   file_format: string;
@@ -26,6 +27,7 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
     save_folder: '',
     auto_save: true,
     file_format: 'mp4',
+    device_selection_version: [1, 1],
     preferred_mic_device: null,
     preferred_system_device: null
   });
@@ -43,6 +45,7 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
         setPreferences(prefs);
       } catch (error) {
         console.error('Failed to load recording preferences:', error);
+        toast.error('Could not load recording preferences', { description: String(error) });
         // If loading fails, get default folder path
         try {
           const defaultPath = await invoke<string>('get_default_recordings_folder_path');
@@ -85,8 +88,12 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
   };
 
   const handleDeviceChange = async (devices: SelectedDevices) => {
-    const newPreferences = {
+    const newPreferences: RecordingPreferences = {
       ...preferences,
+      device_selection_version: [
+        devices.micDevice !== preferences.preferred_mic_device ? 1 : preferences.device_selection_version[0],
+        devices.systemDevice !== preferences.preferred_system_device ? 1 : preferences.device_selection_version[1],
+      ],
       preferred_mic_device: devices.micDevice,
       preferred_system_device: devices.systemDevice
     };
@@ -135,7 +142,10 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
     setSaving(true);
     try {
       await invoke('set_recording_preferences', { preferences: prefs });
-      onSave?.(prefs);
+      const saved = await invoke<RecordingPreferences>('get_recording_preferences');
+      setPreferences(saved);
+      setSelectedDevices({ micDevice: saved.preferred_mic_device, systemDevice: saved.preferred_system_device });
+      onSave?.(saved);
 
       // Show success toast with device details
       const micDevice = prefs.preferred_mic_device ? cachedDeviceLabel(prefs.preferred_mic_device) : 'Default';

@@ -439,11 +439,11 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
             Ok(prefs) => {
                 info!("📋 Loaded recording preferences: auto_save={}, preferred_mic={:?}, preferred_system={:?}",
                       prefs.auto_save, prefs.preferred_mic_device, prefs.preferred_system_device);
+                prefs.validate_device_selection(prefs.preferred_mic_device.as_deref(), prefs.preferred_system_device.as_deref())?;
                 (prefs.auto_save, prefs.preferred_mic_device, prefs.preferred_system_device)
             }
             Err(e) => {
-                warn!("Failed to load recording preferences, using defaults: {}", e);
-                (true, None, None)
+                return Err(format!("Failed to load recording preferences: {}", e));
             }
         };
 
@@ -654,6 +654,11 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
         "message": "Recording initialization started"
     })).map_err(|e| e.to_string())?;
 
+    let prefs = super::recording_preferences::load_recording_preferences(&app).await
+        .map_err(|e| format!("Failed to load recording preferences: {}", e))?;
+    let (mic_device_name, system_device_name) = super::recording_preferences::resolve_start_devices(&prefs, mic_device_name, system_device_name).await?;
+    let auto_save = prefs.auto_save;
+
     #[cfg(not(target_os = "macos"))]
     let mic_device = resolve_mic_or_default(&app, mic_device_name.as_deref());
 
@@ -670,18 +675,6 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
 
     // Create new recording manager
     let mut manager = RecordingManager::new();
-
-    // Load recording preferences to check auto_save setting
-    let auto_save = match super::recording_preferences::load_recording_preferences(&app).await {
-        Ok(prefs) => {
-            info!("📋 Loaded recording preferences: auto_save={}", prefs.auto_save);
-            prefs.auto_save
-        }
-        Err(e) => {
-            warn!("Failed to load recording preferences, defaulting to auto_save=true: {}", e);
-            true // Default to saving if preferences can't be loaded
-        }
-    };
 
     // Always ensure a meeting name is set so incremental saver initializes
     let effective_meeting_name = meeting_name.clone().unwrap_or_else(|| {
@@ -1613,7 +1606,12 @@ fn spawn_device_event_processor<R: Runtime>(
                         };
                         if all_ended {
                             let _ = app.emit("linux-audio-notice", serde_json::json!({"error": true, "message": "Audio capture is unavailable. Stopping and saving this recording."}));
-                            let _ = stop_recording(app.clone(), RecordingArgs { save_path: String::new() }).await;
+                            let result = stop_recording(app.clone(), RecordingArgs { save_path: String::new() }).await;
+                            let result = result.and_then(|()| app.emit("recording-stop-complete", true).map_err(|e| e.to_string()));
+                            if let Err(e) = result {
+                                error!("Automatic recording shutdown failed: {}", e);
+                                let _ = app.emit("linux-audio-notice", serde_json::json!({"error": true, "message": format!("Could not finish saving the recording: {}", e)}));
+                            }
                             break;
                         }
                     }
