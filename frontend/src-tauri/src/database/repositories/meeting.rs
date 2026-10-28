@@ -245,6 +245,10 @@ async fn delete_meeting_with_transaction(
         return Ok(false);
     }
 
+    // Mark recording session as deleted if associated
+    sqlx::query("UPDATE recording_sessions SET meeting_id=NULL,status='deleted' WHERE meeting_id=?")
+        .bind(meeting_id).execute(&mut *transaction).await?;
+
     // Delete from related tables in proper order
     // 1. Delete from transcript_chunks
     sqlx::query("DELETE FROM transcript_chunks WHERE meeting_id = ?")

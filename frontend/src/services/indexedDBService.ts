@@ -34,6 +34,8 @@ class IndexedDBService {
   private readonly DB_NAME = 'MeetilyRecoveryDB';
   private readonly DB_VERSION = 1;
   private initPromise: Promise<void> | null = null;
+  // Also covers a very short recording completing before its first metadata write.
+  private savedMeetings = new Set<string>();
 
   /**
    * Initialize database connection
@@ -105,9 +107,21 @@ class IndexedDBService {
       const store = transaction.objectStore('meetings');
 
       await new Promise<void>((resolve, reject) => {
-        const request = store.put(metadata);
-        request.onsuccess = () => resolve();
-        request.onerror = () => reject(request.error);
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error);
+        transaction.onabort = () => reject(transaction.error);
+        const request = store.get(metadata.meetingId);
+        request.onsuccess = () => {
+          const previous = request.result as MeetingMetadata | undefined;
+          // Read and merge inside the same write transaction, so a late folder
+          // or transcript update cannot undo a successful native save.
+          store.put({
+            ...metadata,
+            transcriptCount: Math.max(metadata.transcriptCount, previous?.transcriptCount || 0),
+            lastUpdated: Math.max(metadata.lastUpdated, previous?.lastUpdated || 0),
+            savedToSQLite: metadata.savedToSQLite || !!previous?.savedToSQLite || this.savedMeetings.has(metadata.meetingId),
+          });
+        };
       });
     } catch (error) {
       console.warn('Failed to save meeting metadata to IndexedDB:', error);
@@ -169,6 +183,7 @@ class IndexedDBService {
    * Mark meeting as saved to SQLite
    */
   async markMeetingSaved(meetingId: string): Promise<void> {
+    this.savedMeetings.add(meetingId);
     try {
       if (!this.db) await this.init();
 
@@ -176,17 +191,16 @@ class IndexedDBService {
       const store = transaction.objectStore('meetings');
 
       return new Promise((resolve, reject) => {
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error);
+        transaction.onabort = () => reject(transaction.error);
         const getRequest = store.get(meetingId);
         getRequest.onsuccess = () => {
           const meeting = getRequest.result;
           if (meeting) {
             meeting.savedToSQLite = true;
             meeting.lastUpdated = Date.now();
-            const putRequest = store.put(meeting);
-            putRequest.onsuccess = () => resolve();
-            putRequest.onerror = () => reject(putRequest.error);
-          } else {
-            resolve();
+            store.put(meeting);
           }
         };
         getRequest.onerror = () => reject(getRequest.error);

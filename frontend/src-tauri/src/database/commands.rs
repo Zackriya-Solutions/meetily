@@ -160,6 +160,7 @@ pub async fn import_and_initialize_database(
             format!("Failed to import database: {}", e)
         })?;
 
+    crate::session::reconcile(db_manager.pool()).await?;
     // Update app state with the new manager
     app.manage(AppState { db_manager });
 

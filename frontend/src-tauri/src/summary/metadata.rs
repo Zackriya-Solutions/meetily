@@ -119,7 +119,7 @@ fn parse_metadata_json(raw: &str) -> Result<Value> {
     serde_json::from_str(raw).context("Failed to parse metadata.json")
 }
 
-fn normalise_supported_summary_language(raw: &str) -> Result<String> {
+pub(crate) fn normalise_supported_summary_language(raw: &str) -> Result<String> {
     let code = raw.trim().to_ascii_lowercase().replace('_', "-");
     if code.is_empty() {
         bail!("Unsupported summary language: empty");

@@ -1,7 +1,6 @@
 'use client';
 
 import { invoke } from '@tauri-apps/api/core';
-import { appDataDir } from '@tauri-apps/api/path';
 import { useCallback, useEffect, useState, useRef } from 'react';
 import { Play, Pause, Square, Mic, AlertCircle, X } from 'lucide-react';
 import { ProcessRequest, SummaryResponse } from '@/types/summary';
@@ -9,13 +8,15 @@ import { listen } from '@tauri-apps/api/event';
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import Analytics from '@/lib/analytics';
-import { useRecordingState } from '@/contexts/RecordingStateContext';
+import { useRecordingState, RecordingStatus } from '@/contexts/RecordingStateContext';
+import { toast } from 'sonner';
 import type { TranscriptionErrorPayload } from '@/services/transcriptService';
+import type { RecordingCompletion } from '@/types';
 
 interface RecordingControlsProps {
   isRecording: boolean;
   barHeights: string[];
-  onRecordingStop: (callApi?: boolean) => void;
+  onRecordingStop: (callApi?: boolean, completion?: RecordingCompletion | null) => void | Promise<void>;
   onRecordingStart: () => void;
   onTranscriptReceived: (summary: SummaryResponse) => void;
   onTranscriptionError?: (message: string) => void;
@@ -53,6 +54,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
   const [isProcessing, setIsProcessing] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
+  const stopInFlight = useRef(false);
   const [isPausing, setIsPausing] = useState(false);
   const [isResuming, setIsResuming] = useState(false);
   const MIN_RECORDING_DURATION = 2000; // 2 seconds minimum recording time
@@ -143,65 +145,51 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
     console.log('Executing stop recording...');
     try {
       setIsProcessing(true);
-      const dataDir = await appDataDir();
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const savePath = `${dataDir}/recording-${timestamp}.wav`;
-      console.log('Saving recording to:', savePath);
       console.log('About to call stop_recording command');
-      const result = await invoke('stop_recording', {
+      const result = await invoke<RecordingCompletion | null>('stop_recording', {
         args: {
-          save_path: savePath
+          session_id: recordingState.session?.sessionId
         }
       });
       console.log('stop_recording command completed successfully:', result);
-      setRecordingPath(savePath);
+      setRecordingPath(result?.folderPath || null);
       // setShowPlayback(true);
       setIsProcessing(false);
       // Track successful transcription
-      Analytics.trackTranscriptionSuccess();
-      onRecordingStop(true);
+      if (result && !result.error) Analytics.trackTranscriptionSuccess();
+      await onRecordingStop(true, result);
     } catch (error) {
       console.error('Failed to stop recording:', error);
-      if (error instanceof Error) {
-        console.error('Error details:', {
-          message: error.message,
-          name: error.name,
-          stack: error.stack,
-        });
-        if (error.message.includes('No recording in progress')) {
-          return;
-        }
-      } else if (typeof error === 'string' && error.includes('No recording in progress')) {
-        return;
-      } else if (error && typeof error === 'object' && 'toString' in error) {
-        if (error.toString().includes('No recording in progress')) {
-          return;
-        }
-      }
-      setIsProcessing(false);
-      onRecordingStop(false);
+      const message = error instanceof Error ? error.message : String(error);
+      toast.error('Could not stop recording', { description: message, duration: 15000 });
+      recordingState.setStatus(RecordingStatus.ERROR, message);
+      await recordingState.syncWithBackend();
+      await onRecordingStop(false);
     } finally {
+      setIsProcessing(false);
       setIsStopping(false);
+      stopInFlight.current = false;
     }
-  }, [onRecordingStop]);
+  }, [onRecordingStop, recordingState.session?.sessionId, recordingState.setStatus, recordingState.syncWithBackend]);
 
   const handleStopRecording = useCallback(async () => {
     console.log('handleStopRecording called - isRecording:', isRecording, 'isStarting:', isStarting, 'isStopping:', isStopping, 'isStartingRecording:', isStartingRecording);
-    if (!isRecording || isStarting || isStopping || isStartingRecording) {
+    if (!isRecording || isStarting || isStopping || isStartingRecording || stopInFlight.current) {
       console.log('Early return from handleStopRecording due to state check');
       return;
     }
 
     console.log('Stopping recording...');
 
-    // Notify parent immediately (for UI state updates)
+    stopInFlight.current = true;
+    recordingState.setStatus(RecordingStatus.STOPPING, 'Stopping recording...');
     onStopInitiated?.();
 
     setIsStopping(true);
 
     // Immediately trigger the stop action
     await stopRecordingAction();
-  }, [isRecording, isStarting, isStopping, isStartingRecording, stopRecordingAction, onStopInitiated]);
+  }, [isRecording, isStarting, isStopping, isStartingRecording, stopRecordingAction, onStopInitiated, recordingState.setStatus]);
 
   const handlePauseRecording = useCallback(async () => {
     if (!isRecording || isPaused || isPausing) return;

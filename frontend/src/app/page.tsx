@@ -228,7 +228,7 @@ export default function Home() {
                   <div className="bg-white rounded-full shadow-lg flex items-center">
                     <RecordingControls
                       isRecording={recordingState.isRecording}
-                      onRecordingStop={(callApi = true) => handleRecordingStop(callApi)}
+                      onRecordingStop={(callApi = true, completion) => handleRecordingStop(callApi, completion)}
                       onRecordingStart={handleRecordingStart}
                       onTranscriptReceived={() => { }} // Not actually used by RecordingControls
                       onStopInitiated={() => setIsStopping(true)}
@@ -249,6 +249,7 @@ export default function Home() {
 
         {/* Status Overlays - Processing and Saving */}
         <StatusOverlays
+          isStopping={status === RecordingStatus.STOPPING}
           isProcessing={status === RecordingStatus.PROCESSING_TRANSCRIPTS && !recordingState.isRecording}
           isSaving={status === RecordingStatus.SAVING}
           sidebarCollapsed={sidebarCollapsed}

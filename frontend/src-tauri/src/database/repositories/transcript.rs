@@ -1,12 +1,29 @@
 use crate::api::{TranscriptSearchResult, TranscriptSegment};
 use chrono::Utc;
-use sqlx::{Connection, Error as SqlxError, SqlitePool};
+use sqlx::{Error as SqlxError, SqlitePool};
 use log::{error, info};
 use uuid::Uuid;
 
 pub struct TranscriptsRepository;
 
 impl TranscriptsRepository {
+    /// Browser recovery can augment audio recovery, but it must reuse an
+    /// already recovered native meeting and never race an active session.
+    pub async fn recover_session_transcript(
+        pool: &SqlitePool,
+        title: &str,
+        transcripts: &[TranscriptSegment],
+        folder: Option<String>,
+        session: &str,
+    ) -> Result<String, SqlxError> {
+        let (status,native_folder): (String,Option<String>) = sqlx::query_as("SELECT status,folder_path FROM recording_sessions WHERE id=?")
+            .bind(session).fetch_one(pool).await?;
+        if !matches!(status.as_str(), "completed" | "error" | "interrupted") {
+            return Err(SqlxError::Protocol("This native recording is active or has been deleted; it cannot be recovered again.".into()));
+        }
+        Self::save_session_transcript(pool,title,transcripts,native_folder.or(folder),Some(session)).await
+    }
+
     /// Saves a new meeting and its associated transcript segments.
     /// This function uses a transaction to ensure that either both the meeting
     /// and all its transcripts are saved, or none of them are.
@@ -16,10 +33,31 @@ impl TranscriptsRepository {
         transcripts: &[TranscriptSegment],
         folder_path: Option<String>,
     ) -> Result<String, SqlxError> {
-        let meeting_id = format!("meeting-{}", Uuid::new_v4());
+        Self::save_session_transcript(pool, meeting_title, transcripts, folder_path, None).await
+    }
 
-        let mut conn = pool.acquire().await?;
-        let mut transaction = conn.begin().await?;
+    /// Recording finalization uses a stable session mapping in the same
+    /// transaction as meeting creation; retrying a save cannot duplicate it.
+    pub async fn save_session_transcript(
+        pool: &SqlitePool,
+        meeting_title: &str,
+        transcripts: &[TranscriptSegment],
+        folder_path: Option<String>,
+        session_id: Option<&str>,
+    ) -> Result<String, SqlxError> {
+        let meeting_id = format!("meeting-{}", session_id.map(str::to_owned).unwrap_or_else(|| Uuid::new_v4().to_string()));
+
+        // Reserve the writer before reading the session mapping. A deferred
+        // transaction can read an old WAL snapshot while phase persistence
+        // commits, then fail its first write with SQLITE_BUSY_SNAPSHOT.
+        let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await?;
+
+        if let Some(session) = session_id {
+            let (status,existing): (String,Option<String>) = sqlx::query_as("SELECT status,meeting_id FROM recording_sessions WHERE id=?")
+                .bind(session).fetch_one(&mut *transaction).await?;
+            if status == "deleted" { return Err(SqlxError::RowNotFound); }
+            if let Some(existing) = existing { transaction.commit().await?; return Ok(existing); }
+        }
 
         let now = Utc::now();
 
@@ -72,6 +110,12 @@ impl TranscriptsRepository {
             transcripts.len(),
             meeting_id
         );
+
+        if let Some(session) = session_id {
+            let mapped = sqlx::query("UPDATE recording_sessions SET meeting_id=? WHERE id=?")
+                .bind(&meeting_id).bind(session).execute(&mut *transaction).await?;
+            if mapped.rows_affected() != 1 { return Err(SqlxError::RowNotFound); }
+        }
 
         // Commit the transaction
         transaction.commit().await?;

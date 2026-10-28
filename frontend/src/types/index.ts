@@ -19,6 +19,7 @@ export interface Transcript {
 }
 
 export interface TranscriptUpdate {
+  session_id?: string;
   text: string;
   timestamp: string; // Wall-clock time for reference
   source: string;
@@ -141,4 +142,25 @@ export interface TranscriptSegmentData {
   endTime?: number; // audio_end_time in seconds
   text: string;
   confidence?: number;
+}
+
+export interface NativeRecordingSession {
+  sessionId: string;
+  meetingTitle?: string;
+  phase: 'starting' | 'recording' | 'paused' | 'stopping' | 'processing' | 'saving' | 'completed' | 'error';
+  startedAt?: string | null;
+  error?: string | null;
+  meetingId?: string;
+}
+
+export interface RecordingSessionStatus {
+  status: NativeRecordingSession['phase'] | 'interrupted' | 'deleted';
+  meetingId: string | null;
+}
+
+export interface RecordingCompletion extends NativeRecordingSession {
+  meetingId: string;
+  meetingTitle: string;
+  transcriptCount: number;
+  folderPath: string | null;
 }
