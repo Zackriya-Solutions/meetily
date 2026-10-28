@@ -55,6 +55,15 @@ struct AudioContext {
 impl CoreAudioCapture {
     /// Create a new Core Audio capture for system audio
     pub fn new() -> Result<Self> {
+        Self::for_processes(None)
+    }
+
+    /// None means global capture. Some must be a nonempty HAL object-ID allowlist.
+    /// Never convert an empty application selection to a global tap.
+    pub fn for_processes(processes: Option<&[u32]>) -> Result<Self> {
+        if let Some(ids) = processes {
+            anyhow::ensure!(!ids.is_empty(), "No application audio processes available");
+        }
         info!("🎙️ CoreAudio: Starting Core Audio capture initialization...");
 
         // Note: Audio Capture permission (NSAudioCaptureUsageDescription) is required for macOS 14.4+
@@ -88,7 +97,14 @@ impl CoreAudioCapture {
         // Create process tap with mono global tap, excluding no processes
         // Note: Mono tap is more reliable for system audio capture on macOS
         info!("🎙️ CoreAudio: Creating process tap (global mono tap)...");
-        let tap_desc = ca::TapDesc::with_mono_global_tap_excluding_processes(&cidre::ns::Array::new());
+        let mut tap_desc = match processes {
+            None => ca::TapDesc::with_mono_global_tap_excluding_processes(&cidre::ns::Array::new()),
+            Some(ids) => {
+                let numbers: Vec<_> = ids.iter().map(|id| cidre::ns::Number::with_u32(*id)).collect();
+                ca::TapDesc::with_mono_mixdown_of_processes(&cidre::ns::Array::from_slice_retained(&numbers))
+            }
+        };
+        tap_desc.set_mute_behavior(ca::TapMuteBehavior::Unmuted);
         let tap = tap_desc.create_process_tap()
             .map_err(|e| {
                 error!("❌ CoreAudio: Failed to create process tap: {:?}", e);
@@ -420,6 +436,11 @@ impl Stream for CoreAudioStream {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_application_allowlist_cannot_create_global_capture() {
+        assert!(CoreAudioCapture::for_processes(Some(&[])).is_err());
+    }
 
     #[tokio::test]
     #[cfg(target_os = "macos")]

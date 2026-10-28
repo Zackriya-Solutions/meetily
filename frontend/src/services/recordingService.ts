@@ -5,6 +5,7 @@
  * Pure 1-to-1 wrapper - no error handling changes, exact same behavior as direct invoke/listen calls.
  */
 
+import type { RecordingSourceOptions, RecordingSourceStatus } from '@/lib/recording-source';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
 
@@ -14,6 +15,7 @@ export interface RecordingState {
   is_active: boolean;
   recording_duration: number | null;
   active_duration: number | null;
+  source_status?: RecordingSourceStatus;
 }
 
 export interface RecordingStoppedPayload {
@@ -90,12 +92,14 @@ export class RecordingService {
   async startRecordingWithDevices(
     micDeviceName: string | null,
     systemDeviceName: string | null,
-    meetingName: string
+    meetingName: string,
+    sourceOptions?: RecordingSourceOptions
   ): Promise<void> {
     return withStartTimeout(invoke('start_recording_with_devices_and_meeting', {
       micDeviceName,
       systemDeviceName,
-      meetingName
+      meetingName,
+      sourceOptions
     }));
   }
 

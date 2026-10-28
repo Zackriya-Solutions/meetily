@@ -824,6 +824,10 @@ impl AudioPipeline {
     /// Run the VAD-driven audio processing pipeline
     pub async fn run(mut self) -> Result<()> {
         info!("VAD-driven audio pipeline started - segments sent in real-time based on speech detection");
+        let options = self.state.source_status().options;
+        if !options.microphone_enabled || matches!(options.source, super::source::AudioSource::Application { .. }) {
+            return self.run_clocked().await;
+        }
 
         // CRITICAL FIX: Continue processing until channel is closed, not based on recording state
         // This ensures ALL chunks are processed during shutdown, fixing premature meeting completion
@@ -857,53 +861,7 @@ impl AudioPipeline {
                     // STEP 2: Mix audio in fixed windows when both streams have sufficient data
                     while self.ring_buffer.can_mix() {
                         if let Some((mic_window, sys_window)) = self.ring_buffer.extract_window() {
-                            // Simple mixing without aggressive ducking
-                            let mixed_clean = self.mixer.mix_window(&mic_window, &sys_window);
-
-                            // NO POST-GAIN NEEDED: Microphone already normalized by EBU R128 to -23 LUFS
-                            // This is broadcast-standard loudness (Netflix/YouTube/Spotify level)
-                            // System audio at natural levels
-                            // Previous 2x gain was causing excessive limiting/distortion
-                            let mixed_with_gain = mixed_clean;
-
-                            // STEP 3: Send mixed audio for transcription (VAD + Whisper)
-                            match self.vad_processor.process_audio(&mixed_with_gain) {
-                                Ok(speech_segments) => {
-                                    for segment in speech_segments {
-                                        let duration_ms = segment.end_timestamp_ms - segment.start_timestamp_ms;
-                                        if segment.samples.len() >= 800 {
-                                            self.log_stats.record_segment(duration_ms);
-                                            let transcription_chunk = AudioChunk {
-                                                data: segment.samples,
-                                                sample_rate: 16000,
-                                                timestamp: segment.start_timestamp_ms / 1000.0,
-                                                chunk_id: self.chunk_id_counter,
-                                                device_type: DeviceType::Microphone,
-                                            };
-                                            if self.transcription_sender.send(transcription_chunk).is_err() {
-                                                self.log_stats.send_failures += 1;
-                                            } else {
-                                                self.chunk_id_counter += 1;
-                                            }
-                                        } else {
-                                            self.log_stats.short += 1;
-                                        }
-                                    }
-                                }
-                                Err(error) => self.log_stats.record_vad_failure(VadOperation::Process, &error),
-                            }
-
-                            // STEP 4: Send mixed audio for recording (WAV file)
-                            if let Some(ref sender) = self.recording_sender_for_mixed {
-                                let recording_chunk = AudioChunk {
-                                    data: mixed_with_gain.clone(),
-                                    sample_rate: self.sample_rate,
-                                    timestamp: chunk.timestamp,
-                                    chunk_id: self.chunk_id_counter,
-                                    device_type: DeviceType::Microphone,  // Mixed audio
-                                };
-                                let _ = sender.send(recording_chunk);
-                            }
+                            self.process_window(&mic_window, &sys_window, chunk.timestamp);
                         }
                     }
                 }
@@ -919,6 +877,98 @@ impl AudioPipeline {
         self.emit_log_summary(true);
         info!("VAD-driven audio pipeline ended");
         Ok(())
+    }
+
+    fn process_window(&mut self, mic_window: &[f32], sys_window: &[f32], timestamp: f64) {
+        // Simple mixing without aggressive ducking
+        let mixed_clean = self.mixer.mix_window(&mic_window, &sys_window);
+
+        // NO POST-GAIN NEEDED: Microphone already normalized by EBU R128 to -23 LUFS
+        // This is broadcast-standard loudness (Netflix/YouTube/Spotify level)
+        // System audio at natural levels
+        // Previous 2x gain was causing excessive limiting/distortion
+        let mixed_with_gain = mixed_clean;
+
+        // STEP 3: Send mixed audio for transcription (VAD + Whisper)
+        match self.vad_processor.process_audio(&mixed_with_gain) {
+            Ok(speech_segments) => {
+                for segment in speech_segments {
+                    let duration_ms = segment.end_timestamp_ms - segment.start_timestamp_ms;
+                    if segment.samples.len() >= 800 {
+                        self.log_stats.record_segment(duration_ms);
+                        let transcription_chunk = AudioChunk {
+                            data: segment.samples,
+                            sample_rate: 16000,
+                            timestamp: segment.start_timestamp_ms / 1000.0,
+                            chunk_id: self.chunk_id_counter,
+                            device_type: DeviceType::Microphone,
+                        };
+                        if self.transcription_sender.send(transcription_chunk).is_err() {
+                            self.log_stats.send_failures += 1;
+                        } else {
+                            self.chunk_id_counter += 1;
+                        }
+                    } else {
+                        self.log_stats.short += 1;
+                    }
+                }
+            }
+            Err(error) => self.log_stats.record_vad_failure(VadOperation::Process, &error),
+        }
+
+        // STEP 4: Send mixed audio for recording (WAV file)
+        if let Some(ref sender) = self.recording_sender_for_mixed {
+            let recording_chunk = AudioChunk {
+                data: mixed_with_gain.clone(),
+                sample_rate: self.sample_rate,
+                timestamp,
+                chunk_id: self.chunk_id_counter,
+                device_type: DeviceType::Microphone,  // Mixed audio
+            };
+            let _ = sender.send(recording_chunk);
+        }
+    }
+
+    /// App capture and mic-off recording use a single clock for both sources.
+    /// A missing source contributes silence, never a second independently mixed window.
+    async fn run_clocked(mut self) -> Result<()> {
+        let mut mixer = super::clocked_mixer::ClockedMixer::new(self.sample_rate);
+        let mut tick = tokio::time::interval(std::time::Duration::from_millis(50));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                chunk = self.receiver.recv() => {
+                    match chunk {
+                        Some(chunk) if chunk.chunk_id >= u64::MAX - 10 => {},
+                        Some(chunk) => {
+                            mixer.push(chunk.device_type, chunk.data);
+                        }
+                        None => break,
+                    }
+                }
+                _ = tick.tick() => {
+                    if self.state.is_paused() {
+                        let elapsed = self.state.get_active_recording_duration().unwrap_or(0.0);
+                        while let Some((mic, system, timestamp)) = mixer.pop_until(elapsed) {
+                            self.process_window(&mic, &system, timestamp);
+                        }
+                        mixer.clear_pending();
+                        continue;
+                    }
+                    // Allow 100ms for async capture/resampling jitter. The tail is
+                    // drained at stop; pauses never advance the recording clock.
+                    let elapsed = (self.state.get_active_recording_duration().unwrap_or(0.0) - 0.1).max(0.0);
+                    while let Some((mic, system, timestamp)) = mixer.pop_until(elapsed) {
+                        self.process_window(&mic, &system, timestamp);
+                    }
+                }
+            }
+        }
+        let elapsed = self.state.get_active_recording_duration().unwrap_or(0.0);
+        while let Some((mic, system, timestamp)) = mixer.pop_until(elapsed) {
+            self.process_window(&mic, &system, timestamp);
+        }
+        self.flush_remaining_audio()
     }
 
     fn flush_remaining_audio(&mut self) -> Result<()> {

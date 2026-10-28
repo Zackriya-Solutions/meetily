@@ -1,3 +1,4 @@
+import type { RecordingSourceOptions } from '@/lib/recording-source';
 /**
  * Configuration Service
  *
@@ -39,6 +40,7 @@ export interface CustomOpenAIConfig {
 export interface RecordingPreferences {
   preferred_mic_device: string | null;
   preferred_system_device: string | null;
+  source_options?: RecordingSourceOptions;
 }
 
 /**

@@ -9,6 +9,12 @@ pub mod vad;
 pub mod devices;
 pub mod capture;
 pub mod permissions;
+pub mod source;
+mod clocked_mixer;
+#[cfg(target_os = "macos")]
+pub mod application_audio;
+#[cfg(target_os = "macos")]
+pub mod application_stream;
 
 // NEW: Device detection and diagnostics for adaptive buffering
 pub mod device_detection;
@@ -116,4 +122,3 @@ pub use decoder::{decode_audio_file, DecodedAudio};
 
 // Export audio constants
 pub use constants::AUDIO_EXTENSIONS;
-

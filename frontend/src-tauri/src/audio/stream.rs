@@ -382,6 +382,23 @@ impl AudioStreamManager {
         let backend = get_current_backend();
         info!("🎙️ Starting audio streams with backend: {:?}", backend);
 
+        let options = self.state.source_status().options;
+        let application_mode = matches!(options.source, super::source::AudioSource::Application { .. });
+        if let super::source::AudioSource::Application { application } = options.source {
+            #[cfg(target_os = "macos")]
+            {
+                let device = system_device.clone().ok_or_else(|| anyhow::anyhow!("Application source missing"))?;
+                let task = super::application_stream::start(application, device.clone(), self.state.clone()).await?;
+                self.state.set_system_device(device.clone());
+                self.system_stream = Some(AudioStream { device, backend: StreamBackend::CoreAudio { task: Some(task) } });
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                let _ = application;
+                anyhow::bail!("Application audio capture is available on macOS only");
+            }
+        }
+
         // Start microphone stream
         if let Some(mic_device) = microphone_device {
             info!("🎤 Creating microphone stream: {} (always uses CPAL)", mic_device.name);
@@ -401,7 +418,7 @@ impl AudioStreamManager {
         }
 
         // Start system audio stream
-        if let Some(sys_device) = system_device {
+        if let Some(sys_device) = system_device.filter(|_| !application_mode) {
             info!("🔊 Creating system audio stream: {} (backend: {:?})", sys_device.name, backend);
             match AudioStream::create(sys_device.clone(), self.state.clone(), DeviceType::System, recording_sender.clone()).await {
                 Ok(stream) => {
