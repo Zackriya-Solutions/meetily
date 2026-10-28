@@ -326,6 +326,19 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
     begin_recording(app, mic_device_name, system_device_name, meeting_name).await
 }
 
+fn recording_device_names(
+    microphone: Option<String>,
+    system: Option<String>,
+    saved_microphone: Option<String>,
+    saved_system: Option<String>,
+) -> (Option<String>, Option<String>) {
+    if microphone.is_none() && system.is_none() {
+        (saved_microphone, saved_system)
+    } else {
+        (microphone, system)
+    }
+}
+
 async fn begin_recording<R: Runtime>(
     app: AppHandle<R>, mic_device_name: Option<String>, system_device_name: Option<String>,
     meeting_name: Option<String>,
@@ -391,6 +404,16 @@ async fn start_session<R: Runtime>(
         "message": "Recording initialization started"
     })).map_err(|e| e.to_string())?;
 
+    // The former default-device start path loaded saved device selections.
+    // Preserve that contract when all starts reserve a native session here.
+    let preferences = super::recording_preferences::load_recording_preferences(&app)
+        .await.map_err(|error| format!("Cannot load recording preferences: {error}"))?;
+    let auto_save = preferences.auto_save;
+    let (mic_device_name, system_device_name) = recording_device_names(
+        mic_device_name, system_device_name,
+        preferences.preferred_mic_device, preferences.preferred_system_device,
+    );
+
     #[cfg(not(target_os = "macos"))]
     let mic_device = resolve_mic_or_default(&app, mic_device_name.as_deref());
 
@@ -407,18 +430,6 @@ async fn start_session<R: Runtime>(
 
     // Create new recording manager
     let mut manager = RecordingManager::new();
-
-    // Load recording preferences to check auto_save setting
-    let auto_save = match super::recording_preferences::load_recording_preferences(&app).await {
-        Ok(prefs) => {
-            info!("📋 Loaded recording preferences: auto_save={}", prefs.auto_save);
-            prefs.auto_save
-        }
-        Err(e) => {
-            warn!("Failed to load recording preferences, defaulting to auto_save=true: {}", e);
-            true // Default to saving if preferences can't be loaded
-        }
-    };
 
     // Always ensure a meeting name is set so incremental saver initializes
     let effective_meeting_name = meeting_name.clone().unwrap_or_else(|| format!("Meeting {}", chrono::Local::now().format("%Y-%m-%d_%H-%M-%S")));
@@ -1570,5 +1581,26 @@ mod shutdown_tests {
         assert!(!task.is_finished(), "stop caller continued while telemetry was still stalled");
         task.abort();
         let _ = task.await;
+    }
+}
+
+#[cfg(test)]
+mod start_preferences_tests {
+    use super::recording_device_names;
+
+    #[test]
+    fn default_session_start_preserves_saved_devices() {
+        assert_eq!(
+            recording_device_names(None, None, Some("Saved mic".into()), Some("Saved output".into())),
+            (Some("Saved mic".into()), Some("Saved output".into())),
+        );
+    }
+
+    #[test]
+    fn explicit_device_start_keeps_its_default_for_the_other_source() {
+        assert_eq!(
+            recording_device_names(Some("USB mic".into()), None, Some("Saved mic".into()), Some("Saved output".into())),
+            (Some("USB mic".into()), None),
+        );
     }
 }

@@ -12,17 +12,17 @@ Browser recovery queries durable native session status before offering checkpoin
 
 ## Integration boundaries
 
-All recording-start entry points reserve a native session, and tray Stop uses the same finalization path as the UI. Duplicate Stop callers wait for the owned result; a stale request cannot stop a newer session. Stop failures surface an error and refresh native state. Model teardown is bounded and completion analytics runs after persistence.
+All recording-start entry points reserve a native session, preserve saved devices for default starts, and tray Stop uses the same finalization path as the UI. Duplicate Stop callers wait for the owned result; a stale request cannot stop a newer session. Stop failures surface an error and refresh native state. Model teardown is bounded and completion analytics runs after persistence.
 
 This proposal does not change normal Quit behavior, title formatting, save-folder selection, application-specific capture, or summary-editor loading. Saver drain/error propagation overlaps upstream PR #789 and should be coordinated before merge. Startup/monitor timeout work is in a separate contribution.
 
-The migration adds recording_sessions and session_preferences. It does not rewrite existing meetings. Upgrade/relaunch behavior and compatibility with an older application accessing a migrated database still require native acceptance testing.
+The migration adds recording_sessions and session_preferences. It does not rewrite existing meetings. An upgrade regression applies the production migrations to a database containing an existing meeting/transcript, repeats migration safely, and verifies that those records and foreign-key enforcement remain intact. The original SQLx migrator rejects the newer database with VersionMissing; downgrading the application against an already migrated database is therefore unsupported. Native GUI relaunch/recovery still needs live acceptance testing.
 
 ## Validation
 
-The frontend passes TypeScript, 50 suite entries including isolated native-event/recovery/Stop/IndexedDB fixtures, and its production build. Changed Rust files pass syntax parsing, which is not native type checking.
+The frontend passes TypeScript, 50 suite entries including isolated native-event/recovery/Stop/IndexedDB fixtures, and its production build. The macOS desktop executable builds with Xcode 27.1.
 
-Native tests in session/persistence_tests.rs cover empty/buffered results, concurrent saves, a file-backed WAL writer, recovery ownership/deletion rules, interrupted checkpoint reconciliation, and status queries. These tests and native GUI/audio checks have not been run on this rebased branch: Xcode SDK access is blocked until the local license is accepted. No recordings or user database were accessed during preparation.
+Native tests in session/persistence_tests.rs cover empty/buffered results, concurrent saves, a file-backed WAL writer, recovery ownership/deletion rules, interrupted checkpoint reconciliation, and status queries. The revised native suite passes 263 tests with three ignored, excluding only two unchanged device-detection failures reproduced on upstream devtest. The new saved-device startup and existing-data upgrade regressions pass. Native GUI/audio checks are pending. Builds exclude installer-only sidecars/resources through TAURI_CONFIG, so installer signing/packaging is not covered. No user recordings or database were accessed.
 
 ```sh
 cargo test -p meetily session:: --lib
