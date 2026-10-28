@@ -160,7 +160,8 @@ export function useRecordingStart(
       await recordingService.startRecordingWithDevices(
         selectedDevices?.micDevice || null,
         selectedDevices?.systemDevice || null,
-        randomTitle
+        randomTitle,
+        selectedDevices?.sourceOptions
       );
       console.log('Backend recording started successfully');
 
@@ -252,7 +253,8 @@ export function useRecordingStart(
             const result = await recordingService.startRecordingWithDevices(
               selectedDevices?.micDevice || null,
               selectedDevices?.systemDevice || null,
-              generatedMeetingTitle
+              generatedMeetingTitle,
+              selectedDevices?.sourceOptions
             );
             console.log('Auto-start backend recording result:', result);
 
@@ -350,7 +352,8 @@ export function useRecordingStart(
         const result = await recordingService.startRecordingWithDevices(
           selectedDevices?.micDevice || null,
           selectedDevices?.systemDevice || null,
-          generatedMeetingTitle
+          generatedMeetingTitle,
+          selectedDevices?.sourceOptions
         );
         console.log('Backend recording result:', result);
 

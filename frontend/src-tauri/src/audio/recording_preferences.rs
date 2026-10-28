@@ -20,6 +20,8 @@ pub struct RecordingPreferences {
     pub preferred_mic_device: Option<String>,
     #[serde(default)]
     pub preferred_system_device: Option<String>,
+    #[serde(default)]
+    pub source_options: super::source::RecordingSourceOptions,
     #[cfg(target_os = "macos")]
     #[serde(default)]
     pub system_audio_backend: Option<String>,
@@ -33,9 +35,25 @@ impl Default for RecordingPreferences {
             file_format: "mp4".to_string(),
             preferred_mic_device: None,
             preferred_system_device: None,
+            source_options: Default::default(),
             #[cfg(target_os = "macos")]
             system_audio_backend: Some("coreaudio".to_string()),
         }
+    }
+}
+
+#[cfg(test)]
+mod source_tests {
+    use super::*;
+    #[test]
+    fn existing_preferences_keep_device_settings_and_default_source() {
+        let preferences: RecordingPreferences = serde_json::from_value(serde_json::json!({
+            "save_folder": "/tmp/meetings", "auto_save": false, "file_format": "mp4",
+            "preferred_mic_device": "USB mic", "preferred_system_device": null
+        })).unwrap();
+        assert_eq!(preferences.preferred_mic_device.as_deref(), Some("USB mic"));
+        assert!(!preferences.auto_save);
+        assert_eq!(preferences.source_options, Default::default());
     }
 }
 
@@ -100,8 +118,7 @@ pub async fn load_recording_preferences<R: Runtime>(
     let store = match app.store("recording_preferences.json") {
         Ok(store) => store,
         Err(e) => {
-            warn!("Failed to access store: {}, using defaults", e);
-            return Ok(RecordingPreferences::default());
+            return Err(anyhow::anyhow!("Cannot read recording preferences: {e}"));
         }
     };
 
@@ -119,8 +136,7 @@ pub async fn load_recording_preferences<R: Runtime>(
                 p
             }
             Err(e) => {
-                warn!("Failed to deserialize preferences: {}, using defaults", e);
-                RecordingPreferences::default()
+                return Err(anyhow::anyhow!("Cannot read saved audio settings: {e}. Re-select your recording settings."));
             }
         }
     } else {
@@ -384,4 +400,3 @@ pub async fn get_audio_backend_info() -> Result<Vec<BackendInfo>, String> {
         }])
     }
 }
-

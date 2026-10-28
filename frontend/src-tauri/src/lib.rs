@@ -267,6 +267,7 @@ async fn start_recording<R: Runtime>(
     mic_device_name: Option<String>,
     system_device_name: Option<String>,
     meeting_name: Option<String>,
+    source_options: Option<audio::source::RecordingSourceOptions>,
 ) -> Result<(), String> {
     log_info!(
         "Recording start requested; microphone_configured={}, system_audio_configured={}, meeting_name_configured={}",
@@ -285,6 +286,7 @@ async fn start_recording<R: Runtime>(
         mic_device_name,
         system_device_name,
         meeting_name.clone(),
+        source_options,
     )
     .await
     {
@@ -479,8 +481,9 @@ async fn start_recording_with_devices<R: Runtime>(
     app: AppHandle<R>,
     mic_device_name: Option<String>,
     system_device_name: Option<String>,
+    source_options: Option<audio::source::RecordingSourceOptions>,
 ) -> Result<(), String> {
-    start_recording_with_devices_and_meeting(app, mic_device_name, system_device_name, None).await
+    start_recording_with_devices_and_meeting(app, mic_device_name, system_device_name, None, source_options).await
 }
 
 #[tauri::command]
@@ -489,6 +492,7 @@ async fn start_recording_with_devices_and_meeting<R: Runtime>(
     mic_device_name: Option<String>,
     system_device_name: Option<String>,
     meeting_name: Option<String>,
+    source_options: Option<audio::source::RecordingSourceOptions>,
 ) -> Result<(), String> {
     log_info!(
         "Recording start requested; microphone_configured={}, system_audio_configured={}, meeting_name_configured={}",
@@ -497,18 +501,11 @@ async fn start_recording_with_devices_and_meeting<R: Runtime>(
         meeting_name.is_some()
     );
     let meeting_name_for_notification = meeting_name.clone();
-    let recording_result = if mic_device_name.is_none() && system_device_name.is_none() {
-        audio::recording_commands::start_recording_with_meeting_name(app.clone(), meeting_name)
-            .await
-    } else {
-        audio::recording_commands::start_recording_with_devices_and_meeting(
-            app.clone(),
-            mic_device_name,
-            system_device_name,
-            meeting_name,
-        )
-        .await
-    };
+
+    // Call the recording module functions that support meeting names
+    let recording_result = audio::recording_commands::start_recording_with_devices_and_meeting(
+        app.clone(), mic_device_name, system_device_name, meeting_name, source_options,
+    ).await;
 
     match recording_result {
         Ok(_) => {
@@ -805,6 +802,8 @@ pub fn run() {
             whisper_engine::parallel_commands::prepare_audio_chunks,
             whisper_engine::parallel_commands::test_parallel_processing_setup,
             get_audio_devices,
+            audio::source::get_audio_capture_capabilities,
+            audio::source::list_audio_applications,
             trigger_microphone_permission,
             start_recording_with_devices,
             start_recording_with_devices_and_meeting,

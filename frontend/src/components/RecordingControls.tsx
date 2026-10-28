@@ -10,6 +10,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import Analytics from '@/lib/analytics';
 import { useRecordingState } from '@/contexts/RecordingStateContext';
+import { sourceLabel } from '@/lib/recording-source';
 import type { TranscriptionErrorPayload } from '@/services/transcriptService';
 
 interface RecordingControlsProps {
@@ -42,6 +43,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
   selectedDevices,
   meetingName,
 }) => {
+  const { sourceStatus } = useRecordingState();
   // Use global recording state context for pause state (syncs with tray operations)
   const recordingState = useRecordingState();
   const isPaused = recordingState.isPaused;
@@ -115,7 +117,9 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
       const errorMsg = error instanceof Error ? error.message : String(error);
 
       // Check for device-related errors
-      if (errorMsg.includes('microphone') || errorMsg.includes('mic') || errorMsg.includes('input')) {
+      if (errorMsg.includes('before starting') || errorMsg.includes('Cannot capture') || errorMsg.includes('application') || errorMsg.includes('Application audio')) {
+        setDeviceError({ title: 'Application audio unavailable', message: errorMsg });
+      } else if (errorMsg.includes('microphone') || errorMsg.includes('mic') || errorMsg.includes('input')) {
         setDeviceError({
           title: 'Microphone Not Available',
           message: 'Unable to access your microphone. Please check that:\n• Your microphone is connected\n• The app has microphone permissions\n• No other app is using the microphone'
@@ -334,6 +338,11 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
   return (
     <TooltipProvider>
       <div className="flex flex-col space-y-2">
+        {isRecording && sourceStatus && <div role="status" aria-live="polite"
+          className={`rounded-md border px-3 py-2 text-sm ${sourceStatus.state === 'capturing' ? 'bg-white text-gray-700' : 'border-amber-300 bg-amber-50 text-amber-800'}`}>
+          <div>{sourceLabel(sourceStatus.options)} · Microphone {sourceStatus.options.microphoneEnabled ? 'on' : 'off'}</div>
+          {sourceStatus.message && <div>{sourceStatus.message}</div>}
+        </div>}
         <div className="flex items-center space-x-2 bg-white rounded-full shadow-lg px-4 py-2">
           {isProcessing && !isParentProcessing ? (
             <div className="flex items-center space-x-2">

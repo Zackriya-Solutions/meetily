@@ -6,6 +6,7 @@ import { DeviceSelection, SelectedDevices } from '@/components/DeviceSelection';
 import Analytics from '@/lib/analytics';
 import { toast } from 'sonner';
 import { useRecordingState } from '@/contexts/RecordingStateContext';
+import { normalizeSourceOptions, sourceLabel, type RecordingSourceOptions } from '@/lib/recording-source';
 import { useConfig } from '@/contexts/ConfigContext';
 
 export interface RecordingPreferences {
@@ -14,6 +15,7 @@ export interface RecordingPreferences {
   file_format: string;
   preferred_mic_device: string | null;
   preferred_system_device: string | null;
+  source_options?: RecordingSourceOptions;
 }
 
 interface RecordingSettingsProps {
@@ -31,8 +33,8 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [showRecordingNotification, setShowRecordingNotification] = useState(true);
-  const { isRecording } = useRecordingState();
-  const { setSelectedDevices } = useConfig();
+  const { isRecording, isStartingRecording } = useRecordingState();
+  const { selectedDevices, setSelectedDevices } = useConfig();
 
   // Load recording preferences on component mount
   useEffect(() => {
@@ -87,7 +89,8 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
     const newPreferences = {
       ...preferences,
       preferred_mic_device: devices.micDevice,
-      preferred_system_device: devices.systemDevice
+      preferred_system_device: devices.systemDevice,
+      source_options: normalizeSourceOptions(devices.sourceOptions)
     };
     setPreferences(newPreferences);
     // Sync the in-memory selection ConfigContext exposes to the start path.
@@ -95,7 +98,7 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
     // app mount), so a newly-chosen mic isn't honored until the next launch —
     // start keeps sending the stale launch-time device.
     setSelectedDevices(devices);
-    await savePreferences(newPreferences);
+    // ConfigContext persists this selection for both settings entry points.
 
     // Track default device preference changes
     // Note: Individual device selection analytics are tracked in DeviceSelection component
@@ -133,12 +136,17 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
   const savePreferences = async (prefs: RecordingPreferences) => {
     setSaving(true);
     try {
-      await invoke('set_recording_preferences', { preferences: prefs });
+      const current = { ...prefs,
+        preferred_mic_device: selectedDevices.micDevice,
+        preferred_system_device: selectedDevices.systemDevice,
+        source_options: normalizeSourceOptions(selectedDevices.sourceOptions ?? prefs.source_options),
+      };
+      await invoke('set_recording_preferences', { preferences: current });
       onSave?.(prefs);
 
       // Show success toast with device details
-      const micDevice = prefs.preferred_mic_device || 'Default';
-      const systemDevice = prefs.preferred_system_device || 'Default';
+      const micDevice = prefs.source_options?.microphoneEnabled === false ? 'Off' : prefs.preferred_mic_device || 'Default';
+      const systemDevice = sourceLabel(prefs.source_options);
       toast.success("Device preferences saved", {
         description: `Microphone: ${micDevice}, System Audio: ${systemDevice}`
       });
@@ -256,12 +264,9 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
 
           <div className="border rounded-lg p-4 bg-gray-50">
             <DeviceSelection
-              selectedDevices={{
-                micDevice: preferences.preferred_mic_device,
-                systemDevice: preferences.preferred_system_device
-              }}
+              selectedDevices={selectedDevices}
               onDeviceChange={handleDeviceChange}
-              disabled={saving || isRecording}
+              disabled={saving || isRecording || isStartingRecording}
             />
           </div>
         </div>

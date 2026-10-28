@@ -3,6 +3,8 @@
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { recordingService } from '@/services/recordingService';
 import { toast } from 'sonner';
+import { listen } from '@tauri-apps/api/event';
+import type { RecordingSourceStatus } from '@/lib/recording-source';
 
 /**
  * Recording state synchronized with backend
@@ -30,6 +32,7 @@ interface RecordingState {
   isPaused: boolean;              // Is the recording paused
   isActive: boolean;              // Is actively recording (recording && !paused)
   recordingDuration: number | null;  // Total duration including pauses
+  sourceStatus?: RecordingSourceStatus;
   activeDuration: number | null;     // Active recording time (excluding pauses)
 
   // NEW: Lifecycle status
@@ -70,6 +73,7 @@ export function RecordingStateProvider({ children }: { children: React.ReactNode
   });
 
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const syncRevision = useRef(0);
 
   // NEW: Status setter with logging
   const setStatus = useCallback((status: RecordingStatus, message?: string) => {
@@ -87,8 +91,10 @@ export function RecordingStateProvider({ children }: { children: React.ReactNode
    * Called on mount (fixes refresh desync) and periodically while recording
    */
   const syncWithBackend = async () => {
+    const revision = ++syncRevision.current;
     try {
       const backendState = await recordingService.getRecordingState();
+      if (revision !== syncRevision.current) return;
 
       setState(prev => ({
         ...prev,
@@ -97,6 +103,7 @@ export function RecordingStateProvider({ children }: { children: React.ReactNode
         isActive: backendState.is_active,
         recordingDuration: backendState.recording_duration,
         activeDuration: backendState.active_duration,
+        sourceStatus: backendState.is_recording ? backendState.source_status : undefined,
       }));
 
       console.log('[RecordingStateContext] Synced with backend:', backendState);
@@ -148,6 +155,7 @@ export function RecordingStateProvider({ children }: { children: React.ReactNode
             isActive: true,
             status: RecordingStatus.RECORDING,  // NEW: Set status to RECORDING
           }));
+          void syncWithBackend();
           startPolling();
         });
         unsubscribers.push(unlistenStarted);
@@ -163,6 +171,7 @@ export function RecordingStateProvider({ children }: { children: React.ReactNode
 
         // Recording stopped
         const unlistenStopped = await recordingService.onRecordingStopped((payload) => {
+          ++syncRevision.current;
           console.log('[RecordingStateContext] Recording stopped event:', payload);
           setState(prev => {
             // Set status to STOPPING if not already in stop flow
@@ -335,6 +344,16 @@ export function RecordingStateProvider({ children }: { children: React.ReactNode
   useEffect(() => {
     console.log('[RecordingStateContext] Initial mount - syncing with backend');
     syncWithBackend();
+  }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    // Fetch the current session instead of applying an event from a stopped one.
+    listen('recording-source-changed', () => { if (!disposed) void syncWithBackend(); })
+      .then(cleanup => { if (disposed) cleanup(); else unlisten = cleanup; })
+      .catch(error => console.error('Could not listen for audio source changes:', error));
+    return () => { disposed = true; unlisten?.(); };
   }, []);
 
   // NEW: Computed helpers from status

@@ -276,7 +276,6 @@ impl RecordingManager {
             return Err(RecordingStartError::TranscriptionRuntime(error));
         }
 
-        self.recording_saver.start_accumulation(auto_save, recording_receiver);
         self.recording_saver.set_device_info(
             microphone_device.as_ref().map(|d| d.name.clone()),
             system_device.as_ref().map(|d| d.name.clone())
@@ -287,11 +286,21 @@ impl RecordingManager {
 
         // Start audio streams - they send RAW unmixed chunks to pipeline for mixing
         // Pipeline handles mixing and distribution to both recording and transcription
-        self.stream_manager.start_streams(microphone_device.clone(), system_device.clone(), None).await?;
+        if let Err(error) = self.stream_manager.start_streams(microphone_device.clone(), system_device.clone(), None).await {
+            self.state.stop_recording();
+            let _ = self.stream_manager.stop_streams();
+            let _ = self.pipeline_manager.stop().await;
+            return Err(error.into());
+        }
+        // Do not create meeting folders/checkpoints until native capture has started.
+        self.recording_saver.start_accumulation(auto_save, recording_receiver);
 
         // Start device monitoring to detect disconnects
         if let Some(ref mut monitor) = self.device_monitor {
-            if let Err(e) = monitor.start_monitoring(microphone_device, system_device) {
+            let monitored_system = if matches!(self.state.source_status().options.source, super::source::AudioSource::System) {
+                system_device
+            } else { None };
+            if let Err(e) = monitor.start_monitoring(microphone_device, monitored_system) {
                 warn!("Failed to start device monitoring: {}", e);
                 // Non-fatal - continue without monitoring
             } else {

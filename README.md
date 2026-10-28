@@ -185,6 +185,8 @@ Use your own OpenAI-compatible endpoint for AI summaries. Perfect for organizati
 
 Capture microphone and system audio simultaneously with intelligent ducking and clipping prevention.
 
+On macOS 14.2+, choose **Specific application** in audio settings to capture one app, such as Zoom or Teams, and toggle **Include microphone** independently. Meetily reconnects if the selected app restarts. Browser selection may include other tabs. See [application audio capture](docs/application-audio.md) for setup and limitations.
+
 <p align="center">
     <img src="docs/audio.png" width="650" style="border-radius: 10px;" alt="Device selection" />
 </p>

@@ -2,10 +2,12 @@
 
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, ReactNode, useRef } from 'react';
 import { TranscriptModelProps } from '@/components/TranscriptSettings';
+import { normalizeSourceOptions } from '@/lib/recording-source';
 import { SelectedDevices } from '@/components/DeviceSelection';
 import { configService, ModelConfig } from '@/services/configService';
 import { invoke } from '@tauri-apps/api/core';
 import Analytics from '@/lib/analytics';
+import { toast } from 'sonner';
 import { BetaFeatures, BetaFeatureKey, loadBetaFeatures, saveBetaFeatures } from '@/types/betaFeatures';
 
 export interface OllamaModel {
@@ -134,10 +136,30 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string>('');
 
   // Device configuration state
-  const [selectedDevices, setSelectedDevices] = useState<SelectedDevices>({
+  const [selectedDevices, setSelectedDevicesState] = useState<SelectedDevices>({
     micDevice: null,
     systemDevice: null
   });
+  // Until hydration finishes, omit sourceOptions so native start loads saved intent.
+  const selectionRevision = useRef(0);
+  const selectionSaveQueue = useRef<Promise<void>>(Promise.resolve());
+  const setSelectedDevices = useCallback((devices: SelectedDevices) => {
+    selectionRevision.current += 1;
+    const normalized = { ...devices, sourceOptions: normalizeSourceOptions(devices.sourceOptions) };
+    setSelectedDevicesState(normalized);
+    // Serialize read/merge/write so rapid selection changes cannot restore an older choice.
+    selectionSaveQueue.current = selectionSaveQueue.current.catch(() => {}).then(async () => {
+      const preferences = await invoke<Record<string, unknown>>('get_recording_preferences');
+      await invoke('set_recording_preferences', { preferences: {
+        ...preferences, preferred_mic_device: normalized.micDevice,
+        preferred_system_device: normalized.systemDevice, source_options: normalized.sourceOptions,
+      } });
+    }).catch(error => {
+      console.error('Could not save audio source selection:', error);
+      toast.error('Could not save audio settings. Your current selection still applies to this session.');
+    });
+  }, []);
+
 
   // Language preference state
   const [selectedLanguage, setSelectedLanguage] = useState<string>(() => {
@@ -352,10 +374,11 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     const loadDevicePreferences = async () => {
       try {
         const prefs = await configService.getRecordingPreferences();
-        if (prefs && (prefs.preferred_mic_device || prefs.preferred_system_device)) {
-          setSelectedDevices({
+        if (prefs && selectionRevision.current === 0) {
+          setSelectedDevicesState({
             micDevice: prefs.preferred_mic_device,
-            systemDevice: prefs.preferred_system_device
+            systemDevice: prefs.preferred_system_device,
+            sourceOptions: normalizeSourceOptions(prefs.source_options)
           });
           console.log('Loaded device preferences:', prefs);
         }

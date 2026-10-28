@@ -7,6 +7,8 @@ import { AudioBackendSelector } from './AudioBackendSelector';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
 import Analytics from '@/lib/analytics';
+import { ApplicationAudioSelector } from './ApplicationAudioSelector';
+import { normalizeSourceOptions, type RecordingSourceOptions } from '@/lib/recording-source';
 
 export interface AudioDevice {
   name: string;
@@ -16,6 +18,7 @@ export interface AudioDevice {
 export interface SelectedDevices {
   micDevice: string | null;
   systemDevice: string | null;
+  sourceOptions?: RecordingSourceOptions;
 }
 
 export interface AudioLevelData {
@@ -38,6 +41,8 @@ interface DeviceSelectionProps {
 }
 
 export function DeviceSelection({ selectedDevices, onDeviceChange, disabled = false }: DeviceSelectionProps) {
+  const sourceOptions = normalizeSourceOptions(selectedDevices.sourceOptions);
+  const applicationMode = sourceOptions.source.kind === 'application';
   const [devices, setDevices] = useState<AudioDevice[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -110,7 +115,7 @@ export function DeviceSelection({ selectedDevices, onDeviceChange, disabled = fa
       next = { ...next, micDevice: null };
     }
     if (
-      selectedDevices.systemDevice &&
+      !applicationMode && selectedDevices.systemDevice &&
       outputs.length > 0 &&
       !outputs.some(d => `${d.name} (output)` === selectedDevices.systemDevice)
     ) {
@@ -123,7 +128,7 @@ export function DeviceSelection({ selectedDevices, onDeviceChange, disabled = fa
     if (next !== selectedDevices) {
       onDeviceChangeRef.current(next);
     }
-  }, [devices, loading, disabled, selectedDevices]);
+  }, [devices, loading, disabled, selectedDevices, applicationMode]);
 
   // Set up audio level event listener
   useEffect(() => {
@@ -311,6 +316,8 @@ export function DeviceSelection({ selectedDevices, onDeviceChange, disabled = fa
         </div>
       )}
 
+      <ApplicationAudioSelector options={sourceOptions} disabled={disabled}
+        onChange={sourceOptions => onDeviceChange({ ...selectedDevices, sourceOptions })} />
       <div className="space-y-3">
         {/* Microphone Selection */}
         <div className="space-y-2">
@@ -323,7 +330,7 @@ export function DeviceSelection({ selectedDevices, onDeviceChange, disabled = fa
           <Select
             value={selectedDevices.micDevice || 'default'}
             onValueChange={handleMicDeviceChange}
-            disabled={disabled}
+            disabled={disabled || !sourceOptions.microphoneEnabled}
           >
             <SelectTrigger id="mic-selection" className="w-full">
               <SelectValue placeholder="Select Microphone" />
@@ -392,7 +399,7 @@ export function DeviceSelection({ selectedDevices, onDeviceChange, disabled = fa
           <Select
             value={selectedDevices.systemDevice || 'default'}
             onValueChange={handleSystemDeviceChange}
-            disabled={disabled}
+            disabled={disabled || applicationMode}
           >
             <SelectTrigger id="system-selection" className="w-full">
               <SelectValue placeholder="Select System Audio" />
@@ -415,7 +422,7 @@ export function DeviceSelection({ selectedDevices, onDeviceChange, disabled = fa
           )}
 
           {/* Backend Selection - available on all platforms */}
-          {!disabled && (
+          {!disabled && !applicationMode && (
             <div className="pt-3 border-t border-gray-100">
               <AudioBackendSelector disabled={disabled} />
             </div>
@@ -426,7 +433,7 @@ export function DeviceSelection({ selectedDevices, onDeviceChange, disabled = fa
       {/* Info text */}
       <div className="text-xs text-gray-500 space-y-1">
         <p>• <strong>Microphone:</strong> Records your voice and ambient sound</p>
-        <p>• <strong>System Audio:</strong> Records computer audio (music, calls, etc.)</p>
+        <p>• <strong>Audio source:</strong> {applicationMode ? 'Records only the selected application.' : 'Records computer audio (music, calls, etc.).'}</p>
         {isMonitoring && (
           <p>• <strong>Mic Levels:</strong> Green = good, Yellow = loud, Red = too loud</p>
         )}

@@ -56,7 +56,7 @@ export function SettingsModals({
     toggleConfidenceIndicator,
   } = useConfig();
 
-  const { isRecording } = useRecordingState();
+  const { isRecording, isStartingRecording } = useRecordingState();
 
   return <>
     {/* Legacy Settings Modal */}
@@ -168,7 +168,7 @@ export function SettingsModals({
     {/* Device Settings Modal */}
     {modals.deviceSettings && (
       <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-        <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
+        <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 shadow-xl max-h-[90vh] overflow-y-auto">
           <div className="flex justify-between items-center mb-4">
             <h3 className="text-lg font-semibold text-gray-900">Audio Device Settings</h3>
             <button
@@ -184,14 +184,14 @@ export function SettingsModals({
           <DeviceSelection
             selectedDevices={selectedDevices}
             onDeviceChange={setSelectedDevices}
-            disabled={isRecording}
+            disabled={isRecording || isStartingRecording}
           />
 
           <div className="mt-6 flex justify-end">
             <button
               onClick={() => {
-                const micDevice = selectedDevices.micDevice || 'Default';
-                const systemDevice = selectedDevices.systemDevice || 'Default';
+                const micDevice = selectedDevices.sourceOptions?.microphoneEnabled === false ? 'Off' : selectedDevices.micDevice || 'Default';
+                const systemDevice = selectedDevices.sourceOptions?.source.kind === 'application' ? selectedDevices.sourceOptions.source.application.name || 'Select an application' : 'All system audio';
                 toast.success("Devices selected", {
                   description: `Microphone: ${micDevice}, System Audio: ${systemDevice}`
                 });
@@ -209,7 +209,7 @@ export function SettingsModals({
     {/* Language Settings Modal */}
     {modals.languageSettings && (
       <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-        <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
+        <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 shadow-xl max-h-[90vh] overflow-y-auto">
           <div className="flex justify-between items-center mb-4">
             <h3 className="text-lg font-semibold text-gray-900">Language Settings</h3>
             <button
@@ -225,7 +225,7 @@ export function SettingsModals({
           <LanguageSelection
             selectedLanguage={selectedLanguage}
             onLanguageChange={setSelectedLanguage}
-            disabled={isRecording}
+            disabled={isRecording || isStartingRecording}
             provider={transcriptModelConfig.provider}
           />
 
