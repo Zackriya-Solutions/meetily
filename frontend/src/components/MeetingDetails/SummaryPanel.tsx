@@ -1,13 +1,13 @@
 "use client";
 
 import { MeetingSummary, Summary, Transcript } from '@/types';
-import { BlockNoteSummaryView, BlockNoteSummaryViewRef } from '@/components/AISummary/BlockNoteSummaryView';
+import type { BlockNoteSummaryViewRef } from '@/components/AISummary/BlockNoteSummaryView';
 import { EmptyStateSummary } from '@/components/EmptyStateSummary';
 import { ModelConfig } from '@/components/ModelSettingsModal';
 import { SummaryGeneratorButtonGroup } from './SummaryGeneratorButtonGroup';
 import { SummaryUpdaterButtonGroup } from './SummaryUpdaterButtonGroup';
 import Analytics from '@/lib/analytics';
-import { useEffect, useRef, useState, RefObject } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState, RefObject } from 'react';
 import { toast } from 'sonner';
 import { Languages, ChevronDown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -21,6 +21,11 @@ import {
   SummaryLanguageStorage,
 } from '@/lib/summary-language-preferences';
 import { hasVisibleSummaryContent } from '@/lib/summary-content';
+
+// Load the editor only when a summary needs it. React.lazy preserves the
+// forwardRef used by Save/Copy while keeping editor code off the initial route.
+const BlockNoteSummaryView = lazy(() => import('@/components/AISummary/BlockNoteSummaryView')
+  .then(module => ({ default: module.BlockNoteSummaryView })));
 
 interface SummaryPanelProps {
   meeting: {
@@ -296,24 +301,26 @@ export function SummaryPanel({
       ) : (
         <div className="flex-1 overflow-y-auto overflow-x-auto min-h-0">
           <div className="p-6 w-full">
-            <BlockNoteSummaryView
-              ref={summaryRef}
-              summaryData={aiSummary}
-              onSave={onSaveSummary}
-              onSummaryChange={onSummaryChange}
-              onDirtyChange={onDirtyChange}
-              status={summaryStatus}
-              error={summaryError}
-              onRegenerateSummary={() => {
-                Analytics.trackButtonClick('regenerate_summary', 'meeting_details');
-                onRegenerateSummary();
-              }}
-              meeting={{
-                id: meeting.id,
-                title: meetingTitle,
-                created_at: meeting.created_at
-              }}
-            />
+            <Suspense fallback={<p role="status" className="text-muted-foreground">Loading summary editor...</p>}>
+              <BlockNoteSummaryView
+                ref={summaryRef}
+                summaryData={aiSummary}
+                onSave={onSaveSummary}
+                onSummaryChange={onSummaryChange}
+                onDirtyChange={onDirtyChange}
+                status={summaryStatus}
+                error={summaryError}
+                onRegenerateSummary={() => {
+                  Analytics.trackButtonClick('regenerate_summary', 'meeting_details');
+                  onRegenerateSummary();
+                }}
+                meeting={{
+                  id: meeting.id,
+                  title: meetingTitle,
+                  created_at: meeting.created_at
+                }}
+              />
+            </Suspense>
           </div>
           {summaryStatus !== 'idle' && (
             <div className={`mt-4 p-4 rounded-lg ${summaryStatus === 'error' ? 'bg-red-100 text-red-700' :
