@@ -150,18 +150,9 @@ impl AudioStream {
     ) -> Result<Self> {
         info!("🔊 Stream: Creating Core Audio stream for device: {}", device.name);
 
-        // Create Core Audio capture
-        info!("🔊 Stream: Calling CoreAudioCapture::new()...");
-        let capture_impl = CoreAudioCapture::new()
+        let core_stream = CoreAudioCapture::start_bounded().await
             .map_err(|e| {
-                error!("❌ Stream: CoreAudioCapture::new() failed: {}", e);
-                anyhow::anyhow!("Failed to create Core Audio capture: {}", e)
-            })?;
-
-        info!("✅ Stream: CoreAudioCapture created, calling stream()...");
-        let core_stream = capture_impl.stream()
-            .map_err(|e| {
-                error!("❌ Stream: capture_impl.stream() failed: {}", e);
+                error!("❌ Stream: Core Audio startup failed: {}", e);
                 anyhow::anyhow!("Failed to create Core Audio stream: {}", e)
             })?;
 

@@ -26,7 +26,7 @@ impl SystemAudioStreamManager {
 
         // Create system audio capture
         let system_capture = SystemAudioCapture::new()?;
-        let mut system_stream = system_capture.start_system_audio_capture()?;
+        let mut system_stream = system_capture.start_system_audio_capture().await?;
 
         // Create audio capture processor to integrate with existing pipeline
         let audio_capture = AudioCapture::new(

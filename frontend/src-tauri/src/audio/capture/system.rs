@@ -38,13 +38,12 @@ impl SystemAudioCapture {
         Ok(device_names)
     }
 
-    pub fn start_system_audio_capture(&self) -> Result<SystemAudioStream> {
+    pub async fn start_system_audio_capture(&self) -> Result<SystemAudioStream> {
         #[cfg(target_os = "macos")]
         {
             info!("Starting Core Audio system capture (macOS)");
             // Use Core Audio tap for system audio capture
-            let core_audio = CoreAudioCapture::new()?;
-            let core_audio_stream = core_audio.stream()?;
+            let core_audio_stream = CoreAudioCapture::start_bounded().await?;
             let sample_rate = core_audio_stream.sample_rate();
 
             // Convert CoreAudioStream to SystemAudioStream
@@ -141,7 +140,7 @@ impl SystemAudioStream {
 /// Public interface for system audio capture
 pub async fn start_system_audio_capture() -> Result<SystemAudioStream> {
     let capture = SystemAudioCapture::new()?;
-    capture.start_system_audio_capture()
+    capture.start_system_audio_capture().await
 }
 
 pub fn list_system_audio_devices() -> Result<Vec<String>> {
