@@ -107,6 +107,7 @@
         "@types/react-test-renderer": "18.3.1",
         "autoprefixer": "^10.0.1",
         "concurrently": "^8.2.2",
+        "fake-indexeddb": "6.2.5",
         "postcss": "^8",
         "react-test-renderer": "18.3.1",
         "tailwindcss": "^3.4.1",

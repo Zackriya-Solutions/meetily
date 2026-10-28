@@ -3,6 +3,8 @@
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { recordingService } from '@/services/recordingService';
 import { toast } from 'sonner';
+import { listen } from '@tauri-apps/api/event';
+import type { NativeRecordingSession } from '@/types';
 
 /**
  * Recording state synchronized with backend
@@ -25,11 +27,17 @@ export enum RecordingStatus {
   ERROR = 'error'                         // Error occurred
 }
 
+function nativeStatus(phase: NativeRecordingSession['phase']): RecordingStatus {
+  if (phase === 'paused') return RecordingStatus.RECORDING;
+  return phase as RecordingStatus;
+}
+
 interface RecordingState {
   isRecording: boolean;           // Is a recording session active
   isPaused: boolean;              // Is the recording paused
   isActive: boolean;              // Is actively recording (recording && !paused)
   recordingDuration: number | null;  // Total duration including pauses
+  session?: NativeRecordingSession;
   activeDuration: number | null;     // Active recording time (excluding pauses)
 
   // NEW: Lifecycle status
@@ -40,6 +48,8 @@ interface RecordingState {
 interface RecordingStateContextType extends RecordingState {
   // NEW: Setters for status management
   setStatus: (status: RecordingStatus, message?: string) => void;
+
+  syncWithBackend: () => Promise<void>;
 
   // Computed helpers (derived from status)
   isStopping: boolean;
@@ -70,6 +80,7 @@ export function RecordingStateProvider({ children }: { children: React.ReactNode
   });
 
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const syncRevision = useRef(0);
 
   // NEW: Status setter with logging
   const setStatus = useCallback((status: RecordingStatus, message?: string) => {
@@ -86,17 +97,23 @@ export function RecordingStateProvider({ children }: { children: React.ReactNode
    * Sync recording state with backend
    * Called on mount (fixes refresh desync) and periodically while recording
    */
-  const syncWithBackend = async () => {
+  const syncWithBackend = useCallback(async () => {
+    const revision = ++syncRevision.current;
     try {
       const backendState = await recordingService.getRecordingState();
+      if (revision !== syncRevision.current) return;
 
       setState(prev => ({
         ...prev,
-        isRecording: backendState.is_recording,
-        isPaused: backendState.is_paused,
-        isActive: backendState.is_active,
+        isRecording: backendState.session ? ['recording', 'paused'].includes(backendState.session.phase) : backendState.is_recording,
+        isPaused: backendState.session ? backendState.session.phase === 'paused' : backendState.is_paused,
+        isActive: backendState.session ? backendState.session.phase === 'recording' : backendState.is_active,
         recordingDuration: backendState.recording_duration,
         activeDuration: backendState.active_duration,
+        session: backendState.session || undefined,
+        status: backendState.session ? nativeStatus(backendState.session.phase) : prev.status,
+        statusMessage: backendState.session ? backendState.session.error || undefined
+          : prev.status === RecordingStatus.ERROR ? prev.statusMessage : undefined,
       }));
 
       console.log('[RecordingStateContext] Synced with backend:', backendState);
@@ -104,7 +121,7 @@ export function RecordingStateProvider({ children }: { children: React.ReactNode
       console.error('[RecordingStateContext] Failed to sync with backend:', error);
       // Don't update state on error - keep current state
     }
-  };
+  }, []);
 
   /**
    * Start polling backend state (called when recording starts)
@@ -165,9 +182,13 @@ export function RecordingStateProvider({ children }: { children: React.ReactNode
         const unlistenStopped = await recordingService.onRecordingStopped((payload) => {
           console.log('[RecordingStateContext] Recording stopped event:', payload);
           setState(prev => {
+            if (payload.completion && prev.session && prev.session.sessionId !== payload.completion.sessionId
+              && ['starting', 'recording', 'paused', 'stopping', 'processing', 'saving'].includes(prev.session.phase)) return prev;
             // Set status to STOPPING if not already in stop flow
             // This ensures smooth UI transition for tray/keyboard stops
-            const newStatus = [
+            const newStatus = payload.completion
+              ? (payload.completion.error ? RecordingStatus.ERROR : RecordingStatus.COMPLETED)
+              : [
               RecordingStatus.STOPPING,
               RecordingStatus.PROCESSING_TRANSCRIPTS,
               RecordingStatus.SAVING
@@ -186,7 +207,6 @@ export function RecordingStateProvider({ children }: { children: React.ReactNode
               activeDuration: null,
             };
           });
-          stopPolling();
         });
         unsubscribers.push(unlistenStopped);
 
@@ -225,6 +245,30 @@ export function RecordingStateProvider({ children }: { children: React.ReactNode
       unsubscribers.forEach(unsub => unsub());
       stopPolling();
     };
+  }, []);
+
+  useEffect(() => {
+    if (state.isRecording || state.session && ['starting', 'recording', 'paused', 'stopping', 'processing', 'saving'].includes(state.session.phase)) startPolling();
+    else stopPolling();
+    return stopPolling;
+  }, [state.isRecording, state.session?.sessionId, state.session?.phase]);
+
+  useEffect(() => {
+    let disposed = false;
+    const listeners: (() => void)[] = [];
+    const register = async <T,>(name: string, callback: (payload: T) => void) => {
+      const fn = await listen<T>(name, ({ payload }) => callback(payload));
+      if (disposed) fn(); else listeners.push(fn);
+    };
+    void Promise.all([
+        register<NativeRecordingSession | null>('recording-session-changed', (payload) => {
+          if (!payload) return;
+          ++syncRevision.current;
+          setState(prev => ({ ...prev, session: payload, status: nativeStatus(payload.phase), statusMessage: payload.error || undefined,
+            isRecording: ['recording', 'paused'].includes(payload.phase), isPaused: payload.phase === 'paused', isActive: payload.phase === 'recording' }));
+        }),
+    ]).catch(error => console.error('Native session listener setup failed:', error));
+    return () => { disposed = true; listeners.forEach(fn => fn()); };
   }, []);
 
   /**
@@ -341,11 +385,12 @@ export function RecordingStateProvider({ children }: { children: React.ReactNode
   const contextValue = useMemo(() => ({
     ...state,
     setStatus,
+    syncWithBackend,
     isStopping: state.status === RecordingStatus.STOPPING,
     isProcessing: state.status === RecordingStatus.PROCESSING_TRANSCRIPTS,
     isSaving: state.status === RecordingStatus.SAVING,
     isStartingRecording: state.status === RecordingStatus.STARTING,
-  }), [state, setStatus]);
+  }), [state, setStatus, syncWithBackend]);
 
   return (
     <RecordingStateContext.Provider value={contextValue}>

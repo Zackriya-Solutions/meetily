@@ -30,6 +30,7 @@ pub async fn initialize_database_on_startup(app: &AppHandle) -> Result<(), Strin
             .await
             .map_err(|e| format!("Failed to initialize database manager: {}", e))?;
 
+        crate::session::reconcile(db_manager.pool()).await?;
         app.manage(AppState { db_manager });
         info!("Database initialized successfully");
     }

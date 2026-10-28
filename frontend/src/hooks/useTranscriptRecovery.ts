@@ -11,6 +11,12 @@ import { indexedDBService, MeetingMetadata, StoredTranscript } from '@/services/
 import { storageService } from '@/services/storageService';
 import { applyPinnedSummaryLanguageToMeeting } from '@/lib/summary-language-preferences';
 import { toast } from 'sonner';
+import type { RecordingSessionStatus } from '@/types';
+
+function nativeSessionId(meetingId: string): string | undefined {
+  const id = meetingId.slice('meeting-'.length);
+  return meetingId.startsWith('meeting-') && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id) ? id : undefined;
+}
 
 interface AudioRecoveryStatus {
   status: string; // "success" | "partial" | "failed" | "none"
@@ -43,21 +49,38 @@ export function useTranscriptRecovery(): UseTranscriptRecoveryReturn {
     try {
       const meetings = await indexedDBService.getAllMeetings();
 
-      // Filter out meetings older than 7 days and newer than 15 seconds
-      // The 15 seconds threshold prevents showing meetings from the current session(jus in case)
-      // where recording just stopped but hasn't been fully saved yet
+      // Keep the existing retention and two-second debounce for legacy checkpoints.
       const cutoffTime = Date.now() - (7 * 24 * 60 * 60 * 1000);
       const secondsAgo = Date.now() - (2 * 1000);
 
       const recentMeetings = meetings.filter(m => {
         const isWithinRetention = m.lastUpdated > cutoffTime; // Not older than 7 days
-        const isOldEnough = m.lastUpdated < secondsAgo; // Older than 15 seconds
+        const isOldEnough = m.lastUpdated < secondsAgo; // Older than two seconds
         return isWithinRetention && isOldEnough;
       });
 
-      // Verify audio checkpoint availability for each meeting
+      // Completion events may have fired while the webview was closed. Reconcile
+      // durable native state before offering browser checkpoints as recovery.
+      const candidates = await Promise.all(recentMeetings.map(async meeting => {
+        const sessionId = nativeSessionId(meeting.meetingId);
+        if (!sessionId) return meeting;
+        try {
+          const native = await invoke<RecordingSessionStatus | null>('get_recording_session_status', { sessionId });
+          if ((native?.status === 'completed' && native.meetingId) || native?.status === 'deleted') {
+            await indexedDBService.markMeetingSaved(meeting.meetingId);
+            return null;
+          }
+          if (native && ['starting', 'recording', 'paused', 'stopping', 'processing', 'saving'].includes(native.status)) return null;
+        } catch (error) {
+          // A failed lookup must never erase a potentially recoverable recording.
+          console.warn('Could not reconcile native recording recovery:', error);
+        }
+        return meeting;
+      }));
+
+      // Verify audio checkpoint availability only for genuine recovery candidates.
       const meetingsWithAudioStatus = await Promise.all(
-        recentMeetings.map(async (meeting) => {
+        candidates.filter((meeting): meeting is MeetingMetadata => meeting !== null).map(async (meeting) => {
           if (meeting.folderPath) {
             try {
               const hasAudio = await invoke<boolean>('has_audio_checkpoints', {
@@ -115,10 +138,11 @@ export function useTranscriptRecovery(): UseTranscriptRecoveryReturn {
       if (!metadata) {
         throw new Error('Meeting metadata not found');
       }
+      const sessionId = nativeSessionId(meetingId);
 
       // 2. Load all transcripts
       const transcripts = await loadMeetingTranscripts(meetingId);
-      if (transcripts.length === 0) {
+      if (transcripts.length === 0 && !sessionId) {
         throw new Error('No transcripts found for this meeting');
       }
 
@@ -126,7 +150,7 @@ export function useTranscriptRecovery(): UseTranscriptRecoveryReturn {
       let folderPath = metadata.folderPath;
 
 
-      if (!folderPath) {
+      if (!folderPath && !sessionId) {
         // Try to get from backend (might exist if only app crashed, not system)
         try {
           folderPath = await invoke<string>('get_meeting_folder_path');
@@ -179,7 +203,8 @@ export function useTranscriptRecovery(): UseTranscriptRecoveryReturn {
       const saveResponse = await storageService.saveMeeting(
         metadata.title,
         formattedTranscripts,
-        folderPath ?? null
+        folderPath ?? null,
+        sessionId,
       );
 
       const savedMeetingId = saveResponse.meeting_id;

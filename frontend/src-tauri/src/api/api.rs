@@ -781,6 +781,9 @@ pub async fn api_delete_meeting<R: Runtime>(
 
     let pool = state.db_manager.pool();
 
+    if crate::session::current().is_some_and(|s| format!("meeting-{}", s.id) == meeting_id) {
+        return Err("This recording is still finalizing. Wait for completion before deleting its meeting.".into());
+    }
     match MeetingsRepository::delete_meeting(pool, &meeting_id).await {
         Ok(true) => {
             log_info!("Successfully deleted meeting {}", meeting_id);
@@ -960,6 +963,7 @@ pub async fn api_save_transcript<R: Runtime>(
     transcripts: Vec<serde_json::Value>,
     folder_path: Option<String>,
     auth_token: Option<String>,
+    session_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
     log_info!(
         "Transcript save requested; transcript_count={}, folder_configured={}, auth_present={}",
@@ -982,14 +986,11 @@ pub async fn api_save_transcript<R: Runtime>(
     let pool = state.db_manager.pool();
 
     // Now, call the repository with the correctly typed data.
-    match TranscriptsRepository::save_transcript(
-        pool,
-        &meeting_title,
-        &transcripts_to_save,
-        folder_path,
-    )
-    .await
-    {
+    let saved = match session_id {
+        Some(session) => TranscriptsRepository::recover_session_transcript(pool,&meeting_title,&transcripts_to_save,folder_path,&session).await,
+        None => TranscriptsRepository::save_transcript(pool,&meeting_title,&transcripts_to_save,folder_path).await,
+    };
+    match saved {
         Ok(meeting_id) => {
             log_info!(
                 "Successfully saved transcript and created meeting with id: {}",

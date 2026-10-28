@@ -161,6 +161,8 @@ fn emit_worker_log_snapshot(stats: WorkerLogStats, final_summary: bool) {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TranscriptUpdate {
+    #[serde(default)]
+    pub session_id: Option<String>,
     pub text: String,
     pub timestamp: String, // Wall-clock time for reference (e.g., "14:30:05")
     pub source: String,
@@ -181,6 +183,8 @@ pub struct TranscriptUpdate {
 pub fn start_transcription_task<R: Runtime>(
     app: AppHandle<R>,
     transcription_receiver: tokio::sync::mpsc::UnboundedReceiver<AudioChunk>,
+    session_id: String,
+    collector: Arc<std::sync::Mutex<Vec<crate::audio::recording_saver::TranscriptSegment>>>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         info!("Starting transcription worker task");
@@ -188,6 +192,7 @@ pub fn start_transcription_task<R: Runtime>(
         let transcription_engine = match super::engine::get_or_init_transcription_engine(&app).await {
             Ok(engine) => engine,
             Err(e) => {
+                crate::session::transcription_error(&session_id, &e.to_string());
                 error!("Failed to initialize transcription engine");
                 let _ = app.emit("transcription-error", serde_json::json!({
                     "error": e,
@@ -204,7 +209,7 @@ pub fn start_transcription_task<R: Runtime>(
         let work_receiver = Arc::new(tokio::sync::Mutex::new(work_receiver));
         let chunks_queued = Arc::new(AtomicU64::new(0));
         let chunks_completed = Arc::new(AtomicU64::new(0));
-        let mut worker_handles = Vec::new();
+        let mut worker_handles = tokio::task::JoinSet::new();
 
         for worker_id in 0..NUM_WORKERS {
             let engine_clone = match &transcription_engine {
@@ -217,7 +222,9 @@ pub fn start_transcription_task<R: Runtime>(
             let chunks_completed_clone = chunks_completed.clone();
             let chunks_queued_clone = chunks_queued.clone();
 
-            worker_handles.push(tokio::spawn(async move {
+            let session_id = session_id.clone();
+            let collector = collector.clone();
+            worker_handles.spawn(async move {
                 let mut stats = WorkerLogStats::default();
                 let mut last_summary = Instant::now();
 
@@ -237,6 +244,7 @@ pub fn start_transcription_task<R: Runtime>(
                     let processing_started = Instant::now();
 
                     if !engine_clone.is_model_loaded().await {
+                        crate::session::transcription_error(&session_id, "Transcription model was unloaded before queued audio completed");
                         stats.record_failure(WorkerFailureCategory::ModelNotLoaded);
                     } else {
                         match transcribe_chunk_with_provider(&engine_clone, chunk, &app_clone).await {
@@ -270,6 +278,7 @@ pub fn start_transcription_task<R: Runtime>(
                                     let sequence_id =
                                         SEQUENCE_COUNTER.fetch_add(1, Ordering::SeqCst);
                                     let update = TranscriptUpdate {
+                                        session_id: Some(session_id.clone()),
                                         text: transcript,
                                         timestamp: format_current_timestamp(),
                                         source: "Audio".to_string(),
@@ -282,6 +291,13 @@ pub fn start_transcription_task<R: Runtime>(
                                         duration: chunk_duration,
                                     };
 
+                                    collector.lock().unwrap().push(crate::audio::recording_saver::TranscriptSegment {
+                                        id: format!("seg_{}", update.sequence_id), text: update.text.clone(),
+                                        audio_start_time: update.audio_start_time, audio_end_time: update.audio_end_time,
+                                        duration: update.duration, display_time: update.timestamp.clone(),
+                                        confidence: update.confidence, sequence_id: update.sequence_id,
+                                    });
+                                    crate::session::persist_transcript_checkpoint(&session_id);
                                     if app_clone.emit("transcript-update", &update).is_ok() {
                                         stats.emitted += 1;
                                         #[cfg(debug_assertions)]
@@ -303,15 +319,18 @@ pub fn start_transcription_task<R: Runtime>(
                                 stats.too_short += 1;
                             }
                             Err(TranscriptionError::ModelNotLoaded) => {
+                                crate::session::transcription_error(&session_id, "Transcription model was unloaded before queued audio completed");
                                 stats.record_failure(WorkerFailureCategory::ModelNotLoaded);
                             }
                             Err(error @ TranscriptionError::EngineFailed(_)) => {
+                                crate::session::transcription_error(&session_id, &error.to_string());
                                 stats.record_failure(WorkerFailureCategory::EngineFailed);
                                 warn!("Transcription engine failed: {}", error);
                                 let _ =
                                     app_clone.emit("transcription-warning", error.to_string());
                             }
                             Err(error @ TranscriptionError::UnsupportedLanguage(_)) => {
+                                crate::session::transcription_error(&session_id, &error.to_string());
                                 stats.record_failure(WorkerFailureCategory::UnsupportedLanguage);
                                 let _ =
                                     app_clone.emit("transcription-warning", error.to_string());
@@ -342,7 +361,7 @@ pub fn start_transcription_task<R: Runtime>(
                 }
 
                 emit_worker_log_snapshot(stats.snapshot_and_reset(), true);
-            }));
+            });
         }
 
         let mut receiver = transcription_receiver;
@@ -361,8 +380,9 @@ pub fn start_transcription_task<R: Runtime>(
             "message": format!("{} chunks queued for processing - waiting for completion", total_chunks_queued)
         }));
 
-        for handle in worker_handles {
-            if handle.await.is_err() {
+        while let Some(result) = worker_handles.join_next().await {
+            if let Err(error) = result {
+                crate::session::transcription_error(&session_id, &error.to_string());
                 error!("Transcription worker panicked");
             }
         }

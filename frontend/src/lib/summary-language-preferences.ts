@@ -44,6 +44,7 @@ export function writePinnedSummaryLanguageDefault(value: string | null): void {
   try {
     if (value) window.localStorage.setItem(SUMMARY_LANGUAGE_DEFAULT_KEY, value);
     else window.localStorage.removeItem(SUMMARY_LANGUAGE_DEFAULT_KEY);
+    void invoke('set_native_summary_language_default', { language: value }).catch(error => console.warn('Native summary language preference could not be saved:', error));
   } catch {
     // Preference writes are non-critical; meeting-specific persistence happens separately.
   }

@@ -1,5 +1,6 @@
 interface StatusOverlaysProps {
   // Status flags
+  isStopping?: boolean;
   isProcessing: boolean;      // Processing transcription after recording stops
   isSaving: boolean;          // Saving transcript to database
 
@@ -38,12 +39,18 @@ function StatusOverlay({ show, message, sidebarCollapsed }: StatusOverlayProps) 
 
 // Main exported component - renders multiple status overlays
 export function StatusOverlays({
+  isStopping = false,
   isProcessing,
   isSaving,
   sidebarCollapsed
 }: StatusOverlaysProps) {
   return (
     <>
+      <StatusOverlay
+        show={isStopping}
+        message="Stopping audio capture..."
+        sidebarCollapsed={sidebarCollapsed}
+      />
       {/* Processing status overlay - shown after recording stops while finalizing transcription */}
       <StatusOverlay
         show={isProcessing}

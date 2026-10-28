@@ -276,18 +276,35 @@ impl RecordingManager {
             return Err(RecordingStartError::TranscriptionRuntime(error));
         }
 
-        self.recording_saver.start_accumulation(auto_save, recording_receiver);
-        self.recording_saver.set_device_info(
-            microphone_device.as_ref().map(|d| d.name.clone()),
-            system_device.as_ref().map(|d| d.name.clone())
-        );
-
         // Give the pipeline a moment to fully initialize before starting streams
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
-        // Start audio streams - they send RAW unmixed chunks to pipeline for mixing
         // Pipeline handles mixing and distribution to both recording and transcription
-        self.stream_manager.start_streams(microphone_device.clone(), system_device.clone(), None).await?;
+        if let Err(error) = self.stream_manager.start_streams(microphone_device.clone(), system_device.clone(), None).await {
+            self.state.stop_recording();
+            let _ = self.stream_manager.stop_streams();
+            let _ = self.pipeline_manager.stop().await;
+            return Err(error.into());
+        }
+        if let Err(error) = self.state.mark_capture_started() {
+            self.state.halt_capture();
+            self.state.stop_recording();
+            let _ = self.stream_manager.stop_streams();
+            let _ = self.pipeline_manager.stop().await;
+            return Err(error.into());
+        }
+        // Do not create meeting folders/checkpoints until native capture has started.
+        self.recording_saver.start_accumulation(auto_save, recording_receiver);
+        self.recording_saver.set_device_info(
+            microphone_device.as_ref().map(|device| device.name.clone()),
+            system_device.as_ref().map(|device| device.name.clone()),
+        );
+        if self.recording_saver.get_meeting_folder().is_none() {
+            self.state.stop_recording();
+            let _ = self.stream_manager.stop_streams();
+            let _ = self.pipeline_manager.stop().await;
+            return Err(anyhow::anyhow!("Meeting folder could not be created. Check your recording folder permissions and free disk space.").into());
+        }
 
         // Start device monitoring to detect disconnects
         if let Some(ref mut monitor) = self.device_monitor {
@@ -335,7 +352,12 @@ impl RecordingManager {
     pub async fn stop_streams_and_force_flush(&mut self) -> Result<()> {
         info!("🚀 Stopping recording streams with IMMEDIATE pipeline flush");
 
-        // CRITICAL: Stop device monitor FIRST to prevent continuous WASAPI polling on Windows
+        // Close capture admission before awaiting potentially slow monitor shutdown.
+        self.state.halt_capture();
+        self.state.stop_recording();
+        let stream_result = self.stream_manager.stop_streams();
+
+        // Stop the device monitor after capture has ceased.
         // This fixes the slow shutdown issue where device enumeration runs for 90+ seconds
         if let Some(ref mut monitor) = self.device_monitor {
             info!("Stopping device monitor first...");
@@ -346,14 +368,17 @@ impl RecordingManager {
         self.state.stop_recording();
 
         // Stop audio streams immediately
-        if let Err(e) = self.stream_manager.stop_streams() {
+        let mut shutdown_errors = Vec::new();
+        if let Err(e) = stream_result {
             error!("Error stopping audio streams: {}", e);
+            shutdown_errors.push(format!("Audio stream shutdown failed: {e}"));
         }
 
         // CRITICAL: Force pipeline to flush ALL accumulated audio before stopping
         debug!("💨 Forcing pipeline to flush accumulated audio immediately");
         if let Err(e) = self.pipeline_manager.force_flush_and_stop().await {
             error!("Error during force flush: {}", e);
+            shutdown_errors.push(format!("Buffered audio flush failed: {e}"));
         }
 
         // CRITICAL: Full cleanup to release all Arc references and resources
@@ -361,7 +386,8 @@ impl RecordingManager {
         self.state.cleanup();
 
         info!("✅ Recording streams stopped with immediate flush completed");
-        Ok(())
+        if shutdown_errors.is_empty() { Ok(()) }
+        else { Err(anyhow::anyhow!(shutdown_errors.join("; "))) }
     }
 
     /// Save recording after transcription is complete
@@ -382,7 +408,7 @@ impl RecordingManager {
             }
             Err(e) => {
                 error!("Failed to save recording: {}", e);
-                // Don't fail the stop operation if saving fails
+                return Err(anyhow::anyhow!(e));
             }
         }
 
@@ -528,6 +554,10 @@ impl RecordingManager {
     /// Used for syncing frontend state after page reload during active recording
     pub fn get_transcript_segments(&self) -> Vec<super::recording_saver::TranscriptSegment> {
         self.recording_saver.get_transcript_segments()
+    }
+
+    pub fn transcript_collector(&self) -> Arc<std::sync::Mutex<Vec<super::recording_saver::TranscriptSegment>>> {
+        self.recording_saver.transcript_collector()
     }
 
     /// Get meeting name from current recording session

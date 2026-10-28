@@ -96,6 +96,8 @@ pub struct RecordingState {
     // Core recording state
     is_recording: AtomicBool,
     is_paused: AtomicBool,
+    capture_halted: AtomicBool,
+    capture_started: Mutex<Option<chrono::DateTime<chrono::Utc>>>,
 
     // Audio devices
     microphone_device: Mutex<Option<Arc<AudioDevice>>>,
@@ -128,6 +130,8 @@ impl RecordingState {
         Arc::new(Self {
             is_recording: AtomicBool::new(false),
             is_paused: AtomicBool::new(false),
+            capture_halted: AtomicBool::new(false),
+            capture_started: Mutex::new(None),
             microphone_device: Mutex::new(None),
             system_device: Mutex::new(None),
             audio_sender: Mutex::new(None),
@@ -145,12 +149,23 @@ impl RecordingState {
 
     // Recording control
     pub fn start_recording(&self) -> Result<()> {
+        self.capture_halted.store(false, Ordering::SeqCst);
+        *self.capture_started.lock().unwrap() = None;
         self.is_recording.store(true, Ordering::SeqCst);
         *self.recording_start.lock().unwrap() = Some(Instant::now());
         self.error_count.store(0, Ordering::SeqCst);
         self.recoverable_error_count.store(0, Ordering::SeqCst);
         *self.last_error.lock().unwrap() = None;
         Ok(())
+    }
+
+    pub fn mark_capture_started(&self) -> Result<()> {
+        *self.capture_started.lock().unwrap() = Some(chrono::Utc::now());
+        Ok(())
+    }
+
+    pub fn capture_start(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        *self.capture_started.lock().unwrap()
     }
 
     pub fn stop_recording(&self) {
@@ -236,6 +251,7 @@ impl RecordingState {
     }
 
     pub fn send_audio_chunk(&self, chunk: AudioChunk) -> Result<()> {
+        if self.capture_halted.load(Ordering::SeqCst) { return Ok(()); }
         // Don't send audio chunks when paused
         if self.is_paused() {
             return Ok(()); // Silently discard chunks while paused
@@ -255,7 +271,9 @@ impl RecordingState {
         }
     }
 
-    // Error handling
+    pub fn halt_capture(&self) { self.capture_halted.store(true, Ordering::SeqCst); }
+
+
     pub fn set_error_callback<F>(&self, callback: F)
     where
         F: Fn(&AudioError) + Send + Sync + 'static,
@@ -390,6 +408,8 @@ impl Default for RecordingState {
         Self {
             is_recording: AtomicBool::new(false),
             is_paused: AtomicBool::new(false),
+            capture_halted: AtomicBool::new(false),
+            capture_started: Mutex::new(None),
             microphone_device: Mutex::new(None),
             system_device: Mutex::new(None),
             audio_sender: Mutex::new(None),
