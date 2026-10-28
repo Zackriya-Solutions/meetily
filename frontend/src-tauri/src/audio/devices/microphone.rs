@@ -26,7 +26,7 @@ pub fn default_input_device() -> Result<AudioDevice> {
                 }
             }
             Ok(None) => {
-                warn!("🎤 No default PulseAudio source reported, falling back to CPAL");
+                return Err(anyhow!("No default microphone is configured in the audio server"));
             }
             Err(e) => {
                 warn!(

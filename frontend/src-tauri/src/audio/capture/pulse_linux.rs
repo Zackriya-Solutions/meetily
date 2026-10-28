@@ -17,8 +17,9 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
 use libpulse_binding::sample::{Format, Spec};
-use libpulse_binding::stream::Direction;
-use libpulse_simple_binding::Simple;
+use libpulse_binding::{context::{Context, FlagSet as ContextFlags, State as ContextState},
+    mainloop::standard::{Mainloop, IterateResult}, stream::{Stream, FlagSet, State, PeekResult}};
+use std::time::{Duration, Instant};
 use log::{debug, warn};
 
 use super::pulse_enumerator;
@@ -95,7 +96,7 @@ fn pick_sink(sinks: Vec<PulseSink>, name: &str) -> Result<PulseSink> {
 }
 
 fn not_found_error(name: &str) -> anyhow::Error {
-    anyhow!("Périphérique '{}' introuvable, re-sélectionnez-le", name)
+    anyhow!("Audio device '{}' not found; select an available device", name)
 }
 
 /// List all real input sources (sink monitors excluded — those are offered as
@@ -132,114 +133,110 @@ pub fn default_sink_name() -> Result<Option<String>> {
     pulse_enumerator::default_sink_name()
 }
 
-/// Blocking PulseAudio record stream, backed by libpulse-simple's record API.
-/// Used both for sink monitors (system audio) and real input sources
-/// (microphones).
+/// Capture configuration is Send; all libpulse objects are created and destroyed
+/// on the capture worker because the standard mainloop is not Send.
 pub struct PulseCapture {
-    simple: Simple,
+    source: String,
     should_stop: Arc<AtomicBool>,
     channels: u16,
 }
 
+pub const SERVER_UNAVAILABLE: &str = "System audio is unavailable. Ensure PulseAudio or PipeWire’s PulseAudio compatibility service is running.";
+
 impl PulseCapture {
-    fn new_with_channels(source_name: &str, channels: u16, stream_label: &str) -> Result<Self> {
-        let spec = Spec {
-            format: Format::FLOAT32NE,
-            channels: channels as u8,
-            rate: CAPTURE_SAMPLE_RATE,
-        };
-        if !spec.is_valid() {
-            return Err(anyhow!("Invalid PulseAudio sample spec"));
+    pub fn new_system(source: &str) -> Result<Self> { Self::new(source, 2) }
+    pub fn new_microphone(source: &str) -> Result<Self> { Self::new(source, 1) }
+    fn new(source: &str, channels: u16) -> Result<Self> {
+        Ok(Self { source: source.into(), channels, should_stop: Arc::new(AtomicBool::new(false)) })
+    }
+    pub fn sample_rate(&self) -> u32 { CAPTURE_SAMPLE_RATE }
+    pub fn channels(&self) -> u16 { self.channels }
+    pub fn stop_handle(&self) -> Arc<AtomicBool> { self.should_stop.clone() }
+
+    pub fn run(&self, on_samples: impl FnMut(&[f32])) -> Result<()> {
+        self.run_ready(on_samples, || {})
+    }
+
+    pub fn run_ready(&self, mut on_samples: impl FnMut(&[f32]), ready: impl FnOnce()) -> Result<()> {
+        if self.should_stop.load(Ordering::Acquire) { return Ok(()); }
+        // Declaration order ensures stream/context are dropped before mainloop.
+        let mut mainloop = Mainloop::new().ok_or_else(|| anyhow!("Cannot create audio mainloop"))?;
+        let mut context = Context::new(&mainloop, "Meetily").ok_or_else(|| anyhow!("Cannot create audio context"))?;
+        context.connect(None, ContextFlags::NOAUTOSPAWN, None)
+            .map_err(|e| anyhow!("{} ({})", SERVER_UNAVAILABLE, e))?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while context.get_state() != ContextState::Ready {
+            if self.should_stop.load(Ordering::Acquire) { return Ok(()); }
+            if matches!(context.get_state(), ContextState::Failed | ContextState::Terminated) || Instant::now() >= deadline {
+                return Err(anyhow!(SERVER_UNAVAILABLE));
+            }
+            pump(&mut mainloop)?;
         }
-
-        let simple = Simple::new(
-            None, // default server
-            "Meetily",
-            Direction::Record,
-            Some(source_name),
-            stream_label,
-            &spec,
-            None, // default channel map
-            None, // default buffering attributes
-        )
-        .map_err(|e| {
-            anyhow!(
-                "Failed to open PulseAudio record stream on '{}': {}",
-                source_name, e
-            )
-        })?;
-
-        Ok(Self {
-            simple,
-            should_stop: Arc::new(AtomicBool::new(false)),
-            channels,
-        })
-    }
-
-    /// System audio: stereo capture of a sink's monitor source.
-    pub fn new_system(monitor_source_name: &str) -> Result<Self> {
-        Self::new_with_channels(monitor_source_name, 2, "System Audio")
-    }
-
-    /// Microphone: mono capture of a real input source. PulseAudio downmixes and
-    /// resamples server-side, so the pipeline still receives 48kHz.
-    pub fn new_microphone(source_name: &str) -> Result<Self> {
-        Self::new_with_channels(source_name, 1, "Microphone")
-    }
-
-    pub fn sample_rate(&self) -> u32 {
-        CAPTURE_SAMPLE_RATE
-    }
-
-    pub fn channels(&self) -> u16 {
-        self.channels
-    }
-
-    /// Handle used to signal the capture loop (running on another thread) to stop.
-    pub fn stop_handle(&self) -> Arc<AtomicBool> {
-        self.should_stop.clone()
-    }
-
-    /// Runs a blocking read loop, invoking `on_samples` with interleaved f32
-    /// frames as they arrive. Meant to run on a `spawn_blocking` task, since
-    /// PulseAudio's simple API blocks on `read()`. Returns once `stop_handle()`
-    /// is signalled or the stream errors out.
-    pub fn run(&self, mut on_samples: impl FnMut(&[f32])) {
-        // ~21ms at 48kHz stereo: matches the 1024-frame chunking used by the
-        // macOS Core Audio path.
-        const FRAMES_PER_CHUNK: usize = 1024;
-        let mut byte_buf = vec![0u8; FRAMES_PER_CHUNK * self.channels as usize * 4];
-        let mut sample_buf = Vec::with_capacity(FRAMES_PER_CHUNK * self.channels as usize);
-
+        let spec = Spec { format: Format::FLOAT32NE, channels: self.channels as u8, rate: CAPTURE_SAMPLE_RATE };
+        let mut stream = Stream::new(&mut context, "Capture", &spec, None)
+            .ok_or_else(|| anyhow!("Cannot create audio stream"))?;
+        stream.connect_record(Some(&self.source), None, FlagSet::DONT_MOVE)
+            .map_err(|e| anyhow!("Cannot open audio device: {}", e))?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while stream.get_state() != State::Ready {
+            if self.should_stop.load(Ordering::Acquire) { return Ok(()); }
+            if matches!(stream.get_state(), State::Failed | State::Terminated) || Instant::now() >= deadline {
+                return Err(anyhow!("Audio device did not become ready"));
+            }
+            pump(&mut mainloop)?;
+        }
+        ready();
+        let mut samples = Vec::new();
         while !self.should_stop.load(Ordering::Acquire) {
-            if let Err(e) = self.simple.read(&mut byte_buf) {
-                warn!("PulseAudio record stream read error: {}", e);
-                break;
+            pump(&mut mainloop)?;
+            if self.should_stop.load(Ordering::Acquire) { break; }
+            if context.get_state() != ContextState::Ready { return Err(anyhow!(SERVER_UNAVAILABLE)); }
+            if stream.get_state() != State::Ready { return Err(anyhow!("Audio capture stopped unexpectedly")); }
+            loop {
+                if self.should_stop.load(Ordering::Acquire) { break; }
+                samples.clear();
+                match stream.peek().map_err(|e| anyhow!("Cannot read audio: {}", e))? {
+                    PeekResult::Empty => break,
+                    PeekResult::Hole(bytes) => samples.resize(bytes / 4, 0.0),
+                    PeekResult::Data(bytes) => samples.extend(bytes.chunks_exact(4)
+                        .map(|b| f32::from_ne_bytes([b[0], b[1], b[2], b[3]]))),
+                }
+                stream.discard().map_err(|e| anyhow!("Cannot release audio buffer: {}", e))?;
+                if !self.should_stop.load(Ordering::Acquire) { on_samples(&samples); }
             }
-
-            // Re-check right after the blocking read returns: if stop() timed
-            // out waiting for this thread (stalled source) and moved on, a
-            // late read() shouldn't inject one more chunk into whatever
-            // pipeline state now exists (new stream, new recording).
-            if self.should_stop.load(Ordering::Acquire) {
-                break;
-            }
-
-            sample_buf.clear();
-            sample_buf.extend(
-                byte_buf
-                    .chunks_exact(4)
-                    .map(|b| f32::from_ne_bytes([b[0], b[1], b[2], b[3]])),
-            );
-
-            on_samples(&sample_buf);
         }
+        let _ = stream.disconnect();
+        context.disconnect();
+        Ok(())
     }
+}
+
+fn pump(mainloop: &mut Mainloop) -> Result<()> {
+    if matches!(mainloop.iterate(false), IterateResult::Err(_) | IterateResult::Quit(_)) {
+        return Err(anyhow!("Audio server mainloop stopped"));
+    }
+    std::thread::sleep(Duration::from_millis(10));
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cancelled_capture_exits_without_opening_server_or_delivering_samples() {
+        let capture = PulseCapture::new_microphone("missing").unwrap();
+        capture.stop_handle().store(true, Ordering::Release);
+        capture.run(|_| panic!("cancelled capture delivered samples")).unwrap();
+    }
+
+    #[test]
+    fn formats_remain_mono_mic_and_stereo_system_at_48khz() {
+        let mic = PulseCapture::new_microphone("source").unwrap();
+        let system = PulseCapture::new_system("monitor").unwrap();
+        assert_eq!((mic.channels(), mic.sample_rate()), (1, 48000));
+        assert_eq!((system.channels(), system.sample_rate()), (2, 48000));
+    }
 
     #[test]
     #[ignore] // Requires a running PulseAudio/PipeWire server; run manually.
@@ -322,7 +319,7 @@ mod tests {
     #[test]
     fn pick_sink_missing_is_reselect_error() {
         let err = pick_sink(vec![sink("sink_a", "Speakers")], "gone").unwrap_err();
-        assert!(err.to_string().contains("re-sélectionnez-le"));
+        assert!(err.to_string().contains("select an available device"));
         assert!(err.to_string().contains("gone"));
     }
 
@@ -340,7 +337,7 @@ mod tests {
     #[test]
     fn pick_source_missing_is_reselect_error() {
         let err = pick_source(vec![], "src_x").unwrap_err();
-        assert!(err.to_string().contains("re-sélectionnez-le"));
+        assert!(err.to_string().contains("select an available device"));
     }
 
     #[test]

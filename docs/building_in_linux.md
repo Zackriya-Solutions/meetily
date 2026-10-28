@@ -221,6 +221,19 @@ src-tauri/target/release/bundle/appimage/Meetily_<version>_amd64.AppImage
 
 ## 🎙️ Audio device names (PipeWire/PulseAudio)
 
+### System audio requirements
+
+Linux system-audio capture requires a running PulseAudio-compatible server:
+either PulseAudio or PipeWire with its PulseAudio compatibility service
+(`pipewire-pulse`, called `pipewire-pulseaudio` on Fedora). PipeWire alone is
+insufficient. Users already running PulseAudio do not need to install PipeWire.
+Minimal or customized installations may omit the compatibility service; see the
+[Fedora documentation](https://fedoraproject.org/wiki/Changes/DefaultPipeWire) and
+[Debian documentation](https://wiki.debian.org/PipeWire).
+
+If the server cannot be reached, system audio is unavailable. Ensure PulseAudio
+or PipeWire’s PulseAudio compatibility service is running.
+
 On Linux, the **Microphone** and **System Audio** pickers are populated directly
 from PulseAudio/PipeWire introspection. The labels you see in Meetily are the
 same ones shown by the desktop's native audio settings (KDE, GNOME, etc.).
@@ -235,8 +248,18 @@ system settings: a USB headset set to output-only profile will not show up as a
 microphone.
 
 If no PulseAudio/`pipewire-pulse` server is reachable, Meetily falls back to a
-small whitelist of ALSA endpoints (`default`, `pipewire`, `pulse`) so the list
-never becomes empty.
+small whitelist of ALSA microphone endpoints (`default`, `pipewire`, `pulse`).
+This fallback does not provide system-audio capture.
+
+### Recording device selection
+
+Default Microphone and Default System Audio follow changes to the OS default
+while recording, checked approximately every two seconds. Explicit device
+selections stay pinned until unavailable. An unavailable microphone port is
+treated as device loss; unknown port availability remains usable. Automatic
+fallback preserves the saved selection and stays fixed for that meeting.
+Switching between speakers and headphones on the same output device does not
+require restarting system-audio capture.
 
 ---
 

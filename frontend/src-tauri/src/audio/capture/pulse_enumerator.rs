@@ -290,6 +290,23 @@ fn list_sinks_impl(mainloop: &mut Mainloop, context: &Context) -> Result<Vec<Pul
     Ok(result)
 }
 
+fn microphone_port_usable(availability: Option<libpulse_binding::def::PortAvailable>) -> bool {
+    availability != Some(libpulse_binding::def::PortAvailable::No)
+}
+
+#[cfg(test)]
+mod port_tests {
+    use super::*;
+    use libpulse_binding::def::PortAvailable;
+    #[test]
+    fn only_explicit_unavailability_excludes_a_microphone() {
+        assert!(!microphone_port_usable(Some(PortAvailable::No)));
+        assert!(microphone_port_usable(Some(PortAvailable::Yes)));
+        assert!(microphone_port_usable(Some(PortAvailable::Unknown)));
+        assert!(microphone_port_usable(None));
+    }
+}
+
 fn list_sources_impl(mainloop: &mut Mainloop, context: &Context) -> Result<Vec<PulseSource>> {
     let sources: Rc<RefCell<Vec<PulseSource>>> = Rc::new(RefCell::new(Vec::new()));
     let sources_cb = sources.clone();
@@ -299,6 +316,9 @@ fn list_sources_impl(mainloop: &mut Mainloop, context: &Context) -> Result<Vec<P
             // Monitors of sinks are already exposed as "System Audio" devices
             // through list_sinks(); ignore them here.
             if info.monitor_of_sink.is_some() {
+                return;
+            }
+            if !microphone_port_usable(info.active_port.as_ref().map(|port| port.available)) {
                 return;
             }
 

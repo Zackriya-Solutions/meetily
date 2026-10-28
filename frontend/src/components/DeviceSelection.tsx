@@ -1,11 +1,13 @@
+import { platform } from '@tauri-apps/plugin-os';
 import React, { useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { RefreshCw, Mic, Speaker } from 'lucide-react';
+import { RefreshCw, Mic, Speaker, CircleHelp } from 'lucide-react';
 import { AudioLevelMeter, CompactAudioLevelMeter } from './AudioLevelMeter';
 import { AudioBackendSelector } from './AudioBackendSelector';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import Analytics from '@/lib/analytics';
 import {
   AudioDevice,
@@ -15,6 +17,7 @@ import {
   encodeDeviceOption,
   fetchAudioDevices,
   isDeviceAvailable,
+  cachedDeviceLabel,
 } from '@/lib/audioDevices';
 
 export type { AudioDevice, SelectedDevices };
@@ -46,6 +49,16 @@ export function DeviceSelection({ selectedDevices, onDeviceChange, disabled = fa
   const [audioLevels, setAudioLevels] = useState<Map<string, AudioLevelData>>(new Map());
   const [isMonitoring, setIsMonitoring] = useState(false);
   const [showLevels, setShowLevels] = useState(false);
+
+  const [isLinux, setIsLinux] = useState<boolean | null>(null);
+  useEffect(() => {
+    try {
+      setIsLinux(platform() === 'linux');
+    } catch {
+      // The desktop does not register the OS plugin; use the WebView's OS.
+      setIsLinux(/Linux/i.test(navigator.userAgent));
+    }
+  }, []);
 
   // Filter devices by type
   const inputDevices = devices.filter(device => device.device_type === 'Input');
@@ -93,7 +106,7 @@ export function DeviceSelection({ selectedDevices, onDeviceChange, disabled = fa
   useEffect(() => {
     // Skip while loading (list not ready) or disabled (selector locked during
     // recording — never reset the device a live recording is using).
-    if (loading || disabled) return;
+    if (loading || disabled || isLinux === null || isLinux) return;
 
     const inputs = devices.filter(d => d.device_type === 'Input');
     const outputs = devices.filter(d => d.device_type === 'Output');
@@ -123,7 +136,7 @@ export function DeviceSelection({ selectedDevices, onDeviceChange, disabled = fa
     if (next !== selectedDevices) {
       onDeviceChangeRef.current(next);
     }
-  }, [devices, loading, disabled, selectedDevices]);
+  }, [devices, loading, disabled, selectedDevices, isLinux]);
 
   // Set up audio level event listener
   useEffect(() => {
@@ -327,6 +340,20 @@ export function DeviceSelection({ selectedDevices, onDeviceChange, disabled = fa
             <Label htmlFor="mic-selection" className="text-sm font-medium text-gray-700">
               Microphone
             </Label>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  aria-label="About microphone selection"
+                  className="text-gray-400 hover:text-gray-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded-full"
+                >
+                  <CircleHelp aria-hidden="true" className="h-4 w-4" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent className="max-w-xs">
+                Choose a mic to record. Default follows your system’s selected microphone.
+              </TooltipContent>
+            </Tooltip>
           </div>
           <Select
             value={encodeDeviceOption(selectedDevices.micDevice)}
@@ -338,6 +365,12 @@ export function DeviceSelection({ selectedDevices, onDeviceChange, disabled = fa
             </SelectTrigger>
             <SelectContent>
               <SelectItem value={encodeDeviceOption(null)}>Default Microphone</SelectItem>
+              {isLinux && selectedDevices.micDevice &&
+                !isDeviceAvailable(devices, 'Input', selectedDevices.micDevice) && (
+                  <SelectItem value={encodeDeviceOption(selectedDevices.micDevice)}>
+                    {cachedDeviceLabel(selectedDevices.micDevice)} — Unavailable — uses default
+                  </SelectItem>
+                )}
               {inputDevices.map((device) => (
                 <SelectItem
                   key={device.name}
@@ -395,6 +428,20 @@ export function DeviceSelection({ selectedDevices, onDeviceChange, disabled = fa
             <Label htmlFor="system-selection" className="text-sm font-medium text-gray-700">
               System Audio
             </Label>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  aria-label="About system audio selection"
+                  className="text-gray-400 hover:text-gray-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded-full"
+                >
+                  <CircleHelp aria-hidden="true" className="h-4 w-4" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent className="max-w-xs">
+                Choose audio to record. Default follows your system’s selected output.
+              </TooltipContent>
+            </Tooltip>
           </div>
 
           <Select
@@ -407,6 +454,12 @@ export function DeviceSelection({ selectedDevices, onDeviceChange, disabled = fa
             </SelectTrigger>
             <SelectContent>
               <SelectItem value={encodeDeviceOption(null)}>Default System Audio</SelectItem>
+              {isLinux && selectedDevices.systemDevice &&
+                !isDeviceAvailable(devices, 'Output', selectedDevices.systemDevice) && (
+                  <SelectItem value={encodeDeviceOption(selectedDevices.systemDevice)}>
+                    {cachedDeviceLabel(selectedDevices.systemDevice)} — Unavailable — uses default
+                  </SelectItem>
+                )}
               {outputDevices.map((device) => (
                 <SelectItem
                   key={device.name}
@@ -435,12 +488,6 @@ export function DeviceSelection({ selectedDevices, onDeviceChange, disabled = fa
       <div className="text-xs text-gray-500 space-y-1">
         <p>• <strong>Microphone:</strong> Records your voice and ambient sound</p>
         <p>• <strong>System Audio:</strong> Records computer audio (music, calls, etc.)</p>
-        {isMonitoring && (
-          <p>• <strong>Mic Levels:</strong> Green = good, Yellow = loud, Red = too loud</p>
-        )}
-        {!isMonitoring && inputDevices.length > 0 && (
-          <p>• <strong>Tip:</strong> Click "Test Mic" to check if your microphone is working</p>
-        )}
       </div>
     </div>
   );

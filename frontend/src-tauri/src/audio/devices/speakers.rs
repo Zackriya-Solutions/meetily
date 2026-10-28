@@ -51,7 +51,7 @@ pub fn default_output_device() -> Result<AudioDevice> {
             }
             Err(e) => {
                 return Err(anyhow!(
-                    "Failed to query the default PulseAudio/PipeWire sink: {}",
+                    "System audio is unavailable. Ensure PulseAudio or PipeWire’s PulseAudio compatibility service is running. ({})",
                     e
                 ))
             }

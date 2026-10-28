@@ -39,6 +39,12 @@ pub use super::transcription::TranscriptUpdate;
 // Simple recording state tracking
 static IS_RECORDING: AtomicBool = AtomicBool::new(false);
 
+#[cfg(target_os = "linux")]
+static START_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+#[cfg(target_os = "linux")]
+static START_CANCEL: Mutex<Option<Arc<AtomicBool>>> = Mutex::new(None);
+
 /// True for the whole `stop_recording` tail (manager taken -> `recording-stopped`
 /// emitted). `IS_RECORDING` must stay true through the tail — the frontend polls
 /// it to keep the stop UI up — so the mic-disconnect fallback checks this flag
@@ -191,7 +197,7 @@ fn resolve_mic_or_default<R: Runtime>(
         }
         MicChoice::Default(device) => {
             info!("✅ Using default microphone: '{}'", device.name);
-            if requested_specific {
+            if requested_specific && !cfg!(target_os = "linux") {
                 // Tell the user their selected mic wasn't available and which
                 // mic is actually recording. Reuses the mic-device-switched
                 // listener the disconnect path wires up.
@@ -281,6 +287,29 @@ fn microphone_enumerated(device: &super::AudioDevice) -> bool {
 /// ponytail: no cpal enumeration check (unlike the mic helper) — Linux system
 /// devices are Pulse/ALSA monitor *inputs* tagged Output, so output_devices()
 /// would false-negative them. stream.rs still hard-fails on a missing device.
+fn resolve_system_for_start<R: Runtime>(app: &AppHandle<R>, requested: Option<&str>) -> Option<Arc<super::AudioDevice>> {
+    #[cfg(not(target_os = "linux"))]
+    { let _ = app; resolve_system_or_default(requested) }
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(id) = requested {
+            if super::capture::find_sink_by_name(id).is_ok() {
+                return Some(Arc::new(super::AudioDevice::new(id.into(), DeviceType::Output)));
+            }
+        }
+        match default_output_device() {
+            Ok(device) => {
+                // Success is announced only after the capture worker is ready.
+                Some(Arc::new(device))
+            }
+            Err(e) => {
+                let _ = app.emit("linux-audio-notice", serde_json::json!({"error": true, "message": e.to_string()}));
+                None
+            }
+        }
+    }
+}
+
 fn resolve_system_or_default(requested_id: Option<&str>) -> Option<Arc<super::AudioDevice>> {
     choose_system(requested_id, default_output_device).map(Arc::new)
 }
@@ -361,7 +390,11 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
         meeting_name.is_some()
     );
 
+    #[cfg(target_os = "linux")]
+    let start_generation = START_GENERATION.load(Ordering::SeqCst);
     let engine_lifecycle_guard = super::common::acquire_engine_lifecycle_lock().await;
+    #[cfg(target_os = "linux")]
+    if START_GENERATION.load(Ordering::SeqCst) != start_generation { return Err("Recording startup cancelled".into()); }
 
     // Check if already recording
     let current_recording_state = IS_RECORDING.load(Ordering::SeqCst);
@@ -417,7 +450,7 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
     #[cfg(not(target_os = "macos"))]
     let microphone_device = resolve_mic_or_default(&app, preferred_mic_name.as_deref());
 
-    let system_device = resolve_system_or_default(preferred_system_name.as_deref());
+    let system_device = resolve_system_for_start(&app, preferred_system_name.as_deref());
 
     #[cfg(target_os = "macos")]
     prepare_audio_for_recording(system_device.as_deref()).await?;
@@ -442,10 +475,18 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
     });
     manager.set_meeting_name(Some(effective_meeting_name));
 
+    #[cfg(target_os = "linux")]
+    {
+        let cancel = Arc::new(AtomicBool::new(START_GENERATION.load(Ordering::SeqCst) != start_generation));
+        *START_CANCEL.lock().unwrap() = Some(cancel.clone());
+        *manager.get_state().capture_cancel.lock().unwrap() = cancel;
+    }
     // Set up error callback
     let app_for_error = app.clone();
     manager.set_error_callback(move |error| {
         let _ = app_for_error.emit("recording-error", error.user_message());
+        #[cfg(target_os = "linux")]
+        let _ = app_for_error.emit("linux-audio-notice", serde_json::json!({"error": true, "message": error.user_message()}));
     });
 
     // Start recording with resolved devices (replaces start_recording_with_defaults_and_auto_save call)
@@ -454,6 +495,23 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
         .await
         .map_err(|error| map_recording_start_error(&app, error))?;
 
+    #[cfg(target_os = "linux")]
+    if START_GENERATION.load(Ordering::SeqCst) != start_generation {
+        manager.cleanup_without_save().await;
+        return Err("Recording startup cancelled".into());
+    }
+    #[cfg(target_os = "linux")]
+    if let (Some(requested), Some(active)) = (preferred_system_name.as_deref(), manager.get_state().get_system_device()) {
+        if requested != active.name {
+            let _ = app.emit("linux-audio-notice", serde_json::json!({"error": false, "message": format!("System audio switched to {} for this meeting.", super::devices::device_label(&active.name))}));
+        }
+    }
+    #[cfg(target_os = "linux")]
+    if let (Some(requested), Some(active)) = (preferred_mic_name.as_deref(), manager.get_state().get_microphone_device()) {
+        if requested != active.name {
+            let _ = app.emit("mic-device-switched", serde_json::json!({"device_name": active.name, "device_label": super::devices::device_label(&active.name)}));
+        }
+    }
     // Take the device event receiver BEFORE storing manager globally.
     // A background task will process device events (hot-swap) without frontend polling.
     let device_event_receiver = manager.take_device_event_receiver();
@@ -467,7 +525,7 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
 
     // Spawn background device event processor (mic-disconnect fallback).
     if let Some(receiver) = device_event_receiver {
-        spawn_device_event_processor(app.clone(), receiver, session);
+        spawn_device_event_processor(app.clone(), receiver, session, (preferred_mic_name.is_none(), preferred_system_name.is_none()));
     }
 
     // Flip recording live + reset per-session flags (speech-detected latch,
@@ -553,7 +611,11 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
         meeting_name.is_some()
     );
 
+    #[cfg(target_os = "linux")]
+    let start_generation = START_GENERATION.load(Ordering::SeqCst);
     let engine_lifecycle_guard = super::common::acquire_engine_lifecycle_lock().await;
+    #[cfg(target_os = "linux")]
+    if START_GENERATION.load(Ordering::SeqCst) != start_generation { return Err("Recording startup cancelled".into()); }
 
     // Check if already recording
     let current_recording_state = IS_RECORDING.load(Ordering::SeqCst);
@@ -595,7 +657,7 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
     #[cfg(not(target_os = "macos"))]
     let mic_device = resolve_mic_or_default(&app, mic_device_name.as_deref());
 
-    let system_device = resolve_system_or_default(system_device_name.as_deref());
+    let system_device = resolve_system_for_start(&app, system_device_name.as_deref());
 
     #[cfg(target_os = "macos")]
     prepare_audio_for_recording(system_device.as_deref()).await?;
@@ -631,10 +693,18 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
     });
     manager.set_meeting_name(Some(effective_meeting_name));
 
+    #[cfg(target_os = "linux")]
+    {
+        let cancel = Arc::new(AtomicBool::new(START_GENERATION.load(Ordering::SeqCst) != start_generation));
+        *START_CANCEL.lock().unwrap() = Some(cancel.clone());
+        *manager.get_state().capture_cancel.lock().unwrap() = cancel;
+    }
     // Set up error callback
     let app_for_error = app.clone();
     manager.set_error_callback(move |error| {
         let _ = app_for_error.emit("recording-error", error.user_message());
+        #[cfg(target_os = "linux")]
+        let _ = app_for_error.emit("linux-audio-notice", serde_json::json!({"error": true, "message": error.user_message()}));
     });
 
     // Start recording with specified devices and auto_save setting
@@ -643,6 +713,23 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
         .await
         .map_err(|error| map_recording_start_error(&app, error))?;
 
+    #[cfg(target_os = "linux")]
+    if START_GENERATION.load(Ordering::SeqCst) != start_generation {
+        manager.cleanup_without_save().await;
+        return Err("Recording startup cancelled".into());
+    }
+    #[cfg(target_os = "linux")]
+    if let (Some(requested), Some(active)) = (system_device_name.as_deref(), manager.get_state().get_system_device()) {
+        if requested != active.name {
+            let _ = app.emit("linux-audio-notice", serde_json::json!({"error": false, "message": format!("System audio switched to {} for this meeting.", super::devices::device_label(&active.name))}));
+        }
+    }
+    #[cfg(target_os = "linux")]
+    if let (Some(requested), Some(active)) = (mic_device_name.as_deref(), manager.get_state().get_microphone_device()) {
+        if requested != active.name {
+            let _ = app.emit("mic-device-switched", serde_json::json!({"device_name": active.name, "device_label": super::devices::device_label(&active.name)}));
+        }
+    }
     // Take the device event receiver BEFORE storing manager globally.
     // A background task will process device events (hot-swap) without frontend polling.
     let device_event_receiver = manager.take_device_event_receiver();
@@ -656,7 +743,7 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
 
     // Spawn background device event processor (mic-disconnect fallback).
     if let Some(receiver) = device_event_receiver {
-        spawn_device_event_processor(app.clone(), receiver, session);
+        spawn_device_event_processor(app.clone(), receiver, session, (mic_device_name.is_none(), system_device_name.is_none()));
     }
 
     // Flip recording live + reset per-session flags (speech-detected latch,
@@ -731,6 +818,11 @@ pub async fn stop_recording<R: Runtime>(
         "🛑 Starting optimized recording shutdown - ensuring ALL transcript chunks are preserved"
     );
 
+    #[cfg(target_os = "linux")]
+    {
+        START_GENERATION.fetch_add(1, Ordering::SeqCst);
+        if let Some(cancel) = START_CANCEL.lock().unwrap().as_ref() { cancel.store(true, Ordering::SeqCst); }
+    }
     // Check if recording is active
     if !IS_RECORDING.load(Ordering::SeqCst) {
         info!("Recording was not active");
@@ -1436,8 +1528,27 @@ async fn do_mic_swap(device_name: &str, session: &Arc<super::RecordingState>) ->
 
     // Resolve the current default output OUTSIDE the lock — a CoreAudio stall here
     // must not block stop_recording (which needs RECORDING_MANAGER). (P1 #1)
+    #[cfg(not(target_os = "linux"))]
     let system_name = default_output_device().ok().map(|d| d.name);
 
+    #[cfg(target_os = "linux")]
+    {
+        let mut stream = Some(new_stream);
+        {
+            let mut guard = RECORDING_MANAGER.lock().unwrap();
+            if let Some(manager) = guard.as_mut() {
+                if recording_live() && Arc::ptr_eq(manager.get_state(), session) {
+                    manager.set_mic_stream_after_swap(stream.take().unwrap(), device_arc, None);
+                }
+            }
+        }
+        if let Some(stale) = stream {
+            let _ = stale.stop().await;
+            return Err("Recording stopped during microphone recovery".into());
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
     // Phase 3: Lock briefly — install ONLY if still the same session
     {
         let mut guard = RECORDING_MANAGER.lock().unwrap();
@@ -1454,6 +1565,7 @@ async fn do_mic_swap(device_name: &str, session: &Arc<super::RecordingState>) ->
             }
         }
     } // lock released
+    }
 
     Ok(())
 }
@@ -1477,11 +1589,37 @@ fn spawn_device_event_processor<R: Runtime>(
     app: AppHandle<R>,
     mut receiver: tokio::sync::mpsc::UnboundedReceiver<DeviceEvent>,
     session: Arc<super::RecordingState>,
+    follow_defaults: (bool, bool),
 ) {
     tokio::spawn(async move {
+        #[cfg(not(target_os = "linux"))]
+        let _ = follow_defaults;
+        #[cfg(target_os = "linux")]
+        let mut default_attempts = [(String::new(), 0u8), (String::new(), 0u8)];
         info!("[DEVICE_EVENTS] Background event processor started");
 
-        while let Some(event) = receiver.recv().await {
+        loop {
+            let event = tokio::select! {
+                event = receiver.recv() => { let Some(event) = event else { break; }; event },
+                _ = tokio::time::sleep(std::time::Duration::from_secs(2)) => {
+                    #[cfg(target_os = "linux")]
+                    {
+                        for (index, follow) in [follow_defaults.0, follow_defaults.1].into_iter().enumerate() {
+                            if follow { follow_linux_default(&app, &session, index == 0, &mut default_attempts[index]).await; }
+                        }
+                        let all_ended = {
+                            let guard = RECORDING_MANAGER.lock().unwrap();
+                            guard.as_ref().map_or(false, |m| recording_live() && !MIC_SWAP_IN_PROGRESS.load(Ordering::SeqCst) && Arc::ptr_eq(m.get_state(), &session) && !m.has_working_streams())
+                        };
+                        if all_ended {
+                            let _ = app.emit("linux-audio-notice", serde_json::json!({"error": true, "message": "Audio capture is unavailable. Stopping and saving this recording."}));
+                            let _ = stop_recording(app.clone(), RecordingArgs { save_path: String::new() }).await;
+                            break;
+                        }
+                    }
+                    continue;
+                }
+            };
             // Skip if recording has stopped
             if !recording_live() {
                 info!("[DEVICE_EVENTS] Recording stopped — ignoring event: {:?}", event);
@@ -1495,10 +1633,17 @@ fn spawn_device_event_processor<R: Runtime>(
                     // when the active microphone dies, fall back to the
                     // system default input. Triggered after the device
                     // monitor's polling threshold fires.
+                    #[cfg(target_os = "linux")]
+                    if matches!(device_type, DeviceMonitorType::SystemAudio) {
+                        recover_linux_system(&app, &session, device_name).await;
+                    }
                     if matches!(device_type, DeviceMonitorType::Microphone) {
                         let name = device_name.clone();
                         let app_clone = app.clone();
                         let session = session.clone();
+                        #[cfg(target_os = "linux")]
+                        trigger_mic_fallback_to_default(app_clone, name, session).await;
+                        #[cfg(not(target_os = "linux"))]
                         tokio::spawn(async move {
                             trigger_mic_fallback_to_default(app_clone, name, session).await;
                         });
@@ -1517,6 +1662,93 @@ fn spawn_device_event_processor<R: Runtime>(
         }
         info!("[DEVICE_EVENTS] Background event processor stopped (channel closed)");
     });
+}
+
+#[cfg(target_os = "linux")]
+async fn follow_linux_default<R: Runtime>(app: &AppHandle<R>, session: &Arc<super::RecordingState>, microphone: bool, attempts: &mut (String, u8)) {
+    if !session_live(session) { return; }
+    let target = if microphone { default_input_device() } else { default_output_device() };
+    let Ok(target) = target else { return; };
+    let active = if microphone { session.get_microphone_device() } else { session.get_system_device() };
+    if active.as_ref().is_some_and(|d| d.name == target.name) { *attempts = (String::new(), 0); return; }
+    if attempts.0 != target.name { *attempts = (target.name.clone(), 0); }
+    if attempts.1 >= 3 { return; }
+    attempts.1 += 1;
+    let device = Arc::new(target);
+    let role = if microphone { super::recording_state::DeviceType::Microphone } else { super::recording_state::DeviceType::System };
+    let result = super::stream::AudioStream::prepare_linux(device.clone(), session.clone(), role).await;
+    let stream = match result {
+        Ok(stream) => stream,
+        Err(e) => {
+            if attempts.1 == 1 && session_live(session) {
+                let _ = app.emit("linux-audio-notice", serde_json::json!({"error": true, "message": format!("Could not follow the default audio device: {}", e)}));
+            }
+            return;
+        }
+    };
+    let latest = if microphone { default_input_device() } else { default_output_device() };
+    if !session_live(session) || latest.map_or(true, |d| d.name != device.name) { let _ = stream.stop().await; return; }
+    let mut prepared = Some(stream);
+    let old = {
+        let mut guard = RECORDING_MANAGER.lock().unwrap();
+        match guard.as_mut() {
+            Some(manager) if recording_live() && Arc::ptr_eq(manager.get_state(), session) => {
+                let old = if microphone { manager.take_mic_stream_for_swap() } else { manager.take_system_stream_for_swap() };
+                if let Some(old) = &old { old.set_delivery(false); }
+                prepared.as_ref().unwrap().set_delivery(true);
+                if microphone { manager.set_mic_stream_after_swap(prepared.take().unwrap(), device.clone(), None); }
+                else { manager.set_system_stream_after_swap(prepared.take().unwrap(), device.clone()); }
+                old
+            }
+            _ => None,
+        }
+    };
+    if let Some(stream) = prepared { let _ = stream.stop().await; return; }
+    if let Some(old) = old { let _ = old.stop().await; }
+    *attempts = (String::new(), 0);
+    if session_live(session) {
+        let role = if microphone { "Microphone" } else { "System audio" };
+        let _ = app.emit("linux-audio-notice", serde_json::json!({"error": false, "message": format!("{} switched to {} to follow your system default.", role, super::devices::device_label(&device.name))}));
+    }
+}
+
+#[cfg(target_os = "linux")]
+async fn recover_linux_system<R: Runtime>(app: &AppHandle<R>, session: &Arc<super::RecordingState>, missing: &str) {
+    if !session_live(session) { return; }
+    let old = {
+        let mut guard = RECORDING_MANAGER.lock().unwrap();
+        let Some(manager) = guard.as_mut() else { return; };
+        if !Arc::ptr_eq(manager.get_state(), session) ||
+            session.get_system_device().map_or(true, |d| d.name != missing) { return; }
+        manager.take_system_stream_for_swap()
+    };
+    // Only the first event for this failure attempts recovery, avoiding toast floods.
+    let Some(old) = old else { return; };
+    let _ = old.stop().await;
+    let result = async {
+        let device = Arc::new(default_output_device().map_err(|e| e.to_string())?);
+        if device.name == missing { return Err("No replacement default output is available".to_string()); }
+        if !session_live(session) { return Err("Recording stopped".into()); }
+        let stream = super::stream::AudioStream::create(device.clone(), session.clone(),
+            super::recording_state::DeviceType::System, None).await.map_err(|e| e.to_string())?;
+        let mut stream = Some(stream);
+        {
+            let mut guard = RECORDING_MANAGER.lock().unwrap();
+            if let Some(manager) = guard.as_mut() {
+                if recording_live() && Arc::ptr_eq(manager.get_state(), session) {
+                    manager.set_system_stream_after_swap(stream.take().unwrap(), device.clone());
+                }
+            }
+        }
+        if let Some(stale) = stream { let _ = stale.stop().await; return Err("Recording stopped".into()); }
+        Ok(device)
+    }.await;
+    if !session_live(session) { return; }
+    let (error, message) = match result {
+        Ok(device) => (false, format!("System audio switched to {} for this meeting.", super::devices::device_label(&device.name))),
+        Err(e) => (true, format!("System audio is unavailable: {}", e)),
+    };
+    let _ = app.emit("linux-audio-notice", serde_json::json!({"error": error, "message": message}));
 }
 
 /// Disconnect fallback: swap the active mic to the system default input

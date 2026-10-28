@@ -43,6 +43,8 @@ unsafe impl Send for StreamBackend {}
 pub struct AudioStream {
     device: Arc<AudioDevice>,
     backend: StreamBackend,
+    #[cfg(target_os = "linux")]
+    delivery: Option<Arc<AtomicBool>>,
 }
 
 // SAFETY: AudioStream contains StreamBackend which we've marked as Send
@@ -106,7 +108,7 @@ impl AudioStream {
         #[cfg(target_os = "linux")]
         if device_type == DeviceType::System {
             info!("🎵 Stream: Using native PulseAudio/PipeWire backend for system audio");
-            return Self::create_pulse_stream(device, state, device_type, recording_sender).await;
+            return Self::create_pulse_stream(device, state, device_type, recording_sender, true).await;
         }
 
         // Linux microphones are identified by their exact PulseAudio source
@@ -122,6 +124,7 @@ impl AudioStream {
                         state,
                         device_type,
                         recording_sender,
+                        true,
                     )
                     .await;
                 }
@@ -182,6 +185,8 @@ impl AudioStream {
         Ok(Self {
             device,
             backend: StreamBackend::Cpal(stream),
+            #[cfg(target_os = "linux")]
+            delivery: None,
         })
     }
 
@@ -285,6 +290,7 @@ impl AudioStream {
         state: Arc<RecordingState>,
         device_type: DeviceType,
         recording_sender: Option<mpsc::UnboundedSender<super::recording_state::AudioChunk>>,
+        delivering: bool,
     ) -> Result<Self> {
         info!("🔊 Stream: Creating PulseAudio stream for device: {}", device.name);
 
@@ -307,17 +313,50 @@ impl AudioStream {
             recording_sender,
         );
 
+        let delivery = Arc::new(AtomicBool::new(delivering));
+        let worker_delivery = delivery.clone();
+        let session_cancel = state.capture_cancel.lock().unwrap().clone();
+        let worker_stop = should_stop.clone();
+        let worker_error = Arc::new(std::sync::Mutex::new(None));
+        let worker_error_out = worker_error.clone();
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
         let device_name = device.name.clone();
         let task = tokio::task::spawn_blocking(move || {
             info!("✅ Stream: PulseAudio capture thread started for {}", device_name);
-            capture_impl.run(|samples| capture.process_audio_data(samples));
+            if let Err(e) = capture_impl.run_ready(|samples| { if worker_delivery.load(std::sync::atomic::Ordering::Acquire) { capture.process_audio_data(samples); } }, || { let _ = ready_tx.send(()); }) {
+                warn!("Linux capture failed: {}", e);
+                *worker_error_out.lock().unwrap() = Some(e.to_string());
+                if !state.capture_cancel.lock().unwrap().load(std::sync::atomic::Ordering::Acquire) {
+                    state.report_error(super::recording_state::AudioError::LinuxCapture(e.to_string()));
+                }
+            }
             info!("⚠️ Stream: PulseAudio capture thread ended for {}", device_name);
         });
 
+        let mut ready_rx = ready_rx;
+        loop {
+            tokio::select! {
+                ready = &mut ready_rx => {
+                    if ready.is_err() {
+                        let _ = task.await;
+                        return Err(anyhow::anyhow!(worker_error.lock().unwrap().clone().unwrap_or_else(|| "Audio startup cancelled".into())));
+                    }
+                    break;
+                }
+                _ = tokio::time::sleep(std::time::Duration::from_millis(10)) => {
+                    if session_cancel.load(std::sync::atomic::Ordering::Acquire) {
+                        worker_stop.store(true, std::sync::atomic::Ordering::Release);
+                        let _ = task.await;
+                        return Err(anyhow::anyhow!("Audio startup cancelled"));
+                    }
+                }
+            }
+        }
         info!("✅ Stream: PulseAudio stream fully initialized for device: {}", device.name);
 
         Ok(Self {
             device: device.clone(),
+            delivery: Some(delivery),
             backend: StreamBackend::Pulse {
                 should_stop,
                 task: Some(task),
@@ -332,6 +371,7 @@ impl AudioStream {
         state: Arc<RecordingState>,
         device_type: DeviceType,
         recording_sender: Option<mpsc::UnboundedSender<super::recording_state::AudioChunk>>,
+        delivering: bool,
     ) -> Result<Self> {
         info!(
             "🔊 Stream: Creating PulseAudio microphone stream for device: {}",
@@ -357,13 +397,26 @@ impl AudioStream {
             recording_sender,
         );
 
+        let delivery = Arc::new(AtomicBool::new(delivering));
+        let worker_delivery = delivery.clone();
+        let session_cancel = state.capture_cancel.lock().unwrap().clone();
+        let worker_stop = should_stop.clone();
+        let worker_error = Arc::new(std::sync::Mutex::new(None));
+        let worker_error_out = worker_error.clone();
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
         let device_name = device.name.clone();
         let task = tokio::task::spawn_blocking(move || {
             info!(
                 "✅ Stream: PulseAudio microphone capture thread started for {}",
                 device_name
             );
-            capture_impl.run(|samples| capture.process_audio_data(samples));
+            if let Err(e) = capture_impl.run_ready(|samples| { if worker_delivery.load(std::sync::atomic::Ordering::Acquire) { capture.process_audio_data(samples); } }, || { let _ = ready_tx.send(()); }) {
+                warn!("Linux capture failed: {}", e);
+                *worker_error_out.lock().unwrap() = Some(e.to_string());
+                if !state.capture_cancel.lock().unwrap().load(std::sync::atomic::Ordering::Acquire) {
+                    state.report_error(super::recording_state::AudioError::LinuxCapture(e.to_string()));
+                }
+            }
             info!(
                 "⚠️ Stream: PulseAudio microphone capture thread ended for {}",
                 device_name
@@ -375,8 +428,28 @@ impl AudioStream {
             device.name
         );
 
+        let mut ready_rx = ready_rx;
+        loop {
+            tokio::select! {
+                ready = &mut ready_rx => {
+                    if ready.is_err() {
+                        let _ = task.await;
+                        return Err(anyhow::anyhow!(worker_error.lock().unwrap().clone().unwrap_or_else(|| "Audio startup cancelled".into())));
+                    }
+                    break;
+                }
+                _ = tokio::time::sleep(std::time::Duration::from_millis(10)) => {
+                    if session_cancel.load(std::sync::atomic::Ordering::Acquire) {
+                        worker_stop.store(true, std::sync::atomic::Ordering::Release);
+                        let _ = task.await;
+                        return Err(anyhow::anyhow!("Audio startup cancelled"));
+                    }
+                }
+            }
+        }
         Ok(Self {
             device: device.clone(),
+            delivery: Some(delivery),
             backend: StreamBackend::Pulse {
                 should_stop,
                 task: Some(task),
@@ -462,6 +535,24 @@ impl AudioStream {
         Ok(stream)
     }
 
+    #[cfg(target_os = "linux")]
+    pub fn has_ended(&self) -> bool {
+        match &self.backend {
+            StreamBackend::Pulse { task, .. } => task.as_ref().map_or(true, |task| task.is_finished()),
+            _ => false,
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    pub async fn prepare_linux(device: Arc<AudioDevice>, state: Arc<RecordingState>, role: DeviceType) -> Result<Self> {
+        if role == DeviceType::System { Self::create_pulse_stream(device, state, role, None, false).await }
+        else { Self::create_pulse_mic_stream(device, state, role, None, false).await }
+    }
+    #[cfg(target_os = "linux")]
+    pub fn set_delivery(&self, enabled: bool) {
+        if let Some(delivery) = &self.delivery { delivery.store(enabled, std::sync::atomic::Ordering::Release); }
+    }
+
     /// Get device info
     pub fn device(&self) -> &AudioDevice {
         &self.device
@@ -513,26 +604,12 @@ impl AudioStream {
             }
             #[cfg(target_os = "linux")]
             StreamBackend::Pulse { should_stop, task } => {
-                // Signal the blocking capture thread to stop after its current
-                // read() call returns, then await its JoinHandle with a bounded
-                // timeout. abort() on a spawn_blocking task that has already
-                // started is a no-op, so waiting is the only reliable way to
-                // know the thread has actually exited.
+                // The nonblocking worker checks this flag between mainloop
+                // iterations. Join it before releasing pipeline resources.
                 info!("Signalling PulseAudio capture thread to stop...");
                 should_stop.store(true, std::sync::atomic::Ordering::Release);
                 if let Some(task_handle) = task {
-                    match tokio::time::timeout(
-                        std::time::Duration::from_secs(2),
-                        task_handle,
-                    )
-                    .await
-                    {
-                        Ok(Ok(())) => info!("PulseAudio capture thread joined cleanly"),
-                        Ok(Err(e)) => warn!("PulseAudio capture thread panicked: {}", e),
-                        Err(_) => warn!(
-                            "PulseAudio capture thread did not stop within 2s, abandoning join (thread may still be running)"
-                        ),
-                    }
+                    task_handle.await.map_err(|e| anyhow::anyhow!("Audio worker failed: {}", e))?;
                 }
             }
         }
@@ -585,7 +662,10 @@ impl AudioStreamManager {
                 }
                 Err(e) => {
                     error!("❌ Failed to create microphone stream: {}", e);
+                    #[cfg(not(target_os = "linux"))]
                     return Err(e);
+                    #[cfg(target_os = "linux")]
+                    self.state.report_error(super::recording_state::AudioError::StreamFailed);
                 }
             }
         } else {
@@ -658,6 +738,17 @@ impl AudioStreamManager {
     /// Set a new microphone stream (used after hot-swap creation).
     pub fn set_mic_stream(&mut self, stream: AudioStream) {
         self.microphone_stream = Some(stream);
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn take_system_stream(&mut self) -> Option<AudioStream> { self.system_stream.take() }
+    #[cfg(target_os = "linux")]
+    pub fn set_system_stream(&mut self, stream: AudioStream) { self.system_stream = Some(stream); }
+
+    #[cfg(target_os = "linux")]
+    pub fn has_working_streams(&self) -> bool {
+        self.microphone_stream.as_ref().map_or(false, |s| !s.has_ended()) ||
+            self.system_stream.as_ref().map_or(false, |s| !s.has_ended())
     }
 
     /// Get stream count

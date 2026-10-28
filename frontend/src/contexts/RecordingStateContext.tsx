@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { recordingService } from '@/services/recordingService';
 import { toast } from 'sonner';
+import { listen } from '@tauri-apps/api/event';
 import { resolveDeviceLabel } from '@/lib/audioDevices';
 
 /**
@@ -226,6 +227,17 @@ export function RecordingStateProvider({ children }: { children: React.ReactNode
       unsubscribers.forEach(unsub => unsub());
       stopPolling();
     };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    listen<{ error: boolean; message: string }>('linux-audio-notice', ({ payload }) => {
+      if (cancelled) return;
+      if (payload.error) toast.error(payload.message, { duration: 8000 });
+      else toast.info(payload.message, { duration: 6000 });
+    }).then(fn => { if (cancelled) fn(); else unlisten = fn; }).catch(console.error);
+    return () => { cancelled = true; unlisten?.(); };
   }, []);
 
   /**
