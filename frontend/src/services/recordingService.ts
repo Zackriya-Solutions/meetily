@@ -8,6 +8,8 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
 
+export type StopOutcome = 'stopped' | 'already_stopping' | 'not_active';
+
 export interface RecordingState {
   is_recording: boolean;
   is_paused: boolean;
@@ -102,9 +104,9 @@ export class RecordingService {
   /**
    * Stop recording and save to file
    * @param savePath - Path to save audio file
-   * @returns Promise<void>
+   * @returns The shutdown ownership outcome
    */
-  async stopRecording(savePath: string): Promise<void> {
+  async stopRecording(savePath: string): Promise<StopOutcome> {
     return invoke('stop_recording', {
       args: { save_path: savePath }
     });

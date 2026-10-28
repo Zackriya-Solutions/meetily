@@ -36,18 +36,22 @@
 //   PULSE_STRESS_SECS    total duration in seconds (default: 300)
 //   PULSE_STRESS_ENUM_MS enumerator interval in milliseconds (default: 200)
 
+#[cfg(target_os = "linux")]
 use std::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(target_os = "linux")]
 use std::sync::Arc;
+#[cfg(target_os = "linux")]
 use std::thread;
+#[cfg(target_os = "linux")]
 use std::time::{Duration, Instant};
 
+#[cfg(target_os = "linux")]
 use app_lib::audio::capture::pulse_linux::{
     list_sinks, list_sources, PulseCapture,
 };
 
+#[cfg(target_os = "linux")]
 fn main() {
-    env_logger::init();
-
     let total_secs = std::env::var("PULSE_STRESS_SECS")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -156,4 +160,10 @@ fn main() {
     }
 
     println!("SUCCESS");
+}
+
+#[cfg(not(target_os = "linux"))]
+fn main() {
+    eprintln!("pulse_stress requires Linux");
+    std::process::exit(1);
 }

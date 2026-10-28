@@ -75,25 +75,42 @@ fn session_live(s: &Arc<super::RecordingState>) -> bool {
             .map_or(false, |m| Arc::ptr_eq(m.get_state(), s))
 }
 
-/// RAII guard for the stop-tail flag. Sets `IS_RECORDING_STOPPING` true on
-/// construction and clears it on Drop — including during unwind — so a panic
-/// anywhere in the ~320-line stop tail can't leave the flag stuck true and
-/// silently kill the mic-disconnect fallback for every later recording.
-///
-/// This unwind-clears behaviour depends on `panic = "unwind"` (the default).
-/// If a release profile ever sets `panic = "abort"`, Drop won't run on panic
-/// and the stuck-flag failure mode returns — add a start-time reset then.
-struct StoppingGuard;
-impl StoppingGuard {
-    fn new() -> Self {
-        IS_RECORDING_STOPPING.store(true, Ordering::SeqCst);
-        StoppingGuard
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StopOutcome {
+    Stopped,
+    AlreadyStopping,
+    NotActive,
+}
+
+// Only the admitted owner clears the flag, including on error or task cancellation.
+#[derive(Debug)]
+struct StoppingGuard<'a>(&'a AtomicBool);
+impl Drop for StoppingGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
     }
 }
-impl Drop for StoppingGuard {
-    fn drop(&mut self) {
-        IS_RECORDING_STOPPING.store(false, Ordering::SeqCst);
+
+// Called under the manager lock: session validation and ownership must precede removal.
+fn take_for_stop<'a, T>(
+    manager: &mut Option<T>,
+    stopping: &'a AtomicBool,
+    active: bool,
+    matches_session: impl FnOnce(&T) -> bool,
+) -> Result<Result<(T, StoppingGuard<'a>), StopOutcome>, String> {
+    if manager.as_ref().is_some_and(|m| !matches_session(m)) {
+        return Ok(Err(StopOutcome::NotActive));
     }
+    if stopping.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+        return Ok(Err(StopOutcome::AlreadyStopping));
+    }
+    let guard = StoppingGuard(stopping);
+    if !active {
+        return Ok(Err(StopOutcome::NotActive));
+    }
+    let manager = manager.take().ok_or("Active recording has no recording manager")?;
+    Ok(Ok((manager, guard)))
 }
 
 /// Shared start-path finalize. Both start commands MUST call this so a new
@@ -399,7 +416,7 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
     // Check if already recording
     let current_recording_state = IS_RECORDING.load(Ordering::SeqCst);
     info!("🔍 IS_RECORDING state check: {}", current_recording_state);
-    if current_recording_state {
+    if current_recording_state || IS_RECORDING_STOPPING.load(Ordering::SeqCst) {
         return Err("Recording already in progress".to_string());
     }
 
@@ -620,7 +637,7 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
     // Check if already recording
     let current_recording_state = IS_RECORDING.load(Ordering::SeqCst);
     info!("🔍 IS_RECORDING state check: {}", current_recording_state);
-    if current_recording_state {
+    if current_recording_state || IS_RECORDING_STOPPING.load(Ordering::SeqCst) {
         return Err("Recording already in progress".to_string());
     }
 
@@ -805,22 +822,37 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
 /// Stop recording with optimized graceful shutdown ensuring NO transcript chunks are lost
 pub async fn stop_recording<R: Runtime>(
     app: AppHandle<R>,
-    _args: RecordingArgs,
-) -> Result<(), String> {
-    info!(
-        "🛑 Starting optimized recording shutdown - ensuring ALL transcript chunks are preserved"
-    );
+    args: RecordingArgs,
+) -> Result<StopOutcome, String> {
+    stop_recording_for_session(app, args, None).await
+}
 
-    #[cfg(target_os = "linux")]
-    {
-        START_GENERATION.fetch_add(1, Ordering::SeqCst);
-        if let Some(cancel) = START_CANCEL.lock().unwrap().as_ref() { cancel.store(true, Ordering::SeqCst); }
-    }
-    // Check if recording is active
-    if !IS_RECORDING.load(Ordering::SeqCst) {
-        info!("Recording was not active");
-        return Ok(());
-    }
+async fn stop_recording_for_session<R: Runtime>(
+    app: AppHandle<R>,
+    _args: RecordingArgs,
+    expected_session: Option<&Arc<super::RecordingState>>,
+) -> Result<StopOutcome, String> {
+    let (manager_for_cleanup, _stopping_guard) = {
+        let mut manager = RECORDING_MANAGER.lock().unwrap();
+        let admission = take_for_stop(
+            &mut manager,
+            &IS_RECORDING_STOPPING,
+            IS_RECORDING.load(Ordering::SeqCst),
+            |m| expected_session.map_or(true, |s| Arc::ptr_eq(m.get_state(), s)),
+        )?;
+        // Manual idle Stop still cancels pending Linux startup; stale automatic Stop must not.
+        #[cfg(target_os = "linux")]
+        if admission.is_ok() || (expected_session.is_none() && matches!(&admission, Err(StopOutcome::NotActive))) {
+            START_GENERATION.fetch_add(1, Ordering::SeqCst);
+            if let Some(cancel) = START_CANCEL.lock().unwrap().as_ref() {
+                cancel.store(true, Ordering::SeqCst);
+            }
+        }
+        match admission {
+            Ok((manager, guard)) => (Some(manager), guard),
+            Err(outcome) => return Ok(outcome),
+        }
+    };
 
     // Emit shutdown progress to frontend
     let _ = app.emit(
@@ -831,19 +863,6 @@ pub async fn stop_recording<R: Runtime>(
             "progress": 20
         }),
     );
-
-    // Step 1: Stop audio capture immediately (no more new chunks) with proper error handling
-    let manager_for_cleanup = {
-        let mut global_manager = RECORDING_MANAGER.lock().unwrap();
-        global_manager.take()
-    };
-
-    // Mark the stop tail as in progress so a mic-disconnect fallback that was
-    // queued before Stop short-circuits instead of retrying against the taken
-    // manager. IS_RECORDING itself stays true until the tail completes — the
-    // frontend polls it to keep the stop UI up. RAII so a panic in the tail
-    // below can't leave the flag stuck true.
-    let _stopping_guard = StoppingGuard::new();
 
     let stop_result = if let Some(mut manager) = manager_for_cleanup {
         // Use FORCE FLUSH to immediately process all accumulated audio - eliminates 30s delay!
@@ -1228,7 +1247,7 @@ pub async fn stop_recording<R: Runtime>(
     crate::tray::update_tray_menu(&app);
 
     info!("🎉 Recording stopped successfully with ZERO transcript chunks lost");
-    Ok(())
+    Ok(StopOutcome::Stopped)
 }
 
 /// Check if recording is active
@@ -1606,8 +1625,10 @@ fn spawn_device_event_processor<R: Runtime>(
                         };
                         if all_ended {
                             let _ = app.emit("linux-audio-notice", serde_json::json!({"error": true, "message": "Audio capture is unavailable. Stopping and saving this recording."}));
-                            let result = stop_recording(app.clone(), RecordingArgs { save_path: String::new() }).await;
-                            let result = result.and_then(|()| app.emit("recording-stop-complete", true).map_err(|e| e.to_string()));
+                            let result = stop_recording_for_session(app.clone(), RecordingArgs { save_path: String::new() }, Some(&session)).await;
+                            let result = result.and_then(|outcome| {
+                                if outcome == StopOutcome::Stopped { app.emit("recording-stop-complete", true).map_err(|e| e.to_string()) } else { Ok(()) }
+                            });
                             if let Err(e) = result {
                                 error!("Automatic recording shutdown failed: {}", e);
                                 let _ = app.emit("linux-audio-notice", serde_json::json!({"error": true, "message": format!("Could not finish saving the recording: {}", e)}));
@@ -2066,5 +2087,93 @@ mod device_resolution_tests {
     fn empty_requested_id_follows_the_default() {
         let device = choose_system(Some("  "), || Ok(output("def"))).expect("default output");
         assert_eq!(device.name, "def");
+    }
+}
+
+#[cfg(test)]
+mod stop_admission_tests {
+    use super::*;
+
+    #[test]
+    fn only_one_stop_takes_the_manager_and_loser_keeps_owner_flag() {
+        let stopping = AtomicBool::new(false);
+        let mut manager = Some(42);
+        let (value, owner) = take_for_stop(&mut manager, &stopping, true, |_| true).unwrap().unwrap();
+        assert_eq!(value, 42);
+        assert!(matches!(take_for_stop(&mut manager, &stopping, true, |_| true).unwrap(), Err(StopOutcome::AlreadyStopping)));
+        assert!(stopping.load(Ordering::SeqCst));
+        drop(owner);
+        assert!(!stopping.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn racing_stops_have_one_owner_until_both_attempt_admission() {
+        let stopping = AtomicBool::new(false);
+        let manager = Mutex::new(Some(42));
+        let barrier = std::sync::Barrier::new(2);
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..2).map(|_| scope.spawn(|| {
+                barrier.wait();
+                let result = take_for_stop(&mut manager.lock().unwrap(), &stopping, true, |_| true).unwrap();
+                barrier.wait();
+                match result {
+                    Ok((42, _guard)) => true,
+                    Err(StopOutcome::AlreadyStopping) => false,
+                    other => panic!("Unexpected admission: {:?}", other),
+                }
+            })).collect();
+            let owners = handles.into_iter().map(|h| h.join().unwrap()).filter(|owned| *owned).count();
+            assert_eq!(owners, 1);
+        });
+        assert!(!stopping.load(Ordering::SeqCst));
+        assert!(manager.lock().unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn aborting_owner_releases_the_stop_claim() {
+        let stopping = Arc::new(AtomicBool::new(false));
+        let worker_stopping = stopping.clone();
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            let mut manager = Some(42);
+            let (_manager, _guard) = take_for_stop(&mut manager, &worker_stopping, true, |_| true).unwrap().unwrap();
+            ready_tx.send(()).unwrap();
+            std::future::pending::<()>().await;
+        });
+        ready_rx.await.unwrap();
+        assert!(stopping.load(Ordering::SeqCst));
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        assert!(!stopping.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn stop_outcomes_match_the_ipc_contract() {
+        for (outcome, wire) in [
+            (StopOutcome::Stopped, "stopped"),
+            (StopOutcome::AlreadyStopping, "already_stopping"),
+            (StopOutcome::NotActive, "not_active"),
+        ] {
+            assert_eq!(serde_json::to_value(outcome).unwrap(), wire);
+        }
+    }
+
+    #[test]
+    fn stale_and_idle_stops_leave_resources_untouched() {
+        let stopping = AtomicBool::new(false);
+        let mut manager = Some(42);
+        assert!(matches!(take_for_stop(&mut manager, &stopping, true, |_| false).unwrap(), Err(StopOutcome::NotActive)));
+        assert_eq!(manager, Some(42));
+        assert!(!stopping.load(Ordering::SeqCst));
+        assert!(matches!(take_for_stop(&mut manager, &stopping, false, |_| true).unwrap(), Err(StopOutcome::NotActive)));
+        assert_eq!(manager, Some(42));
+    }
+
+    #[test]
+    fn missing_active_manager_is_an_error_and_releases_claim() {
+        let stopping = AtomicBool::new(false);
+        let mut manager: Option<i32> = None;
+        assert!(take_for_stop(&mut manager, &stopping, true, |_| true).is_err());
+        assert!(!stopping.load(Ordering::SeqCst));
     }
 }
