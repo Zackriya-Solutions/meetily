@@ -258,11 +258,20 @@ impl AudioDeviceMonitor {
 
     /// Stop monitoring
     pub async fn stop_monitoring(&mut self) {
+        self.stop_monitoring_with_timeout(Duration::from_secs(2)).await;
+    }
+
+    async fn stop_monitoring_with_timeout(&mut self, limit: Duration) {
         info!("Stopping device monitor");
         self.stop_signal.notify_one();
 
-        if let Some(handle) = self.monitor_handle.take() {
-            let _ = handle.await;
+        if let Some(mut handle) = self.monitor_handle.take() {
+            if tokio::time::timeout(limit, &mut handle).await.is_err() {
+                warn!("Device monitor shutdown timed out; cancelling device enumeration");
+                handle.abort();
+                // Do not await a stuck native enumeration after cancellation.
+                // Capture admission has already closed before recording shutdown.
+            }
         }
 
         info!("Device monitor stopped");
@@ -440,4 +449,20 @@ mod tests {
         // Stop should be safe even if not started
         monitor.stop_monitoring().await;
     }
+
+    #[tokio::test]
+    async fn stalled_enumeration_cannot_block_recording_shutdown() {
+        let (mut monitor, _receiver) = AudioDeviceMonitor::new();
+        let task = tokio::spawn(std::future::pending::<()>());
+        let abort = task.abort_handle();
+        monitor.monitor_handle = Some(task);
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            monitor.stop_monitoring_with_timeout(Duration::from_millis(10)),
+        ).await.expect("monitor shutdown must be bounded");
+        assert!(monitor.monitor_handle.is_none());
+        tokio::task::yield_now().await;
+        assert!(abort.is_finished());
+    }
+
 }

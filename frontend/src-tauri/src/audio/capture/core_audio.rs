@@ -53,6 +53,16 @@ struct AudioContext {
 
 #[cfg(target_os = "macos")]
 impl CoreAudioCapture {
+    /// A stalled native start cannot hold async workers or attach after timeout.
+    pub async fn start_bounded() -> Result<CoreAudioStream> {
+        static STARTUP: std::sync::OnceLock<Arc<tokio::sync::Semaphore>> = std::sync::OnceLock::new();
+        let gate = STARTUP.get_or_init(|| Arc::new(tokio::sync::Semaphore::new(1))).clone();
+        super::startup::bounded_start(gate, std::time::Duration::from_secs(10), move |cancelled| {
+            let capture = Self::new()?;
+            capture.stream_with_cancellation(cancelled)
+        }).await
+    }
+
     /// Create a new Core Audio capture for system audio
     pub fn new() -> Result<Self> {
         info!("🎙️ CoreAudio: Starting Core Audio capture initialization...");
@@ -165,6 +175,9 @@ impl CoreAudioCapture {
             ctx: Option<&mut AudioContext>,
         ) -> os::Status {
             let ctx = ctx.unwrap();
+            if ctx.should_terminate.load(Ordering::Acquire) {
+                return os::Status::NO_ERR;
+            }
 
             // Check for sample rate changes
             let after = device
@@ -240,6 +253,11 @@ impl CoreAudioCapture {
 
     /// Create a stream from this capture
     pub fn stream(self) -> Result<CoreAudioStream> {
+        self.stream_with_cancellation(Arc::new(AtomicBool::new(false)))
+    }
+
+    fn stream_with_cancellation(self, cancelled: Arc<AtomicBool>) -> Result<CoreAudioStream> {
+        anyhow::ensure!(!cancelled.load(Ordering::Acquire), "Audio startup was cancelled");
         info!("🎙️ CoreAudio: Creating CoreAudioStream...");
 
         // Get tap audio format
@@ -276,11 +294,13 @@ impl CoreAudioCapture {
             waker_state: waker_state.clone(),
             current_sample_rate: current_sample_rate.clone(),
             consecutive_drops: Arc::new(AtomicU32::new(0)),
-            should_terminate: Arc::new(AtomicBool::new(false)),
+            should_terminate: cancelled.clone(),
         });
 
         info!("🎙️ CoreAudio: Starting audio device...");
+        anyhow::ensure!(!cancelled.load(Ordering::Acquire), "Audio startup was cancelled");
         let device = self.start_device(&mut ctx)?;
+        anyhow::ensure!(!cancelled.load(Ordering::Acquire), "Audio startup was cancelled");
 
         info!("✅ CoreAudio: CoreAudioStream created successfully!");
 
