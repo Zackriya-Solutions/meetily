@@ -19,4 +19,6 @@ cargo test -p meetily audio_startup --lib
 cargo test -p meetily stalled_enumeration_cannot_block_recording_shutdown --lib
 ```
 
-Changed Rust sources pass rustfmt syntax parsing. Native compilation, the regression execution, and real permission/driver behavior remain pending because the local Xcode SDK cannot be accessed until its license is accepted. No audio capture was performed while preparing this draft.
+Validation on October 28, 2026 with Xcode 27.1: the macOS desktop executable builds, and all three startup-helper regressions plus the stalled-monitor regression pass. The complete library suite reports 255 passed, two failed, three ignored. The two failures (test_builtin_mic_detection and test_calculate_buffer_timeout_bluetooth) reproduce on unchanged upstream devtest.
+
+Native validation excludes installer-only sidecars/resources through TAURI_CONFIG. Release packaging, code signing, and real permission/driver behavior remain outside these automated checks. No audio was captured during validation.
