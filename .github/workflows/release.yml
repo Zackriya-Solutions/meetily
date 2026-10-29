@@ -30,37 +30,11 @@ jobs:
           BASE_VERSION=$(grep -o '"version": "[^"]*"' frontend/src-tauri/tauri.conf.json | cut -d'"' -f4)
           echo "Base version from tauri.conf.json: $BASE_VERSION"
 
-          # Fetch all tags
           git fetch --tags
-
-          # Check if base version tag exists
-          if git tag -l "v${BASE_VERSION}" | grep -q .; then
-            echo "Tag v${BASE_VERSION} already exists, looking for minor updates..."
-
-            # Find all existing minor versions (e.g., 0.1.1.1, 0.1.1.2, etc.)
-            LATEST_MINOR=0
-            for i in $(seq 1 100); do
-              if git tag -l "v${BASE_VERSION}.${i}" | grep -q .; then
-                LATEST_MINOR=$i
-              else
-                break
-              fi
-            done
-
-            # Increment to next minor version
-            NEXT_MINOR=$((LATEST_MINOR + 1))
-
-            if [ $NEXT_MINOR -gt 100 ]; then
-              echo "ERROR: Maximum minor version (100) reached for ${BASE_VERSION}"
-              echo "Please update the version in tauri.conf.json"
-              exit 1
-            fi
-
-            VERSION="${BASE_VERSION}.${NEXT_MINOR}"
-            echo "Using minor update version: $VERSION"
-          else
-            VERSION="${BASE_VERSION}"
-            echo "Using base version: $VERSION"
+          VERSION="$BASE_VERSION"
+          if git rev-parse -q --verify "refs/tags/v${VERSION}" >/dev/null; then
+            echo "ERROR: Tag v${VERSION} already exists; bump the application version before releasing."
+            exit 1
           fi
 
           echo "Final version: $VERSION"
@@ -75,6 +49,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               tag_name: `v${{ steps.get-version.outputs.version }}`,
+              target_commitish: context.sha,
               name: `Meetily v${{ steps.get-version.outputs.version }}`,
               draft: true,
               prerelease: false,
@@ -102,6 +77,7 @@ jobs:
 
     uses: ./.github/workflows/build.yml
     with:
+      ref: ${{ github.sha }}
       platform: ${{ matrix.platform }}
       target: ${{ matrix.target }}
       build-args: ${{ matrix.args }}
