@@ -463,14 +463,15 @@ jobs:
           curl -fL --retry 3 https://sdk.lunarg.com/sdk/download/1.4.363.0/linux/vulkansdk-linux-x86_64-1.4.363.0.tar.xz -o "$RUNNER_TEMP/vulkan-sdk.tar.xz"
           echo "197962f5cbf80baf2775a03336a01cee7c8745686c65aaa70d3f751ade4d7e43  $RUNNER_TEMP/vulkan-sdk.tar.xz" | sha256sum -c -
           tar -xf "$RUNNER_TEMP/vulkan-sdk.tar.xz" -C "$RUNNER_TEMP"
-          SDK="$RUNNER_TEMP/1.4.363.0/x86_64"
-          test -f "$SDK/include/vulkan/vulkan.h"
-          test -f "$SDK/lib/libvulkan.so"
-          LD_LIBRARY_PATH="$SDK/lib" "$SDK/bin/glslc" --version
-          echo "VULKAN_SDK=$SDK" >> "$GITHUB_ENV"
-          echo "$SDK/bin" >> "$GITHUB_PATH"
-          echo "CMAKE_PREFIX_PATH=$SDK" >> "$GITHUB_ENV"
-          echo "LD_LIBRARY_PATH=$SDK/lib" >> "$GITHUB_ENV"
+          source "$RUNNER_TEMP/1.4.363.0/setup-env.sh" --set-dep-ld
+          test -f "$VULKAN_SDK/include/vulkan/vulkan.h"
+          test -f "$VULKAN_SDK/lib/VulkanLoader/lib/libvulkan.so"
+          "$VULKAN_SDK/bin/glslc" --version
+          echo "VULKAN_SDK=$VULKAN_SDK" >> "$GITHUB_ENV"
+          echo "$VULKAN_SDK/bin" >> "$GITHUB_PATH"
+          echo "CMAKE_PREFIX_PATH=$CMAKE_PREFIX_PATH" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH" >> "$GITHUB_ENV"
 
       - name: Install frontend dependencies
         run: |
