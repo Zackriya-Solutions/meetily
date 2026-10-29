@@ -111,10 +111,11 @@ jobs:
           python3 -c 'import base64,json; print(base64.b64decode(json.load(open("frontend/src-tauri/tauri.conf.json"))["plugins"]["updater"]["pubkey"]).decode(), end="")' > release-assets/public.key
           python3 - <<'PYCODE'
           import base64, json, os, subprocess
+          from datetime import datetime, timezone
           from pathlib import Path
 
           root = Path('release-assets')
-          for pattern, signed in [('*.dmg', False), ('*.app.tar.gz', True), ('*.msi', True), ('*.exe', True), ('*.deb', True), ('*.AppImage', True)]:
+          for pattern, signed in [('*aarch64.dmg', False), ('*aarch64.app.tar.gz', True), ('*64_en-US.msi', True), ('*-setup.exe', True), ('*.deb', True), ('*.AppImage', True)]:
               matches = list(root.glob(pattern))
               if len(matches) != 1:
                   raise SystemExit(f'Expected exactly one {pattern}, found {len(matches)}')
@@ -127,8 +128,11 @@ jobs:
           from urllib.parse import quote
           platforms = {}
           for target, pattern in [
-              ('darwin-aarch64', '*.app.tar.gz'),
-              ('windows-x86_64', '*.msi'),
+              ('darwin-aarch64', '*aarch64.app.tar.gz'),
+              ('darwin-aarch64-app', '*aarch64.app.tar.gz'),
+              ('windows-x86_64-nsis', '*-setup.exe'),
+              ('windows-x86_64-msi', '*64_en-US.msi'),
+              ('windows-x86_64', '*-setup.exe'),
               ('linux-x86_64-deb', '*.deb'),
               ('linux-x86_64-appimage', '*.AppImage'),
           ]:
@@ -137,7 +141,7 @@ jobs:
                   'url': f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/releases/download/v{os.environ['VERSION']}/{quote(asset.name)}",
                   'signature': Path(str(asset) + '.sig').read_text().strip(),
               }
-          manifest = {'version': os.environ['VERSION'], 'platforms': platforms}
+          manifest = {'version': os.environ['VERSION'], 'notes': '', 'pub_date': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'), 'platforms': platforms}
           (root / 'latest.json').write_text(json.dumps(manifest, indent=2) + '\n')
           PYCODE
           gh release upload "v$VERSION" release-assets/latest.json
