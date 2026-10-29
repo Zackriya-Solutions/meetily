@@ -111,6 +111,11 @@
             "binaries/llama-helper",
             "binaries/ffmpeg"
         ],
+        "linux": {
+            "deb": {
+                "depends": ["libvulkan1"]
+            }
+        },
         "macOS": {
             "entitlements": "entitlements.plist",
             "signingIdentity": "-",

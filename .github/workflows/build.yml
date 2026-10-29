@@ -134,11 +134,42 @@ jobs:
           } | ConvertTo-Json -Depth 4 | Set-Content -Path $configPath -Encoding utf8
           "args=--config `"$configPath`"" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
+      - name: Configure portable Linux native build
+        id: linux-portability
+        if: runner.os == 'Linux' && inputs.target == 'x86_64-unknown-linux-gnu'
+        shell: bash
+        env:
+          PORTABLE_BUILD_ARGS: ${{ inputs.build-args }}
+          PORTABLE_BUILD_PROFILE: ${{ steps.build-profile.outputs.profile }}
+        run: |
+          echo "CMAKE_PROJECT_INCLUDE=$GITHUB_WORKSPACE/.github/force-portable-ggml.cmake" >> "$GITHUB_ENV"
+          echo "RUSTFLAGS=-C target-cpu=x86-64-v2" >> "$GITHUB_ENV"
+          python3 - <<'PY'
+          import json, os, shlex
+          from pathlib import Path
+
+          args = shlex.split(os.environ['PORTABLE_BUILD_ARGS'])
+          target = ''
+          for i, arg in enumerate(args):
+              if arg in ('--target', '-t'):
+                  target = args[i + 1]
+              elif arg.startswith('--target='):
+                  target = arg.split('=', 1)[1]
+          directory = Path('target') / target / os.environ['PORTABLE_BUILD_PROFILE']
+          config = Path(os.environ['RUNNER_TEMP']) / 'tauri.linux-portable.conf.json'
+          config.write_text(json.dumps({'build': {'beforeBundleCommand': {
+              'script': f'node .github/verify-portable-ggml.cjs {directory} --require-llama',
+              'cwd': os.environ['GITHUB_WORKSPACE'],
+          }}}))
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'args=--config "{config}"\n')
+          PY
+
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
-          prefix-key: ${{ runner.os == 'Windows' && 'windows-portable-v1' || 'v0-rust' }}
+          prefix-key: ${{ runner.os == 'Windows' && 'windows-portable-v1' || (runner.os == 'Linux' && inputs.target == 'x86_64-unknown-linux-gnu' && 'linux-portable-v1') || 'v0-rust' }}
           key: ${{ inputs.platform }}-${{ inputs.target }}-vulkan-v2
 
       - name: install dependencies (ubuntu 24.04)
@@ -450,11 +481,17 @@ jobs:
       - name: Prepare Vulkan SDK for Ubuntu 22.04
         if: contains(inputs.platform, 'ubuntu-22.04')
         run: |
-          wget -qO- https://packages.lunarg.com/lunarg-signing-key-pub.asc | sudo tee /etc/apt/trusted.gpg.d/lunarg.asc
-          sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-1.3.290-jammy.list https://packages.lunarg.com/vulkan/1.3.290/lunarg-vulkan-1.3.290-jammy.list
-          sudo apt update
-          sudo apt install vulkan-sdk -y
-          sudo apt-get install -y mesa-vulkan-drivers
+          curl -fL --retry 3 https://sdk.lunarg.com/sdk/download/1.4.363.0/linux/vulkansdk-linux-x86_64-1.4.363.0.tar.xz -o "$RUNNER_TEMP/vulkan-sdk.tar.xz"
+          echo "197962f5cbf80baf2775a03336a01cee7c8745686c65aaa70d3f751ade4d7e43  $RUNNER_TEMP/vulkan-sdk.tar.xz" | sha256sum -c -
+          tar -xf "$RUNNER_TEMP/vulkan-sdk.tar.xz" -C "$RUNNER_TEMP"
+          SDK="$RUNNER_TEMP/1.4.363.0/x86_64"
+          test -f "$SDK/include/vulkan/vulkan.h"
+          test -f "$SDK/lib/libvulkan.so"
+          LD_LIBRARY_PATH="$SDK/lib" "$SDK/bin/glslc" --version
+          echo "VULKAN_SDK=$SDK" >> "$GITHUB_ENV"
+          echo "$SDK/bin" >> "$GITHUB_PATH"
+          echo "CMAKE_PREFIX_PATH=$SDK" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$SDK/lib" >> "$GITHUB_ENV"
 
       - name: Install frontend dependencies
         run: |
@@ -520,10 +557,12 @@ jobs:
             echo "Windows build with Vulkan GPU acceleration"
           fi
 
-          # Linux: Use OpenBLAS for optimized CPU performance
-          if [[ "${{ inputs.platform }}" == *"ubuntu"* ]]; then
+          # Linux: enable Vulkan for transcription
+          if [[ "${{ inputs.platform }}" == *"ubuntu-22.04"* ]]; then
+            FEATURES="--features vulkan"
+            echo "Linux build with Vulkan GPU acceleration"
+          elif [[ "${{ inputs.platform }}" == *"ubuntu"* ]]; then
             FEATURES="--features openblas"
-            echo "Linux build with OpenBLAS CPU optimization"
           fi
 
           # macOS: Uses Metal by default, no additional features needed
@@ -568,6 +607,9 @@ jobs:
           if [[ "${{ inputs.platform }}" == *"macos"* ]]; then
             LLAMA_FEATURES="--features metal"
             echo "Using Metal GPU acceleration for macOS"
+          elif [[ "${{ inputs.platform }}" == *"ubuntu-22.04"* ]]; then
+            LLAMA_FEATURES="--features vulkan"
+            echo "Using Vulkan GPU acceleration for Linux"
           else
             echo "Using CPU-only mode for Linux"
           fi
@@ -601,6 +643,12 @@ jobs:
           key: ${{ runner.os }}-onnxruntime-${{ inputs.target }}-${{ hashFiles('frontend/src-tauri/build/onnxruntime.rs') }}
 
 
+      - name: Install FUSE for AppImage processing
+        if: contains(inputs.platform, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fuse libfuse2
+
       - name: Build with Tauri
         id: tauri-build
         uses: tauri-apps/tauri-action@v0
@@ -623,10 +671,11 @@ jobs:
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         with:
           projectPath: frontend
-          tagName: ${{ inputs.release-id && format('v{0}', steps.get-version.outputs.version) || '' }}
-          releaseName: ${{ inputs.release-id && format('v{0}', steps.get-version.outputs.version) || '' }}
-          releaseId: ${{ inputs.release-id }}
-          args: ${{ inputs.build-args }} ${{ steps.build-features.outputs.features }} ${{ steps.windows-portability.outputs.args }}
+          includeUpdaterJson: ${{ inputs.release-id == '' }}
+          tagName: ${{ inputs.release-id && runner.os != 'Linux' && format('v{0}', steps.get-version.outputs.version) || '' }}
+          releaseName: ${{ inputs.release-id && runner.os != 'Linux' && format('v{0}', steps.get-version.outputs.version) || '' }}
+          releaseId: ${{ runner.os != 'Linux' && inputs.release-id || '' }}
+          args: ${{ inputs.build-args }} ${{ steps.build-features.outputs.features }} ${{ steps.windows-portability.outputs.args }} ${{ steps.linux-portability.outputs.args }}
 
       - name: Upload artifacts (macOS)
         if: inputs.upload-artifacts && contains(inputs.platform, 'macos')
@@ -639,12 +688,6 @@ jobs:
             target/${{ inputs.target }}/${{ steps.build-profile.outputs.profile }}/bundle/macos/*.app.tar.gz
             target/${{ inputs.target }}/${{ steps.build-profile.outputs.profile }}/bundle/macos/*.app.tar.gz.sig
           retention-days: 30
-
-      - name: Install FUSE for AppImage processing
-        if: contains(inputs.platform, 'ubuntu')
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y fuse libfuse2
 
       - name: Remove libwayland-client.so from AppImage
         if: contains(inputs.platform, 'ubuntu')
@@ -690,6 +733,25 @@ jobs:
           else
             echo "No AppImage found to process"
           fi
+
+      - name: Sign and upload Linux release packages
+        if: runner.os == 'Linux' && inputs.release-id != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          packages=(target/${{ steps.build-profile.outputs.profile }}/bundle/deb/*.deb target/${{ steps.build-profile.outputs.profile }}/bundle/appimage/*.AppImage)
+          [[ ${#packages[@]} -eq 2 ]] || { echo "Expected one deb and one AppImage"; exit 1; }
+          for package in "${packages[@]}"; do
+            rm -f "$package.sig"
+            frontend/node_modules/.bin/tauri signer sign "$package"
+            test -s "$package.sig"
+            gh release upload "v${{ steps.get-version.outputs.version }}" "$package" "$package.sig"
+          done
 
       - name: Upload artifacts (Linux)
         if: inputs.upload-artifacts && contains(inputs.platform, 'ubuntu')
