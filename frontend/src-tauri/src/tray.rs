@@ -156,48 +156,83 @@ fn stop_recording_handler<R: Runtime>(app: &AppHandle<R>) {
     focus_main_window(app);
     let app_clone = app.clone();
     tauri::async_runtime::spawn(async move {
-        log::info!("Tray: Stopping recording...");
+        stop_and_save_recording(app_clone).await;
+    });
+}
 
-        // Generate save path (same as RecordingControls.tsx)
-        let data_dir = match app_clone.path().app_data_dir() {
-            Ok(dir) => dir,
-            Err(e) => {
-                log::error!("Failed to get app data dir: {}", e);
-                update_tray_menu_async(&app_clone).await;
-                return;
-            }
-        };
+/// Stops the current recording and hands it to the frontend for saving.
+///
+/// Shared by the tray's Stop item and calendar auto-record, so a recording
+/// stopped automatically is saved exactly like one stopped by hand.
+pub(crate) async fn stop_and_save_recording<R: Runtime>(app_clone: AppHandle<R>) {
+    log::info!("Tray: Stopping recording...");
 
-        let timestamp = chrono::Local::now().format("%Y-%m-%dT%H-%M-%S").to_string();
-        let save_path = data_dir.join(format!("recording-{}.wav", timestamp));
+    // Generate save path (same as RecordingControls.tsx)
+    let data_dir = match app_clone.path().app_data_dir() {
+        Ok(dir) => dir,
+        Err(e) => {
+            log::error!("Failed to get app data dir: {}", e);
+            update_tray_menu_async(&app_clone).await;
+            return;
+        }
+    };
 
-        // Call Rust stop_recording command (like pause/resume pattern)
-        let stop_result = crate::audio::recording_commands::stop_recording(
-            app_clone.clone(),
-            crate::audio::recording_commands::RecordingArgs {
-                save_path: save_path.to_string_lossy().to_string(),
-            },
-        )
-        .await;
+    let timestamp = chrono::Local::now().format("%Y-%m-%dT%H-%M-%S").to_string();
+    let save_path = data_dir.join(format!("recording-{}.wav", timestamp));
 
-        // Handle result
-        match stop_result {
-            Ok(_) => {
-                log::info!("Tray: Recording stopped successfully");
+    // Call Rust stop_recording command (like pause/resume pattern)
+    let stop_result = crate::audio::recording_commands::stop_recording(
+        app_clone.clone(),
+        crate::audio::recording_commands::RecordingArgs {
+            save_path: save_path.to_string_lossy().to_string(),
+        },
+    )
+    .await;
 
-                // Trigger frontend post-processing via event (works from any page)
-                // (SQLite save, navigation, analytics)
-                if let Err(e) = app_clone.emit("recording-stop-complete", true) {
-                    log::error!("Tray: Failed to emit recording-stop-complete event: {}", e);
-                }
-            }
-            Err(e) => {
-                log::error!("Tray: Failed to stop recording: {}", e);
-                // Revert tray state on error
-                update_tray_menu_async(&app_clone).await;
+    // Handle result
+    match stop_result {
+        Ok(_) => {
+            log::info!("Tray: Recording stopped successfully");
+
+            // Trigger frontend post-processing via event (works from any page)
+            // (SQLite save, navigation, analytics)
+            if let Err(e) = app_clone.emit("recording-stop-complete", true) {
+                log::error!("Tray: Failed to emit recording-stop-complete event: {}", e);
             }
         }
-    });
+        Err(e) => {
+            log::error!("Tray: Failed to stop recording: {}", e);
+            // Revert tray state on error
+            update_tray_menu_async(&app_clone).await;
+        }
+    }
+}
+
+/// Starts a recording named after a calendar meeting, through the same
+/// auto-start path the tray's Start item uses.
+///
+/// The window is not brought to the front, because this fires just as the user
+/// is joining a call in the browser. Closing the window only hides it, so the page
+/// that picks up the flag is still loaded. Returns false when there is no window.
+pub(crate) fn start_recording_for_meeting<R: Runtime>(app: &AppHandle<R>, meeting_title: &str) -> bool {
+    let Some(window) = app.get_webview_window("main") else {
+        log::warn!("Calendar auto-record: main window not found, cannot start recording");
+        return false;
+    };
+    // serde_json gives a correctly escaped JavaScript string literal for any title.
+    let title_literal = serde_json::to_string(meeting_title).unwrap_or_else(|_| "\"\"".to_string());
+    set_tray_state(app, RecordingState::Starting);
+    let script = format!(
+        "sessionStorage.setItem('autoStartMeetingTitle', {title_literal}); \
+         sessionStorage.setItem('autoStartRecording', 'true'); \
+         window.location.assign('/')"
+    );
+    if let Err(e) = window.eval(&script) {
+        log::error!("Calendar auto-record: failed to signal recording start: {}", e);
+        update_tray_menu(app);
+        return false;
+    }
+    true
 }
 
 fn check_updates_handler<R: Runtime>(app: &AppHandle<R>) {

@@ -10,5 +10,7 @@
     <true/>
     <key>com.apple.security.device.screen-capture</key>
     <true/>
+    <key>com.apple.security.personal-information.calendars</key>
+    <true/>
 </dict>
 </plist>

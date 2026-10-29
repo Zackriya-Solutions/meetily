@@ -216,6 +216,10 @@ export function useRecordingStart(
           console.log('Auto-starting recording from navigation...');
           setIsAutoStarting(true);
           sessionStorage.removeItem('autoStartRecording'); // Clear the flag
+          // Calendar auto-record passes the meeting's own title; read it now so a
+          // failed start below cannot leave it behind for the next recording.
+          const presetMeetingTitle = sessionStorage.getItem('autoStartMeetingTitle')?.trim();
+          sessionStorage.removeItem('autoStartMeetingTitle');
 
           // Check the selected transcription model before starting.
           const modelReady = await checkModelReady();
@@ -242,8 +246,8 @@ export function useRecordingStart(
 
           // Start the actual backend recording
           try {
-            // Generate meeting title
-            const generatedMeetingTitle = generateMeetingTitle();
+            // Use the calendar meeting's title when one was passed, otherwise generate one
+            const generatedMeetingTitle = presetMeetingTitle || generateMeetingTitle();
 
             // Set STARTING status before initiating backend recording
             setStatus(RecordingStatus.STARTING, 'Initializing recording...');

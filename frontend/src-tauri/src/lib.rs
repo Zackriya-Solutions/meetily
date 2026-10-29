@@ -38,6 +38,7 @@ pub(crate) use perf_trace;
 pub mod analytics;
 pub mod api;
 pub mod audio;
+pub mod calendar_autorecord;
 pub mod config;
 pub mod console_utils;
 pub mod database;
@@ -511,6 +512,9 @@ pub fn run() {
                 log::error!("Failed to create system tray: {}", e);
             }
 
+            // Calendar auto-record runs after the tray exists, since it starts and stops through it
+            calendar_autorecord::commands::init(_app.handle());
+
             // Initialize notification system with proper defaults
             log::info!("Initializing notification system...");
             let app_for_notif = _app.handle().clone();
@@ -796,6 +800,10 @@ pub fn run() {
             audio::system_audio_commands::start_system_audio_monitoring,
             audio::system_audio_commands::stop_system_audio_monitoring,
             audio::system_audio_commands::get_system_audio_monitoring_status,
+            // Calendar auto-record commands
+            calendar_autorecord::commands::calendar_autorecord_get_status,
+            calendar_autorecord::commands::calendar_autorecord_set_enabled,
+            calendar_autorecord::commands::calendar_autorecord_upcoming,
             // Screen Recording permission commands
             audio::permissions::check_screen_recording_permission_command,
             audio::permissions::request_screen_recording_permission_command,
