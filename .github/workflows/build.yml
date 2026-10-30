@@ -466,6 +466,7 @@ jobs:
           source "$RUNNER_TEMP/1.4.363.0/setup-env.sh" --set-dep-ld
           test -f "$VULKAN_SDK/include/vulkan/vulkan.h"
           test -f "$VULKAN_SDK/lib/VulkanLoader/lib/libvulkan.so"
+          echo "LIBRARY_PATH=$VULKAN_SDK/lib/VulkanLoader/lib${LIBRARY_PATH:+:$LIBRARY_PATH}" >> "$GITHUB_ENV"
           "$VULKAN_SDK/bin/glslc" --version
           echo "VULKAN_SDK=$VULKAN_SDK" >> "$GITHUB_ENV"
           echo "$VULKAN_SDK/bin" >> "$GITHUB_PATH"
@@ -697,6 +698,7 @@ jobs:
 
             # Get appimagetool
             wget -q https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+            echo "b90f4a8b18967545fda78a445b27680a1642f1ef9488ced28b65398f2be7add2  appimagetool-x86_64.AppImage" | sha256sum -c -
             chmod +x appimagetool-x86_64.AppImage
 
             # Repackage AppImage with no-appstream to avoid warnings
