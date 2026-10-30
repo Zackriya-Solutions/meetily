@@ -4,6 +4,7 @@ mod ffmpeg;
 mod onnxruntime;
 
 fn main() {
+    configure_cuda_linking();
     // GPU Acceleration Detection and Build Guidance
     detect_and_report_gpu_capabilities();
 
@@ -22,6 +23,26 @@ fn main() {
     onnxruntime::ensure_onnxruntime_runtime();
 
     tauri_build::build()
+}
+
+fn configure_cuda_linking() {
+    println!("cargo:rerun-if-env-changed=CUDA_PATH");
+    if !cfg!(feature = "cuda")
+        || std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("linux")
+    {
+        return;
+    }
+
+    // whisper-rs-sys 0.11 hardcodes /usr/local/cuda on Linux. Search the
+    // selected toolkit first so its runtime matches the nvcc used by CMake.
+    if let Some(root) = std::env::var_os("CUDA_PATH") {
+        let root = std::path::PathBuf::from(root);
+        for dir in [root.join("lib64"), root.join("targets/x86_64-linux/lib")] {
+            if dir.is_dir() {
+                println!("cargo:rustc-link-search=native={}", dir.display());
+            }
+        }
+    }
 }
 
 /// Detects GPU acceleration capabilities and provides build guidance

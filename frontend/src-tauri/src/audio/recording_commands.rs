@@ -242,7 +242,15 @@ fn resolve_mic_or_default<R: Runtime>(
 /// would false-negative them. stream.rs still hard-fails on a missing device.
 fn resolve_system_or_default(requested_name: Option<&str>) -> Option<Arc<super::AudioDevice>> {
     if let Some(name) = requested_name {
-        match parse_audio_device(name) {
+        let parsed = parse_audio_device(name);
+        #[cfg(target_os = "linux")]
+        let parsed = parsed.and_then(|device| {
+            // Store the canonical server name in recording state too, so the
+            // disconnect monitor recognizes legacy names and default aliases.
+            let source = super::linux_pulse::monitor_sources()?.resolve(Some(&device.name))?;
+            Ok(super::AudioDevice::new(source, super::DeviceType::Output))
+        });
+        match parsed {
             Ok(device) => {
                 info!("✅ Using requested system audio: '{}'", device.name);
                 return Some(Arc::new(device));

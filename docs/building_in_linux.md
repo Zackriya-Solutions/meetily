@@ -13,14 +13,16 @@ If you're new to building on Linux, start here. These simple commands work for m
 ```bash
 # Ubuntu/Debian
 sudo apt update
-sudo apt install build-essential cmake git
+sudo apt install build-essential cmake git pkg-config libpulse-dev
 
 # Fedora/RHEL
-sudo dnf install gcc-c++ cmake git
+sudo dnf install gcc-c++ cmake git pkgconf-pkg-config pulseaudio-libs-devel
 
 # Arch Linux
-sudo pacman -S base-devel cmake git
+sudo pacman -S base-devel cmake git pkgconf libpulse
 ```
+
+System audio capture uses PulseAudio monitor sources directly. On PipeWire desktops, the `pipewire-pulse` compatibility server must be running. Meetily records the monitor of the default output, or the specific monitor selected in recording settings; the microphone remains a separate input.
 
 ### 2. Build and Run
 

@@ -16,9 +16,14 @@ echo ""
 
 # Export CUDA flags for Linux/NVIDIA
 if [[ "$OSTYPE" == "linux-gnu"* ]]; then
-    export CMAKE_CUDA_ARCHITECTURES=75
-    export CMAKE_CUDA_STANDARD=17
+    export CMAKE_CUDA_ARCHITECTURES="${CMAKE_CUDA_ARCHITECTURES:-native}"
+    export CMAKE_CUDA_STANDARD="${CMAKE_CUDA_STANDARD:-17}"
     export CMAKE_POSITION_INDEPENDENT_CODE=ON
+    # find_cuda_helper searches toolkit roots from CUDA_LIBRARY_PATH before
+    # /usr/local/cuda. Keep Rust linking consistent with the selected nvcc.
+    if [ -n "${CUDA_PATH:-}" ]; then
+        export CUDA_LIBRARY_PATH="$CUDA_PATH${CUDA_LIBRARY_PATH:+:$CUDA_LIBRARY_PATH}"
+    fi
 fi
 
 # Detect OS

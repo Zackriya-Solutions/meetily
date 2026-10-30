@@ -15,6 +15,8 @@ use super::capture::CoreAudioCapture;
 
 /// Stream backend implementation
 pub enum StreamBackend {
+    #[cfg(target_os = "linux")]
+    PulseAudio(super::linux_pulse::PulseCapture),
     /// CPAL-based stream (ScreenCaptureKit or default)
     Cpal(Stream),
     /// Core Audio direct implementation (macOS only)
@@ -60,6 +62,30 @@ impl AudioStream {
     ) -> Result<Self> {
         info!("🎵 Stream: Creating audio stream for device: {} with backend: {:?}, device_type: {:?}",
               device.name, backend_type, device_type);
+
+        #[cfg(target_os = "linux")]
+        if device_type == DeviceType::System {
+            let capture = AudioCapture::new(
+                device.clone(), state,
+                super::linux_pulse::SAMPLE_RATE,
+                super::linux_pulse::CHANNELS as u16,
+                device_type, recording_sender,
+            );
+            let source = device.name.clone();
+            let error_capture = capture.clone();
+            let stream = tokio::task::spawn_blocking(move || {
+                super::linux_pulse::PulseCapture::start(
+                    &source,
+                    move |samples| capture.process_audio_data(samples),
+                    move |description| error_capture.handle_stream_error(
+                        cpal::StreamError::BackendSpecific {
+                            err: cpal::BackendSpecificError { description },
+                        },
+                    ),
+                )
+            }).await??;
+            return Ok(Self { device, backend: StreamBackend::PulseAudio(stream) });
+        }
 
         // For system audio devices, use the selected backend
         // For microphone devices, always use CPAL
@@ -321,6 +347,8 @@ impl AudioStream {
         info!("Stopping audio stream for device: {}", self.device.name);
 
         match self.backend {
+            #[cfg(target_os = "linux")]
+            StreamBackend::PulseAudio(stream) => drop(stream),
             StreamBackend::Cpal(stream) => {
                 // CRITICAL: Pause the stream first to stop callbacks immediately
                 // This ensures closures stop executing before we drop the stream,

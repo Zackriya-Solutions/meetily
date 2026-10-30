@@ -8,6 +8,8 @@ pub mod vad;
 // Modularized device management
 pub mod devices;
 pub mod capture;
+#[cfg(target_os = "linux")]
+pub(crate) mod linux_pulse;
 pub mod permissions;
 
 // NEW: Device detection and diagnostics for adaptive buffering

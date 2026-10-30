@@ -42,9 +42,15 @@ const env = { ...process.env };
 
 if (platform === 'linux' && feature === 'cuda') {
   console.log('🐧 Linux/CUDA detected: Setting CMAKE flags for NVIDIA GPU');
-  env.CMAKE_CUDA_ARCHITECTURES = '75';
-  env.CMAKE_CUDA_STANDARD = '17';
+  env.CMAKE_CUDA_ARCHITECTURES ||= 'native';
+  env.CMAKE_CUDA_STANDARD ||= '17';
   env.CMAKE_POSITION_INDEPENDENT_CODE = 'ON';
+  // find_cuda_helper expects toolkit roots here, despite the variable name.
+  // Prefer the same toolkit used by nvcc over /usr/local/cuda.
+  if (env.CUDA_PATH) {
+    const roots = (env.CUDA_LIBRARY_PATH || '').split(path.delimiter).filter(Boolean);
+    env.CUDA_LIBRARY_PATH = [env.CUDA_PATH, ...roots.filter(root => root !== env.CUDA_PATH)].join(path.delimiter);
+  }
 }
 
 // Build the tauri command
