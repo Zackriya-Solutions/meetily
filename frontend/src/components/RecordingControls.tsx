@@ -1,5 +1,7 @@
 'use client';
 
+import type { StopOutcome } from '@/services/recordingService';
+
 import { invoke } from '@tauri-apps/api/core';
 import { appDataDir } from '@tauri-apps/api/path';
 import { useCallback, useEffect, useState, useRef } from 'react';
@@ -148,11 +150,13 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
       const savePath = `${dataDir}/recording-${timestamp}.wav`;
       console.log('Saving recording to:', savePath);
       console.log('About to call stop_recording command');
-      const result = await invoke('stop_recording', {
+      const result = await invoke<StopOutcome>('stop_recording', {
         args: {
           save_path: savePath
         }
       });
+      if (result !== 'stopped') return;
+      onStopInitiated?.();
       console.log('stop_recording command completed successfully:', result);
       setRecordingPath(savePath);
       // setShowPlayback(true);
@@ -181,9 +185,10 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
       setIsProcessing(false);
       onRecordingStop(false);
     } finally {
+      setIsProcessing(false);
       setIsStopping(false);
     }
-  }, [onRecordingStop]);
+  }, [onRecordingStop, onStopInitiated]);
 
   const handleStopRecording = useCallback(async () => {
     console.log('handleStopRecording called - isRecording:', isRecording, 'isStarting:', isStarting, 'isStopping:', isStopping, 'isStartingRecording:', isStartingRecording);
@@ -193,9 +198,6 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
     }
 
     console.log('Stopping recording...');
-
-    // Notify parent immediately (for UI state updates)
-    onStopInitiated?.();
 
     setIsStopping(true);
 

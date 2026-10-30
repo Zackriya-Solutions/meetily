@@ -13,6 +13,11 @@ use super::capture::{AudioCaptureBackend, get_current_backend};
 #[cfg(target_os = "macos")]
 use super::capture::CoreAudioCapture;
 
+#[cfg(target_os = "linux")]
+use super::capture::{find_sink_by_name, find_source_by_name, list_pulse_sources, PulseCapture};
+#[cfg(target_os = "linux")]
+use std::sync::atomic::AtomicBool;
+
 /// Stream backend implementation
 pub enum StreamBackend {
     /// CPAL-based stream (ScreenCaptureKit or default)
@@ -20,6 +25,12 @@ pub enum StreamBackend {
     /// Core Audio direct implementation (macOS only)
     #[cfg(target_os = "macos")]
     CoreAudio {
+        task: Option<tokio::task::JoinHandle<()>>,
+    },
+    /// Native PipeWire/PulseAudio implementation (Linux only)
+    #[cfg(target_os = "linux")]
+    Pulse {
+        should_stop: Arc<AtomicBool>,
         task: Option<tokio::task::JoinHandle<()>>,
     },
 }
@@ -32,6 +43,8 @@ unsafe impl Send for StreamBackend {}
 pub struct AudioStream {
     device: Arc<AudioDevice>,
     backend: StreamBackend,
+    #[cfg(target_os = "linux")]
+    delivery: Option<Arc<AtomicBool>>,
 }
 
 // SAFETY: AudioStream contains StreamBackend which we've marked as Send
@@ -61,8 +74,9 @@ impl AudioStream {
         info!("🎵 Stream: Creating audio stream for device: {} with backend: {:?}, device_type: {:?}",
               device.name, backend_type, device_type);
 
-        // For system audio devices, use the selected backend
-        // For microphone devices, always use CPAL
+        // For system audio devices, use the selected backend.
+        // For microphone devices, prefer CPAL, except on Linux where we first
+        // try the native PulseAudio/PipeWire source path (see below).
         #[cfg(target_os = "macos")]
         let use_core_audio = device_type == DeviceType::System
             && backend_type == AudioCaptureBackend::CoreAudio;
@@ -85,6 +99,40 @@ impl AudioStream {
         if use_core_audio {
             info!("🎵 Stream: Using Core Audio backend (cidre) for system audio");
             return Self::create_core_audio_stream(device, state, device_type, recording_sender).await;
+        }
+
+        // Linux system audio always goes through the native PipeWire/PulseAudio
+        // path instead of cpal's ALSA host — no backend toggle needed, unlike
+        // macOS's ScreenCaptureKit/CoreAudio choice, since there's only one way
+        // to capture system audio natively on Linux.
+        #[cfg(target_os = "linux")]
+        if device_type == DeviceType::System {
+            info!("🎵 Stream: Using native PulseAudio/PipeWire backend for system audio");
+            return Self::create_pulse_stream(device, state, device_type, recording_sender, true).await;
+        }
+
+        // Linux microphones are identified by their exact PulseAudio source
+        // name. CPAL is only a degraded mode for an unreachable Pulse server:
+        // a reachable server that doesn't know the ID is a hard error, never
+        // a reinterpretation of the ID as an ALSA name.
+        #[cfg(target_os = "linux")]
+        if device_type == DeviceType::Microphone {
+            match list_pulse_sources() {
+                Ok(_) => {
+                    return Self::create_pulse_mic_stream(
+                        device,
+                        state,
+                        device_type,
+                        recording_sender,
+                        true,
+                    )
+                    .await;
+                }
+                Err(e) => warn!(
+                    "🎤 Stream: PulseAudio/PipeWire server unreachable ({}), falling back to CPAL",
+                    e
+                ),
+            }
         }
 
         // Default path: use CPAL
@@ -137,6 +185,8 @@ impl AudioStream {
         Ok(Self {
             device,
             backend: StreamBackend::Cpal(stream),
+            #[cfg(target_os = "linux")]
+            delivery: None,
         })
     }
 
@@ -233,6 +283,180 @@ impl AudioStream {
         })
     }
 
+    /// Create a native PulseAudio/PipeWire stream (Linux only)
+    #[cfg(target_os = "linux")]
+    async fn create_pulse_stream(
+        device: Arc<AudioDevice>,
+        state: Arc<RecordingState>,
+        device_type: DeviceType,
+        recording_sender: Option<mpsc::UnboundedSender<super::recording_state::AudioChunk>>,
+        delivering: bool,
+    ) -> Result<Self> {
+        info!("🔊 Stream: Creating PulseAudio stream for device: {}", device.name);
+
+        let sink = find_sink_by_name(&device.name)?;
+
+        let capture_impl = PulseCapture::new_system(&sink.monitor_source_name)
+            .map_err(|e| anyhow::anyhow!("Failed to open PulseAudio record stream: {}", e))?;
+
+        let sample_rate = capture_impl.sample_rate();
+        let channels = capture_impl.channels();
+        let should_stop = capture_impl.stop_handle();
+
+        // Create audio capture processor for pipeline integration
+        let capture = AudioCapture::new(
+            device.clone(),
+            state.clone(),
+            sample_rate,
+            channels,
+            device_type,
+            recording_sender,
+        );
+
+        let delivery = Arc::new(AtomicBool::new(delivering));
+        let worker_delivery = delivery.clone();
+        let session_cancel = state.capture_cancel.lock().unwrap().clone();
+        let worker_stop = should_stop.clone();
+        let worker_error = Arc::new(std::sync::Mutex::new(None));
+        let worker_error_out = worker_error.clone();
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let device_name = device.name.clone();
+        let task = tokio::task::spawn_blocking(move || {
+            info!("✅ Stream: PulseAudio capture thread started for {}", device_name);
+            if let Err(e) = capture_impl.run_ready(|samples| { if worker_delivery.load(std::sync::atomic::Ordering::Acquire) { capture.process_audio_data(samples); } }, || { let _ = ready_tx.send(()); }) {
+                warn!("Linux capture failed: {}", e);
+                *worker_error_out.lock().unwrap() = Some(e.to_string());
+                if !state.capture_cancel.lock().unwrap().load(std::sync::atomic::Ordering::Acquire) {
+                    state.report_error(super::recording_state::AudioError::LinuxCapture(e.to_string()));
+                }
+            }
+            info!("⚠️ Stream: PulseAudio capture thread ended for {}", device_name);
+        });
+
+        let mut ready_rx = ready_rx;
+        loop {
+            tokio::select! {
+                ready = &mut ready_rx => {
+                    if ready.is_err() {
+                        let _ = task.await;
+                        return Err(anyhow::anyhow!(worker_error.lock().unwrap().clone().unwrap_or_else(|| "Audio startup cancelled".into())));
+                    }
+                    break;
+                }
+                _ = tokio::time::sleep(std::time::Duration::from_millis(10)) => {
+                    if session_cancel.load(std::sync::atomic::Ordering::Acquire) {
+                        worker_stop.store(true, std::sync::atomic::Ordering::Release);
+                        let _ = task.await;
+                        return Err(anyhow::anyhow!("Audio startup cancelled"));
+                    }
+                }
+            }
+        }
+        info!("✅ Stream: PulseAudio stream fully initialized for device: {}", device.name);
+
+        Ok(Self {
+            device: device.clone(),
+            delivery: Some(delivery),
+            backend: StreamBackend::Pulse {
+                should_stop,
+                task: Some(task),
+            },
+        })
+    }
+
+    /// Create a native PulseAudio/PipeWire microphone stream (Linux only)
+    #[cfg(target_os = "linux")]
+    async fn create_pulse_mic_stream(
+        device: Arc<AudioDevice>,
+        state: Arc<RecordingState>,
+        device_type: DeviceType,
+        recording_sender: Option<mpsc::UnboundedSender<super::recording_state::AudioChunk>>,
+        delivering: bool,
+    ) -> Result<Self> {
+        info!(
+            "🔊 Stream: Creating PulseAudio microphone stream for device: {}",
+            device.name
+        );
+
+        let source = find_source_by_name(&device.name)?;
+
+        let capture_impl = PulseCapture::new_microphone(&source.source_name)
+            .map_err(|e| anyhow::anyhow!("Failed to open PulseAudio record stream: {}", e))?;
+
+        let sample_rate = capture_impl.sample_rate();
+        let channels = capture_impl.channels();
+        let should_stop = capture_impl.stop_handle();
+
+        // Create audio capture processor for pipeline integration
+        let capture = AudioCapture::new(
+            device.clone(),
+            state.clone(),
+            sample_rate,
+            channels,
+            device_type,
+            recording_sender,
+        );
+
+        let delivery = Arc::new(AtomicBool::new(delivering));
+        let worker_delivery = delivery.clone();
+        let session_cancel = state.capture_cancel.lock().unwrap().clone();
+        let worker_stop = should_stop.clone();
+        let worker_error = Arc::new(std::sync::Mutex::new(None));
+        let worker_error_out = worker_error.clone();
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let device_name = device.name.clone();
+        let task = tokio::task::spawn_blocking(move || {
+            info!(
+                "✅ Stream: PulseAudio microphone capture thread started for {}",
+                device_name
+            );
+            if let Err(e) = capture_impl.run_ready(|samples| { if worker_delivery.load(std::sync::atomic::Ordering::Acquire) { capture.process_audio_data(samples); } }, || { let _ = ready_tx.send(()); }) {
+                warn!("Linux capture failed: {}", e);
+                *worker_error_out.lock().unwrap() = Some(e.to_string());
+                if !state.capture_cancel.lock().unwrap().load(std::sync::atomic::Ordering::Acquire) {
+                    state.report_error(super::recording_state::AudioError::LinuxCapture(e.to_string()));
+                }
+            }
+            info!(
+                "⚠️ Stream: PulseAudio microphone capture thread ended for {}",
+                device_name
+            );
+        });
+
+        info!(
+            "✅ Stream: PulseAudio microphone stream fully initialized for device: {}",
+            device.name
+        );
+
+        let mut ready_rx = ready_rx;
+        loop {
+            tokio::select! {
+                ready = &mut ready_rx => {
+                    if ready.is_err() {
+                        let _ = task.await;
+                        return Err(anyhow::anyhow!(worker_error.lock().unwrap().clone().unwrap_or_else(|| "Audio startup cancelled".into())));
+                    }
+                    break;
+                }
+                _ = tokio::time::sleep(std::time::Duration::from_millis(10)) => {
+                    if session_cancel.load(std::sync::atomic::Ordering::Acquire) {
+                        worker_stop.store(true, std::sync::atomic::Ordering::Release);
+                        let _ = task.await;
+                        return Err(anyhow::anyhow!("Audio startup cancelled"));
+                    }
+                }
+            }
+        }
+        Ok(Self {
+            device: device.clone(),
+            delivery: Some(delivery),
+            backend: StreamBackend::Pulse {
+                should_stop,
+                task: Some(task),
+            },
+        })
+    }
+
     /// Build stream based on sample format
     fn build_stream(
         device: &Device,
@@ -311,13 +535,48 @@ impl AudioStream {
         Ok(stream)
     }
 
+    #[cfg(target_os = "linux")]
+    pub fn has_ended(&self) -> bool {
+        match &self.backend {
+            StreamBackend::Pulse { task, .. } => task.as_ref().map_or(true, |task| task.is_finished()),
+            _ => false,
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    pub async fn prepare_linux(device: Arc<AudioDevice>, state: Arc<RecordingState>, role: DeviceType) -> Result<Self> {
+        if role == DeviceType::System { Self::create_pulse_stream(device, state, role, None, false).await }
+        else { Self::create_pulse_mic_stream(device, state, role, None, false).await }
+    }
+    #[cfg(target_os = "linux")]
+    pub fn set_delivery(&self, enabled: bool) {
+        if let Some(delivery) = &self.delivery { delivery.store(enabled, std::sync::atomic::Ordering::Release); }
+    }
+
     /// Get device info
     pub fn device(&self) -> &AudioDevice {
         &self.device
     }
 
-    /// Stop the stream
-    pub fn stop(self) -> Result<()> {
+    /// Signal the capture thread to stop, without waiting for it to exit.
+    ///
+    /// Used only by `AudioStreamManager::Drop`, which cannot be async. Every
+    /// normal shutdown path must use `stop().await` instead.
+    pub fn signal_stop_only(&self) {
+        match &self.backend {
+            #[cfg(target_os = "linux")]
+            StreamBackend::Pulse { should_stop, .. } => {
+                should_stop.store(true, std::sync::atomic::Ordering::Release);
+            }
+            _ => {
+                // CPAL/CoreAudio backends clean themselves up through their own
+                // Drop implementations; no explicit signal is needed here.
+            }
+        }
+    }
+
+    /// Stop the stream and wait for its capture thread/task to finish.
+    pub async fn stop(self) -> Result<()> {
         info!("Stopping audio stream for device: {}", self.device.name);
 
         match self.backend {
@@ -341,6 +600,16 @@ impl AudioStream {
                     // This helps ensure Arc references in the closure are dropped
                     std::thread::sleep(std::time::Duration::from_millis(50));
                     info!("Core Audio task aborted");
+                }
+            }
+            #[cfg(target_os = "linux")]
+            StreamBackend::Pulse { should_stop, task } => {
+                // The nonblocking worker checks this flag between mainloop
+                // iterations. Join it before releasing pipeline resources.
+                info!("Signalling PulseAudio capture thread to stop...");
+                should_stop.store(true, std::sync::atomic::Ordering::Release);
+                if let Some(task_handle) = task {
+                    task_handle.await.map_err(|e| anyhow::anyhow!("Audio worker failed: {}", e))?;
                 }
             }
         }
@@ -393,7 +662,10 @@ impl AudioStreamManager {
                 }
                 Err(e) => {
                     error!("❌ Failed to create microphone stream: {}", e);
+                    #[cfg(not(target_os = "linux"))]
                     return Err(e);
+                    #[cfg(target_os = "linux")]
+                    self.state.report_error(super::recording_state::AudioError::StreamFailed);
                 }
             }
         } else {
@@ -426,15 +698,15 @@ impl AudioStreamManager {
         Ok(())
     }
 
-    /// Stop all audio streams
-    pub fn stop_streams(&mut self) -> Result<()> {
+    /// Stop all audio streams and wait for each capture thread to finish.
+    pub async fn stop_streams(&mut self) -> Result<()> {
         info!("Stopping all audio streams");
 
         let mut errors = Vec::new();
 
         // Stop microphone stream
         if let Some(mic_stream) = self.microphone_stream.take() {
-            if let Err(e) = mic_stream.stop() {
+            if let Err(e) = mic_stream.stop().await {
                 error!("Failed to stop microphone stream: {}", e);
                 errors.push(e);
             }
@@ -442,7 +714,7 @@ impl AudioStreamManager {
 
         // Stop system stream
         if let Some(sys_stream) = self.system_stream.take() {
-            if let Err(e) = sys_stream.stop() {
+            if let Err(e) = sys_stream.stop().await {
                 error!("Failed to stop system stream: {}", e);
                 errors.push(e);
             }
@@ -468,6 +740,17 @@ impl AudioStreamManager {
         self.microphone_stream = Some(stream);
     }
 
+    #[cfg(target_os = "linux")]
+    pub fn take_system_stream(&mut self) -> Option<AudioStream> { self.system_stream.take() }
+    #[cfg(target_os = "linux")]
+    pub fn set_system_stream(&mut self, stream: AudioStream) { self.system_stream = Some(stream); }
+
+    #[cfg(target_os = "linux")]
+    pub fn has_working_streams(&self) -> bool {
+        self.microphone_stream.as_ref().map_or(false, |s| !s.has_ended()) ||
+            self.system_stream.as_ref().map_or(false, |s| !s.has_ended())
+    }
+
     /// Get stream count
     pub fn active_stream_count(&self) -> usize {
         let mut count = 0;
@@ -488,8 +771,16 @@ impl AudioStreamManager {
 
 impl Drop for AudioStreamManager {
     fn drop(&mut self) {
-        if let Err(e) = self.stop_streams() {
-            error!("Error stopping streams during drop: {}", e);
+        // Drop can't be async, so this is a best-effort signal-only shutdown —
+        // it does not wait for capture threads to actually exit. The real,
+        // awaited shutdown always happens via an explicit stop_streams().await
+        // earlier in every control-flow path (recording_manager.rs); this is
+        // only a safety net for paths that drop the manager without calling it.
+        if let Some(mic_stream) = self.microphone_stream.take() {
+            mic_stream.signal_stop_only();
+        }
+        if let Some(sys_stream) = self.system_stream.take() {
+            sys_stream.signal_stop_only();
         }
     }
 }

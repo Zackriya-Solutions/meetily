@@ -287,11 +287,18 @@ impl RecordingManager {
 
         // Start audio streams - they send RAW unmixed chunks to pipeline for mixing
         // Pipeline handles mixing and distribution to both recording and transcription
-        self.stream_manager.start_streams(microphone_device.clone(), system_device.clone(), None).await?;
+        if let Err(e) = self.stream_manager.start_streams(microphone_device.clone(), system_device.clone(), None).await {
+            self.cleanup_without_save().await;
+            return Err(e.into());
+        }
 
         // Start device monitoring to detect disconnects
         if let Some(ref mut monitor) = self.device_monitor {
-            if let Err(e) = monitor.start_monitoring(microphone_device, system_device) {
+            #[cfg(target_os = "linux")]
+            let monitored = (self.state.get_microphone_device(), self.state.get_system_device());
+            #[cfg(not(target_os = "linux"))]
+            let monitored = (microphone_device, system_device);
+            if let Err(e) = monitor.start_monitoring(monitored.0, monitored.1) {
                 warn!("Failed to start device monitoring: {}", e);
                 // Non-fatal - continue without monitoring
             } else {
@@ -318,7 +325,7 @@ impl RecordingManager {
         self.state.stop_recording();
 
         // Stop audio streams
-        if let Err(e) = self.stream_manager.stop_streams() {
+        if let Err(e) = self.stream_manager.stop_streams().await {
             error!("Error stopping audio streams: {}", e);
         }
 
@@ -346,7 +353,7 @@ impl RecordingManager {
         self.state.stop_recording();
 
         // Stop audio streams immediately
-        if let Err(e) = self.stream_manager.stop_streams() {
+        if let Err(e) = self.stream_manager.stop_streams().await {
             error!("Error stopping audio streams: {}", e);
         }
 
@@ -402,7 +409,7 @@ impl RecordingManager {
         self.state.stop_recording();
 
         // Stop audio streams
-        if let Err(e) = self.stream_manager.stop_streams() {
+        if let Err(e) = self.stream_manager.stop_streams().await {
             error!("Error stopping audio streams: {}", e);
         }
 
@@ -545,7 +552,7 @@ impl RecordingManager {
             self.state.stop_recording();
 
             // Stop audio streams
-            if let Err(e) = self.stream_manager.stop_streams() {
+            if let Err(e) = self.stream_manager.stop_streams().await {
                 error!("Error stopping audio streams during cleanup: {}", e);
             }
 
@@ -593,10 +600,29 @@ impl RecordingManager {
         // during a mic-only hot-swap, which would leave the monitor tracking
         // the dead name and spamming "missing for N checks".
         if let Some(ref monitor) = self.device_monitor {
+            #[cfg(not(target_os = "linux"))]
             monitor.notify_mic_swapped(device.name.clone(), system_name);
+            #[cfg(target_os = "linux")]
+            { let _ = system_name; monitor.notify_mic_swapped(device.name.clone(), None); }
         }
         self.state.set_microphone_device(device);
     }
+
+    #[cfg(target_os = "linux")]
+    pub fn take_system_stream_for_swap(&mut self) -> Option<super::stream::AudioStream> {
+        self.stream_manager.take_system_stream()
+    }
+    #[cfg(target_os = "linux")]
+    pub fn set_system_stream_after_swap(&mut self, stream: super::stream::AudioStream, device: Arc<AudioDevice>) {
+        self.stream_manager.set_system_stream(stream);
+        self.state.set_system_device(device.clone());
+        if let Some(monitor) = &self.device_monitor {
+            monitor.notify_mic_swapped(String::new(), Some(device.name.clone()));
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn has_working_streams(&self) -> bool { self.stream_manager.has_working_streams() }
 
     /// Get reference to recording state for external access
     pub fn get_state(&self) -> &Arc<RecordingState> {

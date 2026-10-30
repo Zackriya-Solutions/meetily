@@ -38,6 +38,8 @@ pub struct ProcessedAudioChunk {
 pub enum AudioError {
     DeviceDisconnected,
     StreamFailed,
+    #[cfg(target_os = "linux")]
+    LinuxCapture(String),
     ProcessingFailed,
     TranscriptionFailed,
     ChannelClosed,
@@ -55,6 +57,8 @@ impl AudioError {
             // Device disconnect is now recoverable - we can attempt reconnection
             AudioError::DeviceDisconnected => true,
             AudioError::StreamFailed => true,
+            #[cfg(target_os = "linux")]
+            AudioError::LinuxCapture(_) => true,
             AudioError::ProcessingFailed => true,
             AudioError::TranscriptionFailed => true,
             AudioError::ChannelClosed => false,
@@ -67,10 +71,12 @@ impl AudioError {
     }
 
     /// Get user-friendly error message
-    pub fn user_message(&self) -> &'static str {
+    pub fn user_message(&self) -> &str {
         match self {
             AudioError::DeviceDisconnected => "Audio device was disconnected",
             AudioError::StreamFailed => "Audio stream encountered an error",
+            #[cfg(target_os = "linux")]
+            AudioError::LinuxCapture(message) => message,
             AudioError::ProcessingFailed => "Audio processing failed",
             AudioError::TranscriptionFailed => "Speech transcription failed",
             AudioError::ChannelClosed => "Audio channel was closed unexpectedly",
@@ -93,6 +99,8 @@ pub struct RecordingStats {
 
 /// Unified state management for audio recording
 pub struct RecordingState {
+    #[cfg(target_os = "linux")]
+    pub(crate) capture_cancel: Mutex<Arc<AtomicBool>>,
     // Core recording state
     is_recording: AtomicBool,
     is_paused: AtomicBool,
@@ -126,6 +134,8 @@ pub struct RecordingState {
 impl RecordingState {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
+            #[cfg(target_os = "linux")]
+            capture_cancel: Mutex::new(Arc::new(AtomicBool::new(false))),
             is_recording: AtomicBool::new(false),
             is_paused: AtomicBool::new(false),
             microphone_device: Mutex::new(None),
@@ -388,6 +398,8 @@ impl RecordingState {
 impl Default for RecordingState {
     fn default() -> Self {
         Self {
+            #[cfg(target_os = "linux")]
+            capture_cancel: Mutex::new(Arc::new(AtomicBool::new(false))),
             is_recording: AtomicBool::new(false),
             is_paused: AtomicBool::new(false),
             microphone_device: Mutex::new(None),
