@@ -1,4 +1,6 @@
-use anyhow::{anyhow, Result};
+use anyhow::Result;
+#[cfg(not(target_os = "linux"))]
+use anyhow::anyhow;
 use cpal::traits::{HostTrait, DeviceTrait};
 use log::{info, warn};
 
@@ -35,13 +37,10 @@ pub fn default_output_device() -> Result<AudioDevice> {
         return Ok(AudioDevice::new(device.name()?, DeviceType::Output));
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(target_os = "linux")]
     {
-        let host = cpal::default_host();
-        let device = host
-            .default_output_device()
-            .ok_or_else(|| anyhow!("No default output device found"))?;
-        return Ok(AudioDevice::new(device.name()?, DeviceType::Output));
+        let name = crate::audio::linux_pulse::monitor_sources()?.resolve(None)?;
+        return Ok(AudioDevice::new(name, DeviceType::Output));
     }
 }
 

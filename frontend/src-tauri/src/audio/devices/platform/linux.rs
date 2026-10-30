@@ -14,19 +14,12 @@ pub fn configure_linux_audio(host: &cpal::Host) -> Result<Vec<AudioDevice>> {
         }
     }
 
-    // Add PulseAudio monitor sources for system audio
-    if let Ok(pulse_host) = cpal::host_from_id(cpal::HostId::Alsa) {
-        for device in pulse_host.input_devices()? {
-            if let Ok(name) = device.name() {
-                // Check if it's a monitor source
-                if name.contains("monitor") {
-                    devices.push(AudioDevice::new(
-                        format!("{} (System Audio)", name),
-                        DeviceType::Output
-                    ));
-                }
-            }
-        }
+    // Query the audio server directly, not ALSA's unrelated PCM list.
+    match crate::audio::linux_pulse::monitor_sources() {
+        Ok(monitors) => devices.extend(monitors.sources.into_iter().map(|source| {
+            AudioDevice::new(source.name, DeviceType::Output)
+        })),
+        Err(error) => log::warn!("System audio sources unavailable: {error:#}"),
     }
 
     Ok(devices)

@@ -10,7 +10,7 @@ pub async fn list_audio_devices() -> Result<Vec<AudioDevice>> {
     let host = cpal::default_host();
 
     // Platform-specific device enumeration
-    let mut devices = {
+    let devices = {
         #[cfg(target_os = "windows")]
         {
             platform::configure_windows_audio(&host)?
@@ -28,6 +28,9 @@ pub async fn list_audio_devices() -> Result<Vec<AudioDevice>> {
     };
 
     // Add any additional devices from the default host
+    #[cfg(not(target_os = "linux"))]
+    let mut devices = devices;
+    #[cfg(not(target_os = "linux"))]
     if let Ok(other_devices) = host.devices() {
         for device in other_devices {
             if let Ok(name) = device.name() {
