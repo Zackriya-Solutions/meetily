@@ -201,7 +201,6 @@ futures-channel = "0.3.31"
 # Native PipeWire/PulseAudio client for system-audio capture (bypasses cpal's
 # ALSA-only host on Linux, no ~/.asoundrc setup required)
 libpulse-binding = "2.30.1"
-libpulse-simple-binding = "2.29.0"
 
 [dev-dependencies]
 tempfile = "3.3.0"
