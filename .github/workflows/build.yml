@@ -716,6 +716,7 @@ jobs:
         if: runner.os == 'Linux' && inputs.release-id != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ inputs.release-id }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         shell: bash
@@ -724,11 +725,15 @@ jobs:
           shopt -s nullglob
           packages=(target/${{ steps.build-profile.outputs.profile }}/bundle/deb/*.deb target/${{ steps.build-profile.outputs.profile }}/bundle/appimage/*.AppImage)
           [[ ${#packages[@]} -eq 2 ]] || { echo "Expected one deb and one AppImage"; exit 1; }
+          upload_url=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" --jq '.upload_url | split("{")[0]')
           for package in "${packages[@]}"; do
             rm -f "$package.sig"
             frontend/node_modules/.bin/tauri signer sign "$package"
             test -s "$package.sig"
-            gh release upload "v${{ steps.get-version.outputs.version }}" "$package" "$package.sig"
+            for asset in "$package" "$package.sig"; do
+              gh api --method POST "$upload_url" --header "Content-Type: application/octet-stream" \
+                --raw-field "name=$(basename "$asset")" --input "$asset"
+            done
           done
 
       - name: Upload artifacts (Linux)

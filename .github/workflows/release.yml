@@ -102,12 +102,18 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.create-release.outputs.version }}
+          RELEASE_ID: ${{ needs.create-release.outputs.release-id }}
         run: |
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y minisign
           mkdir release-assets
-          gh release download "v$VERSION" --dir release-assets
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets" \
+            --jq '.[] | [.id, .name] | @tsv' |
+          while IFS=$'\t' read -r asset_id asset_name; do
+            gh api "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" \
+              --header "Accept: application/octet-stream" > "release-assets/$(basename -- "$asset_name")"
+          done
           python3 -c 'import base64,json; print(base64.b64decode(json.load(open("frontend/src-tauri/tauri.conf.json"))["plugins"]["updater"]["pubkey"]).decode(), end="")' > release-assets/public.key
           python3 - <<'PYCODE'
           import base64, json, os, subprocess
@@ -144,7 +150,9 @@ jobs:
           manifest = {'version': os.environ['VERSION'], 'notes': '', 'pub_date': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'), 'platforms': platforms}
           (root / 'latest.json').write_text(json.dumps(manifest, indent=2) + '\n')
           PYCODE
-          gh release upload "v$VERSION" release-assets/latest.json
+          upload_url=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" --jq '.upload_url | split("{")[0]')
+          gh api --method POST "$upload_url" --header "Content-Type: application/json" \
+            --raw-field "name=latest.json" --input release-assets/latest.json
 
   # STEP 3: Show release summary
   release-summary:
@@ -171,7 +179,8 @@ jobs:
 
           # Download and show latest.json
           echo "### latest.json content" >> $GITHUB_STEP_SUMMARY
-          gh release download "v${VERSION}" --pattern "latest.json" --dir . 2>/dev/null || echo "latest.json not yet available"
+          LATEST_JSON_ID=$(gh api --paginate "repos/${{ github.repository }}/releases/$RELEASE_ID/assets" --jq '.[] | select(.name == "latest.json") | .id')
+          gh api "repos/${{ github.repository }}/releases/assets/$LATEST_JSON_ID" --header "Accept: application/octet-stream" > latest.json
           if [ -f latest.json ]; then
             echo "\`\`\`json" >> $GITHUB_STEP_SUMMARY
             cat latest.json >> $GITHUB_STEP_SUMMARY
