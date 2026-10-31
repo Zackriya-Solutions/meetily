@@ -30,37 +30,11 @@ jobs:
           BASE_VERSION=$(grep -o '"version": "[^"]*"' frontend/src-tauri/tauri.conf.json | cut -d'"' -f4)
           echo "Base version from tauri.conf.json: $BASE_VERSION"
 
-          # Fetch all tags
           git fetch --tags
-
-          # Check if base version tag exists
-          if git tag -l "v${BASE_VERSION}" | grep -q .; then
-            echo "Tag v${BASE_VERSION} already exists, looking for minor updates..."
-
-            # Find all existing minor versions (e.g., 0.1.1.1, 0.1.1.2, etc.)
-            LATEST_MINOR=0
-            for i in $(seq 1 100); do
-              if git tag -l "v${BASE_VERSION}.${i}" | grep -q .; then
-                LATEST_MINOR=$i
-              else
-                break
-              fi
-            done
-
-            # Increment to next minor version
-            NEXT_MINOR=$((LATEST_MINOR + 1))
-
-            if [ $NEXT_MINOR -gt 100 ]; then
-              echo "ERROR: Maximum minor version (100) reached for ${BASE_VERSION}"
-              echo "Please update the version in tauri.conf.json"
-              exit 1
-            fi
-
-            VERSION="${BASE_VERSION}.${NEXT_MINOR}"
-            echo "Using minor update version: $VERSION"
-          else
-            VERSION="${BASE_VERSION}"
-            echo "Using base version: $VERSION"
+          VERSION="$BASE_VERSION"
+          if git rev-parse -q --verify "refs/tags/v${VERSION}" >/dev/null; then
+            echo "ERROR: Tag v${VERSION} already exists; bump the application version before releasing."
+            exit 1
           fi
 
           echo "Final version: $VERSION"
@@ -75,6 +49,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               tag_name: `v${{ steps.get-version.outputs.version }}`,
+              target_commitish: context.sha,
               name: `Meetily v${{ steps.get-version.outputs.version }}`,
               draft: true,
               prerelease: false,
@@ -84,7 +59,6 @@ jobs:
             return data.id
 
   # STEP 2: Build all platforms and upload directly to release
-  # Note: Linux builds are excluded from release (only macOS and Windows)
   build-all-platforms:
     needs: create-release
     permissions:
@@ -96,12 +70,16 @@ jobs:
           - platform: "macos-latest" # for Apple Silicon only (M1 and above)
             args: "--target aarch64-apple-darwin"
             target: "aarch64-apple-darwin"
+          - platform: "ubuntu-22.04"
+            args: "--bundles deb,appimage"
+            target: "x86_64-unknown-linux-gnu"
           - platform: "windows-latest"
             args: ""
             target: "x86_64-pc-windows-msvc"
 
     uses: ./.github/workflows/build.yml
     with:
+      ref: ${{ github.sha }}
       platform: ${{ matrix.platform }}
       target: ${{ matrix.target }}
       build-args: ${{ matrix.args }}
@@ -111,9 +89,74 @@ jobs:
       release-id: ${{ needs.create-release.outputs.release-id }}
     secrets: inherit
 
+  validate-release:
+    needs: [create-release, build-all-platforms]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Download and verify release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.create-release.outputs.version }}
+          RELEASE_ID: ${{ needs.create-release.outputs.release-id }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y minisign
+          mkdir release-assets
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets" \
+            --jq '.[] | [.id, .name] | @tsv' |
+          while IFS=$'\t' read -r asset_id asset_name; do
+            gh api "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" \
+              --header "Accept: application/octet-stream" > "release-assets/$(basename -- "$asset_name")"
+          done
+          python3 -c 'import base64,json; print(base64.b64decode(json.load(open("frontend/src-tauri/tauri.conf.json"))["plugins"]["updater"]["pubkey"]).decode(), end="")' > release-assets/public.key
+          python3 - <<'PYCODE'
+          import base64, json, os, subprocess
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          root = Path('release-assets')
+          for pattern, signed in [('*aarch64.dmg', False), ('*aarch64.app.tar.gz', True), ('*64_en-US.msi', True), ('*-setup.exe', True), ('*.deb', True), ('*.AppImage', True)]:
+              matches = list(root.glob(pattern))
+              if len(matches) != 1:
+                  raise SystemExit(f'Expected exactly one {pattern}, found {len(matches)}')
+              if signed:
+                  asset = matches[0]
+                  signature = Path(str(asset) + '.sig')
+                  decoded = root / 'signature.minisig'
+                  decoded.write_bytes(base64.b64decode(signature.read_text().strip(), validate=True))
+                  subprocess.run(['minisign', '-Vm', str(asset), '-p', str(root / 'public.key'), '-x', str(decoded)], check=True)
+          from urllib.parse import quote
+          platforms = {}
+          for target, pattern in [
+              ('darwin-aarch64', '*aarch64.app.tar.gz'),
+              ('darwin-aarch64-app', '*aarch64.app.tar.gz'),
+              ('windows-x86_64-nsis', '*-setup.exe'),
+              ('windows-x86_64-msi', '*64_en-US.msi'),
+              ('windows-x86_64', '*-setup.exe'),
+              ('linux-x86_64-deb', '*.deb'),
+              ('linux-x86_64-appimage', '*.AppImage'),
+          ]:
+              asset = next(root.glob(pattern))
+              platforms[target] = {
+                  'url': f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/releases/download/v{os.environ['VERSION']}/{quote(asset.name)}",
+                  'signature': Path(str(asset) + '.sig').read_text().strip(),
+              }
+          manifest = {'version': os.environ['VERSION'], 'notes': '', 'pub_date': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'), 'platforms': platforms}
+          (root / 'latest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+          PYCODE
+          upload_url=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" --jq '.upload_url | split("{")[0]')
+          gh api --method POST "$upload_url" --header "Content-Type: application/json" \
+            --raw-field "name=latest.json" --input release-assets/latest.json
+
   # STEP 3: Show release summary
   release-summary:
-    needs: [create-release, build-all-platforms]
+    needs: [create-release, validate-release]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -136,7 +179,8 @@ jobs:
 
           # Download and show latest.json
           echo "### latest.json content" >> $GITHUB_STEP_SUMMARY
-          gh release download "v${VERSION}" --pattern "latest.json" --dir . 2>/dev/null || echo "latest.json not yet available"
+          LATEST_JSON_ID=$(gh api --paginate "repos/${{ github.repository }}/releases/$RELEASE_ID/assets" --jq '.[] | select(.name == "latest.json") | .id')
+          gh api "repos/${{ github.repository }}/releases/assets/$LATEST_JSON_ID" --header "Accept: application/octet-stream" > latest.json
           if [ -f latest.json ]; then
             echo "\`\`\`json" >> $GITHUB_STEP_SUMMARY
             cat latest.json >> $GITHUB_STEP_SUMMARY
@@ -166,7 +210,8 @@ jobs:
           echo "Uploaded assets (via tauri-action):"
           echo "  - macOS: DMG installer + app.tar.gz (for updater) + .sig"
           echo "  - Windows: MSI + NSIS installers (SIGNED via signCommand) + .sig files"
-          echo "  - Updater manifest: latest.json (auto-generated by tauri-action)"
+          echo "  - Linux: DEB and AppImage packages + .sig files"
+          echo "  - Updater manifest: latest.json (generated after validation)"
           echo ""
           echo "Next steps:"
           echo "  1. Review the draft release"
@@ -187,7 +232,8 @@ jobs:
           echo "|----------|--------|" >> $GITHUB_STEP_SUMMARY
           echo "| **macOS** | DMG installer, app.tar.gz (updater), .sig |" >> $GITHUB_STEP_SUMMARY
           echo "| **Windows** | MSI installer (SIGNED), NSIS installer (SIGNED), .sig files |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Updater** | latest.json manifest (auto-generated by tauri-action) |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Linux** | DEB, AppImage and signatures |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Updater** | latest.json manifest (generated after validation) |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
