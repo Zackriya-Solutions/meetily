@@ -122,6 +122,29 @@ impl RecordingPreferences {
     }
 }
 
+fn resolve_cached_legacy_id<'a>(
+    id: &'a str,
+    saved: Option<&str>,
+    version: u8,
+    role: super::devices::DeviceType,
+    devices: &[super::devices::AudioDevice],
+) -> Option<&'a str> {
+    let exists = |name: &str| {
+        devices
+            .iter()
+            .any(|device| device.device_type == role && device.name == name)
+    };
+    if exists(id) {
+        return Some(id);
+    }
+    let suffix = match role {
+        super::devices::DeviceType::Input => " (input)",
+        super::devices::DeviceType::Output => " (output)",
+    };
+    id.strip_suffix(suffix)
+        .filter(|stripped| version == 1 && saved == Some(*stripped) && exists(stripped))
+}
+
 pub(super) async fn resolve_start_devices(
     prefs: &RecordingPreferences,
     mic: Option<String>,
@@ -149,11 +172,21 @@ pub(super) async fn resolve_start_devices(
             let devices = super::devices::list_audio_devices()
                 .await
                 .map_err(|e| e.to_string())?;
-            if !devices
-                .iter()
-                .any(|d| d.device_type == role && d.name == id)
-            {
-                return Err("Your saved audio selection needs updating. Choose a device in Recording Settings.".into());
+            let saved = if index == 0 {
+                prefs.preferred_mic_device.as_deref()
+            } else {
+                prefs.preferred_system_device.as_deref()
+            };
+            let resolved = resolve_cached_legacy_id(
+                id,
+                saved,
+                prefs.device_selection_version[index],
+                role,
+                &devices,
+            )
+            .ok_or_else(|| "Your saved audio selection needs updating. Choose a device in Recording Settings.".to_string())?;
+            if resolved != id {
+                requested[index] = Some(resolved.to_owned());
             }
         }
     }
@@ -587,6 +620,122 @@ mod device_preference_tests {
             resolve_start_devices(&prefs, None, None).await.unwrap(),
             (None, None)
         );
+    }
+
+    #[tokio::test]
+    async fn cached_arguments_resolve_after_migration_roundtrip_and_default_stays_default() {
+        let mut prefs = RecordingPreferences::default();
+        prefs.device_selection_version = [0; 2];
+        prefs.preferred_mic_device = Some("USB Mic (input)".into());
+        prefs.preferred_system_device = Some("USB Speaker (output)".into());
+        let devices = [
+            mic("USB Mic"),
+            AudioDevice::new("USB Speaker".into(), DeviceType::Output),
+        ];
+        normalize_device_preferences(&mut prefs, &devices);
+        let reloaded: RecordingPreferences =
+            serde_json::from_value(serde_json::to_value(prefs).unwrap()).unwrap();
+        assert_eq!(reloaded.migrated_from, [None, None]);
+        assert_eq!(reloaded.device_selection_version, [1; 2]);
+        for (index, (id, saved, role, expected)) in [
+            (
+                "USB Mic (input)",
+                reloaded.preferred_mic_device.as_deref(),
+                DeviceType::Input,
+                "USB Mic",
+            ),
+            (
+                "USB Speaker (output)",
+                reloaded.preferred_system_device.as_deref(),
+                DeviceType::Output,
+                "USB Speaker",
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert_eq!(
+                resolve_cached_legacy_id(
+                    id,
+                    saved,
+                    reloaded.device_selection_version[index],
+                    role,
+                    &devices,
+                ),
+                Some(expected),
+            );
+        }
+        assert_eq!(
+            resolve_start_devices(&reloaded, None, None).await.unwrap(),
+            (None, None),
+        );
+    }
+
+    #[test]
+    fn cached_argument_prefers_exact_literal_id_for_the_same_role() {
+        for (role, id) in [
+            (DeviceType::Input, "USB (input)"),
+            (DeviceType::Output, "USB (output)"),
+        ] {
+            let devices = [
+                AudioDevice::new("USB".into(), role.clone()),
+                AudioDevice::new(id.into(), role.clone()),
+            ];
+            for version in [0, 1] {
+                assert_eq!(
+                    resolve_cached_legacy_id(id, Some("USB"), version, role.clone(), &devices),
+                    Some(id),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cached_argument_rejects_unproven_or_unresolved_aliases() {
+        for (role, other_role, id) in [
+            (DeviceType::Input, DeviceType::Output, "USB (input)"),
+            (DeviceType::Output, DeviceType::Input, "USB (output)"),
+        ] {
+            let canonical = [AudioDevice::new("USB".into(), role.clone())];
+            let wrong_role = [
+                AudioDevice::new("USB".into(), other_role.clone()),
+                AudioDevice::new(id.into(), other_role),
+            ];
+            for (saved, version, devices) in [
+                (Some("USB"), 1, wrong_role.as_slice()),
+                (Some("USB"), 1, &[][..]),
+                (Some("unrelated"), 1, canonical.as_slice()),
+                (None, 1, canonical.as_slice()),
+                (Some("USB"), 0, canonical.as_slice()),
+                (Some(id), 0, canonical.as_slice()),
+            ] {
+                assert_eq!(
+                    resolve_cached_legacy_id(id, saved, version, role.clone(), devices),
+                    None,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cached_argument_strips_exactly_one_role_suffix() {
+        for (role, id, saved) in [
+            (DeviceType::Input, "USB (input) (input)", "USB (input)"),
+            (DeviceType::Output, "USB (output) (output)", "USB (output)"),
+        ] {
+            let devices = [
+                AudioDevice::new("USB".into(), role.clone()),
+                AudioDevice::new(saved.into(), role.clone()),
+            ];
+            assert_eq!(
+                resolve_cached_legacy_id(id, Some(saved), 1, role.clone(), &devices),
+                Some(saved),
+            );
+            assert_eq!(
+                resolve_cached_legacy_id(id, Some("USB"), 1, role, &devices),
+                None,
+            );
+        }
     }
 
     #[test]

@@ -22,6 +22,10 @@ use super::{
     RecordingManager,
 };
 use super::device_monitor::{DeviceEvent, DeviceMonitorType};
+#[cfg(target_os = "linux")]
+use super::devices::AudioDevice;
+#[cfg(target_os = "linux")]
+use super::stream::LinuxStreamKind;
 
 // Import transcription modules
 use super::transcription::{
@@ -849,7 +853,11 @@ async fn stop_recording_for_session<R: Runtime>(
             }
         }
         match admission {
-            Ok((manager, guard)) => (Some(manager), guard),
+            Ok((manager, guard)) => {
+                #[cfg(target_os = "linux")]
+                manager.request_capture_finish();
+                (Some(manager), guard)
+            },
             Err(outcome) => return Ok(outcome),
         }
     };
@@ -884,7 +892,11 @@ async fn stop_recording_for_session<R: Runtime>(
         }
         Err(e) => {
             error!("❌ Failed to stop audio streams: {}", e);
-            return Err(format!("Failed to stop audio streams: {}", e)); // _stopping_guard clears on return
+            #[cfg(not(target_os = "linux"))]
+            return Err(format!("Failed to stop audio streams: {}", e));
+            #[cfg(target_os = "linux")]
+            let _ = app.emit("linux-audio-notice", serde_json::json!({"error": true,
+                "message": format!("Some queued audio could not be preserved: {}. Saving the available recording.", e)}));
         }
     }
 
@@ -1443,19 +1455,21 @@ const MAX_MIC_FALLBACK_ATTEMPTS: u32 = 3;
 /// If CPAL hangs during stream creation, only this task blocks; stop flow stays unblocked.
 async fn perform_mic_hot_swap_task<R: Runtime>(
     new_device_name: String,
+    expected_device_name: &str,
     session: &Arc<super::RecordingState>,
     app: AppHandle<R>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     info!("[HOT_SWAP] Starting mic hot-swap to '{}'", new_device_name);
 
-    match do_mic_swap(&new_device_name, session).await {
-        Ok(()) => {
+    match do_mic_swap(&new_device_name, expected_device_name, session).await {
+        Ok(false) => Ok(false),
+        Ok(true) => {
             info!("[HOT_SWAP] Mic switched to '{}'", new_device_name);
             let _ = app.emit("mic-device-switched", serde_json::json!({
                 "device_name": new_device_name,
                 "device_label": super::devices::device_label(&new_device_name),
             }));
-            Ok(())
+            Ok(true)
         }
         Err(e) => {
             if !session_live(session) {
@@ -1464,14 +1478,15 @@ async fn perform_mic_hot_swap_task<R: Runtime>(
             warn!("[HOT_SWAP] First attempt failed: {} — retrying in 500ms", e);
             tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
-            match do_mic_swap(&new_device_name, session).await {
-                Ok(()) => {
+            match do_mic_swap(&new_device_name, expected_device_name, session).await {
+                Ok(false) => Ok(false),
+                Ok(true) => {
                     info!("[HOT_SWAP] Mic switched to '{}' on retry", new_device_name);
                     let _ = app.emit("mic-device-switched", serde_json::json!({
                         "device_name": new_device_name,
                         "device_label": super::devices::device_label(&new_device_name),
                     }));
-                    Ok(())
+                    Ok(true)
                 }
                 Err(e) => {
                     error!("[HOT_SWAP] Mic swap failed after retry: {}", e);
@@ -1490,7 +1505,7 @@ async fn perform_mic_hot_swap_task<R: Runtime>(
 }
 
 /// Phased mic swap — lock is never held during async I/O.
-async fn do_mic_swap(device_name: &str, session: &Arc<super::RecordingState>) -> Result<(), String> {
+async fn do_mic_swap(device_name: &str, expected_device_name: &str, session: &Arc<super::RecordingState>) -> Result<bool, String> {
     // Phase 1: Lock briefly — verify identity, take old stream OUT (no teardown under lock)
     let old_mic = {
         let mut guard = RECORDING_MANAGER.lock().unwrap();
@@ -1501,6 +1516,12 @@ async fn do_mic_swap(device_name: &str, session: &Arc<super::RecordingState>) ->
         if !Arc::ptr_eq(manager.get_state(), session) {
             return Err("Session changed before hot-swap — aborting".to_string());
         }
+        #[cfg(target_os = "linux")]
+        if manager.get_state().get_microphone_device().as_ref().map(|d| d.name.as_str()) != Some(expected_device_name) {
+            return Ok(false);
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = expected_device_name;
         manager.take_mic_stream_for_swap()
     }; // lock released
 
@@ -1579,7 +1600,7 @@ async fn do_mic_swap(device_name: &str, session: &Arc<super::RecordingState>) ->
     } // lock released
     }
 
-    Ok(())
+    Ok(true)
 }
 
 /// Background processor for device monitor events during a recording session.
@@ -1608,22 +1629,47 @@ fn spawn_device_event_processor<R: Runtime>(
         let _ = follow_defaults;
         #[cfg(target_os = "linux")]
         let mut default_attempts = [(String::new(), 0u8), (String::new(), 0u8)];
+        #[cfg(target_os = "linux")]
+        let mut audio_loss_since = None;
+        #[cfg(target_os = "linux")]
+        let mut recovery_tick = tokio::time::interval_at(
+            tokio::time::Instant::now() + std::time::Duration::from_secs(2),
+            std::time::Duration::from_secs(2),
+        );
+        #[cfg(target_os = "linux")]
+        recovery_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         info!("[DEVICE_EVENTS] Background event processor started");
 
         loop {
             let event = tokio::select! {
                 event = receiver.recv() => { let Some(event) = event else { break; }; event },
-                _ = tokio::time::sleep(std::time::Duration::from_secs(2)) => {
+                _ = async {
+                    #[cfg(target_os = "linux")]
+                    recovery_tick.tick().await;
+                    #[cfg(not(target_os = "linux"))]
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                } => {
                     #[cfg(target_os = "linux")]
                     {
+                        let all_ended = {
+                            let guard = RECORDING_MANAGER.lock().unwrap();
+                            guard.as_ref().is_some_and(|m| recording_live() && Arc::ptr_eq(m.get_state(), &session) && !m.has_working_streams())
+                        };
+                        linux_audio_loss_expired(&mut audio_loss_since, all_ended, tokio::time::Instant::now());
                         for (index, follow) in [follow_defaults.0, follow_defaults.1].into_iter().enumerate() {
-                            if follow { follow_linux_default(&app, &session, index == 0, &mut default_attempts[index]).await; }
+                            if follow {
+                                follow_linux_default(&app, &session, index == 0, &mut default_attempts[index]).await;
+                            } else {
+                                repair_linux_stream(&app, &session, index == 0, &mut default_attempts[index], None).await;
+                            }
                         }
                         let all_ended = {
                             let guard = RECORDING_MANAGER.lock().unwrap();
-                            guard.as_ref().map_or(false, |m| recording_live() && !MIC_SWAP_IN_PROGRESS.load(Ordering::SeqCst) && Arc::ptr_eq(m.get_state(), &session) && !m.has_working_streams())
+                            guard.as_ref().is_some_and(|m| recording_live() && Arc::ptr_eq(m.get_state(), &session) && !m.has_working_streams())
                         };
-                        if all_ended {
+                        if linux_audio_loss_expired(&mut audio_loss_since, all_ended, tokio::time::Instant::now())
+                            && !MIC_SWAP_IN_PROGRESS.load(Ordering::SeqCst)
+                        {
                             let _ = app.emit("linux-audio-notice", serde_json::json!({"error": true, "message": "Audio capture is unavailable. Stopping and saving this recording."}));
                             let result = stop_recording_for_session(app.clone(), RecordingArgs { save_path: String::new() }, Some(&session)).await;
                             let result = result.and_then(|outcome| {
@@ -1653,16 +1699,16 @@ fn spawn_device_event_processor<R: Runtime>(
                     // system default input. Triggered after the device
                     // monitor's polling threshold fires.
                     #[cfg(target_os = "linux")]
-                    if matches!(device_type, DeviceMonitorType::SystemAudio) {
-                        recover_linux_system(&app, &session, device_name).await;
+                    {
+                        let microphone = matches!(device_type, DeviceMonitorType::Microphone);
+                        let index = if microphone { 0 } else { 1 };
+                        repair_linux_stream(&app, &session, microphone, &mut default_attempts[index], Some(device_name)).await;
                     }
+                    #[cfg(not(target_os = "linux"))]
                     if matches!(device_type, DeviceMonitorType::Microphone) {
                         let name = device_name.clone();
                         let app_clone = app.clone();
                         let session = session.clone();
-                        #[cfg(target_os = "linux")]
-                        trigger_mic_fallback_to_default(app_clone, name, session).await;
-                        #[cfg(not(target_os = "linux"))]
                         tokio::spawn(async move {
                             trigger_mic_fallback_to_default(app_clone, name, session).await;
                         });
@@ -1684,36 +1730,62 @@ fn spawn_device_event_processor<R: Runtime>(
 }
 
 #[cfg(target_os = "linux")]
-async fn follow_linux_default<R: Runtime>(app: &AppHandle<R>, session: &Arc<super::RecordingState>, microphone: bool, attempts: &mut (String, u8)) {
-    if !session_live(session) { return; }
-    let target = if microphone { default_input_device() } else { default_output_device() };
-    let Ok(target) = target else { return; };
-    let active = if microphone { session.get_microphone_device() } else { session.get_system_device() };
-    if active.as_ref().is_some_and(|d| d.name == target.name) { *attempts = (String::new(), 0); return; }
-    if attempts.0 != target.name { *attempts = (target.name.clone(), 0); }
-    if attempts.1 >= 3 { return; }
-    attempts.1 += 1;
-    let device = Arc::new(target);
+fn linux_audio_loss_expired(
+    since: &mut Option<tokio::time::Instant>,
+    all_ended: bool,
+    now: tokio::time::Instant,
+) -> bool {
+    if !all_ended {
+        *since = None;
+        return false;
+    }
+    now.duration_since(*since.get_or_insert(now)) >= std::time::Duration::from_secs(10)
+}
+
+#[cfg(target_os = "linux")]
+async fn swap_linux_stream<R: Runtime>(
+    app: &AppHandle<R>,
+    session: &Arc<super::RecordingState>,
+    device: Arc<AudioDevice>,
+    microphone: bool,
+    follow_default: bool,
+) -> Result<(), String> {
+    if !session_live(session) { return Err("Recording stopped".into()); }
     let role = if microphone { super::recording_state::DeviceType::Microphone } else { super::recording_state::DeviceType::System };
-    let result = super::stream::AudioStream::prepare_linux(device.clone(), session.clone(), role).await;
-    let stream = match result {
-        Ok(stream) => stream,
-        Err(e) => {
-            if attempts.1 == 1 && session_live(session) {
-                let _ = app.emit("linux-audio-notice", serde_json::json!({"error": true, "message": format!("Could not follow the default audio device: {}", e)}));
-            }
-            return;
+    let stream = super::stream::AudioStream::prepare_linux(device.clone(), session.clone(), role).await.map_err(|e| e.to_string())?;
+    if follow_default {
+        let latest = if microphone { default_input_device() } else { default_output_device() };
+        if latest.map_or(true, |d| d.name != device.name) {
+            let _ = stream.stop().await;
+            return Err("The default audio device changed during preparation".into());
         }
-    };
-    let latest = if microphone { default_input_device() } else { default_output_device() };
-    if !session_live(session) || latest.map_or(true, |d| d.name != device.name) { let _ = stream.stop().await; return; }
+    }
+    if !session_live(session) || stream.has_ended() {
+        let _ = stream.stop().await;
+        return Err("Audio replacement is no longer available".into());
+    }
+    loop {
+        let finished = {
+            let guard = RECORDING_MANAGER.lock().unwrap();
+            match guard.as_ref() {
+                Some(manager) if recording_live() && Arc::ptr_eq(manager.get_state(), session) => Some(manager.finish_role(microphone)),
+                _ => None,
+            }
+        };
+        match finished {
+            Some(true) => break,
+            Some(false) => tokio::time::sleep(std::time::Duration::from_millis(10)).await,
+            None => { let _ = stream.stop().await; return Err("Recording stopped".into()); }
+        }
+    }
+    if stream.has_ended() { let _ = stream.stop().await; return Err("Audio replacement ended during preparation".into()); }
+    // Retirement commits this successor; follow any newer default on the next cycle.
     let mut prepared = Some(stream);
     let old = {
         let mut guard = RECORDING_MANAGER.lock().unwrap();
         match guard.as_mut() {
             Some(manager) if recording_live() && Arc::ptr_eq(manager.get_state(), session) => {
                 let old = if microphone { manager.take_mic_stream_for_swap() } else { manager.take_system_stream_for_swap() };
-                if let Some(old) = &old { old.set_delivery(false); }
                 prepared.as_ref().unwrap().set_delivery(true);
                 if microphone { manager.set_mic_stream_after_swap(prepared.take().unwrap(), device.clone(), None); }
                 else { manager.set_system_stream_after_swap(prepared.take().unwrap(), device.clone()); }
@@ -1722,52 +1794,143 @@ async fn follow_linux_default<R: Runtime>(app: &AppHandle<R>, session: &Arc<supe
             _ => None,
         }
     };
-    if let Some(stream) = prepared { let _ = stream.stop().await; return; }
-    if let Some(old) = old { let _ = old.stop().await; }
-    *attempts = (String::new(), 0);
-    if session_live(session) {
-        let role = if microphone { "Microphone" } else { "System audio" };
-        let _ = app.emit("linux-audio-notice", serde_json::json!({"error": false, "message": format!("{} switched to {} to follow your system default.", role, super::devices::device_label(&device.name))}));
+    if let Some(stream) = prepared { let _ = stream.stop().await; return Err("Recording stopped".into()); }
+    if let Some(old) = old {
+        if let Err(e) = old.stop().await {
+            if session_live(session) {
+                let _ = app.emit("linux-audio-notice", serde_json::json!({"error": true,
+                    "message": format!("Some audio from the previous device could not be preserved: {}", e)}));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+async fn follow_linux_default<R: Runtime>(app: &AppHandle<R>, session: &Arc<super::RecordingState>, microphone: bool, attempts: &mut (String, u8)) {
+    if !session_live(session) { return; }
+    let target = if microphone { default_input_device() } else { default_output_device() };
+    let Ok(target) = target else { return; };
+    let active = if microphone { session.get_microphone_device() } else { session.get_system_device() };
+    let working = {
+        let guard = RECORDING_MANAGER.lock().unwrap();
+        guard.as_ref().is_some_and(|m| Arc::ptr_eq(m.get_state(), session) && m.has_working_stream(microphone))
+    };
+    if working && active.as_ref().is_some_and(|d| d.name == target.name) {
+        *attempts = (String::new(), 0);
+        return;
+    }
+    if attempts.0 != target.name { *attempts = (target.name.clone(), 0); }
+    if working && attempts.1 >= 3 { return; }
+    attempts.1 = attempts.1.saturating_add(1);
+    let device = Arc::new(target);
+    match swap_linux_stream(app, session, device.clone(), microphone, true).await {
+        Ok(()) => {
+            *attempts = (String::new(), 0);
+            if session_live(session) {
+                let role = if microphone { "Microphone" } else { "System audio" };
+                let _ = app.emit("linux-audio-notice", serde_json::json!({"error": false, "message": format!("{} switched to {} to follow your system default.", role, super::devices::device_label(&device.name))}));
+            }
+        }
+        Err(e) if attempts.1 == 1 && session_live(session) => {
+            let _ = app.emit("linux-audio-notice", serde_json::json!({"error": true, "message": format!("Could not follow the default audio device: {}", e)}));
+        }
+        Err(_) => {}
     }
 }
 
 #[cfg(target_os = "linux")]
-async fn recover_linux_system<R: Runtime>(app: &AppHandle<R>, session: &Arc<super::RecordingState>, missing: &str) {
-    if !session_live(session) { return; }
-    let old = {
-        let mut guard = RECORDING_MANAGER.lock().unwrap();
-        let Some(manager) = guard.as_mut() else { return; };
-        if !Arc::ptr_eq(manager.get_state(), session) ||
-            session.get_system_device().map_or(true, |d| d.name != missing) { return; }
-        manager.take_system_stream_for_swap()
-    };
-    // Only the first event for this failure attempts recovery, avoiding toast floods.
-    let Some(old) = old else { return; };
-    let _ = old.stop().await;
-    let result = async {
-        let device = Arc::new(default_output_device().map_err(|e| e.to_string())?);
-        if device.name == missing { return Err("No replacement default output is available".to_string()); }
-        if !session_live(session) { return Err("Recording stopped".into()); }
-        let stream = super::stream::AudioStream::create(device.clone(), session.clone(),
-            super::recording_state::DeviceType::System, None).await.map_err(|e| e.to_string())?;
-        let mut stream = Some(stream);
-        {
-            let mut guard = RECORDING_MANAGER.lock().unwrap();
-            if let Some(manager) = guard.as_mut() {
-                if recording_live() && Arc::ptr_eq(manager.get_state(), session) {
-                    manager.set_system_stream_after_swap(stream.take().unwrap(), device.clone());
-                }
-            }
+fn linux_mic_uses_legacy_recovery(kind: Option<LinuxStreamKind>, failed_attempts: u32) -> bool {
+    kind == Some(LinuxStreamKind::Cpal) || (kind.is_none() && failed_attempts > 0)
+}
+
+#[cfg(target_os = "linux")]
+async fn attempt_linux_recovery<F: std::future::Future<Output = Result<(), String>>>(
+    working: bool,
+    active: Arc<AudioDevice>,
+    attempts: &mut (String, u8),
+    inspect: impl FnOnce(&AudioDevice) -> Result<bool, String>,
+    default_device: impl FnOnce() -> Result<AudioDevice, String>,
+    replace: impl FnOnce(Arc<AudioDevice>) -> F,
+) -> Result<Option<Arc<AudioDevice>>, String> {
+    if working { return Ok(None); }
+    let present = match inspect(&active) {
+        Ok(present) => present,
+        Err(e) => {
+            warn!("Could not inspect native audio devices for recovery: {}", e);
+            return Ok(None);
         }
-        if let Some(stale) = stream { let _ = stale.stop().await; return Err("Recording stopped".into()); }
-        Ok(device)
-    }.await;
-    if !session_live(session) { return; }
-    let (error, message) = match result {
-        Ok(device) => (false, format!("System audio switched to {} for this meeting.", super::devices::device_label(&device.name))),
-        Err(e) => (true, format!("System audio is unavailable: {}", e)),
     };
-    let _ = app.emit("linux-audio-notice", serde_json::json!({"error": error, "message": message}));
+    let target = if present {
+        Ok(active.clone())
+    } else {
+        default_device().and_then(|device| {
+            if device.name == active.name { Err("No replacement default audio device is available".into()) }
+            else { Ok(Arc::new(device)) }
+        })
+    };
+    let key = target.as_ref().map_or(active.name.as_str(), |device| device.name.as_str());
+    if attempts.0 != key { *attempts = (key.to_string(), 0); }
+    // Failed native capture stays retryable; this counter only throttles notices.
+    attempts.1 = attempts.1.saturating_add(1);
+    let device = target?;
+    replace(device.clone()).await?;
+    *attempts = (String::new(), 0);
+    Ok(Some(device))
+}
+
+#[cfg(target_os = "linux")]
+async fn repair_linux_stream<R: Runtime>(
+    app: &AppHandle<R>,
+    session: &Arc<super::RecordingState>,
+    microphone: bool,
+    attempts: &mut (String, u8),
+    expected_device: Option<&str>,
+) {
+    let (device, kind, working) = {
+        let guard = RECORDING_MANAGER.lock().unwrap();
+        let Some(manager) = guard.as_ref() else { return; };
+        if !recording_live() || !Arc::ptr_eq(manager.get_state(), session) { return; }
+        let active = if microphone { session.get_microphone_device() } else { session.get_system_device() };
+        let Some(device) = active else { return; };
+        if expected_device.is_some_and(|expected| expected != device.name) { return; }
+        (device, manager.linux_stream_kind(microphone), manager.has_working_stream(microphone))
+    };
+    if microphone && linux_mic_uses_legacy_recovery(kind, MIC_FALLBACK_FAILED_ATTEMPTS.load(Ordering::SeqCst)) {
+        // Keep the existing CPAL event/retry policy, including empty slots after a failed swap.
+        if expected_device.is_some() || (!working && super::capture::list_pulse_sources()
+            .is_ok_and(|sources| !sources.iter().any(|source| source.source_name == device.name)))
+        {
+            trigger_mic_fallback_to_default(app.clone(), device.name.clone(), session.clone()).await;
+        }
+        return;
+    }
+    if kind != Some(LinuxStreamKind::Pulse) { return; }
+    let previous_name = device.name.clone();
+    let result = attempt_linux_recovery(working, device, attempts,
+        |device| {
+            if microphone {
+                super::capture::list_pulse_sources().map(|sources| sources.iter().any(|s| s.source_name == device.name))
+            } else {
+                super::capture::list_pulse_sinks().map(|sinks| sinks.iter().any(|s| s.name == device.name))
+            }.map_err(|e| e.to_string())
+        },
+        || (if microphone { default_input_device() } else { default_output_device() }).map_err(|e| e.to_string()),
+        |device| async move { swap_linux_stream(app, session, device, microphone, false).await },
+    ).await;
+    if !session_live(session) { return; }
+    let role = if microphone { "Microphone" } else { "System audio" };
+    match result {
+        Ok(Some(device)) if device.name != previous_name => {
+            let _ = app.emit("linux-audio-notice", serde_json::json!({"error": false,
+                "message": format!("{} switched to {} for this meeting.", role, super::devices::device_label(&device.name))}));
+        }
+        Err(e) if attempts.1 == 1 => {
+            let _ = app.emit("linux-audio-notice", serde_json::json!({"error": true,
+                "message": format!("{} is unavailable: {}", role, e)}));
+        }
+        _ => {}
+    }
 }
 
 /// Disconnect fallback: swap the active mic to the system default input
@@ -1794,6 +1957,24 @@ async fn trigger_mic_fallback_to_default<R: Runtime>(
             disconnected_name
         );
         return;
+    }
+
+    #[cfg(target_os = "linux")]
+    if session.get_microphone_device().as_ref().map(|d| d.name.as_str()) != Some(disconnected_name.as_str()) {
+        return;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let working = {
+            let guard = RECORDING_MANAGER.lock().unwrap();
+            guard.as_ref().is_some_and(|m| Arc::ptr_eq(m.get_state(), &session) && m.has_working_stream(true))
+        };
+        // Preserve the legacy CPAL inventory check on Linux.
+        if working && super::capture::list_pulse_sources()
+            .is_ok_and(|sources| sources.iter().any(|s| s.source_name == disconnected_name))
+        {
+            return;
+        }
     }
 
     if MIC_FALLBACK_FAILED_ATTEMPTS.load(Ordering::SeqCst) >= MAX_MIC_FALLBACK_ATTEMPTS {
@@ -1978,8 +2159,9 @@ async fn trigger_mic_fallback_to_default<R: Runtime>(
     // perform_mic_hot_swap_task performs its own retry-once logic on failure
     // and emits the mic-device-switched / mic-swap-failed events, so we can
     // just delegate here. It does NOT touch MIC_SWAP_IN_PROGRESS internally.
-    match perform_mic_hot_swap_task(fallback_name.clone(), &session, app.clone()).await {
-        Ok(()) => {
+    match perform_mic_hot_swap_task(fallback_name.clone(), &disconnected_name, &session, app.clone()).await {
+        Ok(false) => {},
+        Ok(true) => {
             info!(
                 "[MIC_FALLBACK] Fallback complete: now recording via '{}'",
                 fallback_name
@@ -2175,5 +2357,151 @@ mod stop_admission_tests {
         let mut manager: Option<i32> = None;
         assert!(take_for_stop(&mut manager, &stopping, true, |_| true).is_err());
         assert!(!stopping.load(Ordering::SeqCst));
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod linux_audio_loss_tests {
+    use super::linux_audio_loss_expired;
+    use tokio::time::{Duration, Instant};
+
+    #[test]
+    fn total_loss_gets_ten_seconds_and_any_healthy_role_resets_it() {
+        let start = Instant::now();
+        let mut since = None;
+        assert!(!linux_audio_loss_expired(&mut since, true, start));
+        assert!(!linux_audio_loss_expired(&mut since, true, start + Duration::from_secs(9)));
+        assert!(linux_audio_loss_expired(&mut since, true, start + Duration::from_secs(10)));
+        assert!(!linux_audio_loss_expired(&mut since, false, start + Duration::from_secs(11)));
+        assert_eq!(since, None);
+        assert!(!linux_audio_loss_expired(&mut since, true, start + Duration::from_secs(12)));
+        assert!(!linux_audio_loss_expired(&mut since, true, start + Duration::from_secs(21)));
+        assert!(linux_audio_loss_expired(&mut since, true, start + Duration::from_secs(22)));
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod linux_recovery_tests {
+    use super::*;
+    use super::super::stream::linux_clock_tests::test_stream;
+
+    fn input(name: &str) -> Arc<AudioDevice> {
+        Arc::new(AudioDevice::new(name.into(), DeviceType::Input))
+    }
+
+    #[tokio::test]
+    async fn healthy_native_capture_does_not_inspect_or_replace() {
+        let mut attempts = (String::new(), 0);
+        let result = attempt_linux_recovery(true, input("active"), &mut attempts,
+            |_| panic!("healthy capture must not enumerate"),
+            || panic!("healthy capture must not query the default"),
+            |_| std::future::ready(Err("healthy capture must not be replaced".into())),
+        ).await.unwrap();
+        assert!(result.is_none());
+        assert_eq!(attempts, (String::new(), 0));
+    }
+
+    #[tokio::test]
+    async fn unknown_inventory_does_not_select_a_default_or_replace() {
+        let mut attempts = (String::new(), 0);
+        let result = attempt_linux_recovery(false, input("active"), &mut attempts,
+            |_| Err("enumeration unavailable".into()),
+            || panic!("unknown inventory is not confirmed absence"),
+            |_| std::future::ready(Err("unknown inventory must not replace capture".into())),
+        ).await.unwrap();
+        assert!(result.is_none());
+        assert_eq!(attempts, (String::new(), 0));
+    }
+
+    #[tokio::test]
+    async fn native_recovery_attempts_a_fourth_replacement_and_resets_on_success() {
+        let replacements = std::cell::Cell::new(0);
+        let mut attempts = (String::new(), 0);
+        for attempt in 1..=4 {
+            let result = attempt_linux_recovery(false, input("missing"), &mut attempts,
+                |_| Ok(false),
+                || Ok(AudioDevice::new("replacement".into(), DeviceType::Input)),
+                |device| {
+                    assert_eq!(device.name, "replacement");
+                    replacements.set(replacements.get() + 1);
+                    std::future::ready(if attempt < 4 { Err("not ready".into()) } else { Ok(()) })
+                },
+            ).await;
+            assert_eq!(replacements.get(), attempt);
+            if attempt < 4 {
+                assert!(result.is_err());
+                assert_eq!(attempts, ("replacement".into(), attempt));
+            } else {
+                assert_eq!(result.unwrap().unwrap().name, "replacement");
+                assert_eq!(attempts, (String::new(), 0));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn present_native_device_is_reopened_without_querying_the_default() {
+        let mut attempts = ("active".into(), 3);
+        let result = attempt_linux_recovery(false, input("active"), &mut attempts,
+            |device| { assert_eq!(device.name, "active"); Ok(true) },
+            || panic!("explicit present device must remain pinned"),
+            |device| {
+                assert_eq!(device.name, "active");
+                std::future::ready(Ok(()))
+            },
+        ).await.unwrap().unwrap();
+        assert_eq!(result.name, "active");
+        assert_eq!(attempts, (String::new(), 0));
+    }
+
+    #[tokio::test]
+    async fn unresolved_default_is_retryable_without_replacing_capture() {
+        let mut attempts = (String::new(), 0);
+        for default in [Err("no default".into()), Ok((*input("missing")).clone())] {
+            assert!(attempt_linux_recovery(false, input("missing"), &mut attempts,
+                |_| Ok(false), || default,
+                |_| std::future::ready(Ok(())),
+            ).await.is_err());
+        }
+        assert_eq!(attempts, ("missing".into(), 2));
+    }
+
+    #[test]
+    fn backend_routing_preserves_empty_slot_legacy_retries() {
+        use super::super::stream::LinuxStreamKind;
+        for failures in [0, 1, MAX_MIC_FALLBACK_ATTEMPTS] {
+            assert!(!linux_mic_uses_legacy_recovery(Some(LinuxStreamKind::Pulse), failures));
+            assert!(linux_mic_uses_legacy_recovery(Some(LinuxStreamKind::Cpal), failures));
+            assert_eq!(linux_mic_uses_legacy_recovery(None, failures), failures > 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn stale_disconnect_cannot_take_a_replacement_microphone() {
+        struct Reset {
+            manager: Option<RecordingManager>,
+            worker: tokio::task::AbortHandle,
+        }
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                *RECORDING_MANAGER.lock().unwrap() = self.manager.take();
+                self.worker.abort();
+            }
+        }
+        let mut manager = super::super::RecordingManager::new();
+        let session = manager.get_state().clone();
+        session.start_recording().unwrap();
+        let device = Arc::new(AudioDevice::new("replacement".into(), DeviceType::Input));
+        let worker = tokio::spawn(std::future::pending());
+        let abort = worker.abort_handle();
+        let stream = test_stream("replacement", Arc::new(AtomicBool::new(false)), worker);
+        manager.set_mic_stream_after_swap(stream, device, None);
+        let previous = RECORDING_MANAGER.lock().unwrap().replace(manager);
+        let _reset = Reset { manager: previous, worker: abort };
+        let result = tokio::time::timeout(std::time::Duration::from_millis(100),
+            do_mic_swap("default", "disconnected", &session)).await.unwrap().unwrap();
+        assert!(!result);
+        let guard = RECORDING_MANAGER.lock().unwrap();
+        assert_eq!(guard.as_ref().unwrap().active_stream_count(), 1);
+        assert_eq!(session.get_microphone_device().unwrap().name, "replacement");
     }
 }

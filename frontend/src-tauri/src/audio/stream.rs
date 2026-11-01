@@ -31,8 +31,17 @@ pub enum StreamBackend {
     #[cfg(target_os = "linux")]
     Pulse {
         should_stop: Arc<AtomicBool>,
+        should_finish: Arc<AtomicBool>,
+        worker_error: Arc<std::sync::Mutex<Option<String>>>,
         task: Option<tokio::task::JoinHandle<()>>,
     },
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum LinuxStreamKind {
+    Pulse,
+    Cpal,
 }
 
 // SAFETY: While Stream doesn't implement Send, we ensure it's only accessed
@@ -302,6 +311,7 @@ impl AudioStream {
         let sample_rate = capture_impl.sample_rate();
         let channels = capture_impl.channels();
         let should_stop = capture_impl.stop_handle();
+        let should_finish = capture_impl.finish_handle();
 
         // Create audio capture processor for pipeline integration
         let capture = AudioCapture::new(
@@ -323,7 +333,16 @@ impl AudioStream {
         let device_name = device.name.clone();
         let task = tokio::task::spawn_blocking(move || {
             info!("✅ Stream: PulseAudio capture thread started for {}", device_name);
-            if let Err(e) = capture_impl.run_ready(|samples| { if worker_delivery.load(std::sync::atomic::Ordering::Acquire) { capture.process_audio_data(samples); } }, || { let _ = ready_tx.send(()); }) {
+            let epoch = std::cell::Cell::new(0.0);
+            if let Err(e) = capture_impl.run_timed_ready(|samples, first_frame| {
+                if worker_delivery.load(std::sync::atomic::Ordering::Acquire) && !state.is_paused() {
+                    let timestamp = linux_sample_timestamp(epoch.get(), first_frame, state.get_total_pause_duration());
+                    capture.process_audio_data_at(samples, timestamp);
+                }
+            }, || {
+                epoch.set(state.get_recording_duration().unwrap_or(0.0));
+                let _ = ready_tx.send(());
+            }) {
                 warn!("Linux capture failed: {}", e);
                 *worker_error_out.lock().unwrap() = Some(e.to_string());
                 if !state.capture_cancel.lock().unwrap().load(std::sync::atomic::Ordering::Acquire) {
@@ -358,6 +377,8 @@ impl AudioStream {
             device: device.clone(),
             delivery: Some(delivery),
             backend: StreamBackend::Pulse {
+                should_finish,
+                worker_error,
                 should_stop,
                 task: Some(task),
             },
@@ -386,6 +407,7 @@ impl AudioStream {
         let sample_rate = capture_impl.sample_rate();
         let channels = capture_impl.channels();
         let should_stop = capture_impl.stop_handle();
+        let should_finish = capture_impl.finish_handle();
 
         // Create audio capture processor for pipeline integration
         let capture = AudioCapture::new(
@@ -410,7 +432,16 @@ impl AudioStream {
                 "✅ Stream: PulseAudio microphone capture thread started for {}",
                 device_name
             );
-            if let Err(e) = capture_impl.run_ready(|samples| { if worker_delivery.load(std::sync::atomic::Ordering::Acquire) { capture.process_audio_data(samples); } }, || { let _ = ready_tx.send(()); }) {
+            let epoch = std::cell::Cell::new(0.0);
+            if let Err(e) = capture_impl.run_timed_ready(|samples, first_frame| {
+                if worker_delivery.load(std::sync::atomic::Ordering::Acquire) && !state.is_paused() {
+                    let timestamp = linux_sample_timestamp(epoch.get(), first_frame, state.get_total_pause_duration());
+                    capture.process_audio_data_at(samples, timestamp);
+                }
+            }, || {
+                epoch.set(state.get_recording_duration().unwrap_or(0.0));
+                let _ = ready_tx.send(());
+            }) {
                 warn!("Linux capture failed: {}", e);
                 *worker_error_out.lock().unwrap() = Some(e.to_string());
                 if !state.capture_cancel.lock().unwrap().load(std::sync::atomic::Ordering::Acquire) {
@@ -451,6 +482,8 @@ impl AudioStream {
             device: device.clone(),
             delivery: Some(delivery),
             backend: StreamBackend::Pulse {
+                should_finish,
+                worker_error,
                 should_stop,
                 task: Some(task),
             },
@@ -553,6 +586,17 @@ impl AudioStream {
         if let Some(delivery) = &self.delivery { delivery.store(enabled, std::sync::atomic::Ordering::Release); }
     }
 
+    #[cfg(target_os = "linux")]
+    pub(super) fn request_finish(&self) {
+        if let StreamBackend::Pulse { should_finish, should_stop, .. } = &self.backend {
+            if self.delivery.as_ref().is_some_and(|enabled| enabled.load(std::sync::atomic::Ordering::Acquire)) {
+                should_finish.store(true, std::sync::atomic::Ordering::Release);
+            } else {
+                should_stop.store(true, std::sync::atomic::Ordering::Release);
+            }
+        }
+    }
+
     /// Get device info
     pub fn device(&self) -> &AudioDevice {
         &self.device
@@ -560,7 +604,7 @@ impl AudioStream {
 
     /// Signal the capture thread to stop, without waiting for it to exit.
     ///
-    /// Used only by `AudioStreamManager::Drop`, which cannot be async. Every
+    /// Used by Drop and aborted startup, which must not preserve queued capture. Every
     /// normal shutdown path must use `stop().await` instead.
     pub fn signal_stop_only(&self) {
         match &self.backend {
@@ -577,6 +621,8 @@ impl AudioStream {
 
     /// Stop the stream and wait for its capture thread/task to finish.
     pub async fn stop(self) -> Result<()> {
+        #[cfg(target_os = "linux")]
+        self.request_finish();
         info!("Stopping audio stream for device: {}", self.device.name);
 
         match self.backend {
@@ -603,13 +649,15 @@ impl AudioStream {
                 }
             }
             #[cfg(target_os = "linux")]
-            StreamBackend::Pulse { should_stop, task } => {
+            StreamBackend::Pulse { task, worker_error, .. } => {
                 // The nonblocking worker checks this flag between mainloop
                 // iterations. Join it before releasing pipeline resources.
                 info!("Signalling PulseAudio capture thread to stop...");
-                should_stop.store(true, std::sync::atomic::Ordering::Release);
                 if let Some(task_handle) = task {
                     task_handle.await.map_err(|e| anyhow::anyhow!("Audio worker failed: {}", e))?;
+                }
+                if let Some(error) = worker_error.lock().unwrap().as_ref() {
+                    return Err(anyhow::anyhow!(error.clone()));
                 }
             }
         }
@@ -698,10 +746,34 @@ impl AudioStreamManager {
         Ok(())
     }
 
+    #[cfg(target_os = "linux")]
+    pub(super) fn request_finish(&self) {
+        for stream in [&self.microphone_stream, &self.system_stream].into_iter().flatten() {
+            stream.request_finish();
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(super) fn finish_role(&self, microphone: bool) -> bool {
+        let stream = if microphone { &self.microphone_stream } else { &self.system_stream };
+        stream.as_ref().map_or(true, |stream| {
+            stream.request_finish();
+            !matches!(&stream.backend, StreamBackend::Pulse { .. }) || stream.has_ended()
+        })
+    }
+
     /// Stop all audio streams and wait for each capture thread to finish.
     pub async fn stop_streams(&mut self) -> Result<()> {
         info!("Stopping all audio streams");
 
+        #[cfg(target_os = "linux")]
+        if self.state.is_recording() {
+            self.request_finish();
+        } else {
+            for stream in [&self.microphone_stream, &self.system_stream].into_iter().flatten() {
+                stream.signal_stop_only();
+            }
+        }
         let mut errors = Vec::new();
 
         // Stop microphone stream
@@ -746,9 +818,23 @@ impl AudioStreamManager {
     pub fn set_system_stream(&mut self, stream: AudioStream) { self.system_stream = Some(stream); }
 
     #[cfg(target_os = "linux")]
+    pub(super) fn linux_stream_kind(&self, microphone: bool) -> Option<LinuxStreamKind> {
+        let stream = if microphone { &self.microphone_stream } else { &self.system_stream };
+        stream.as_ref().map(|stream| match &stream.backend {
+            StreamBackend::Pulse { .. } => LinuxStreamKind::Pulse,
+            StreamBackend::Cpal(_) => LinuxStreamKind::Cpal,
+        })
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn has_working_stream(&self, microphone: bool) -> bool {
+        let stream = if microphone { &self.microphone_stream } else { &self.system_stream };
+        stream.as_ref().is_some_and(|stream| !stream.has_ended())
+    }
+
+    #[cfg(target_os = "linux")]
     pub fn has_working_streams(&self) -> bool {
-        self.microphone_stream.as_ref().map_or(false, |s| !s.has_ended()) ||
-            self.system_stream.as_ref().map_or(false, |s| !s.has_ended())
+        self.has_working_stream(true) || self.has_working_stream(false)
     }
 
     /// Get stream count
@@ -782,5 +868,78 @@ impl Drop for AudioStreamManager {
         if let Some(sys_stream) = self.system_stream.take() {
             sys_stream.signal_stop_only();
         }
+    }
+}
+// Callers check Pause before reading its completed total so Resume cannot admit a future timestamp.
+#[cfg(target_os = "linux")]
+fn linux_sample_timestamp(wall_origin: f64, first_frame: u64, paused: f64) -> f64 {
+    wall_origin + first_frame as f64 / 48000.0 - paused
+}
+
+#[cfg(all(test, target_os = "linux"))]
+pub(super) mod linux_clock_tests {
+    use super::*;
+
+    pub(crate) fn test_stream(name: &str, finish: Arc<AtomicBool>, task: tokio::task::JoinHandle<()>) -> AudioStream {
+        AudioStream {
+            device: Arc::new(AudioDevice::new(name.into(), super::super::devices::DeviceType::Input)),
+            delivery: Some(Arc::new(AtomicBool::new(true))),
+            backend: StreamBackend::Pulse {
+                should_stop: Arc::new(AtomicBool::new(false)), should_finish: finish,
+                worker_error: Arc::new(std::sync::Mutex::new(None)), task: Some(task),
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn native_backend_identity_survives_worker_exit() {
+        let mut manager = AudioStreamManager::new(RecordingState::new());
+        assert_eq!(manager.linux_stream_kind(true), None);
+        let task = tokio::spawn(async {});
+        while !task.is_finished() { tokio::task::yield_now().await; }
+        manager.set_mic_stream(test_stream("mic", Arc::new(AtomicBool::new(false)), task));
+        assert_eq!(manager.linux_stream_kind(true), Some(LinuxStreamKind::Pulse));
+        assert!(!manager.has_working_stream(true));
+        let stream = manager.take_mic_stream().unwrap();
+        assert_eq!(manager.linux_stream_kind(true), None);
+        stream.stop().await.unwrap();
+    }
+
+    #[test]
+    fn alsa_callback_jitter_and_pause_do_not_change_sample_spacing() {
+        let state = RecordingState::new();
+        state.start_recording().unwrap();
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        state.set_audio_sender(sender);
+        let capture = AudioCapture::new(Arc::new(AudioDevice::new("test".into(), super::super::devices::DeviceType::Input)),
+            state.clone(), 48000, 1, DeviceType::System, None);
+        capture.process_audio_data(&[1.0; 10]);
+        state.pause_recording().unwrap();
+        capture.process_audio_data(&[3.0; 17]);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        state.resume_recording().unwrap();
+        capture.process_audio_data(&[2.0; 11]);
+        let first = receiver.try_recv().unwrap();
+        let second = receiver.try_recv().unwrap();
+        assert_eq!(first.data.len(), 10);
+        assert_eq!(second.data.len(), 11);
+        assert!((second.timestamp - first.timestamp - 10.0 / 48000.0).abs() < 1e-9);
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn prepared_and_paused_frames_keep_their_session_position() {
+        assert_eq!(linux_sample_timestamp(7.0, 192000, 8.0), 3.0);
+        // A candidate prepared earlier retains its current position when activated.
+        assert_eq!(linux_sample_timestamp(7.0, 48000, 5.0), 3.0);
+        // A replacement created after an earlier pause subtracts that pause once.
+        assert_eq!(linux_sample_timestamp(12.0, 48000, 8.0), 5.0);
+    }
+
+    #[test]
+    fn ready_during_pause_preserves_resumed_sample_position() {
+        let resumed = linux_sample_timestamp(15.0, 240000, 10.0);
+        assert_eq!(resumed, 10.0);
+        assert!((linux_sample_timestamp(15.0, 240480, 10.0) - resumed - 0.01).abs() < 1e-9);
     }
 }

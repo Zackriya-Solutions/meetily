@@ -138,6 +138,7 @@ pub fn default_sink_name() -> Result<Option<String>> {
 pub struct PulseCapture {
     source: String,
     should_stop: Arc<AtomicBool>,
+    should_finish: Arc<AtomicBool>,
     channels: u16,
 }
 
@@ -147,17 +148,23 @@ impl PulseCapture {
     pub fn new_system(source: &str) -> Result<Self> { Self::new(source, 2) }
     pub fn new_microphone(source: &str) -> Result<Self> { Self::new(source, 1) }
     fn new(source: &str, channels: u16) -> Result<Self> {
-        Ok(Self { source: source.into(), channels, should_stop: Arc::new(AtomicBool::new(false)) })
+        Ok(Self { source: source.into(), channels, should_stop: Arc::new(AtomicBool::new(false)), should_finish: Arc::new(AtomicBool::new(false)) })
     }
     pub fn sample_rate(&self) -> u32 { CAPTURE_SAMPLE_RATE }
     pub fn channels(&self) -> u16 { self.channels }
     pub fn stop_handle(&self) -> Arc<AtomicBool> { self.should_stop.clone() }
+
+    pub fn finish_handle(&self) -> Arc<AtomicBool> { self.should_finish.clone() }
 
     pub fn run(&self, on_samples: impl FnMut(&[f32])) -> Result<()> {
         self.run_ready(on_samples, || {})
     }
 
     pub fn run_ready(&self, mut on_samples: impl FnMut(&[f32]), ready: impl FnOnce()) -> Result<()> {
+        self.run_timed_ready(|samples, _| on_samples(samples), ready)
+    }
+
+    pub(crate) fn run_timed_ready(&self, mut on_samples: impl FnMut(&[f32], u64), ready: impl FnOnce()) -> Result<()> {
         if self.should_stop.load(Ordering::Acquire) { return Ok(()); }
         // Declaration order ensures stream/context are dropped before mainloop.
         let mut mainloop = Mainloop::new().ok_or_else(|| anyhow!("Cannot create audio mainloop"))?;
@@ -175,7 +182,11 @@ impl PulseCapture {
         let spec = Spec { format: Format::FLOAT32NE, channels: self.channels as u8, rate: CAPTURE_SAMPLE_RATE };
         let mut stream = Stream::new(&mut context, "Capture", &spec, None)
             .ok_or_else(|| anyhow!("Cannot create audio stream"))?;
-        stream.connect_record(Some(&self.source), None, FlagSet::DONT_MOVE)
+        let attributes = libpulse_binding::def::BufferAttr {
+            maxlength: u32::MAX, tlength: u32::MAX, prebuf: u32::MAX, minreq: u32::MAX,
+            fragsize: CAPTURE_SAMPLE_RATE / 50 * self.channels as u32 * 4,
+        };
+        stream.connect_record(Some(&self.source), Some(&attributes), FlagSet::DONT_MOVE)
             .map_err(|e| anyhow!("Cannot open audio device: {}", e))?;
         let deadline = Instant::now() + Duration::from_secs(5);
         while stream.get_state() != State::Ready {
@@ -185,7 +196,16 @@ impl PulseCapture {
             }
             pump(&mut mainloop)?;
         }
+        if let Some(attributes) = stream.get_buffer_attr() {
+            debug!("Linux capture negotiated fragment: {} bytes", attributes.fragsize);
+        }
         ready();
+        let frame_bytes = u64::from(self.channels) * 4;
+        let mut consumed_bytes = 0u64;
+        let mut finish_deadline = None;
+        let timing_done = std::rc::Rc::new(std::cell::Cell::new(None));
+        let mut timing_operation = None;
+        let mut cutoff = None;
         let mut samples = Vec::new();
         while !self.should_stop.load(Ordering::Acquire) {
             pump(&mut mainloop)?;
@@ -194,21 +214,68 @@ impl PulseCapture {
             if stream.get_state() != State::Ready { return Err(anyhow!("Audio capture stopped unexpectedly")); }
             loop {
                 if self.should_stop.load(Ordering::Acquire) { break; }
-                samples.clear();
-                match stream.peek().map_err(|e| anyhow!("Cannot read audio: {}", e))? {
-                    PeekResult::Empty => break,
-                    PeekResult::Hole(bytes) => samples.resize(bytes / 4, 0.0),
-                    PeekResult::Data(bytes) => samples.extend(bytes.chunks_exact(4)
-                        .map(|b| f32::from_ne_bytes([b[0], b[1], b[2], b[3]]))),
+                if self.should_finish.load(Ordering::Acquire) {
+                    if finish_deadline.is_none() {
+                        finish_deadline = Some(Instant::now() + Duration::from_millis(250));
+                        let done = timing_done.clone();
+                        timing_operation = Some(stream.update_timing_info(Some(Box::new(move |success| done.set(Some(success))))));
+                    }
+                    if cutoff.is_none() {
+                        match timing_done.get() {
+                            Some(true) => {
+                                let timing = stream.get_timing_info().ok_or_else(|| anyhow!("Capture closeout has no timing information"))?;
+                                cutoff = Some(validate_cutoff(timing.write_index, timing.write_index_corrupt != 0, consumed_bytes, frame_bytes)?);
+                            }
+                            Some(false) => return Err(anyhow!("Could not obtain capture closeout timing")),
+                            None => {}
+                        }
+                    }
+                    if cutoff == Some(consumed_bytes) { break; }
+                    if Instant::now() >= finish_deadline.unwrap() {
+                        return Err(anyhow!("Timed out preserving queued audio during capture closeout"));
+                    }
+                    // Leave arrivals in libpulse's queue until the server cutoff is known.
+                    if cutoff.is_none() { break; }
                 }
+                samples.clear();
+                let bytes = match stream.peek().map_err(|e| anyhow!("Cannot read audio: {}", e))? {
+                    PeekResult::Empty => break,
+                    PeekResult::Hole(bytes) => {
+                        let accepted = closeout_bytes(bytes, consumed_bytes, cutoff);
+                        samples.resize(accepted / 4, 0.0);
+                        bytes
+                    }
+                    PeekResult::Data(bytes) => {
+                        let accepted = closeout_bytes(bytes.len(), consumed_bytes, cutoff);
+                        samples.extend(bytes[..accepted].chunks_exact(4)
+                            .map(|b| f32::from_ne_bytes([b[0], b[1], b[2], b[3]])));
+                        bytes.len()
+                    }
+                };
+                let first_frame = consumed_bytes / frame_bytes;
+                consumed_bytes += closeout_bytes(bytes, consumed_bytes, cutoff) as u64;
                 stream.discard().map_err(|e| anyhow!("Cannot release audio buffer: {}", e))?;
-                if !self.should_stop.load(Ordering::Acquire) { on_samples(&samples); }
+                if !self.should_stop.load(Ordering::Acquire) { on_samples(&samples, first_frame); }
             }
+            if cutoff == Some(consumed_bytes) { break; }
         }
+        drop(timing_operation);
+
         let _ = stream.disconnect();
         context.disconnect();
         Ok(())
     }
+}
+
+fn validate_cutoff(write_index: i64, corrupt: bool, consumed: u64, frame_bytes: u64) -> Result<u64> {
+    if corrupt || write_index < 0 || write_index as u64 % frame_bytes != 0 || (write_index as u64) < consumed {
+        return Err(anyhow!("Capture closeout received an invalid sample cutoff"));
+    }
+    Ok(write_index as u64)
+}
+
+fn closeout_bytes(available: usize, consumed: u64, cutoff: Option<u64>) -> usize {
+    cutoff.map_or(available, |end| end.saturating_sub(consumed).min(available as u64) as usize)
 }
 
 fn pump(mainloop: &mut Mainloop) -> Result<()> {
@@ -231,11 +298,65 @@ mod tests {
     }
 
     #[test]
+    fn closeout_clips_data_and_holes_on_stereo_frame_boundaries() {
+        assert_eq!(closeout_bytes(80, 0, Some(24)), 24);
+        assert_eq!(closeout_bytes(80, 16, Some(24)), 8);
+        assert_eq!(closeout_bytes(80, 24, Some(24)), 0);
+        assert_eq!(closeout_bytes(80, 0, None), 80);
+        assert!(validate_cutoff(23, false, 0, 8).is_err());
+        assert!(validate_cutoff(-8, false, 0, 8).is_err());
+        assert!(validate_cutoff(24, true, 0, 8).is_err());
+        assert!(validate_cutoff(24, false, 32, 8).is_err());
+        assert_eq!(validate_cutoff(24, false, 16, 8).unwrap(), 24);
+    }
+
+    #[test]
     fn formats_remain_mono_mic_and_stereo_system_at_48khz() {
         let mic = PulseCapture::new_microphone("source").unwrap();
         let system = PulseCapture::new_system("monitor").unwrap();
         assert_eq!((mic.channels(), mic.sample_rate()), (1, 48000));
         assert_eq!((system.channels(), system.sample_rate()), (2, 48000));
+    }
+
+    #[test]
+    #[ignore] // Creates and removes its own silent virtual sink on a live server.
+    fn graceful_closeout_on_an_isolated_virtual_sink() {
+        let name = format!("meetily_closeout_test_{}", std::process::id());
+        let output = std::process::Command::new("pactl").args([
+            "load-module", "module-null-sink", &format!("sink_name={name}")]).output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        struct Module(String);
+        impl Drop for Module {
+            fn drop(&mut self) {
+                let _ = std::process::Command::new("pactl").args(["unload-module", self.0.trim()]).status();
+            }
+        }
+        let _module = Module(String::from_utf8(output.stdout).unwrap());
+        let output = std::process::Command::new("pactl").args([
+            "load-module", "module-sine", &format!("sink={name}"), "frequency=440"]).output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        let _tone = Module(String::from_utf8(output.stdout).unwrap());
+        let capture = PulseCapture::new_system(&format!("{name}.monitor")).unwrap();
+        let finish = capture.finish_handle();
+        let stop = capture.stop_handle();
+        let (done, wait) = std::sync::mpsc::channel();
+        let watchdog = std::thread::spawn(move || {
+            if wait.recv_timeout(Duration::from_secs(5)).is_err() { stop.store(true, Ordering::Release); }
+        });
+        let mut frames = 0;
+        let mut finishing = None;
+        let result = capture.run_timed_ready(|samples, first_frame| {
+            assert_eq!(first_frame, frames);
+            assert_eq!(samples.len() % 2, 0);
+            frames += (samples.len() / 2) as u64;
+            finishing.get_or_insert_with(Instant::now);
+            finish.store(true, Ordering::Release);
+        }, || {});
+        let _ = done.send(());
+        watchdog.join().unwrap();
+        result.unwrap();
+        assert!(frames > 0);
+        assert!(finishing.unwrap().elapsed() < Duration::from_millis(500));
     }
 
     #[test]
