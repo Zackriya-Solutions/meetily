@@ -695,6 +695,21 @@ impl AudioStreamManager {
         system_device: Option<Arc<AudioDevice>>,
         recording_sender: Option<mpsc::UnboundedSender<super::recording_state::AudioChunk>>,
     ) -> Result<()> {
+        self.start_streams_with(microphone_device, system_device, |device, state, role| {
+            AudioStream::create(device, state, role, recording_sender.clone())
+        }).await
+    }
+
+    async fn start_streams_with<F, Fut>(
+        &mut self,
+        microphone_device: Option<Arc<AudioDevice>>,
+        system_device: Option<Arc<AudioDevice>>,
+        mut create: F,
+    ) -> Result<()>
+    where
+        F: FnMut(Arc<AudioDevice>, Arc<RecordingState>, DeviceType) -> Fut,
+        Fut: std::future::Future<Output = Result<AudioStream>>,
+    {
         use super::capture::get_current_backend;
         let backend = get_current_backend();
         info!("🎙️ Starting audio streams with backend: {:?}", backend);
@@ -702,7 +717,7 @@ impl AudioStreamManager {
         // Start microphone stream
         if let Some(mic_device) = microphone_device {
             info!("🎤 Creating microphone stream: {} (always uses CPAL)", mic_device.name);
-            match AudioStream::create(mic_device.clone(), self.state.clone(), DeviceType::Microphone, recording_sender.clone()).await {
+            match create(mic_device.clone(), self.state.clone(), DeviceType::Microphone).await {
                 Ok(stream) => {
                     self.state.set_microphone_device(mic_device);
                     self.microphone_stream = Some(stream);
@@ -710,10 +725,7 @@ impl AudioStreamManager {
                 }
                 Err(e) => {
                     error!("❌ Failed to create microphone stream: {}", e);
-                    #[cfg(not(target_os = "linux"))]
                     return Err(e);
-                    #[cfg(target_os = "linux")]
-                    self.state.report_error(super::recording_state::AudioError::StreamFailed);
                 }
             }
         } else {
@@ -723,7 +735,7 @@ impl AudioStreamManager {
         // Start system audio stream
         if let Some(sys_device) = system_device {
             info!("🔊 Creating system audio stream: {} (backend: {:?})", sys_device.name, backend);
-            match AudioStream::create(sys_device.clone(), self.state.clone(), DeviceType::System, recording_sender.clone()).await {
+            match create(sys_device.clone(), self.state.clone(), DeviceType::System).await {
                 Ok(stream) => {
                     self.state.set_system_device(sys_device);
                     self.system_stream = Some(stream);
@@ -874,6 +886,105 @@ impl Drop for AudioStreamManager {
 #[cfg(target_os = "linux")]
 fn linux_sample_timestamp(wall_origin: f64, first_frame: u64, paused: f64) -> f64 {
     wall_origin + first_frame as f64 / 48000.0 - paused
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod linux_startup_tests {
+    use super::*;
+
+    fn device(name: &str, role: super::super::devices::DeviceType) -> Arc<AudioDevice> {
+        Arc::new(AudioDevice::new(name.into(), role))
+    }
+
+    fn stream(device: Arc<AudioDevice>) -> AudioStream {
+        let mut stream = super::linux_clock_tests::test_stream(
+            &device.name, Arc::new(AtomicBool::new(false)), tokio::spawn(async {}),
+        );
+        stream.device = device;
+        stream
+    }
+
+    #[tokio::test]
+    async fn microphone_start_failure_returns_before_opening_system_audio() {
+        let state = RecordingState::new();
+        let mut manager = AudioStreamManager::new(state.clone());
+        let mut calls = Vec::new();
+        let result = manager.start_streams_with(
+            Some(device("mic", super::super::devices::DeviceType::Input)),
+            Some(device("system", super::super::devices::DeviceType::Output)),
+            |device, _, role| {
+                calls.push(role.clone());
+                std::future::ready(if role == DeviceType::Microphone {
+                    Err(anyhow::anyhow!("microphone readiness failed"))
+                } else {
+                    Ok(stream(device))
+                })
+            },
+        ).await;
+        assert_eq!(result.unwrap_err().to_string(), "microphone readiness failed");
+        assert_eq!(calls, vec![DeviceType::Microphone]);
+        assert_eq!(manager.active_stream_count(), 0);
+        assert!(state.get_microphone_device().is_none());
+        assert!(state.get_system_device().is_none());
+
+        manager.start_streams_with(
+            Some(device("mic", super::super::devices::DeviceType::Input)),
+            Some(device("system", super::super::devices::DeviceType::Output)),
+            |device, _, _| std::future::ready(Ok(stream(device))),
+        ).await.unwrap();
+        assert_eq!(manager.active_stream_count(), 2);
+        assert_eq!(state.get_microphone_device().unwrap().name, "mic");
+        manager.stop_streams().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn no_microphone_still_allows_system_only_startup() {
+        let state = RecordingState::new();
+        let mut manager = AudioStreamManager::new(state.clone());
+        let system = device("system", super::super::devices::DeviceType::Output);
+        manager.start_streams_with(None, Some(system.clone()), |device, _, role| {
+            assert_eq!(role, DeviceType::System);
+            std::future::ready(Ok(stream(device)))
+        }).await.unwrap();
+        assert_eq!(manager.active_stream_count(), 1);
+        assert!(state.get_microphone_device().is_none());
+        assert_eq!(state.get_system_device().unwrap().name, system.name);
+        manager.stop_streams().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn system_failure_still_allows_microphone_only_startup() {
+        let state = RecordingState::new();
+        let mut manager = AudioStreamManager::new(state.clone());
+        manager.start_streams_with(
+            Some(device("mic", super::super::devices::DeviceType::Input)),
+            Some(device("system", super::super::devices::DeviceType::Output)),
+            |device, _, role| std::future::ready(if role == DeviceType::System {
+                Err(anyhow::anyhow!("system unavailable"))
+            } else {
+                Ok(stream(device))
+            }),
+        ).await.unwrap();
+        assert_eq!(manager.active_stream_count(), 1);
+        assert_eq!(state.get_microphone_device().unwrap().name, "mic");
+        assert!(state.get_system_device().is_none());
+        manager.stop_streams().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn both_successful_roles_are_installed() {
+        let state = RecordingState::new();
+        let mut manager = AudioStreamManager::new(state.clone());
+        manager.start_streams_with(
+            Some(device("mic", super::super::devices::DeviceType::Input)),
+            Some(device("system", super::super::devices::DeviceType::Output)),
+            |device, _, _| std::future::ready(Ok(stream(device))),
+        ).await.unwrap();
+        assert_eq!(manager.active_stream_count(), 2);
+        assert_eq!(state.get_microphone_device().unwrap().name, "mic");
+        assert_eq!(state.get_system_device().unwrap().name, "system");
+        manager.stop_streams().await.unwrap();
+    }
 }
 
 #[cfg(all(test, target_os = "linux"))]
