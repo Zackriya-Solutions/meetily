@@ -44,7 +44,7 @@ A privacy-first AI meeting assistant that captures, transcribes, and summarizes 
 
 ---
 
-> **Meetily PRO Upgrade Offer** - Meetily PRO is available for users who need enhanced accuracy, advanced exports, custom summary workflows, and team-ready features. Use coupon code **LAUNCH20** for **20% off** until the next Meetily Community Edition release. Speaker diarization is also planned for PRO in mid-June. [Explore Meetily PRO →](https://meetily.ai/pro/)
+> **Meetily PRO Upgrade Offer** - Meetily PRO is available for users who need speaker identification, API, MCP and other integrations, advanced exports, custom summary workflows, and team-ready features. Use coupon code **LAUNCH20** for **20% off** until the next Meetily Community Edition release. Pro adds speaker identification (who said what), custom summary templates, PDF/DOCX export, and MCP, CLI and webhook integrations. [Explore Meetily PRO →](https://meetily.ai/pro/)
 
 ---
 
@@ -66,7 +66,7 @@ A privacy-first AI meeting assistant that captures, transcribes, and summarizes 
 
 ## Introduction
 
-Meetily is a privacy-first AI meeting assistant that runs entirely on your local machine. It captures your meetings, transcribes them in real-time, and generates summaries, all without sending any data to the cloud. This makes it the perfect solution for professionals and enterprises who need to maintain complete control over their sensitive information.
+Meetily is a privacy-first AI meeting assistant that runs entirely on your local machine. It captures your meetings, transcribes them in real-time, and generates summaries with a local model by default. Audio and transcription never leave your device. If you choose a cloud AI provider for summaries, only the transcript text is sent to it. This makes it the perfect solution for professionals and enterprises who need to maintain complete control over their sensitive information.
 
 ## Why Meetily?
 
@@ -78,6 +78,9 @@ While there are many meeting transcription tools available, this solution stands
 - **Customizable:** Self-host and modify for your specific needs.
 
 <details>
+
+Note: Official builds are only on meetily.ai and github.com/Zackriya-Solutions/meetily/releases.
+    
 <summary>The Privacy Problem</summary>
 
 Meeting AI tools create significant privacy and compliance risks across all sectors:
@@ -97,7 +100,7 @@ Whether you're a defense consultant, enterprise executive, legal professional, o
 - **Local First:** All processing is done on your machine. No data ever leaves your computer.
 - **Real-time Transcription:** Get a live transcript of your meeting as it happens.
 - **AI-Powered Summaries:** Generate summaries of your meetings using powerful language models.
-- **Multi-Platform:** Works on macOS, Windows, and Linux.
+- **Multi-Platform:** Native apps for Windows and macOS (Apple Silicon). On Linux, build from source.
 - **Open Source:** Meetily is open source and free to use.
 - **Flexible AI Provider Support:** Choose from Ollama (local), Claude, Groq, OpenRouter, or use your own OpenAI-compatible endpoint.
 
@@ -127,8 +130,8 @@ Build from source following our detailed guides:
 **Quick start:**
 
 ```bash
-git clone https://github.com/Zackriya-Solutions/meeting-minutes
-cd meeting-minutes/frontend
+git clone https://github.com/Zackriya-Solutions/meetily
+cd meetily/frontend
 pnpm install --frozen-lockfile
 ./build-gpu.sh
 ```
@@ -215,23 +218,20 @@ If you want to contribute to Meetily or build it from source, you'll need to hav
     <img src="docs/pv2.1.png" width="650" style="border-radius: 10px;" alt="Upcoming version" />
 </p>
 
-**Meetily PRO** is a professional-grade solution with enhanced accuracy and advanced features for serious users and teams. Built on a different codebase with superior transcription models and enterprise-ready capabilities.
+**Meetily PRO** is a professional-grade solution with enhanced accuracy and advanced features for serious users and teams. 
 
 ### Community Thank-You Offer
 
-Meetily Community Edition will remain free and open source. PRO exists for users and teams who want a more advanced meeting workflow, including higher transcription accuracy, custom summary templates, advanced exports, auto-meeting detection, and self-hosted deployment options.
+Meetily Community Edition will remain free and open source. PRO exists for users and teams who want a more advanced meeting workflow, including speaker identification, custom summary templates, advanced exports, auto-meeting detection, and AI assistant integrations (MCP, CLI, webhooks), and self-hosted deployment options for teams.
 
 For the community that helped Meetily grow, we are making the upgrade easier: use coupon code **LAUNCH20** for **20% off Meetily PRO** until the next Meetily Community Edition release.
 
-Speaker diarization is planned for mid-June, bringing automatic speaker separation to PRO meetings.
-
 ### Key Advantages Over Community Edition:
 
-- **Enhanced Accuracy**: Superior transcription models for professional-grade accuracy
 - **Custom Summary Templates**: Tailor summaries to your specific workflow and needs
 - **Advanced Export Options**: PDF, DOCX, and Markdown exports with formatting
 - **Auto-detect and Join Meetings**: Automatic meeting detection and joining
-- **Speaker Identification**: Distinguish between speakers automatically *(Coming Soon)*
+- **Speaker Identification**: Who said what, on your device, live and on imported audio
 - **Chat with Meetings**: AI-powered meeting insights and queries *(Coming Soon)*
 - **Calendar Integration**: Seamless integration with your calendar *(Coming Soon)*
 - **Self-Hosted Deployment**: Deploy on your own infrastructure for teams
@@ -240,14 +240,15 @@ Speaker diarization is planned for mid-June, bringing automatic speaker separati
 
 ### Who is PRO for?
 
-- **Professionals** who need the highest accuracy for critical meetings
 - **Teams and organizations** (2-100 users) requiring self-hosted deployment
 - **Power users** who need advanced export formats and custom workflows
 - **Compliance-focused organizations** requiring GDPR readiness
 
-> **Note:** Meetily Community Edition remains **free & open source forever** with local transcription, AI summaries, and core features. PRO is a separate professional solution for users who need enhanced accuracy and advanced capabilities.
+> **Note:** Meetily Community Edition remains **free & open source forever** (MIT) with local transcription, AI summaries, and core features. PRO is a separate professional solution for users who need enhanced accuracy and advanced capabilities.
 
-For organizations needing 100+ users or managed compliance solutions, explore [Meetily Enterprise](https://meetily.ai/enterprise/).
+Pro is $10/user/month, billed annually, with a 14-day free trial.
+
+For organizations needing 100+ users or managed compliance solutions, explore [https://meetily.ai/](https://meetily.ai/pricing).
 
 **Learn more about pricing and features:** [https://meetily.ai/pro/](https://meetily.ai/pro/)
 
