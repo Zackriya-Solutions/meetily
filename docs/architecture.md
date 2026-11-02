@@ -39,3 +39,12 @@ graph TD
 *   **Transcription Engine:** Uses local speech-to-text models (Whisper or Parakeet) to transcribe the captured audio. It can be accelerated with a GPU.
 *   **Database:** A local SQLite database that stores meeting metadata, transcripts, and summaries.
 *   **Summary Engine:** Generates meeting summaries using various Large Language Models (LLMs), including local models via Ollama.
+
+## Desktop file access
+
+Do not expose generic file read/write commands through Tauri IPC. The unused
+`read_audio_file` and `save_transcript` commands have been removed, along with the
+unused playback hook that called the former. Meeting persistence continues through
+the database-backed `api_save_transcript` command. Future playback or export
+commands must authorize paths in Rust rather than trusting a renderer-supplied
+filename or relying on the filesystem plugin's scope to protect custom commands.
