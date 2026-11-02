@@ -64,13 +64,13 @@ export function AudioLevelMeter({
     <div className={`flex items-center space-x-2 ${className}`}>
       {/* Device activity indicator */}
       <div className={`w-2 h-2 rounded-full ${
-        isActive ? 'bg-green-400 animate-pulse' : 'bg-gray-300'
+        isActive ? 'bg-green-400 animate-pulse' : 'bg-gray-300 dark:bg-zinc-600'
       }`} title={`${deviceName} - ${isActive ? 'Active' : 'Inactive'}`} />
 
       {/* Level meter container */}
       <div className={`flex-1 ${sizes.container} relative`}>
         {/* Background */}
-        <div className="w-full h-full bg-gray-200 rounded-sm overflow-hidden">
+        <div className="w-full h-full bg-gray-200 dark:bg-zinc-700 rounded-sm overflow-hidden">
           {/* RMS level bar (main level) */}
           <div
             className={`${sizes.meter} ${rmsColor} transition-all duration-150 ease-out rounded-sm`}
@@ -98,7 +98,7 @@ export function AudioLevelMeter({
       </div>
 
       {/* Level percentage display */}
-      <div className={`${sizes.text} text-gray-600 font-mono min-w-[3rem] text-right`}>
+      <div className={`${sizes.text} text-gray-600 dark:text-zinc-400 font-mono min-w-[3rem] text-right`}>
         {rmsPercent}%
       </div>
     </div>
@@ -133,11 +133,11 @@ export function CompactAudioLevelMeter({
     <div className={`flex items-center space-x-1 ${className}`}>
       {/* Activity dot */}
       <div className={`w-1.5 h-1.5 rounded-full ${
-        isActive ? 'bg-green-400' : 'bg-gray-300'
+        isActive ? 'bg-green-400' : 'bg-gray-300 dark:bg-zinc-600'
       }`} />
 
       {/* Mini meter */}
-      <div className="w-8 h-1.5 bg-gray-200 rounded-sm overflow-hidden">
+      <div className="w-8 h-1.5 bg-gray-200 dark:bg-zinc-700 rounded-sm overflow-hidden">
         <div
           className={`h-full ${getLevelColor(logRms)} transition-all duration-150`}
           style={{ width: `${rmsPercent}%` }}
