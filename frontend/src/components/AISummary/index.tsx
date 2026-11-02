@@ -606,25 +606,25 @@ export const AISummary = ({ summary, status, error, onSummaryChange, onRegenerat
   };
 
   const renderErrorState = () => (
-    <div className="w-full p-4 bg-red-50 border border-red-200 rounded-lg">
+    <div className="w-full p-4 bg-red-50 dark:bg-red-950/50 border border-red-200 dark:border-red-800 rounded-lg">
       <div className="flex items-center mb-2">
-        <ExclamationTriangleIcon className="h-5 w-5 text-red-500 mr-2" />
-        <h3 className="text-red-700 font-medium">Error Generating Summary</h3>
+        <ExclamationTriangleIcon className="h-5 w-5 text-red-500 dark:text-red-400 mr-2" />
+        <h3 className="text-red-700 dark:text-red-300 font-medium">Error Generating Summary</h3>
       </div>
-      <p className="text-red-600 text-sm">{error}</p>
-      <p className="text-red-500 text-xs mt-2">Please check your model configuration and API keys, or try again.</p>
+      <p className="text-red-600 dark:text-red-400 text-sm">{error}</p>
+      <p className="text-red-500 dark:text-red-400 text-xs mt-2">Please check your model configuration and API keys, or try again.</p>
     </div>
   );
 
   const renderLoadingState = () => (
-    <div className="w-full p-4 bg-blue-50 border border-blue-200 rounded-lg">
+    <div className="w-full p-4 bg-blue-50 dark:bg-blue-950/50 border border-blue-200 dark:border-blue-800 rounded-lg">
       <div className="flex items-center space-x-3">
         <div className="animate-spin rounded-full h-5 w-5 border-2 border-blue-500 border-t-transparent"></div>
         <div>
-          <h3 className="text-blue-700 font-medium">
+          <h3 className="text-blue-700 dark:text-blue-300 font-medium">
             {status === 'processing' ? 'Processing Transcript' : 'Generating Summary'}
           </h3>
-          <p className="text-blue-600 text-sm">
+          <p className="text-blue-600 dark:text-blue-400 text-sm">
             {status === 'processing' 
               ? 'Analyzing your transcript...' 
               : 'Creating a detailed summary of your meeting...'}
@@ -648,9 +648,9 @@ export const AISummary = ({ summary, status, error, onSummaryChange, onRegenerat
 
   if (!hasContent && status === 'completed') {
     return (
-      <div className="w-full p-4 bg-gray-50 border border-gray-200 rounded-lg text-center">
-        <p className="text-gray-600">No summary content available.</p>
-        <p className="text-gray-500 text-sm mt-1">Try generating a new summary.</p>
+      <div className="w-full p-4 bg-gray-50 dark:bg-zinc-950 border border-gray-200 dark:border-zinc-800 rounded-lg text-center">
+        <p className="text-gray-600 dark:text-zinc-400">No summary content available.</p>
+        <p className="text-gray-500 dark:text-zinc-400 text-sm mt-1">Try generating a new summary.</p>
       </div>
     );
   }
@@ -672,7 +672,7 @@ export const AISummary = ({ summary, status, error, onSummaryChange, onRegenerat
       {/* Context Menu */}
       {contextMenu.visible && selectedBlocks.length > 0 && (
         <div
-          className="fixed z-50 bg-white shadow-lg rounded-lg py-1 min-w-[160px] border border-gray-200
+          className="fixed z-50 bg-white dark:bg-zinc-900 shadow-lg rounded-lg py-1 min-w-[160px] border border-gray-200 dark:border-zinc-800
                      animate-in fade-in zoom-in-95 duration-150"
           style={{ 
             left: contextMenu.x, 
@@ -681,14 +681,14 @@ export const AISummary = ({ summary, status, error, onSummaryChange, onRegenerat
           onClick={e => e.stopPropagation()}
         >
           <button
-            className="w-full px-4 py-2 text-left hover:bg-gray-100 flex items-center space-x-2"
+            className="w-full px-4 py-2 text-left hover:bg-gray-100 dark:hover:bg-zinc-800 flex items-center space-x-2"
             onClick={handleCopyBlocks}
           >
-            <span className="text-gray-600">📋</span>
+            <span className="text-gray-600 dark:text-zinc-400">📋</span>
             <span>Copy {selectedBlocks.length > 1 ? `${selectedBlocks.length} blocks` : 'block'}</span>
           </button>
           <button
-            className="w-full px-4 py-2 text-left hover:bg-gray-100 text-red-600 flex items-center space-x-2"
+            className="w-full px-4 py-2 text-left hover:bg-gray-100 dark:hover:bg-zinc-800 text-red-600 dark:text-red-400 flex items-center space-x-2"
             onClick={handleDeleteBlocks}
           >
             <span>🗑️</span>
@@ -708,7 +708,7 @@ export const AISummary = ({ summary, status, error, onSummaryChange, onRegenerat
           <button
             onClick={handleUndo}
             disabled={currentHistoryIndex === 0}
-            className="p-2 hover:bg-gray-100 rounded disabled:opacity-50"
+            className="p-2 hover:bg-gray-100 dark:hover:bg-zinc-800 rounded disabled:opacity-50"
             title="Undo"
           >
             <svg
@@ -729,7 +729,7 @@ export const AISummary = ({ summary, status, error, onSummaryChange, onRegenerat
           <button
             onClick={handleRedo}
             disabled={currentHistoryIndex === history.length - 1}
-            className="p-2 hover:bg-gray-100 rounded disabled:opacity-50"
+            className="p-2 hover:bg-gray-100 dark:hover:bg-zinc-800 rounded disabled:opacity-50"
             title="Redo"
           >
             <svg
@@ -749,7 +749,7 @@ export const AISummary = ({ summary, status, error, onSummaryChange, onRegenerat
           </button>
           <button
             onClick={handleAddSection}
-            className="p-2 hover:bg-gray-100 rounded"
+            className="p-2 hover:bg-gray-100 dark:hover:bg-zinc-800 rounded"
             title="Add new section"
           >
             <svg
@@ -772,14 +772,14 @@ export const AISummary = ({ summary, status, error, onSummaryChange, onRegenerat
               const markdown = convertToMarkdown();
               navigator.clipboard.writeText(markdown);
             }}
-            className="px-2 py-1 text-sm bg-gray-100 hover:bg-gray-200 rounded-md flex items-center space-x-1"
+            className="px-2 py-1 text-sm bg-gray-100 dark:bg-zinc-800 hover:bg-gray-200 dark:hover:bg-zinc-700 rounded-md flex items-center space-x-1"
           >
             <span>📋</span>
             <span>Copy</span>
           </button>
           <button
             onClick={onRegenerateSummary}
-            className="px-2 py-1 text-sm bg-gray-100 hover:bg-gray-200 rounded-md flex items-center space-x-1"
+            className="px-2 py-1 text-sm bg-gray-100 dark:bg-zinc-800 hover:bg-gray-200 dark:hover:bg-zinc-700 rounded-md flex items-center space-x-1"
             title="Regenerate Summary"
           >
             <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">

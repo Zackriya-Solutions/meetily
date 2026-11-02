@@ -189,7 +189,7 @@ export default function Home() {
   const isProcessingStop = status === RecordingStatus.PROCESSING_TRANSCRIPTS || isProcessing;
 
   return (
-    <div className="flex flex-col h-screen bg-gray-50">
+    <div className="flex flex-col h-screen bg-gray-50 dark:bg-zinc-950">
       {/* All Modals supported*/}
       <SettingsModals
         modals={modals}
@@ -225,7 +225,7 @@ export default function Home() {
                 }}
               >
                 <div className="w-2/3 max-w-[750px] flex justify-center">
-                  <div className="bg-white rounded-full shadow-lg flex items-center">
+                  <div className="bg-white dark:bg-zinc-900 rounded-full shadow-lg flex items-center">
                     <RecordingControls
                       isRecording={recordingState.isRecording}
                       onRecordingStop={(callApi = true) => handleRecordingStop(callApi)}

@@ -146,6 +146,15 @@ For build and acceleration details, see:
 - Source code is in the `src/` directory
 - To run only the frontend: `pnpm run dev`
 
+### Appearance
+
+Settings → General → Appearance offers System (the default), Light, and Dark.
+The choice is saved on this device. System follows appearance changes while the app is open.
+The main window, onboarding, dialogs, notifications, transcripts, and summary editors share the selected theme.
+
+Run `pnpm test:theme` for browser coverage. Install Chromium once with `pnpm exec playwright install chromium`.
+These tests use real app routes with fixture data at the Tauri IPC boundary; they do not exercise native audio or model services.
+
 ### Backend (Tauri)
 - The Rust backend is in the `src-tauri/` directory
 - Handles audio capture, file system access, transcription, storage, and native integrations

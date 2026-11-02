@@ -22,7 +22,7 @@ const buttonVariants = cva(
         green: "bg-green-600 text-white hover:bg-green-600",
         blue: "bg-blue-500 text-white hover:bg-blue-600",
         red: "bg-red-500 text-white hover:bg-red-600",
-        gray: "border bg-gray-100 border-input shadow-sm hover:bg-gray-200 hover:text-accent-foreground",
+        gray: "border bg-gray-100 dark:bg-zinc-800 border-input shadow-sm hover:bg-gray-200 dark:hover:bg-zinc-700 hover:text-accent-foreground",
       },
       size: {
         default: "h-9 px-4 py-2",

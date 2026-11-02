@@ -76,27 +76,27 @@ export function ChunkProgressDisplay({
   const getChunkStatusColor = (status: ChunkStatus['status']) => {
     switch (status) {
       case 'completed':
-        return 'text-green-600 bg-green-50 border-green-200';
+        return 'text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-950/50 border-green-200 dark:border-green-800';
       case 'processing':
-        return 'text-blue-600 bg-blue-50 border-blue-200';
+        return 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/50 border-blue-200 dark:border-blue-800';
       case 'failed':
-        return 'text-red-600 bg-red-50 border-red-200';
+        return 'text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/50 border-red-200 dark:border-red-800';
       case 'pending':
       default:
-        return 'text-gray-600 bg-gray-50 border-gray-200';
+        return 'text-gray-600 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-950 border-gray-200 dark:border-zinc-800';
     }
   };
 
   return (
-    <div className={`bg-white border border-gray-200 rounded-lg p-4 ${className}`}>
+    <div className={`bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 rounded-lg p-4 ${className}`}>
       {/* Progress Header */}
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center space-x-3">
-          <h3 className="text-lg font-semibold text-gray-900">
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-zinc-100">
             Processing Progress
           </h3>
           {isPaused && (
-            <span className="bg-yellow-100 text-yellow-800 px-2 py-1 rounded-full text-xs font-medium">
+            <span className="bg-yellow-100 dark:bg-yellow-950/50 text-yellow-800 dark:text-yellow-300 px-2 py-1 rounded-full text-xs font-medium">
               Paused
             </span>
           )}
@@ -132,15 +132,15 @@ export function ChunkProgressDisplay({
       {/* Progress Bar */}
       <div className="mb-4">
         <div className="flex items-center justify-between mb-2">
-          <span className="text-sm font-medium text-gray-700">
+          <span className="text-sm font-medium text-gray-700 dark:text-zinc-200">
             {progress.completed_chunks} of {progress.total_chunks} chunks completed
           </span>
-          <span className="text-sm font-medium text-gray-700">
+          <span className="text-sm font-medium text-gray-700 dark:text-zinc-200">
             {completionPercentage}%
           </span>
         </div>
 
-        <div className="w-full bg-gray-200 rounded-full h-2">
+        <div className="w-full bg-gray-200 dark:bg-zinc-700 rounded-full h-2">
           <div
             className="bg-blue-600 h-2 rounded-full transition-all duration-300 ease-out"
             style={{ width: `${completionPercentage}%` }}
@@ -151,40 +151,40 @@ export function ChunkProgressDisplay({
       {/* Processing Stats */}
       <div className="grid grid-cols-4 gap-4 mb-4 text-sm">
         <div className="text-center">
-          <div className="text-lg font-semibold text-green-600">
+          <div className="text-lg font-semibold text-green-600 dark:text-green-400">
             {progress.completed_chunks}
           </div>
-          <div className="text-gray-600">Completed</div>
+          <div className="text-gray-600 dark:text-zinc-400">Completed</div>
         </div>
 
         <div className="text-center">
-          <div className="text-lg font-semibold text-blue-600">
+          <div className="text-lg font-semibold text-blue-600 dark:text-blue-400">
             {progress.processing_chunks}
           </div>
-          <div className="text-gray-600">Processing</div>
+          <div className="text-gray-600 dark:text-zinc-400">Processing</div>
         </div>
 
         <div className="text-center">
-          <div className="text-lg font-semibold text-gray-600">
+          <div className="text-lg font-semibold text-gray-600 dark:text-zinc-400">
             {progress.total_chunks - progress.completed_chunks - progress.processing_chunks - progress.failed_chunks}
           </div>
-          <div className="text-gray-600">Pending</div>
+          <div className="text-gray-600 dark:text-zinc-400">Pending</div>
         </div>
 
         <div className="text-center">
-          <div className="text-lg font-semibold text-red-600">
+          <div className="text-lg font-semibold text-red-600 dark:text-red-400">
             {progress.failed_chunks}
           </div>
-          <div className="text-gray-600">Failed</div>
+          <div className="text-gray-600 dark:text-zinc-400">Failed</div>
         </div>
       </div>
 
       {/* Time Estimate */}
       {progress.estimated_remaining_ms && progress.estimated_remaining_ms > 0 && (
-        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4">
+        <div className="bg-blue-50 dark:bg-blue-950/50 border border-blue-200 dark:border-blue-800 rounded-lg p-3 mb-4">
           <div className="flex items-center space-x-2">
-            <span className="text-blue-600">⏱️</span>
-            <span className="text-sm text-blue-800">
+            <span className="text-blue-600 dark:text-blue-400">⏱️</span>
+            <span className="text-sm text-blue-800 dark:text-blue-300">
               Estimated time remaining: {formatTimeRemaining(progress.estimated_remaining_ms)}
             </span>
           </div>
@@ -193,7 +193,7 @@ export function ChunkProgressDisplay({
 
       {/* Recent Chunks Grid */}
       <div className="space-y-2">
-        <h4 className="text-sm font-medium text-gray-700 mb-2">
+        <h4 className="text-sm font-medium text-gray-700 dark:text-zinc-200 mb-2">
           Recent Chunks ({Math.min(progress.chunks.length, 10)} of {progress.total_chunks})
         </h4>
 
@@ -213,7 +213,7 @@ export function ChunkProgressDisplay({
                       Chunk {chunk.chunk_id}
                     </span>
                     {chunk.duration_ms && (
-                      <span className="text-gray-500">
+                      <span className="text-gray-500 dark:text-zinc-400">
                         ({formatDuration(chunk.duration_ms)})
                       </span>
                     )}
@@ -227,13 +227,13 @@ export function ChunkProgressDisplay({
                 </div>
 
                 {chunk.text_preview && (
-                  <div className="mt-1 text-gray-700 text-xs truncate">
+                  <div className="mt-1 text-gray-700 dark:text-zinc-200 text-xs truncate">
                     "{chunk.text_preview}"
                   </div>
                 )}
 
                 {chunk.error_message && (
-                  <div className="mt-1 text-red-700 text-xs">
+                  <div className="mt-1 text-red-700 dark:text-red-300 text-xs">
                     Error: {chunk.error_message}
                   </div>
                 )}
@@ -244,10 +244,10 @@ export function ChunkProgressDisplay({
 
       {/* Processing Complete */}
       {progress.completed_chunks === progress.total_chunks && progress.total_chunks > 0 && (
-        <div className="mt-4 bg-green-50 border border-green-200 rounded-lg p-3">
+        <div className="mt-4 bg-green-50 dark:bg-green-950/50 border border-green-200 dark:border-green-800 rounded-lg p-3">
           <div className="flex items-center space-x-2">
-            <span className="text-green-600">🎉</span>
-            <span className="text-sm font-medium text-green-800">
+            <span className="text-green-600 dark:text-green-400">🎉</span>
+            <span className="text-sm font-medium text-green-800 dark:text-green-300">
               Processing completed! All {progress.total_chunks} chunks have been transcribed.
             </span>
           </div>
@@ -264,27 +264,27 @@ export function ChunkProgressMini({ progress, className = '' }: { progress: Proc
     : 0;
 
   return (
-    <div className={`bg-gray-50 border border-gray-200 rounded-lg p-3 ${className}`}>
+    <div className={`bg-gray-50 dark:bg-zinc-950 border border-gray-200 dark:border-zinc-800 rounded-lg p-3 ${className}`}>
       <div className="flex items-center justify-between mb-2">
-        <span className="text-sm font-medium text-gray-700">
+        <span className="text-sm font-medium text-gray-700 dark:text-zinc-200">
           Processing
         </span>
-        <span className="text-sm font-medium text-gray-700">
+        <span className="text-sm font-medium text-gray-700 dark:text-zinc-200">
           {completionPercentage}%
         </span>
       </div>
 
-      <div className="w-full bg-gray-200 rounded-full h-1.5 mb-2">
+      <div className="w-full bg-gray-200 dark:bg-zinc-700 rounded-full h-1.5 mb-2">
         <div
           className="bg-blue-600 h-1.5 rounded-full transition-all duration-300"
           style={{ width: `${completionPercentage}%` }}
         />
       </div>
 
-      <div className="text-xs text-gray-600">
+      <div className="text-xs text-gray-600 dark:text-zinc-400">
         {progress.completed_chunks} / {progress.total_chunks} chunks
         {progress.processing_chunks > 0 && (
-          <span className="ml-2 text-blue-600">
+          <span className="ml-2 text-blue-600 dark:text-blue-400">
             ({progress.processing_chunks} processing)
           </span>
         )}

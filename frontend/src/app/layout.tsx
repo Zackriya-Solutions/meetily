@@ -1,12 +1,14 @@
 'use client'
 
 import './globals.css'
+import { ThemeProvider } from 'next-themes'
+import { ThemeEffects } from '@/components/ThemeEffects'
 import { Source_Sans_3 } from 'next/font/google'
 import Sidebar from '@/components/Sidebar'
 import { SidebarProvider } from '@/components/Sidebar/SidebarProvider'
 import MainContent from '@/components/MainContent'
 import AnalyticsProvider from '@/components/AnalyticsProvider'
-import { Toaster, toast } from 'sonner'
+import { toast } from 'sonner'
 import "sonner/dist/styles.css"
 import { useState, useEffect, useCallback } from 'react'
 import { listen, UnlistenFn } from '@tauri-apps/api/event'
@@ -231,8 +233,10 @@ export default function RootLayout({
   }
 
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <body className={`${sourceSans3.variable} font-sans antialiased`}>
+        <ThemeProvider attribute="class" defaultTheme="system" storageKey="meetily-theme" disableTransitionOnChange>
+        <ThemeEffects />
         <AnalyticsProvider>
           <RecordingStateProvider>
             <TranscriptProvider>
@@ -276,7 +280,7 @@ export default function RootLayout({
           </RecordingStateProvider>
         </AnalyticsProvider>
 
-        <Toaster position="bottom-center" richColors closeButton />
+        </ThemeProvider>
       </body>
     </html>
   )

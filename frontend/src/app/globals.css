@@ -108,9 +108,9 @@
   .dark {
     --background: 0 0% 3.9%;
     --foreground: 0 0% 98%;
-    --card: 0 0% 3.9%;
+    --card: 240 5.9% 10%;
     --card-foreground: 0 0% 98%;
-    --popover: 0 0% 3.9%;
+    --popover: 240 5.9% 10%;
     --popover-foreground: 0 0% 98%;
     --primary: 0 0% 98%;
     --primary-foreground: 0 0% 9%;
@@ -122,8 +122,8 @@
     --accent-foreground: 0 0% 98%;
     --destructive: 0 62.8% 30.6%;
     --destructive-foreground: 0 0% 98%;
-    --border: 0 0% 14.9%;
-    --input: 0 0% 14.9%;
+    --border: 240 3.7% 25%;
+    --input: 240 3.8% 46.1%;
     --ring: 0 0% 83.1%;
     --chart-1: 220 70% 50%;
     --chart-2: 160 60% 45%;
@@ -166,18 +166,18 @@
   }
 
   .custom-scrollbar::-webkit-scrollbar-thumb {
-    background: #d1d5db;
+    background: hsl(var(--muted-foreground) / 0.5);
     border-radius: 3px;
   }
 
   .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-    background: #9ca3af;
+    background: hsl(var(--muted-foreground));
   }
 
   /* Firefox scrollbar */
   .custom-scrollbar {
     scrollbar-width: thin;
-    scrollbar-color: #d1d5db transparent;
+    scrollbar-color: hsl(var(--muted-foreground) / 0.5) transparent;
   }
 
   /* BlockNote Editor - Override fixed dimensions for responsive layout */
