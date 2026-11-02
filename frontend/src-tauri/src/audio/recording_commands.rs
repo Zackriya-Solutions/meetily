@@ -26,6 +26,8 @@ use super::device_monitor::{DeviceEvent, DeviceMonitorType};
 use super::devices::AudioDevice;
 #[cfg(target_os = "linux")]
 use super::stream::LinuxStreamKind;
+#[cfg(target_os = "linux")]
+use super::devices::discovery::linux_device_query;
 
 // Import transcription modules
 use super::transcription::{
@@ -281,6 +283,9 @@ fn microphone_enumerated(device: &super::AudioDevice) -> bool {
     use cpal::traits::{DeviceTrait, HostTrait};
 
     let cpal_has = || {
+        #[cfg(target_os = "linux")]
+        let _guard = super::devices::platform::linux::ALSA_GLOBAL_LOCK
+            .lock().unwrap_or_else(|e| e.into_inner());
         cpal::default_host()
             .input_devices()
             .map(|mut it| it.any(|d| d.name().map(|n| n == device.name).unwrap_or(false)))
@@ -329,6 +334,22 @@ fn resolve_system_for_start<R: Runtime>(app: &AppHandle<R>, requested: Option<&s
             }
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+async fn resolve_linux_devices_for_start<R: Runtime>(
+    app: &AppHandle<R>, mic: Option<&str>, system: Option<&str>,
+) -> Result<(Option<Arc<AudioDevice>>, Option<Arc<AudioDevice>>), String> {
+    let (app, mic, system) = (app.clone(), mic.map(str::to_owned), system.map(str::to_owned));
+    linux_device_query(move || Ok((
+        resolve_mic_or_default(&app, mic.as_deref()),
+        resolve_system_for_start(&app, system.as_deref()),
+    ))).await.map_err(|e| e.to_string())
+}
+
+#[cfg(target_os = "linux")]
+async fn linux_default_device(microphone: bool) -> Result<AudioDevice> {
+    linux_device_query(move || if microphone { default_input_device() } else { default_output_device() }).await
 }
 
 fn resolve_system_or_default(requested_id: Option<&str>) -> Option<Arc<super::AudioDevice>> {
@@ -468,9 +489,12 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
             }
         };
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    let (microphone_device, system_device) = resolve_linux_devices_for_start(&app, preferred_mic_name.as_deref(), preferred_system_name.as_deref()).await?;
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     let microphone_device = resolve_mic_or_default(&app, preferred_mic_name.as_deref());
 
+    #[cfg(not(target_os = "linux"))]
     let system_device = resolve_system_for_start(&app, preferred_system_name.as_deref());
 
     #[cfg(target_os = "macos")]
@@ -680,9 +704,12 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
     let (mic_device_name, system_device_name) = super::recording_preferences::resolve_start_devices(&prefs, mic_device_name, system_device_name).await?;
     let auto_save = prefs.auto_save;
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    let (mic_device, system_device) = resolve_linux_devices_for_start(&app, mic_device_name.as_deref(), system_device_name.as_deref()).await?;
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     let mic_device = resolve_mic_or_default(&app, mic_device_name.as_deref());
 
+    #[cfg(not(target_os = "linux"))]
     let system_device = resolve_system_for_start(&app, system_device_name.as_deref());
 
     #[cfg(target_os = "macos")]
@@ -1754,7 +1781,7 @@ async fn swap_linux_stream<R: Runtime>(
     let role = if microphone { super::recording_state::DeviceType::Microphone } else { super::recording_state::DeviceType::System };
     let stream = super::stream::AudioStream::prepare_linux(device.clone(), session.clone(), role).await.map_err(|e| e.to_string())?;
     if follow_default {
-        let latest = if microphone { default_input_device() } else { default_output_device() };
+        let latest = linux_default_device(microphone).await;
         if latest.map_or(true, |d| d.name != device.name) {
             let _ = stream.stop().await;
             return Err("The default audio device changed during preparation".into());
@@ -1809,7 +1836,8 @@ async fn swap_linux_stream<R: Runtime>(
 #[cfg(target_os = "linux")]
 async fn follow_linux_default<R: Runtime>(app: &AppHandle<R>, session: &Arc<super::RecordingState>, microphone: bool, attempts: &mut (String, u8)) {
     if !session_live(session) { return; }
-    let target = if microphone { default_input_device() } else { default_output_device() };
+    let target = linux_default_device(microphone).await;
+    if !session_live(session) { return; }
     let Ok(target) = target else { return; };
     let active = if microphone { session.get_microphone_device() } else { session.get_system_device() };
     let working = {
@@ -1845,16 +1873,20 @@ fn linux_mic_uses_legacy_recovery(kind: Option<LinuxStreamKind>, failed_attempts
 }
 
 #[cfg(target_os = "linux")]
-async fn attempt_linux_recovery<F: std::future::Future<Output = Result<(), String>>>(
+async fn attempt_linux_recovery<
+    F: std::future::Future<Output = Result<(), String>>,
+    I: std::future::Future<Output = Result<bool, String>>,
+    D: std::future::Future<Output = Result<AudioDevice, String>>,
+>(
     working: bool,
     active: Arc<AudioDevice>,
     attempts: &mut (String, u8),
-    inspect: impl FnOnce(&AudioDevice) -> Result<bool, String>,
-    default_device: impl FnOnce() -> Result<AudioDevice, String>,
+    inspect: impl FnOnce(&AudioDevice) -> I,
+    default_device: impl FnOnce() -> D,
     replace: impl FnOnce(Arc<AudioDevice>) -> F,
 ) -> Result<Option<Arc<AudioDevice>>, String> {
     if working { return Ok(None); }
-    let present = match inspect(&active) {
+    let present = match inspect(&active).await {
         Ok(present) => present,
         Err(e) => {
             warn!("Could not inspect native audio devices for recovery: {}", e);
@@ -1864,7 +1896,7 @@ async fn attempt_linux_recovery<F: std::future::Future<Output = Result<(), Strin
     let target = if present {
         Ok(active.clone())
     } else {
-        default_device().and_then(|device| {
+        default_device().await.and_then(|device| {
             if device.name == active.name { Err("No replacement default audio device is available".into()) }
             else { Ok(Arc::new(device)) }
         })
@@ -1898,7 +1930,7 @@ async fn repair_linux_stream<R: Runtime>(
     };
     if microphone && linux_mic_uses_legacy_recovery(kind, MIC_FALLBACK_FAILED_ATTEMPTS.load(Ordering::SeqCst)) {
         // Keep the existing CPAL event/retry policy, including empty slots after a failed swap.
-        if expected_device.is_some() || (!working && super::capture::list_pulse_sources()
+        if expected_device.is_some() || (!working && linux_device_query(super::capture::list_pulse_sources).await
             .is_ok_and(|sources| !sources.iter().any(|source| source.source_name == device.name)))
         {
             trigger_mic_fallback_to_default(app.clone(), device.name.clone(), session.clone()).await;
@@ -1909,13 +1941,18 @@ async fn repair_linux_stream<R: Runtime>(
     let previous_name = device.name.clone();
     let result = attempt_linux_recovery(working, device, attempts,
         |device| {
-            if microphone {
-                super::capture::list_pulse_sources().map(|sources| sources.iter().any(|s| s.source_name == device.name))
-            } else {
-                super::capture::list_pulse_sinks().map(|sinks| sinks.iter().any(|s| s.name == device.name))
-            }.map_err(|e| e.to_string())
+            let name = device.name.clone();
+            async move {
+                linux_device_query(move || {
+                    if microphone {
+                        super::capture::list_pulse_sources().map(|sources| sources.iter().any(|s| s.source_name == name))
+                    } else {
+                        super::capture::list_pulse_sinks().map(|sinks| sinks.iter().any(|s| s.name == name))
+                    }
+                }).await.map_err(|e| e.to_string())
+            }
         },
-        || (if microphone { default_input_device() } else { default_output_device() }).map_err(|e| e.to_string()),
+        || async { linux_default_device(microphone).await.map_err(|e| e.to_string()) },
         |device| async move { swap_linux_stream(app, session, device, microphone, false).await },
     ).await;
     if !session_live(session) { return; }
@@ -1970,9 +2007,12 @@ async fn trigger_mic_fallback_to_default<R: Runtime>(
             guard.as_ref().is_some_and(|m| Arc::ptr_eq(m.get_state(), &session) && m.has_working_stream(true))
         };
         // Preserve the legacy CPAL inventory check on Linux.
-        if working && super::capture::list_pulse_sources()
+        if working && linux_device_query(super::capture::list_pulse_sources).await
             .is_ok_and(|sources| sources.iter().any(|s| s.source_name == disconnected_name))
         {
+            return;
+        }
+        if !session_live(&session) || session.get_microphone_device().as_ref().map(|d| d.name.as_str()) != Some(disconnected_name.as_str()) {
             return;
         }
     }
@@ -2027,7 +2067,13 @@ async fn trigger_mic_fallback_to_default<R: Runtime>(
     // Query the current system default input. If it still reports the
     // disconnected device, back off once more and re-query — this handles
     // the edge case where the OS hasn't propagated the change yet.
-    let fallback_name = match default_input_device() {
+    #[cfg(target_os = "linux")]
+    let fallback = linux_default_device(true).await;
+    #[cfg(not(target_os = "linux"))]
+    let fallback = default_input_device();
+    #[cfg(target_os = "linux")]
+    if !session_live(&session) { return; }
+    let fallback_name = match fallback {
         Ok(dev) => dev.name,
         Err(e) => {
             error!("[MIC_FALLBACK] Failed to query default input device: {}", e);
@@ -2060,7 +2106,13 @@ async fn trigger_mic_fallback_to_default<R: Runtime>(
             info!("[MIC_FALLBACK] Session no longer live after retry wait — aborting fallback for '{}'", disconnected_name);
             return;
         }
-        match default_input_device() {
+        #[cfg(target_os = "linux")]
+        let fallback = linux_default_device(true).await;
+        #[cfg(not(target_os = "linux"))]
+        let fallback = default_input_device();
+        #[cfg(target_os = "linux")]
+        if !session_live(&session) { return; }
+        match fallback {
             Ok(dev) if dev.name != disconnected_name => dev.name,
             Ok(dev) => {
                 error!(
@@ -2383,6 +2435,7 @@ mod linux_audio_loss_tests {
 #[cfg(all(test, target_os = "linux"))]
 mod linux_recovery_tests {
     use super::*;
+    use std::future::ready;
     use super::super::stream::linux_clock_tests::test_stream;
 
     fn input(name: &str) -> Arc<AudioDevice> {
@@ -2393,8 +2446,8 @@ mod linux_recovery_tests {
     async fn healthy_native_capture_does_not_inspect_or_replace() {
         let mut attempts = (String::new(), 0);
         let result = attempt_linux_recovery(true, input("active"), &mut attempts,
-            |_| panic!("healthy capture must not enumerate"),
-            || panic!("healthy capture must not query the default"),
+            |_| -> std::future::Ready<Result<bool, String>> { panic!("healthy capture must not enumerate") },
+            || -> std::future::Ready<Result<AudioDevice, String>> { panic!("healthy capture must not query the default") },
             |_| std::future::ready(Err("healthy capture must not be replaced".into())),
         ).await.unwrap();
         assert!(result.is_none());
@@ -2405,8 +2458,8 @@ mod linux_recovery_tests {
     async fn unknown_inventory_does_not_select_a_default_or_replace() {
         let mut attempts = (String::new(), 0);
         let result = attempt_linux_recovery(false, input("active"), &mut attempts,
-            |_| Err("enumeration unavailable".into()),
-            || panic!("unknown inventory is not confirmed absence"),
+            |_| ready(Err("enumeration unavailable".into())),
+            || -> std::future::Ready<Result<AudioDevice, String>> { panic!("unknown inventory is not confirmed absence") },
             |_| std::future::ready(Err("unknown inventory must not replace capture".into())),
         ).await.unwrap();
         assert!(result.is_none());
@@ -2419,8 +2472,8 @@ mod linux_recovery_tests {
         let mut attempts = (String::new(), 0);
         for attempt in 1..=4 {
             let result = attempt_linux_recovery(false, input("missing"), &mut attempts,
-                |_| Ok(false),
-                || Ok(AudioDevice::new("replacement".into(), DeviceType::Input)),
+                |_| ready(Ok(false)),
+                || ready(Ok(AudioDevice::new("replacement".into(), DeviceType::Input))),
                 |device| {
                     assert_eq!(device.name, "replacement");
                     replacements.set(replacements.get() + 1);
@@ -2442,8 +2495,8 @@ mod linux_recovery_tests {
     async fn present_native_device_is_reopened_without_querying_the_default() {
         let mut attempts = ("active".into(), 3);
         let result = attempt_linux_recovery(false, input("active"), &mut attempts,
-            |device| { assert_eq!(device.name, "active"); Ok(true) },
-            || panic!("explicit present device must remain pinned"),
+            |device| { assert_eq!(device.name, "active"); ready(Ok(true)) },
+            || -> std::future::Ready<Result<AudioDevice, String>> { panic!("explicit present device must remain pinned") },
             |device| {
                 assert_eq!(device.name, "active");
                 std::future::ready(Ok(()))
@@ -2458,7 +2511,7 @@ mod linux_recovery_tests {
         let mut attempts = (String::new(), 0);
         for default in [Err("no default".into()), Ok((*input("missing")).clone())] {
             assert!(attempt_linux_recovery(false, input("missing"), &mut attempts,
-                |_| Ok(false), || default,
+                |_| ready(Ok(false)), || ready(default),
                 |_| std::future::ready(Ok(())),
             ).await.is_err());
         }

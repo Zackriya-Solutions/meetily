@@ -16,6 +16,8 @@ use super::capture::CoreAudioCapture;
 #[cfg(target_os = "linux")]
 use super::capture::{find_sink_by_name, find_source_by_name, list_pulse_sources, PulseCapture};
 #[cfg(target_os = "linux")]
+use super::devices::discovery::linux_device_query;
+#[cfg(target_os = "linux")]
 use std::sync::atomic::AtomicBool;
 
 /// Stream backend implementation
@@ -126,7 +128,7 @@ impl AudioStream {
         // a reinterpretation of the ID as an ALSA name.
         #[cfg(target_os = "linux")]
         if device_type == DeviceType::Microphone {
-            match list_pulse_sources() {
+            match linux_device_query(|| Ok(list_pulse_sources())).await? {
                 Ok(_) => {
                     return Self::create_pulse_mic_stream(
                         device,
@@ -303,7 +305,8 @@ impl AudioStream {
     ) -> Result<Self> {
         info!("🔊 Stream: Creating PulseAudio stream for device: {}", device.name);
 
-        let sink = find_sink_by_name(&device.name)?;
+        let name = device.name.clone();
+        let sink = linux_device_query(move || find_sink_by_name(&name)).await?;
 
         let capture_impl = PulseCapture::new_system(&sink.monitor_source_name)
             .map_err(|e| anyhow::anyhow!("Failed to open PulseAudio record stream: {}", e))?;
@@ -399,7 +402,8 @@ impl AudioStream {
             device.name
         );
 
-        let source = find_source_by_name(&device.name)?;
+        let name = device.name.clone();
+        let source = linux_device_query(move || find_source_by_name(&name)).await?;
 
         let capture_impl = PulseCapture::new_microphone(&source.source_name)
             .map_err(|e| anyhow::anyhow!("Failed to open PulseAudio record stream: {}", e))?;

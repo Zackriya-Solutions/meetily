@@ -8,6 +8,7 @@ use super::platform;
 /// List all available audio devices on the system
 pub async fn list_audio_devices() -> Result<Vec<AudioDevice>> {
     info!("🎙️ list_audio_devices: start");
+    #[cfg(not(target_os = "linux"))]
     let host = cpal::default_host();
 
     // Platform-specific device enumeration
@@ -21,7 +22,7 @@ pub async fn list_audio_devices() -> Result<Vec<AudioDevice>> {
         #[cfg(target_os = "linux")]
         {
             info!("🎙️ list_audio_devices: calling configure_linux_audio");
-            let result = platform::configure_linux_audio(&host)?;
+            let result = linux_device_query(|| platform::configure_linux_audio(&cpal::default_host())).await?;
             info!("🎙️ list_audio_devices: configure_linux_audio returned {} device(s)", result.len());
             result
         }
@@ -194,4 +195,30 @@ pub async fn verify_microphone_access() -> anyhow::Result<()> {
     })
     .await
     .map_err(|e| anyhow::anyhow!("Microphone verification task failed: {}", e))?
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) async fn linux_device_query<T: Send + 'static>(
+    query: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Result<T> {
+    tokio::task::spawn_blocking(query).await
+        .map_err(|e| anyhow::anyhow!("Audio device query worker failed: {}", e))?
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod linux_query_tests {
+    use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn waiting_query_leaves_the_runtime_free_and_preserves_errors() {
+        let (release, wait) = std::sync::mpsc::channel();
+        let query = tokio::spawn(linux_device_query(move || {
+            wait.recv_timeout(std::time::Duration::from_secs(1))?;
+            Err::<(), _>(anyhow::anyhow!("server unavailable"))
+        }));
+        tokio::task::yield_now().await;
+        assert!(!query.is_finished(), "a synchronous query blocked the runtime");
+        release.send(()).unwrap();
+        assert_eq!(query.await.unwrap().unwrap_err().to_string(), "server unavailable");
+    }
 }

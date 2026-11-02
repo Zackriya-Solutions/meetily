@@ -61,7 +61,7 @@ pub fn cached_label(id: &str) -> String {
 }
 
 const GENERIC_INPUT_LABEL: &str = "Microphone";
-const GENERIC_OUTPUT_LABEL: &str = "Sortie audio";
+const GENERIC_OUTPUT_LABEL: &str = "System Audio";
 
 /// Display labels for one role (inputs or outputs), aligned with `entries`
 /// (`(id, description)`). Empty descriptions become the generic role label,
@@ -379,7 +379,7 @@ mod tests {
         let inputs = pulse_source_devices(&[source("alsa_input.x", "  ")], None);
         let outputs = pulse_sink_devices(&[sink("alsa_output.x", "")], None);
         assert_eq!(inputs[0].label.as_deref(), Some("Microphone"));
-        assert_eq!(outputs[0].label.as_deref(), Some("Sortie audio"));
+        assert_eq!(outputs[0].label.as_deref(), Some("System Audio"));
     }
 
     #[test]

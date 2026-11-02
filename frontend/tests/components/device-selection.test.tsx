@@ -1,5 +1,9 @@
-import { afterEach, expect, mock, test } from 'bun:test';
+import { afterAll, afterEach, expect, mock, test } from 'bun:test';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
+const originals = await Promise.all(['@tauri-apps/api/core', '@tauri-apps/api/event', '../../src/lib/analytics', '../../src/components/ui/tooltip', '../../src/components/ui/select'].map(async path =>
+  [path, { ...await import(path) }] as const));
+afterAll(() => { for (const [path, exports] of originals) mock.module(path, () => exports); });
+
 mock.module('@tauri-apps/api/core', () => ({ invoke: mock(async () => []) }));
 mock.module('@tauri-apps/api/event', () => ({ listen: mock(async () => () => {}) }));
 mock.module('../../src/lib/analytics', () => ({ default: { track: async () => {} } }));

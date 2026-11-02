@@ -163,6 +163,15 @@ export function RecordingStateProvider({ children }: { children: React.ReactNode
         });
         unsubscribers.push(unlistenStarting);
 
+        const unlistenShutdown = await listen<{ stage: string }>('recording-shutdown-progress', ({ payload }) => {
+          if (payload.stage !== 'stopping_audio') return;
+          setState(prev => (prev.status === RecordingStatus.RECORDING ||
+            (prev.status === RecordingStatus.IDLE && prev.isRecording))
+            ? { ...prev, status: RecordingStatus.STOPPING, statusMessage: 'Stopping recording...' }
+            : prev);
+        });
+        unsubscribers.push(unlistenShutdown);
+
         // Recording stopped
         const unlistenStopped = await recordingService.onRecordingStopped((payload) => {
           console.log('[RecordingStateContext] Recording stopped event:', payload);

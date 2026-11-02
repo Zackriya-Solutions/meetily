@@ -142,7 +142,7 @@ pub struct PulseCapture {
     channels: u16,
 }
 
-pub const SERVER_UNAVAILABLE: &str = "System audio is unavailable. Ensure PulseAudio or PipeWire’s PulseAudio compatibility service is running.";
+pub const SERVER_UNAVAILABLE: &str = "Audio capture is unavailable. Ensure PulseAudio or PipeWire’s PulseAudio compatibility service is running.";
 
 impl PulseCapture {
     pub fn new_system(source: &str) -> Result<Self> { Self::new(source, 2) }

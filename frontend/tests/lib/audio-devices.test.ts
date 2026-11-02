@@ -1,5 +1,7 @@
-import { describe, expect, mock, test } from 'bun:test';
-mock.module('@tauri-apps/api/core', () => ({ invoke: mock(async () => []) }));
+import { afterAll, describe, expect, mock, test } from 'bun:test';
+const originalCore = { ...await import('@tauri-apps/api/core') };
+afterAll(() => { mock.module('@tauri-apps/api/core', () => originalCore); });
+mock.module('@tauri-apps/api/core', () => ({ ...originalCore, invoke: mock(async () => []) }));
 const { encodeDeviceOption, decodeDeviceOption, deviceLabel, isDeviceAvailable } = await import('../../src/lib/audioDevices');
 describe('audio device identity', () => {
   test('default and literal IDs cannot collide', () => {
