@@ -688,7 +688,7 @@ fn emit_progress<R: Runtime>(app: &AppHandle<R>, stage: &str, progress: u32, mes
 
 
 /// Create a new meeting with transcripts in the database
-async fn create_meeting_with_transcripts(
+pub(super) async fn create_meeting_with_transcripts(
     pool: &sqlx::SqlitePool,
     title: &str,
     segments: &[TranscriptSegment],
@@ -877,7 +877,7 @@ async fn get_configured_model<R: Runtime>(app: &AppHandle<R>, provider_type: &st
 }
 
 /// Write metadata.json to a meeting folder (atomic write with temp file)
-fn write_import_metadata(
+pub(super) fn write_import_metadata(
     folder: &Path,
     meeting_id: &str,
     title: &str,

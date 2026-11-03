@@ -147,6 +147,8 @@ Transcribe meetings entirely on your device using **Whisper** or **Parakeet** mo
 
 Import existing audio files to generate transcripts, or enhance to re-transcribe any recorded meeting with a different model or language, all processed locally.
 
+Already have a transcript from another tool? Use **Import Transcript** to bring in a `.txt`, `.md`, `.srt` or `.vtt` file as a meeting and summarize it, no audio needed.
+
 > Contributed by [Jeremi Joslin](https://github.com/jeremi), improved by [Vishnu P S](https://github.com/p-s-vishnu) and [Mohammed Safvan](https://github.com/mohammedsafvan)
 
 <p align="center">
