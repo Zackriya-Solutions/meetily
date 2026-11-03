@@ -284,6 +284,7 @@ function MeetingDetailsContent() {
       await refetchMeetings();
     }}
     onRefetchTranscripts={refetch}
+    source={source}
     // Pagination props for efficient transcript loading
     segments={segments}
     hasMore={hasMore}

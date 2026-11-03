@@ -16,6 +16,7 @@ export interface Transcript {
   audio_start_time?: number; // Seconds from recording start (e.g., 125.3)
   audio_end_time?: number;   // Seconds from recording start (e.g., 128.6)
   duration?: number;          // Segment duration in seconds (e.g., 3.3)
+  speaker?: string;          // Speaker attribution (e.g., "Speaker 1")
 }
 
 export interface TranscriptUpdate {
@@ -30,6 +31,7 @@ export interface TranscriptUpdate {
   audio_start_time: number; // Seconds from recording start
   audio_end_time: number;   // Seconds from recording start
   duration: number;          // Segment duration in seconds
+  speaker?: string;          // Speaker attribution (e.g., "Speaker 1")
 }
 
 export interface Block {
@@ -141,4 +143,42 @@ export interface TranscriptSegmentData {
   endTime?: number; // audio_end_time in seconds
   text: string;
   confidence?: number;
+  speaker?: string; // Speaker attribution (e.g., "Speaker 1")
 }
+
+// Diarization types
+export type DiarizationStreamingPreset = 'Offline' | 'LowLatency' | 'VeryLowLatency' | 'UltraLowLatency';
+
+export interface DiarizationConfig {
+  enabled: boolean;
+  preset: DiarizationStreamingPreset;
+  max_speakers: number;
+  threshold: number;
+}
+
+export type DiarizationModelStatus =
+  | 'Available'
+  | 'Missing'
+  | { Downloading: { progress: number } }
+  | { Error: string };
+
+export interface DiarizationModelInfo {
+  name: string;
+  filename: string;
+  path: string;
+  size_mb: number;
+  status: DiarizationModelStatus;
+  description: string;
+  architecture: string;
+  max_speakers_supported: number;
+}
+
+export interface DiarizationDownloadProgress {
+  downloaded_bytes: number;
+  total_bytes: number;
+  downloaded_mb: number;
+  total_mb: number;
+  speed_mbps: number;
+  percent: number;
+}
+

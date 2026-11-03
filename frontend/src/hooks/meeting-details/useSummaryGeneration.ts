@@ -444,9 +444,9 @@ export function useSummaryGeneration({
 
     return {
       transcriptText: allTranscripts
-        .map((transcript) => `${formatTime(transcript.audio_start_time, transcript.timestamp)} ${transcript.text}`)
+        .map((transcript) => `${formatTime(transcript.audio_start_time, transcript.timestamp)} ${transcript.speaker ? `[${transcript.speaker}] ` : ''}${transcript.text}`)
         .join('\n'),
-      transcriptTexts: allTranscripts.map((transcript) => transcript.text),
+      transcriptTexts: allTranscripts.map((transcript) => transcript.speaker ? `[${transcript.speaker}] ${transcript.text}` : transcript.text),
     };
   }, []);
 

@@ -29,41 +29,89 @@ echo.
 
 echo.
 
-REM Kill any existing processes on port 3118
-echo 🧹 Checking for existing processes on port 3118...
+REM Kill any existing processes on port 3118 and running meetily instances
+echo 🧹 Checking for existing processes...
+taskkill /IM meetily.exe /F >nul 2>&1
+powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'msedgewebview2.exe' -and $_.CommandLine -like '*meetily*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>&1
 for /f "tokens=5" %%a in ('netstat -aon ^| findstr :3118 2^>nul') do (
-    echo    Killing process %%a on port 3118
-    taskkill /PID %%a /F >nul 2>&1
+    if not "%%a"=="0" if not "%%a"=="" (
+        echo    Killing process %%a on port 3118
+        taskkill /PID %%a /F >nul 2>&1
+    )
+)
+
+REM Ensure Cargo and Rust are in PATH
+if exist "%USERPROFILE%\.cargo\bin" (
+    set "PATH=%USERPROFILE%\.cargo\bin;%PATH%"
+)
+
+REM Ensure CMake is in PATH for whisper-rs-sys and CUDA builds
+if exist "C:\Program Files\CMake\bin" (
+    set "PATH=C:\Program Files\CMake\bin;%PATH%"
+) else if exist "C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin" (
+    set "PATH=C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin;%PATH%"
+) else if exist "C:\Program Files\Microsoft Visual Studio\18\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin" (
+    set "PATH=C:\Program Files\Microsoft Visual Studio\18\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin;%PATH%"
+) else if exist "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin" (
+    set "PATH=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin;%PATH%"
+) else if exist "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin" (
+    set "PATH=C:\Program Files\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin;%PATH%"
+)
+
+REM Ensure Ninja is in PATH if available
+if exist "C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja" (
+    set "PATH=C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja;%PATH%"
+) else if exist "C:\Program Files\Microsoft Visual Studio\18\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja" (
+    set "PATH=C:\Program Files\Microsoft Visual Studio\18\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja;%PATH%"
+) else if exist "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja" (
+    set "PATH=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja;%PATH%"
+) else if exist "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja" (
+    set "PATH=C:\Program Files\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja;%PATH%"
 )
 
 REM Set libclang path for whisper-rs-sys
 set "LIBCLANG_PATH=C:\Program Files\LLVM\bin"
+if exist "C:\Program Files\LLVM\bin" (
+    set "PATH=C:\Program Files\LLVM\bin;%PATH%"
+)
+
+REM Ensure CUDA runtime directories are in PATH for cublas, cudart, etc.
+if defined CUDA_PATH (
+    if exist "%CUDA_PATH%\bin\x64" set "PATH=%CUDA_PATH%\bin\x64;%PATH%"
+    if exist "%CUDA_PATH%\bin" set "PATH=%CUDA_PATH%\bin;%PATH%"
+)
+
+REM Set modern CUDA architecture flags for CUDA 12/13+ compatibility
+set "CMAKE_CUDA_ARCHITECTURES=75"
+set "CMAKE_CUDA_STANDARD=17"
+set "_CL_=/Zc:preprocessor"
 
 REM Try to find and setup Visual Studio environment
 echo 🔧 Setting up Visual Studio environment...
-if exist "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat" (
+if exist "C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\VC\Auxiliary\Build\vcvars64.bat" (
+    echo    Using Visual Studio 18 Build Tools
+    call "C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
+) else if exist "C:\Program Files\Microsoft Visual Studio\18\BuildTools\VC\Auxiliary\Build\vcvars64.bat" (
+    echo    Using Visual Studio 18 Build Tools
+    call "C:\Program Files\Microsoft Visual Studio\18\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
+) else if exist "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat" (
     echo    Using Visual Studio 2022 Build Tools
-    call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1
-
-    REM Manually set up the environment
-    set "LIB=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\lib\x64;C:\Program Files (x86)\Windows Kits\10\Lib\10.0.22621.0\um\x64;C:\Program Files (x86)\Windows Kits\10\Lib\10.0.22621.0\ucrt\x64"
-    set "INCLUDE=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\include;C:\Program Files (x86)\Windows Kits\10\Include\10.0.22621.0\um;C:\Program Files (x86)\Windows Kits\10\Include\10.0.22621.0\shared;C:\Program Files (x86)\Windows Kits\10\Include\10.0.22621.0\ucrt"
-    set "PATH=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\HostX64\x64;C:\Program Files (x86)\Windows Kits\10\bin\10.0.22621.0\x64;%PATH%"
+    call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
 ) else if exist "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat" (
     echo    Using Visual Studio 2022 Build Tools
-    call "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1
+    call "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
 ) else if exist "C:\Program Files (x86)\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat" (
     echo    Using Visual Studio 2022 Community
-    call "C:\Program Files (x86)\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1
+    call "C:\Program Files (x86)\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat"
 ) else if exist "C:\Program Files (x86)\Microsoft Visual Studio\2022\Professional\VC\Auxiliary\Build\vcvars64.bat" (
     echo    Using Visual Studio 2022 Professional
-    call "C:\Program Files (x86)\Microsoft Visual Studio\2022\Professional\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1
+    call "C:\Program Files (x86)\Microsoft Visual Studio\2022\Professional\VC\Auxiliary\Build\vcvars64.bat"
 ) else if exist "C:\Program Files (x86)\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat" (
     echo    Using Visual Studio 2022 Enterprise
-    call "C:\Program Files (x86)\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1
+    call "C:\Program Files (x86)\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
 ) else if exist "C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Auxiliary\Build\vcvars64.bat" (
     echo    Using Visual Studio 2019 Build Tools
-    call "C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1
+    call "C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
 ) else (
     echo    ⚠️  Visual Studio not found, using manual SDK setup
     set "WindowsSDKVersion=10.0.22621.0"
@@ -183,6 +231,17 @@ if exist "%SRC_PATH%" (
     echo ⚠️ Contents of ..\target\debug:
     dir "..\target\debug"
     exit /b 1
+)
+
+REM Copy CUDA runtime DLLs to target\debug for direct execution
+if defined CUDA_PATH (
+    if exist "%CUDA_PATH%\bin\x64\cublas64_*.dll" (
+        copy /Y "%CUDA_PATH%\bin\x64\cublas*.dll" "..\target\debug\" >nul 2>&1
+        copy /Y "%CUDA_PATH%\bin\x64\cudart*.dll" "..\target\debug\" >nul 2>&1
+        copy /Y "%CUDA_PATH%\bin\x64\cublas*.dll" "target\debug\" >nul 2>&1
+        copy /Y "%CUDA_PATH%\bin\x64\cudart*.dll" "target\debug\" >nul 2>&1
+        echo ✅ Copied CUDA runtime DLLs to target\debug
+    )
 )
 
 REM Run tauri dev

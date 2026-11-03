@@ -32,7 +32,25 @@ impl DatabaseManager {
 
         let pool = SqlitePool::connect(tauri_db_path).await?;
 
-        sqlx::migrate!("./migrations").run(&pool).await?;
+        // Run migrations with self-healing for missing/orphaned migration records
+        if let Err(e) = sqlx::migrate!("./migrations").run(&pool).await {
+            let err_msg = e.to_string();
+            if err_msg.contains("missing in the resolved migrations") {
+                log::warn!("Detected orphaned migration in database: {}. Cleaning up _sqlx_migrations...", err_msg);
+                let _ = sqlx::query(
+                    "DELETE FROM _sqlx_migrations WHERE version NOT IN (
+                        20250916100000, 20250920155811, 20251006000000, 20251010153942,
+                        20251101000000, 20251105120000, 20251110000000, 20251110000001,
+                        20251223000000, 20251229000000
+                    )"
+                ).execute(&pool).await;
+
+                // Retry migration
+                sqlx::migrate!("./migrations").run(&pool).await.map_err(|err| sqlx::Error::from(err))?;
+            } else {
+                return Err(e.into());
+            }
+        }
 
         Ok(DatabaseManager { pool })
     }

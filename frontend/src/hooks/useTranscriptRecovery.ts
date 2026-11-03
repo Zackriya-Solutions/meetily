@@ -51,8 +51,9 @@ export function useTranscriptRecovery(): UseTranscriptRecoveryReturn {
 
       const recentMeetings = meetings.filter(m => {
         const isWithinRetention = m.lastUpdated > cutoffTime; // Not older than 7 days
-        const isOldEnough = m.lastUpdated < secondsAgo; // Older than 15 seconds
-        return isWithinRetention && isOldEnough;
+        const isOldEnough = m.lastUpdated < secondsAgo; // Older than threshold
+        const isNotSaved = !m.savedToSQLite; // Only recover meetings that were not saved to SQLite
+        return isWithinRetention && isOldEnough && isNotSaved;
       });
 
       // Verify audio checkpoint availability for each meeting
@@ -170,6 +171,7 @@ export function useTranscriptRecovery(): UseTranscriptRecoveryReturn {
         chunk_start_time: (t as any).chunk_start_time,
         is_partial: (t as any).is_partial || false,
         confidence: t.confidence,
+        speaker: (t as any).speaker,
         audio_start_time: (t as any).audio_start_time,
         audio_end_time: (t as any).audio_end_time,
         duration: (t as any).duration,

@@ -27,6 +27,62 @@ pub struct TimestampedResult {
     pub tokens: Vec<String>,
 }
 
+impl TimestampedResult {
+    /// Extract words with their start/end timestamps from the token sequence
+    pub fn extract_words(&self, total_duration: f64) -> Vec<crate::diarization_engine::TimedWord> {
+        let mut words = Vec::new();
+        let mut cur_word = String::new();
+        let mut word_start: Option<f64> = None;
+        let mut word_end: f64 = 0.0;
+
+        for (token, &t_f32) in self.tokens.iter().zip(self.timestamps.iter()) {
+            let t = t_f32 as f64;
+            let is_new_word = token.starts_with(' ') || token.starts_with('\u{2581}');
+            let clean_tok = token.trim_start_matches(|c| c == ' ' || c == '\u{2581}');
+
+            if is_new_word && !cur_word.is_empty() {
+                if let Some(start) = word_start {
+                    words.push(crate::diarization_engine::TimedWord {
+                        word: cur_word.clone(),
+                        start_time: start,
+                        end_time: word_end.max(start + 0.08),
+                    });
+                }
+                cur_word.clear();
+                word_start = Some(t);
+            } else if word_start.is_none() {
+                word_start = Some(t);
+            }
+
+            cur_word.push_str(clean_tok);
+            word_end = t + 0.12;
+        }
+
+        if !cur_word.is_empty() {
+            if let Some(start) = word_start {
+                words.push(crate::diarization_engine::TimedWord {
+                    word: cur_word,
+                    start_time: start,
+                    end_time: word_end.min(total_duration).max(start + 0.08),
+                });
+            }
+        }
+
+        // Adjust end_time of word[i] to start_time of word[i+1] where consecutive
+        let len = words.len();
+        for i in 0..len {
+            if i + 1 < len {
+                let next_start = words[i + 1].start_time;
+                if next_start > words[i].start_time && next_start <= words[i].start_time + 2.0 {
+                    words[i].end_time = next_start;
+                }
+            }
+        }
+
+        words
+    }
+}
+
 #[derive(thiserror::Error, Debug)]
 pub enum ParakeetError {
     #[error("ORT error")]

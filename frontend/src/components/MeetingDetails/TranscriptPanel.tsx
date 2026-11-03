@@ -28,6 +28,10 @@ interface TranscriptPanelProps {
   meetingId?: string;
   meetingFolderPath?: string | null;
   onRefetchTranscripts?: () => Promise<void>;
+
+  // Speaker modal props
+  showSpeakerModal?: boolean;
+  onSpeakerModalOpenChange?: (open: boolean) => void;
 }
 
 export function TranscriptPanel({
@@ -48,6 +52,8 @@ export function TranscriptPanel({
   meetingId,
   meetingFolderPath,
   onRefetchTranscripts,
+  showSpeakerModal,
+  onSpeakerModalOpenChange,
 }: TranscriptPanelProps) {
   // Convert transcripts to segments if pagination is not used but we want virtualization
   const convertedSegments = useMemo(() => {
@@ -60,9 +66,26 @@ export function TranscriptPanel({
       timestamp: t.audio_start_time ?? 0,
       endTime: t.audio_end_time,
       text: t.text,
+      speaker: t.speaker,
       confidence: t.confidence,
     }));
   }, [transcripts, usePagination, segments]);
+
+  // Extract all distinct speakers from transcripts/segments
+  const detectedSpeakers = useMemo(() => {
+    const set = new Set<string>();
+    if (segments) {
+      for (const s of segments) {
+        if (s.speaker && s.speaker.trim()) set.add(s.speaker.trim());
+      }
+    }
+    if (transcripts) {
+      for (const t of transcripts) {
+        if (t.speaker && t.speaker.trim()) set.add(t.speaker.trim());
+      }
+    }
+    return Array.from(set);
+  }, [segments, transcripts]);
 
   return (
     <div className="flex h-full min-w-0 w-full bg-white flex-col relative @container">
@@ -75,6 +98,9 @@ export function TranscriptPanel({
           meetingId={meetingId}
           meetingFolderPath={meetingFolderPath}
           onRefetchTranscripts={onRefetchTranscripts}
+          speakers={detectedSpeakers}
+          showSpeakerModal={showSpeakerModal}
+          onSpeakerModalOpenChange={onSpeakerModalOpenChange}
         />
       </div>
 
