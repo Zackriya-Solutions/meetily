@@ -80,6 +80,11 @@
     },
     "bundle": {
         "active": true,
+        "shortDescription": "Privacy-first AI meeting assistant",
+        "longDescription": "Meetily Community Edition is a free, open-source AI meeting assistant. Record meetings, transcribe audio locally and create AI summaries using local models or a provider you choose. Your recordings and transcripts stay on your device.",
+        "category": "Productivity",
+        "publisher": "Meetily",
+        "homepage": "https://meetily.ai",
         "targets": [
             "deb",
             "appimage",
@@ -106,6 +111,11 @@
             "binaries/llama-helper",
             "binaries/ffmpeg"
         ],
+        "linux": {
+            "deb": {
+                "depends": ["libvulkan1"]
+            }
+        },
         "macOS": {
             "entitlements": "entitlements.plist",
             "signingIdentity": "-",
