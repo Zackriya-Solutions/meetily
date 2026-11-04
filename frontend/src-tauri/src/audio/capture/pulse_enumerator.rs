@@ -21,7 +21,7 @@ use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context as _, Result};
 use libpulse_binding::callbacks::ListResult;
 use libpulse_binding::context::introspect::ServerInfo;
 use libpulse_binding::context::{Context, FlagSet as ContextFlagSet, State as ContextState};
@@ -31,6 +31,82 @@ use libpulse_binding::proplist::Proplist;
 use log::{debug, info, warn};
 
 use super::pulse_linux::{PulseSink, PulseSource};
+
+#[derive(Debug)]
+pub(crate) struct PulseListError;
+
+impl std::fmt::Display for PulseListError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("PulseAudio device list callback failed")
+    }
+}
+
+impl std::error::Error for PulseListError {}
+
+fn collect_list_result<T, U>(
+    result: ListResult<T>,
+    entries: &mut std::result::Result<Vec<U>, PulseListError>,
+    map: impl FnOnce(T) -> Option<U>,
+) {
+    match result {
+        ListResult::Item(value) => {
+            if let Ok(entries) = entries {
+                if let Some(entry) = map(value) {
+                    entries.push(entry);
+                }
+            }
+        }
+        ListResult::Error => *entries = Err(PulseListError),
+        ListResult::End => {}
+    }
+}
+
+#[cfg(test)]
+mod list_result_tests {
+    use super::*;
+
+    #[test]
+    fn end_without_items_is_a_successful_empty_inventory() {
+        let mut entries = Ok(Vec::<i32>::new());
+        collect_list_result(ListResult::<i32>::End, &mut entries, Some);
+        assert_eq!(entries.unwrap(), Vec::<i32>::new());
+    }
+
+    #[test]
+    fn successful_items_preserve_order_and_filtered_items_are_omitted() {
+        let mut entries = Ok(Vec::new());
+        for value in [3, 0, 1] {
+            collect_list_result(ListResult::Item(value), &mut entries, |value| {
+                (value != 0).then_some(value)
+            });
+        }
+        collect_list_result(ListResult::<i32>::End, &mut entries, Some);
+        assert_eq!(entries.unwrap(), vec![3, 1]);
+    }
+
+    #[test]
+    fn error_without_items_is_not_an_empty_inventory() {
+        let mut entries = Ok(Vec::<i32>::new());
+        collect_list_result(ListResult::<i32>::Error, &mut entries, Some);
+        assert!(entries.is_err());
+    }
+
+    #[test]
+    fn partial_inventory_is_discarded_and_failure_is_sticky() {
+        let mut entries = Ok(Vec::new());
+        collect_list_result(ListResult::Item(1), &mut entries, Some);
+        collect_list_result(ListResult::<i32>::Error, &mut entries, Some);
+        collect_list_result(ListResult::Item(2), &mut entries, |_| {
+            panic!("a failed inventory must not map later items")
+        });
+        collect_list_result(ListResult::<i32>::End, &mut entries, Some);
+        let error = entries
+            .map_err(anyhow::Error::from)
+            .context("Failed to list PulseAudio sources")
+            .unwrap_err();
+        assert!(error.is::<PulseListError>());
+    }
+}
 
 /// Upper bound on any single mainloop pumping loop. A local introspection
 /// round-trip answers in milliseconds; this is a safety ceiling against a
@@ -259,14 +335,14 @@ fn run_operation_to_completion<T: ?Sized>(
 }
 
 fn list_sinks_impl(mainloop: &mut Mainloop, context: &Context) -> Result<Vec<PulseSink>> {
-    let sinks: Rc<RefCell<Vec<PulseSink>>> = Rc::new(RefCell::new(Vec::new()));
+    let sinks = Rc::new(RefCell::new(Ok(Vec::new())));
     let sinks_cb = sinks.clone();
 
     let operation = context.introspect().get_sink_info_list(move |result| {
-        if let ListResult::Item(info) = result {
+        collect_list_result(result, &mut sinks_cb.borrow_mut(), |info| {
             let monitor_source_name = info.monitor_source_name.as_deref().unwrap_or_default();
             if monitor_source_name.is_empty() {
-                return;
+                return None;
             }
 
             let description = info
@@ -275,18 +351,22 @@ fn list_sinks_impl(mainloop: &mut Mainloop, context: &Context) -> Result<Vec<Pul
                 .unwrap_or("Unknown output")
                 .to_string();
 
-            sinks_cb.borrow_mut().push(PulseSink {
+            Some(PulseSink {
                 name: info.name.as_deref().unwrap_or_default().to_string(),
                 description,
                 monitor_source_name: monitor_source_name.to_string(),
-            });
-        }
+            })
+        });
     });
 
-    run_operation_to_completion(mainloop, &operation)?;
+    let operation_result = run_operation_to_completion(mainloop, &operation);
     drop(operation);
 
-    let result = sinks.borrow().clone();
+    let result = sinks
+        .replace(Ok(Vec::new()))
+        .map_err(anyhow::Error::from)
+        .context("Failed to list PulseAudio sinks")?;
+    operation_result?;
     Ok(result)
 }
 
@@ -308,23 +388,23 @@ mod port_tests {
 }
 
 fn list_sources_impl(mainloop: &mut Mainloop, context: &Context) -> Result<Vec<PulseSource>> {
-    let sources: Rc<RefCell<Vec<PulseSource>>> = Rc::new(RefCell::new(Vec::new()));
+    let sources = Rc::new(RefCell::new(Ok(Vec::new())));
     let sources_cb = sources.clone();
 
     let operation = context.introspect().get_source_info_list(move |result| {
-        if let ListResult::Item(info) = result {
+        collect_list_result(result, &mut sources_cb.borrow_mut(), |info| {
             // Monitors of sinks are already exposed as "System Audio" devices
             // through list_sinks(); ignore them here.
             if info.monitor_of_sink.is_some() {
-                return;
+                return None;
             }
             if !microphone_port_usable(info.active_port.as_ref().map(|port| port.available)) {
-                return;
+                return None;
             }
 
             let source_name = info.name.as_deref().unwrap_or_default();
             if source_name.is_empty() {
-                return;
+                return None;
             }
 
             let description = info
@@ -333,17 +413,21 @@ fn list_sources_impl(mainloop: &mut Mainloop, context: &Context) -> Result<Vec<P
                 .unwrap_or(source_name)
                 .to_string();
 
-            sources_cb.borrow_mut().push(PulseSource {
+            Some(PulseSource {
                 description,
                 source_name: source_name.to_string(),
-            });
-        }
+            })
+        });
     });
 
-    run_operation_to_completion(mainloop, &operation)?;
+    let operation_result = run_operation_to_completion(mainloop, &operation);
     drop(operation);
 
-    let result = sources.borrow().clone();
+    let result = sources
+        .replace(Ok(Vec::new()))
+        .map_err(anyhow::Error::from)
+        .context("Failed to list PulseAudio sources")?;
+    operation_result?;
     Ok(result)
 }
 

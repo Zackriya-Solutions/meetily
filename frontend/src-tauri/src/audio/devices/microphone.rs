@@ -3,6 +3,8 @@ use cpal::traits::{HostTrait, DeviceTrait};
 use log::{info, warn};
 
 use super::configuration::{AudioDevice, DeviceType};
+#[cfg(target_os = "linux")]
+use crate::audio::capture::pulse_enumerator::PulseListError;
 
 /// Get the default input (microphone) device for the system.
 ///
@@ -19,6 +21,7 @@ pub fn default_input_device() -> Result<AudioDevice> {
                         return eligible_default_source(&source_name, &sources)
                             .map(|id| AudioDevice::new(id, DeviceType::Input).with_default(true));
                     }
+                    Err(e) if e.is::<PulseListError>() => return Err(e),
                     Err(e) => warn!(
                         "🎤 Failed to list PulseAudio sources ({}), falling back to CPAL",
                         e

@@ -14,6 +14,8 @@ use super::capture::{AudioCaptureBackend, get_current_backend};
 use super::capture::CoreAudioCapture;
 
 #[cfg(target_os = "linux")]
+use super::capture::pulse_enumerator::PulseListError;
+#[cfg(target_os = "linux")]
 use super::capture::{find_sink_by_name, find_source_by_name, list_pulse_sources, PulseCapture};
 #[cfg(target_os = "linux")]
 use super::devices::discovery::linux_device_query;
@@ -139,6 +141,7 @@ impl AudioStream {
                     )
                     .await;
                 }
+                Err(e) if e.is::<PulseListError>() => return Err(e),
                 Err(e) => warn!(
                     "🎤 Stream: PulseAudio/PipeWire server unreachable ({}), falling back to CPAL",
                     e

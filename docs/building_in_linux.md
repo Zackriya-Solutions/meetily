@@ -234,6 +234,10 @@ Minimal or customized installations may omit the compatibility service; see the
 If the server cannot be reached, system audio is unavailable. Ensure PulseAudio
 or PipeWire’s PulseAudio compatibility service is running.
 
+DEB packages declare `libpulse0` and `libasound2`, alongside `libvulkan1`, as
+runtime dependencies. These client libraries do not install or select an audio
+server.
+
 On Linux, the **Microphone** and **System Audio** pickers are populated directly
 from PulseAudio/PipeWire introspection. The labels you see in Meetily are the
 same ones shown by the desktop's native audio settings (KDE, GNOME, etc.).
@@ -250,6 +254,11 @@ microphone.
 If no PulseAudio/`pipewire-pulse` server is reachable, Meetily falls back to a
 small whitelist of ALSA microphone endpoints (`default`, `pipewire`, `pulse`).
 This fallback does not provide system-audio capture.
+
+If a PulseAudio source or sink list callback fails, Meetily rejects the entire
+inventory rather than using an empty or partial list as evidence of device loss
+or a reason to select ALSA fallback. The device monitor retains its previous
+snapshot until a successful poll.
 
 ### Recording device selection
 

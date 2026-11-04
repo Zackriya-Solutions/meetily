@@ -23,6 +23,8 @@ use super::{
 };
 use super::device_monitor::{DeviceEvent, DeviceMonitorType};
 #[cfg(target_os = "linux")]
+use super::capture::pulse_enumerator::PulseListError;
+#[cfg(target_os = "linux")]
 use super::devices::AudioDevice;
 #[cfg(target_os = "linux")]
 use super::stream::LinuxStreamKind;
@@ -296,6 +298,8 @@ fn microphone_enumerated(device: &super::AudioDevice) -> bool {
     {
         match super::capture::list_pulse_sources() {
             Ok(sources) => sources.iter().any(|s| s.source_name == device.name),
+            // Unknown inventory is not evidence the selected mic disappeared; native open validates the ID.
+            Err(e) if e.is::<PulseListError>() => true,
             Err(_) => cpal_has(),
         }
     }
@@ -2010,10 +2014,12 @@ async fn trigger_mic_fallback_to_default<R: Runtime>(
             guard.as_ref().is_some_and(|m| Arc::ptr_eq(m.get_state(), &session) && m.has_working_stream(true))
         };
         // Preserve the legacy CPAL inventory check on Linux.
-        if working && linux_device_query(super::capture::list_pulse_sources).await
-            .is_ok_and(|sources| sources.iter().any(|s| s.source_name == disconnected_name))
-        {
-            return;
+        if working {
+            match linux_device_query(super::capture::list_pulse_sources).await {
+                Ok(sources) if sources.iter().any(|s| s.source_name == disconnected_name) => return,
+                Err(e) if e.is::<PulseListError>() => return,
+                _ => {}
+            }
         }
         if !session_live(&session) || session.get_microphone_device().as_ref().map(|d| d.name.as_str()) != Some(disconnected_name.as_str()) {
             return;

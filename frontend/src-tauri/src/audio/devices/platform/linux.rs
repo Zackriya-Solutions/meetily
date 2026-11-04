@@ -4,6 +4,7 @@ use log::{info, warn};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Mutex;
 
+use crate::audio::capture::pulse_enumerator::PulseListError;
 use crate::audio::capture::{
     default_pulse_sink_name, default_pulse_source_name, list_pulse_sinks, list_pulse_sources,
     PulseSink, PulseSource,
@@ -174,6 +175,7 @@ pub fn configure_linux_audio(host: &cpal::Host) -> Result<Vec<AudioDevice>> {
             });
             devices.extend(pulse_source_devices(&sources, default_source.as_deref()));
         }
+        Err(e) if e.is::<PulseListError>() => return Err(e),
         Err(e) => {
             warn!(
                 "🎙️ configure_linux_audio: failed to list PulseAudio/PipeWire sources ({}); falling back to filtered ALSA endpoints",
@@ -218,6 +220,7 @@ pub fn configure_linux_audio(host: &cpal::Host) -> Result<Vec<AudioDevice>> {
             });
             devices.extend(pulse_sink_devices(&sinks, default_sink.as_deref()));
         }
+        Err(e) if e.is::<PulseListError>() => return Err(e),
         Err(e) => {
             warn!("Failed to list PulseAudio/PipeWire sinks for System Audio: {}", e);
         }

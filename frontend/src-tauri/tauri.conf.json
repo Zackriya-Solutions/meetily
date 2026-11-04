@@ -113,7 +113,7 @@
         ],
         "linux": {
             "deb": {
-                "depends": ["libvulkan1"]
+                "depends": ["libvulkan1", "libpulse0", "libasound2"]
             }
         },
         "macOS": {
