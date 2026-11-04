@@ -1879,13 +1879,15 @@ async fn attempt_linux_recovery<
     D: std::future::Future<Output = Result<AudioDevice, String>>,
 >(
     working: bool,
+    recheck_availability: bool,
     active: Arc<AudioDevice>,
     attempts: &mut (String, u8),
     inspect: impl FnOnce(&AudioDevice) -> I,
     default_device: impl FnOnce() -> D,
     replace: impl FnOnce(Arc<AudioDevice>) -> F,
 ) -> Result<Option<Arc<AudioDevice>>, String> {
-    if working { return Ok(None); }
+    // A live native worker can outlast its unavailable microphone port.
+    if working && !recheck_availability { return Ok(None); }
     let present = match inspect(&active).await {
         Ok(present) => present,
         Err(e) => {
@@ -1893,6 +1895,7 @@ async fn attempt_linux_recovery<
             return Ok(None);
         }
     };
+    if working && present { return Ok(None); }
     let target = if present {
         Ok(active.clone())
     } else {
@@ -1939,7 +1942,7 @@ async fn repair_linux_stream<R: Runtime>(
     }
     if kind != Some(LinuxStreamKind::Pulse) { return; }
     let previous_name = device.name.clone();
-    let result = attempt_linux_recovery(working, device, attempts,
+    let result = attempt_linux_recovery(working, microphone && expected_device.is_some(), device, attempts,
         |device| {
             let name = device.name.clone();
             async move {
@@ -2443,9 +2446,41 @@ mod linux_recovery_tests {
     }
 
     #[tokio::test]
+    async fn live_native_source_missing_after_disconnect_uses_default() {
+        let mut attempts = (String::new(), 0);
+        let replaced = std::cell::Cell::new(false);
+        let result = attempt_linux_recovery(true, true, input("missing"), &mut attempts,
+            |device| { assert_eq!(device.name, "missing"); ready(Ok(false)) },
+            || ready(Ok(AudioDevice::new("replacement".into(), DeviceType::Input))),
+            |device| {
+                assert_eq!(device.name, "replacement");
+                replaced.set(true);
+                ready(Ok(()))
+            },
+        ).await.unwrap();
+        assert_eq!(result.expect("a live worker cannot establish source availability").name, "replacement");
+        assert!(replaced.get());
+        assert_eq!(attempts, (String::new(), 0));
+    }
+
+    #[tokio::test]
+    async fn live_native_source_reappeared_after_disconnect_is_not_reopened() {
+        let mut attempts = ("previous".into(), 2);
+        let inspected = std::cell::Cell::new(false);
+        let result = attempt_linux_recovery(true, true, input("active"), &mut attempts,
+            |_| { inspected.set(true); ready(Ok(true)) },
+            || -> std::future::Ready<Result<AudioDevice, String>> { panic!("a present source must remain pinned") },
+            |_| -> std::future::Ready<Result<(), String>> { panic!("a live present source must not restart") },
+        ).await.unwrap();
+        assert!(inspected.get());
+        assert!(result.is_none());
+        assert_eq!(attempts, ("previous".into(), 2));
+    }
+
+    #[tokio::test]
     async fn healthy_native_capture_does_not_inspect_or_replace() {
         let mut attempts = (String::new(), 0);
-        let result = attempt_linux_recovery(true, input("active"), &mut attempts,
+        let result = attempt_linux_recovery(true, false, input("active"), &mut attempts,
             |_| -> std::future::Ready<Result<bool, String>> { panic!("healthy capture must not enumerate") },
             || -> std::future::Ready<Result<AudioDevice, String>> { panic!("healthy capture must not query the default") },
             |_| std::future::ready(Err("healthy capture must not be replaced".into())),
@@ -2456,37 +2491,43 @@ mod linux_recovery_tests {
 
     #[tokio::test]
     async fn unknown_inventory_does_not_select_a_default_or_replace() {
-        let mut attempts = (String::new(), 0);
-        let result = attempt_linux_recovery(false, input("active"), &mut attempts,
-            |_| ready(Err("enumeration unavailable".into())),
-            || -> std::future::Ready<Result<AudioDevice, String>> { panic!("unknown inventory is not confirmed absence") },
-            |_| std::future::ready(Err("unknown inventory must not replace capture".into())),
-        ).await.unwrap();
-        assert!(result.is_none());
-        assert_eq!(attempts, (String::new(), 0));
+        for working in [false, true] {
+            let mut attempts = ("previous".into(), 2);
+            let inspected = std::cell::Cell::new(false);
+            let result = attempt_linux_recovery(working, true, input("active"), &mut attempts,
+                |_| { inspected.set(true); ready(Err("enumeration unavailable".into())) },
+                || -> std::future::Ready<Result<AudioDevice, String>> { panic!("unknown inventory is not confirmed absence") },
+                |_| -> std::future::Ready<Result<(), String>> { panic!("unknown inventory must not replace capture") },
+            ).await.unwrap();
+            assert!(inspected.get());
+            assert!(result.is_none());
+            assert_eq!(attempts, ("previous".into(), 2));
+        }
     }
 
     #[tokio::test]
     async fn native_recovery_attempts_a_fourth_replacement_and_resets_on_success() {
-        let replacements = std::cell::Cell::new(0);
-        let mut attempts = (String::new(), 0);
-        for attempt in 1..=4 {
-            let result = attempt_linux_recovery(false, input("missing"), &mut attempts,
-                |_| ready(Ok(false)),
-                || ready(Ok(AudioDevice::new("replacement".into(), DeviceType::Input))),
-                |device| {
-                    assert_eq!(device.name, "replacement");
-                    replacements.set(replacements.get() + 1);
-                    std::future::ready(if attempt < 4 { Err("not ready".into()) } else { Ok(()) })
-                },
-            ).await;
-            assert_eq!(replacements.get(), attempt);
-            if attempt < 4 {
-                assert!(result.is_err());
-                assert_eq!(attempts, ("replacement".into(), attempt));
-            } else {
-                assert_eq!(result.unwrap().unwrap().name, "replacement");
-                assert_eq!(attempts, (String::new(), 0));
+        for working in [false, true] {
+            let replacements = std::cell::Cell::new(0);
+            let mut attempts = (String::new(), 0);
+            for attempt in 1..=4 {
+                let result = attempt_linux_recovery(working, true, input("missing"), &mut attempts,
+                    |_| ready(Ok(false)),
+                    || ready(Ok(AudioDevice::new("replacement".into(), DeviceType::Input))),
+                    |device| {
+                        assert_eq!(device.name, "replacement");
+                        replacements.set(replacements.get() + 1);
+                        std::future::ready(if attempt < 4 { Err("not ready".into()) } else { Ok(()) })
+                    },
+                ).await;
+                assert_eq!(replacements.get(), attempt);
+                if attempt < 4 {
+                    assert!(result.is_err());
+                    assert_eq!(attempts, ("replacement".into(), attempt));
+                } else {
+                    assert_eq!(result.unwrap().unwrap().name, "replacement");
+                    assert_eq!(attempts, (String::new(), 0));
+                }
             }
         }
     }
@@ -2494,7 +2535,7 @@ mod linux_recovery_tests {
     #[tokio::test]
     async fn present_native_device_is_reopened_without_querying_the_default() {
         let mut attempts = ("active".into(), 3);
-        let result = attempt_linux_recovery(false, input("active"), &mut attempts,
+        let result = attempt_linux_recovery(false, false, input("active"), &mut attempts,
             |device| { assert_eq!(device.name, "active"); ready(Ok(true)) },
             || -> std::future::Ready<Result<AudioDevice, String>> { panic!("explicit present device must remain pinned") },
             |device| {
@@ -2508,14 +2549,16 @@ mod linux_recovery_tests {
 
     #[tokio::test]
     async fn unresolved_default_is_retryable_without_replacing_capture() {
-        let mut attempts = (String::new(), 0);
-        for default in [Err("no default".into()), Ok((*input("missing")).clone())] {
-            assert!(attempt_linux_recovery(false, input("missing"), &mut attempts,
-                |_| ready(Ok(false)), || ready(default),
-                |_| std::future::ready(Ok(())),
-            ).await.is_err());
+        for working in [false, true] {
+            let mut attempts = (String::new(), 0);
+            for default in [Err("no default".into()), Ok((*input("missing")).clone())] {
+                assert!(attempt_linux_recovery(working, true, input("missing"), &mut attempts,
+                    |_| ready(Ok(false)), || ready(default),
+                    |_| -> std::future::Ready<Result<(), String>> { panic!("an unresolved default must not replace capture") },
+                ).await.is_err());
+            }
+            assert_eq!(attempts, ("missing".into(), 2));
         }
-        assert_eq!(attempts, ("missing".into(), 2));
     }
 
     #[test]
