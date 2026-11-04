@@ -7,13 +7,13 @@
     <a href="https://trendshift.io/repositories/21958" target="_blank"><img src="https://trendshift.io/api/badge/repositories/21958" alt="Zackriya-Solutions%2Fmeetily | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
     <br>
     <br>
-    <a href="https://github.com/Zackriya-Solutions/meetily/releases/"><img src="https://img.shields.io/badge/Pre_Release-Link-brightgreen" alt="Pre-Release"></a>
-    <a href="https://github.com/Zackriya-Solutions/meetily"><img alt="GitHub Repo stars" src="https://img.shields.io/github/stars/zackriya-solutions/meetily?style=flat">
+    <a href="https://github.com/Zackriya-Solutions/meeting-minutes/releases/"><img src="https://img.shields.io/badge/Pre_Release-Link-brightgreen" alt="Pre-Release"></a>
+    <a href="https://github.com/Zackriya-Solutions/meeting-minutes/releases"><img alt="GitHub Repo stars" src="https://img.shields.io/github/stars/zackriya-solutions/meeting-minutes?style=flat">
 </a>
- <a href="https://github.com/Zackriya-Solutions/meetily/releases"> <img alt="GitHub Downloads (all assets, all releases)" src="https://img.shields.io/github/downloads/zackriya-solutions/meetily/total?style=plastic"> </a>
-    <a href="https://github.com/Zackriya-Solutions/meetily/blob/main/LICENSE.md"><img src="https://img.shields.io/badge/License-MIT-blue" alt="License"></a>
-    <a href="#installation"><img src="https://img.shields.io/badge/Supported_OS-macOS,_Windows-white" alt="Supported OS"></a>
-    <a href="https://github.com/Zackriya-Solutions/meetily/releases"><img alt="GitHub Tag" src="https://img.shields.io/github/v/tag/zackriya-solutions/meetily?include_prereleases&color=yellow">
+ <a href="https://github.com/Zackriya-Solutions/meeting-minutes/releases"> <img alt="GitHub Downloads (all assets, all releases)" src="https://img.shields.io/github/downloads/zackriya-solutions/meeting-minutes/total?style=plastic"> </a>
+    <a href="https://github.com/Zackriya-Solutions/meeting-minutes/releases"><img src="https://img.shields.io/badge/License-MIT-blue" alt="License"></a>
+    <a href="https://github.com/Zackriya-Solutions/meeting-minutes/releases"><img src="https://img.shields.io/badge/Supported_OS-macOS,_Windows-white" alt="Supported OS"></a>
+    <a href="https://github.com/Zackriya-Solutions/meeting-minutes/releases"><img alt="GitHub Tag" src="https://img.shields.io/github/v/tag/zackriya-solutions/meeting-minutes?include_prereleases&color=yellow">
 </a>
     <br>
     <h3>
@@ -44,7 +44,7 @@ A privacy-first AI meeting assistant that captures, transcribes, and summarizes 
 
 ---
 
-> **Meetily PRO Upgrade Offer** - Meetily PRO is available for users who need enhanced accuracy, advanced exports, custom summary workflows, and team-ready features. Use coupon code **LAUNCH20** for **20% off** until the next Meetily Community Edition release. [Explore Meetily PRO →](https://meetily.ai/pro/)
+> **Meetily PRO Upgrade Offer** - Meetily PRO is available for users who need enhanced accuracy, advanced exports, custom summary workflows, and team-ready features. Use coupon code **LAUNCH20** for **20% off** until the next Meetily Community Edition release. Speaker diarization is also planned for PRO in mid-June. [Explore Meetily PRO →](https://meetily.ai/pro/)
 
 ---
 
@@ -229,7 +229,7 @@ For the community that helped Meetily grow, we are making the upgrade easier: us
 - **Custom Summary Templates**: Tailor summaries to your specific workflow and needs
 - **Advanced Export Options**: PDF, DOCX, and Markdown exports with formatting
 - **Auto-detect and Join Meetings**: Automatic meeting detection and joining
-- **Speaker Identification**: Distinguish between speakers automatically
+- **Speaker Identification**: Distinguish between speakers automatically *(Coming Soon)*
 - **Chat with Meetings**: AI-powered meeting insights and queries *(Coming Soon)*
 - **Calendar Integration**: Seamless integration with your calendar *(Coming Soon)*
 - **Self-Hosted Deployment**: Deploy on your own infrastructure for teams

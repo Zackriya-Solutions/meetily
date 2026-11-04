@@ -20,7 +20,33 @@ Frozen installation keeps the lockfile and installed dependency set aligned. Whe
 
 ## Development Commands and Debugging
 
-Run application commands from `frontend/` after installing dependencies:
+### First-run sidecar setup
+
+Installing frontend dependencies does not prepare `llama-helper`. The desktop dev/build commands expect this sidecar to be staged first. Repeat preparation if the staged binary is removed or the build target changes.
+
+From the repository root, build the helper and inspect the native host target:
+
+```bash
+cargo build -p llama-helper
+rustc -vV
+```
+
+Use the value printed after `host:` as `<host-triple>` below. If the helper build fails, stop: do not copy a binary or launch Tauri.
+
+Create `frontend/src-tauri/binaries/`, then copy the built executable using the paths for your platform, relative to the repository root. Replace `<host-triple>` with the actual value printed by `rustc`, not the literal placeholder:
+
+| Platform | Built executable | Staged destination |
+| --- | --- | --- |
+| macOS/Linux | `target/debug/llama-helper` | `frontend/src-tauri/binaries/llama-helper-<host-triple>` |
+| Windows | `target/debug/llama-helper.exe` | `frontend/src-tauri/binaries/llama-helper-<host-triple>.exe` |
+
+For a production build, run `cargo build -p llama-helper --release` and copy the executable from `target/release/` to the same target-suffixed destination, only after the build succeeds.
+
+These commands build the helper without an explicit GPU backend. Its optional acceleration features are `metal`, `cuda`, and `vulkan`, each requiring a compatible platform and toolchain. Do not forward Whisper's `coreml`, `hipblas`, or `openblas` flags to the helper.
+
+These paths assume an ordinary native-host workspace build. With a custom Cargo output directory or cross-compilation, copy from the actual configured output and use the actual build target as the suffix instead of the `rustc` host.
+
+After staging the helper, run application commands from `frontend/` with dependencies installed:
 
 | Command | Purpose |
 | --- | --- |
@@ -34,22 +60,23 @@ Run application commands from `frontend/` after installing dependencies:
 
 The feature-specific commands require a compatible platform and toolchain. The maintained command definitions are in [package.json](../frontend/package.json); see the [GPU acceleration guide](GPU_ACCELERATION.md) for setup.
 
-To enable Rust debug logging on macOS or Linux:
+Development builds already log `app_lib` at Debug level, normally to both the terminal and `logs-dev/` below the app data directory. No environment variable is needed for `pnpm run tauri:dev`.
 
-```bash
-RUST_LOG=debug pnpm run tauri:dev
-```
+Release builds normally log `app_lib` at Info level under `logs/`. To enable Debug logging, launch the installed executable with `MEETILY_DEBUG_LOG=1` on macOS/Linux. In Windows PowerShell, set `$env:MEETILY_DEBUG_LOG="1"` before launching the installed executable. This does not restore Trace messages compiled out of release builds.
 
-On Windows PowerShell:
+| Platform | App data directory |
+| --- | --- |
+| Linux | `${XDG_DATA_HOME:-$HOME/.local/share}/com.meetily.ai` |
+| macOS | `~/Library/Application Support/com.meetily.ai` |
+| Windows | `%APPDATA%\com.meetily.ai` |
 
-```powershell
-$env:RUST_LOG="debug"
-pnpm run tauri:dev
-```
+Append `logs-dev/` for development builds or `logs/` for release builds. If the persistent log path is unavailable or unwritable, logging may fall back to a stream, so log files are not guaranteed.
+
+`RUST_LOG` does not control Meetily's configured application logger; build tools or dependencies may handle it separately.
 
 Inspect the terminal's Rust logs and the desktop app's developer tools when diagnosing frontend/native interaction. For audio problems, inspect the pipeline and transcription-worker summaries for dropped samples, speech-segment statistics, queue depth, and failures. Use synthetic audio and redact sensitive data before sharing diagnostics.
 
-The `clean_run.sh` and Windows wrapper scripts are alternative launch paths, but inspect them before use: clean-run scripts can remove frontend dependencies and generated output, and the shell wrapper sets its own `RUST_LOG` from its argument. Prefer the commands above when you do not need a clean rebuild.
+The `clean_run.sh` and Windows wrapper scripts are alternative launch paths, but inspect them before use: clean-run scripts can remove frontend dependencies and generated output. After sidecar preparation, prefer the commands above when you do not need a clean rebuild.
 
 
 <details>

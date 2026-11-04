@@ -16,6 +16,8 @@ See [architecture and audio pipeline](docs/architecture.md), including [frontend
 
 Use pnpm 9.15.9. Run these commands from `frontend/`:
 
+Before running desktop dev/build commands, complete the [first-run sidecar setup](docs/BUILDING.md#first-run-sidecar-setup). Installing frontend dependencies alone does not stage `llama-helper`.
+
 | Command | Purpose |
 | --- | --- |
 | `pnpm install --frozen-lockfile` | Install the committed dependency set |
@@ -24,7 +26,7 @@ Use pnpm 9.15.9. Run these commands from `frontend/`:
 
 Use the Tauri app for development and validation; a standalone Next.js server does not exercise native commands, audio, or permissions.
 
-See [build and platform setup](docs/BUILDING.md), [development commands and debugging](docs/BUILDING.md#development-commands-and-debugging), and [GPU acceleration](docs/GPU_ACCELERATION.md) for prerequisites and platform-specific options. Prefer the package scripts over clean-run wrappers, which can remove dependencies and generated output.
+See [build and platform setup](docs/BUILDING.md), [development commands and debugging](docs/BUILDING.md#development-commands-and-debugging), and [GPU acceleration](docs/GPU_ACCELERATION.md) for prerequisites and platform-specific options. After sidecar preparation, prefer the package scripts over clean-run wrappers, which can remove dependencies and generated output.
 
 ## Working in This Repository
 
@@ -50,13 +52,15 @@ See [build and platform setup](docs/BUILDING.md), [development commands and debu
 | Meeting persistence | [database/](frontend/src-tauri/src/database/) |
 | Recording commands and lifecycle | [recording_commands.rs](frontend/src-tauri/src/audio/recording_commands.rs), [recording_manager.rs](frontend/src-tauri/src/audio/recording_manager.rs) |
 | Device discovery and platform configuration | [devices/](frontend/src-tauri/src/audio/devices/) |
+| Audio permissions | [permissions.rs](frontend/src-tauri/src/audio/permissions.rs) |
 | Audio capture | [capture/](frontend/src-tauri/src/audio/capture/) |
 | Mixing, resampling, and VAD | [pipeline.rs](frontend/src-tauri/src/audio/pipeline.rs), [vad.rs](frontend/src-tauri/src/audio/vad.rs) |
 | Recording output | [recording_saver.rs](frontend/src-tauri/src/audio/recording_saver.rs) |
 | Transcription providers and workers | [transcription/](frontend/src-tauri/src/audio/transcription/) |
 | Whisper model loading and acceleration | [whisper_engine/](frontend/src-tauri/src/whisper_engine/) |
+| Parakeet model loading and inference | [parakeet_engine/](frontend/src-tauri/src/parakeet_engine/) |
 | Summary providers and orchestration | [summary/](frontend/src-tauri/src/summary/) |
-| Recording UI and meeting state | [page.tsx](frontend/src/app/page.tsx), [SidebarProvider.tsx](frontend/src/components/Sidebar/SidebarProvider.tsx) |
+| Recording UI and shared frontend state | [page.tsx](frontend/src/app/page.tsx), [SidebarProvider.tsx](frontend/src/components/Sidebar/SidebarProvider.tsx), [RecordingStateContext.tsx](frontend/src/contexts/RecordingStateContext.tsx) |
 
 ## Verification and Privacy
 

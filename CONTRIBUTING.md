@@ -78,7 +78,7 @@ For bugs, provide the app version, OS and architecture, installation method, rep
 1. Open a focused PR from your feature branch to `devtest`.
 2. Link related issues or discussions when applicable. Link overlapping PRs and explain any distinct approach; do not create duplicate work silently.
 3. Complete the [PR template](.github/pull_request_template.md), including your duplicate search and verification results.
-4. Review your own changes and ensure relevant CI checks pass.
+4. Review your own changes, run relevant local checks, and report their results.
 5. Request maintainer review and address feedback.
 6. Keep the PR up to date with `devtest`. A maintainer merges it after approval.
 
