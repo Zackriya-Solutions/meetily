@@ -18,6 +18,40 @@ Frozen installation keeps the lockfile and installed dependency set aligned. Whe
 - **Windows packages:** Distribution builds use Vulkan-enabled Whisper and require an AVX2-capable x64 CPU. AVX-512 is not required.
 - **CUDA:** NVIDIA CUDA support requires a compatible source build and CUDA toolchain; the standard Windows installer does not select it automatically.
 
+## Development Commands and Debugging
+
+Run application commands from `frontend/` after installing dependencies:
+
+| Command | Purpose |
+| --- | --- |
+| `pnpm run dev` | Next.js UI development server at `http://localhost:3118`; native Tauri behavior requires the desktop app |
+| `pnpm run tauri:dev` | Full Tauri development app with build-time acceleration detection |
+| `pnpm run tauri:build` | Desktop production build |
+| `pnpm run tauri:dev:cpu` | Development app without an explicit GPU feature flag |
+| `pnpm run tauri:dev:metal` | Development app with Metal |
+| `pnpm run tauri:dev:cuda` | Development app with CUDA |
+| `pnpm run tauri:dev:vulkan` | Development app with Vulkan |
+
+The feature-specific commands require a compatible platform and toolchain. The maintained command definitions are in [package.json](../frontend/package.json); see the [GPU acceleration guide](GPU_ACCELERATION.md) for setup.
+
+To enable Rust debug logging on macOS or Linux:
+
+```bash
+RUST_LOG=debug pnpm run tauri:dev
+```
+
+On Windows PowerShell:
+
+```powershell
+$env:RUST_LOG="debug"
+pnpm run tauri:dev
+```
+
+Inspect the terminal's Rust logs and the desktop app's developer tools when diagnosing frontend/native interaction. For audio problems, inspect the pipeline and transcription-worker summaries for dropped samples, speech-segment statistics, queue depth, and failures. Use synthetic audio and redact sensitive data before sharing diagnostics.
+
+The `clean_run.sh` and Windows wrapper scripts are alternative launch paths, but inspect them before use: clean-run scripts can remove frontend dependencies and generated output, and the shell wrapper sets its own `RUST_LOG` from its argument. Prefer the commands above when you do not need a clean rebuild.
+
+
 <details>
 <summary>Linux</summary>
 

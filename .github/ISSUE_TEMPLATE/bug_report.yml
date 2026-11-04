@@ -1,0 +1,65 @@
+name: Bug report
+description: Report a problem with the Meetily desktop app.
+title: "[BUG] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search [issues](https://github.com/Zackriya-Solutions/meetily/issues?q=is%3Aissue) and [PRs](https://github.com/Zackriya-Solutions/meetily/pulls?q=is%3Apr) first. If an existing report covers the problem, add useful reproduction details there instead.
+        Use synthetic examples or redact sensitive information. Do not attach private meeting recordings, transcripts, credentials, or unredacted logs.
+  - type: checkboxes
+    id: duplicate-search
+    attributes:
+      label: Existing reports and fixes
+      options:
+        - label: I searched open and closed issues and PRs for this problem.
+          required: true
+  - type: input
+    id: version
+    attributes:
+      label: Meetily version
+      description: App version or source commit. If the app cannot open, use the downloaded release tag, or write unknown.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: OS version and CPU architecture
+      placeholder: "For example: Windows 11 x64, macOS 15 arm64, or Ubuntu 24.04 x86_64"
+    validations:
+      required: true
+  - type: dropdown
+    id: installation
+    attributes:
+      label: Installation method
+      options:
+        - Release installer
+        - Built from source
+        - Other / not sure
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Actual and expected behavior
+      description: What happened, and what did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Give numbered steps and say how often it happens. If intermittent, describe the last occurrence.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Relevant settings, logs, or screenshots
+      description: Include only relevant details, such as devices, transcription model, AI provider, or GPU. For source-build failures, include the build command and relevant toolchain versions. Redact private data before attaching anything.
+  - type: input
+    id: related-work
+    attributes:
+      label: Related issues or PRs
+      description: Link similar reports or fixes and explain any difference. Leave blank if none apply.

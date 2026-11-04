@@ -7,13 +7,13 @@
     <a href="https://trendshift.io/repositories/21958" target="_blank"><img src="https://trendshift.io/api/badge/repositories/21958" alt="Zackriya-Solutions%2Fmeetily | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
     <br>
     <br>
-    <a href="https://github.com/Zackriya-Solutions/meeting-minutes/releases/"><img src="https://img.shields.io/badge/Pre_Release-Link-brightgreen" alt="Pre-Release"></a>
-    <a href="https://github.com/Zackriya-Solutions/meeting-minutes/releases"><img alt="GitHub Repo stars" src="https://img.shields.io/github/stars/zackriya-solutions/meeting-minutes?style=flat">
+    <a href="https://github.com/Zackriya-Solutions/meetily/releases/"><img src="https://img.shields.io/badge/Pre_Release-Link-brightgreen" alt="Pre-Release"></a>
+    <a href="https://github.com/Zackriya-Solutions/meetily"><img alt="GitHub Repo stars" src="https://img.shields.io/github/stars/zackriya-solutions/meetily?style=flat">
 </a>
- <a href="https://github.com/Zackriya-Solutions/meeting-minutes/releases"> <img alt="GitHub Downloads (all assets, all releases)" src="https://img.shields.io/github/downloads/zackriya-solutions/meeting-minutes/total?style=plastic"> </a>
-    <a href="https://github.com/Zackriya-Solutions/meeting-minutes/releases"><img src="https://img.shields.io/badge/License-MIT-blue" alt="License"></a>
-    <a href="https://github.com/Zackriya-Solutions/meeting-minutes/releases"><img src="https://img.shields.io/badge/Supported_OS-macOS,_Windows-white" alt="Supported OS"></a>
-    <a href="https://github.com/Zackriya-Solutions/meeting-minutes/releases"><img alt="GitHub Tag" src="https://img.shields.io/github/v/tag/zackriya-solutions/meeting-minutes?include_prereleases&color=yellow">
+ <a href="https://github.com/Zackriya-Solutions/meetily/releases"> <img alt="GitHub Downloads (all assets, all releases)" src="https://img.shields.io/github/downloads/zackriya-solutions/meetily/total?style=plastic"> </a>
+    <a href="https://github.com/Zackriya-Solutions/meetily/blob/main/LICENSE.md"><img src="https://img.shields.io/badge/License-MIT-blue" alt="License"></a>
+    <a href="#installation"><img src="https://img.shields.io/badge/Supported_OS-macOS,_Windows-white" alt="Supported OS"></a>
+    <a href="https://github.com/Zackriya-Solutions/meetily/releases"><img alt="GitHub Tag" src="https://img.shields.io/github/v/tag/zackriya-solutions/meetily?include_prereleases&color=yellow">
 </a>
     <br>
     <h3>
@@ -44,7 +44,7 @@ A privacy-first AI meeting assistant that captures, transcribes, and summarizes 
 
 ---
 
-> **Meetily PRO Upgrade Offer** - Meetily PRO is available for users who need enhanced accuracy, advanced exports, custom summary workflows, and team-ready features. Use coupon code **LAUNCH20** for **20% off** until the next Meetily Community Edition release. Speaker diarization is also planned for PRO in mid-June. [Explore Meetily PRO →](https://meetily.ai/pro/)
+> **Meetily PRO Upgrade Offer** - Meetily PRO is available for users who need enhanced accuracy, advanced exports, custom summary workflows, and team-ready features. Use coupon code **LAUNCH20** for **20% off** until the next Meetily Community Edition release. [Explore Meetily PRO →](https://meetily.ai/pro/)
 
 ---
 
@@ -105,14 +105,14 @@ Whether you're a defense consultant, enterprise executive, legal professional, o
 
 ### 🪟 **Windows**
 
-1. Download the latest `x64-setup.exe` from [Releases](https://github.com/Zackriya-Solutions/meeting-minutes/releases/latest)
+1. Download the latest `x64-setup.exe` from [Releases](https://github.com/Zackriya-Solutions/meetily/releases/latest)
 2. Run the installer
 
 > **Windows compatibility:** The packaged installer uses a Vulkan-enabled Whisper build. It requires an AVX2-capable x64 CPU; AVX-512 is not required. CUDA acceleration requires a source build configured with a compatible NVIDIA CUDA toolchain.
 
 ### 🍎 **macOS**
 
-1. Download `meetily_0.4.1_aarch64.dmg` from [Releases](https://github.com/Zackriya-Solutions/meeting-minutes/releases/latest)
+1. Download `meetily_0.4.1_aarch64.dmg` from [Releases](https://github.com/Zackriya-Solutions/meetily/releases/latest)
 2. Open the downloaded `.dmg` file
 3. Drag **Meetily** to your Applications folder
 4. Open **Meetily** from Applications folder
@@ -127,8 +127,8 @@ Build from source following our detailed guides:
 **Quick start:**
 
 ```bash
-git clone https://github.com/Zackriya-Solutions/meeting-minutes
-cd meeting-minutes/frontend
+git clone https://github.com/Zackriya-Solutions/meetily
+cd meetily/frontend
 pnpm install --frozen-lockfile
 ./build-gpu.sh
 ```
@@ -223,15 +223,13 @@ Meetily Community Edition will remain free and open source. PRO exists for users
 
 For the community that helped Meetily grow, we are making the upgrade easier: use coupon code **LAUNCH20** for **20% off Meetily PRO** until the next Meetily Community Edition release.
 
-Speaker diarization is planned for mid-June, bringing automatic speaker separation to PRO meetings.
-
 ### Key Advantages Over Community Edition:
 
 - **Enhanced Accuracy**: Superior transcription models for professional-grade accuracy
 - **Custom Summary Templates**: Tailor summaries to your specific workflow and needs
 - **Advanced Export Options**: PDF, DOCX, and Markdown exports with formatting
 - **Auto-detect and Join Meetings**: Automatic meeting detection and joining
-- **Speaker Identification**: Distinguish between speakers automatically *(Coming Soon)*
+- **Speaker Identification**: Distinguish between speakers automatically
 - **Chat with Meetings**: AI-powered meeting insights and queries *(Coming Soon)*
 - **Calendar Integration**: Seamless integration with your calendar *(Coming Soon)*
 - **Self-Hosted Deployment**: Deploy on your own infrastructure for teams
@@ -253,7 +251,7 @@ For organizations needing 100+ users or managed compliance solutions, explore [M
 
 ## Contributing
 
-We welcome contributions from the community! If you have any questions or suggestions, please open an issue or submit a pull request. Please follow the established project structure and guidelines. For more details, refer to the [CONTRIBUTING.md](CONTRIBUTING.md) file.
+We welcome contributions to Meetily! Before starting, search existing issues and PRs and read [CONTRIBUTING.md](CONTRIBUTING.md). Coding agents should also follow [AGENTS.md](AGENTS.md). Use the [issue forms](https://github.com/Zackriya-Solutions/meetily/issues/new/choose) for actionable bug reports, feature requests, and documentation problems; ask usage questions in the [Meetily community chat](https://discord.gg/crRymMQBFH).
 
 Thanks for all the contributions. Our community is what makes this project possible.
 

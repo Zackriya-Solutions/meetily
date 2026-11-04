@@ -1,0 +1,7 @@
+contact_links:
+  - name: Usage and setup questions
+    url: https://discord.gg/crRymMQBFH
+    about: Ask the Meetily community for help. Use the forms for actionable bugs, feature requests, and documentation problems.
+  - name: Contribution and agent guidance
+    url: https://github.com/Zackriya-Solutions/meetily/blob/main/CONTRIBUTING.md
+    about: Read the contribution workflow and linked agent instructions before starting work.
