@@ -751,6 +751,22 @@ impl AudioStreamManager {
                 Err(e) => {
                     warn!("⚠️ Failed to create system audio stream: {}", e);
                     // Don't fail if only system audio fails
+                    #[cfg(target_os = "linux")]
+                    {
+                        let message = e.to_string();
+                        let cancelled = self.state.capture_cancel.lock().unwrap().load(std::sync::atomic::Ordering::Acquire);
+                        // Worker failures before readiness were already reported with the same text.
+                        let already_reported = matches!(
+                            self.state.get_last_error(),
+                            Some(super::recording_state::AudioError::LinuxCapture(last)) if last == message
+                        );
+                        if self.microphone_stream.is_some() && !cancelled && !already_reported {
+                            self.state.report_error(super::recording_state::AudioError::LinuxCapture(format!(
+                                "System audio could not start ({}). Recording continues with the microphone only.",
+                                message
+                            )));
+                        }
+                    }
                 }
             }
         } else {
@@ -991,6 +1007,60 @@ mod linux_startup_tests {
         assert_eq!(state.get_microphone_device().unwrap().name, "mic");
         assert_eq!(state.get_system_device().unwrap().name, "system");
         manager.stop_streams().await.unwrap();
+    }
+
+    async fn start_with_failing_system(manager: &mut AudioStreamManager) {
+        manager.start_streams_with(
+            Some(device("mic", super::super::devices::DeviceType::Input)),
+            Some(device("system", super::super::devices::DeviceType::Output)),
+            |device, _, role| std::future::ready(if role == DeviceType::System {
+                Err(anyhow::anyhow!("system unavailable"))
+            } else {
+                Ok(stream(device))
+            }),
+        ).await.unwrap();
+        assert_eq!(manager.active_stream_count(), 1);
+        manager.stop_streams().await.unwrap();
+    }
+
+    fn counting_callback(state: &RecordingState) -> Arc<std::sync::atomic::AtomicUsize> {
+        let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let callback_count = count.clone();
+        state.set_error_callback(move |_| {
+            callback_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        });
+        count
+    }
+
+    #[tokio::test]
+    async fn system_start_failure_notifies_once_and_continues_with_microphone() {
+        let state = RecordingState::new();
+        let messages = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let captured = messages.clone();
+        state.set_error_callback(move |error| captured.lock().unwrap().push(error.user_message().to_string()));
+        start_with_failing_system(&mut AudioStreamManager::new(state.clone())).await;
+        let messages = messages.lock().unwrap();
+        assert_eq!(messages.len(), 1);
+        assert!(messages[0].contains("system unavailable"));
+        assert!(messages[0].contains("microphone only"));
+    }
+
+    #[tokio::test]
+    async fn cancelled_system_start_does_not_notify() {
+        let state = RecordingState::new();
+        state.capture_cancel.lock().unwrap().store(true, std::sync::atomic::Ordering::Release);
+        let count = counting_callback(&state);
+        start_with_failing_system(&mut AudioStreamManager::new(state.clone())).await;
+        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn system_failure_already_reported_by_worker_is_not_repeated() {
+        let state = RecordingState::new();
+        let count = counting_callback(&state);
+        state.report_error(super::super::recording_state::AudioError::LinuxCapture("system unavailable".into()));
+        start_with_failing_system(&mut AudioStreamManager::new(state.clone())).await;
+        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 }
 
