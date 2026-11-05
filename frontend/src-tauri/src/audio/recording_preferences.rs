@@ -114,7 +114,12 @@ impl RecordingPreferences {
         .into_iter()
         .enumerate()
         {
-            if self.unresolved_devices[index] && requested.is_some() && requested == saved {
+            // macOS/Windows: an unresolved legacy mic falls back to the default (and still migrates later); Linux legacy IDs never map to Pulse names.
+            if self.unresolved_devices[index]
+                && requested.is_some()
+                && requested == saved
+                && (index == 1 || cfg!(target_os = "linux"))
+            {
                 return Err(format!("Your saved {} selection needs updating. Choose a device in Recording Settings.", role));
             }
         }
@@ -164,6 +169,15 @@ pub(super) async fn resolve_start_devices(
             };
         }
         let suffix = if index == 0 { " (input)" } else { " (output)" };
+        let saved = if index == 0 {
+            prefs.preferred_mic_device.as_deref()
+        } else {
+            prefs.preferred_system_device.as_deref()
+        };
+        // An unresolved saved choice is judged by validate_device_selection, not re-resolved.
+        if prefs.unresolved_devices[index] && requested[index].as_deref() == saved {
+            continue;
+        }
         // A cached legacy argument may outlive migration by another preferences reader.
         if let Some(id) = requested[index]
             .as_deref()
@@ -172,11 +186,6 @@ pub(super) async fn resolve_start_devices(
             let devices = super::devices::list_audio_devices()
                 .await
                 .map_err(|e| e.to_string())?;
-            let saved = if index == 0 {
-                prefs.preferred_mic_device.as_deref()
-            } else {
-                prefs.preferred_system_device.as_deref()
-            };
             let resolved = resolve_cached_legacy_id(
                 id,
                 saved,
@@ -796,9 +805,12 @@ mod device_preference_tests {
         );
         assert_eq!(prefs.device_selection_version[0], 0);
         normalize_device_preferences(&mut prefs, &[]);
-        assert!(prefs
-            .validate_device_selection(Some("USB (input)"), None)
-            .is_err());
+        assert_eq!(
+            prefs
+                .validate_device_selection(Some("USB (input)"), None)
+                .is_err(),
+            cfg!(target_os = "linux")
+        );
     }
 
     #[test]
@@ -838,9 +850,12 @@ mod device_preference_tests {
             prefs.preferred_mic_device.as_deref(),
             Some("Old ALSA (input)")
         );
-        assert!(prefs
-            .validate_device_selection(Some("Old ALSA (input)"), None)
-            .is_err());
+        assert_eq!(
+            prefs
+                .validate_device_selection(Some("Old ALSA (input)"), None)
+                .is_err(),
+            cfg!(target_os = "linux")
+        );
         assert!(prefs.validate_device_selection(None, None).is_ok());
         assert!(prefs
             .validate_device_selection(Some("pulse-source"), None)
@@ -848,5 +863,28 @@ mod device_preference_tests {
         prefs.preferred_mic_device = None;
         normalize_device_preferences(&mut prefs, &devices);
         assert_eq!(prefs.device_selection_version, [1; 2]);
+    }
+
+    #[tokio::test]
+    async fn unresolved_legacy_mic_falls_back_off_linux_and_keeps_saved_value() {
+        let mut prefs = RecordingPreferences::default();
+        prefs.device_selection_version = [0; 2];
+        prefs.preferred_mic_device = Some("AirPods (input)".into());
+        prefs.preferred_system_device = Some("BlackHole (output)".into());
+        normalize_device_preferences(&mut prefs, &[]);
+        let started = resolve_start_devices(&prefs, Some("AirPods (input)".into()), None).await;
+        if cfg!(target_os = "linux") {
+            assert!(started.is_err());
+        } else {
+            assert_eq!(started.unwrap(), (Some("AirPods (input)".into()), None));
+        }
+        assert!(resolve_start_devices(&prefs, None, Some("BlackHole (output)".into()))
+            .await
+            .is_err());
+        assert_eq!(prefs.preferred_mic_device.as_deref(), Some("AirPods (input)"));
+        assert_eq!(prefs.device_selection_version, [0; 2]);
+        normalize_device_preferences(&mut prefs, &[mic("AirPods")]);
+        assert_eq!(prefs.preferred_mic_device.as_deref(), Some("AirPods"));
+        assert_eq!(prefs.device_selection_version[0], 1);
     }
 }
