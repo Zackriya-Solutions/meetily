@@ -46,6 +46,33 @@ pub struct ChatRequest {
 }
 
 /// Build OpenAI-compat JSON body.
+/// Identity headers for Custom OpenAI-compatible endpoints.
+///
+/// Meetily always identifies itself with its own user agent. OpenCode Go
+/// additionally requires a stable `x-opencode-session` per conversation
+/// (used for routing and prompt caching); it is only sent to opencode.ai so
+/// other endpoints never receive it.
+pub(crate) fn custom_openai_identity_headers(
+    endpoint: &str,
+    session_id: Option<&str>,
+) -> header::HeaderMap {
+    let mut headers = header::HeaderMap::new();
+    headers.insert(
+        header::USER_AGENT,
+        header::HeaderValue::from_static(concat!("meetily/", env!("CARGO_PKG_VERSION"))),
+    );
+    let is_opencode = reqwest::Url::parse(endpoint)
+        .ok()
+        .and_then(|url| url.host_str().map(|host| host == "opencode.ai"))
+        .unwrap_or(false);
+    if let (true, Some(session)) = (is_opencode, session_id) {
+        if let Ok(value) = header::HeaderValue::from_str(session) {
+            headers.insert("x-opencode-session", value);
+        }
+    }
+    headers
+}
+
 pub fn build_openai_compat_chat_body(
     provider: &LLMProvider,
     model_name: &str,
@@ -254,6 +281,7 @@ impl LLMProvider {
 /// * `top_p` - Optional top_p (for CustomOpenAI provider)
 /// * `app_data_dir` - Optional app data directory (for BuiltInAI provider)
 /// * `cancellation_token` - Optional token to cancel the request
+/// * `session_id` - Optional stable conversation id (sent to OpenCode Go only)
 ///
 /// The generated visible content and whether private reasoning was removed.
 pub(crate) async fn generate_summary(
@@ -270,6 +298,7 @@ pub(crate) async fn generate_summary(
     top_p: Option<f32>,
     app_data_dir: Option<&PathBuf>,
     cancellation_token: Option<&CancellationToken>,
+    session_id: Option<&str>,
 ) -> Result<LlmCompletion, String> {
     // Check if cancelled before starting
     if let Some(token) = cancellation_token {
@@ -325,7 +354,7 @@ pub(crate) async fn generate_summary(
                 .ok_or_else(|| "Custom OpenAI endpoint not configured".to_string())?;
             (
                 format!("{}/chat/completions", endpoint.trim_end_matches('/')),
-                header::HeaderMap::new(),
+                custom_openai_identity_headers(endpoint, session_id),
             )
         }
         LLMProvider::Claude => {
@@ -580,6 +609,74 @@ mod tests {
     }
 
     #[test]
+    fn custom_openai_identifies_meetily_and_sends_opencode_session_only_to_opencode() {
+        let user_agent = format!("meetily/{}", env!("CARGO_PKG_VERSION"));
+
+        let opencode = custom_openai_identity_headers(
+            "https://opencode.ai/inference/go/openai/v1",
+            Some("meeting-session-1"),
+        );
+        assert_eq!(opencode[header::USER_AGENT], user_agent.as_str());
+        assert_eq!(opencode["x-opencode-session"], "meeting-session-1");
+
+        let other = custom_openai_identity_headers("https://llm.example.com/v1", Some("s"));
+        assert_eq!(other[header::USER_AGENT], user_agent.as_str());
+        assert!(other.get("x-opencode-session").is_none());
+
+        let no_session =
+            custom_openai_identity_headers("https://opencode.ai/inference/go/openai/v1", None);
+        assert!(no_session.get("x-opencode-session").is_none());
+
+        let lookalike =
+            custom_openai_identity_headers("https://opencode.ai.evil.example/v1", Some("s"));
+        assert!(lookalike.get("x-opencode-session").is_none());
+    }
+
+    #[tokio::test]
+    async fn custom_openai_request_carries_meetily_user_agent() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let request = read_http_request(&mut stream).await;
+            let body = br#"{"choices":[{"message":{"content":"ok"}}]}"#;
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            stream.write_all(head.as_bytes()).await.unwrap();
+            stream.write_all(body).await.unwrap();
+            String::from_utf8_lossy(&request).to_lowercase()
+        });
+
+        let endpoint = format!("http://{address}/v1");
+        let completion = generate_summary(
+            &Client::new(),
+            &LLMProvider::CustomOpenAI,
+            "model",
+            "key",
+            "system",
+            "user",
+            None,
+            Some(&endpoint),
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("session-1"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(completion.content, "ok");
+
+        let request = server.await.unwrap();
+        let expected = format!("user-agent: meetily/{}", env!("CARGO_PKG_VERSION"));
+        assert!(request.contains(&expected), "missing {expected} in:\n{request}");
+        assert!(!request.contains("x-opencode-session"));
+    }
+
+    #[test]
     fn only_ollama_disables_reasoning_and_custom_sampling_is_preserved() {
         for provider in [
             LLMProvider::OpenAI,
@@ -694,6 +791,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await
         .expect_err("custom provider failure should preserve its response body");
@@ -778,6 +876,7 @@ mod tests {
             None,
             None,
             Some(&cancellation_token),
+            None,
         );
         tokio::pin!(generation);
 
@@ -864,6 +963,7 @@ mod tests {
             None,
             None,
             Some(&cancellation_token),
+            None,
         );
         tokio::pin!(generation);
 
@@ -942,6 +1042,7 @@ mod tests {
                 None,
                 None,
                 Some(&cancellation_token),
+                None,
             ),
         )
         .await;
