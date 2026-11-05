@@ -119,19 +119,12 @@ Whether you're a defense consultant, enterprise executive, legal professional, o
 
 ### 🐧 **Linux**
 
-Build from source following our detailed guides:
+1. Download the latest `.deb` or `.AppImage` package for Linux x64 from [Releases](https://github.com/Zackriya-Solutions/meetily/releases/latest).
+2. Install or run your preferred package:
+   - **Debian/Ubuntu (.deb):** Open a terminal in the download folder and run `sudo apt install ./<downloaded-file>.deb`.
+   - **AppImage:** Open the file’s properties, allow it to run as a program, then double-click it to launch **Meetily**.
 
-- [Building on Linux](docs/building_in_linux.md)
-- [General Build Instructions](docs/BUILDING.md)
-
-**Quick start:**
-
-```bash
-git clone https://github.com/Zackriya-Solutions/meetily
-cd meetily/frontend
-pnpm install --frozen-lockfile
-./build-gpu.sh
-```
+To build from source, see [Building on Linux](docs/building_in_linux.md) or [General Build Instructions](docs/BUILDING.md).
 
 ## Key Features in Action
 
