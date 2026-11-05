@@ -115,26 +115,19 @@ Whether you're a defense consultant, enterprise executive, legal professional, o
 
 ### 🍎 **macOS**
 
-1. Download `meetily_0.4.1_aarch64.dmg` from [Releases](https://github.com/Zackriya-Solutions/meetily/releases/latest)
+1. Download the latest `meetily_<version>_aarch64.dmg` from [Releases](https://github.com/Zackriya-Solutions/meetily/releases/latest)
 2. Open the downloaded `.dmg` file
 3. Drag **Meetily** to your Applications folder
 4. Open **Meetily** from Applications folder
 
 ### 🐧 **Linux**
 
-Build from source following our detailed guides:
+1. Download the latest `.deb` or `.AppImage` package for Linux x64 from [Releases](https://github.com/Zackriya-Solutions/meetily/releases/latest).
+2. Install or run your preferred package:
+   - **Debian/Ubuntu (.deb):** Open a terminal in the download folder and run `sudo apt install ./<downloaded-file>.deb`.
+   - **AppImage:** Open the file’s properties, allow it to run as a program, then double-click it to launch **Meetily**.
 
-- [Building on Linux](docs/building_in_linux.md)
-- [General Build Instructions](docs/BUILDING.md)
-
-**Quick start:**
-
-```bash
-git clone https://github.com/Zackriya-Solutions/meetily
-cd meetily/frontend
-pnpm install --frozen-lockfile
-./build-gpu.sh
-```
+To build from source, see [Building on Linux](docs/building_in_linux.md) or [General Build Instructions](docs/BUILDING.md).
 
 ## Key Features in Action
 
@@ -254,7 +247,7 @@ For organizations needing 100+ users or managed compliance solutions, explore [h
 
 ## Contributing
 
-We welcome contributions from the community! If you have any questions or suggestions, please open an issue or submit a pull request. Please follow the established project structure and guidelines. For more details, refer to the [CONTRIBUTING.md](CONTRIBUTING.md) file.
+We welcome contributions to Meetily! Before starting, search existing issues and PRs and read [CONTRIBUTING.md](CONTRIBUTING.md). Coding agents should also follow [AGENTS.md](AGENTS.md). Use the [issue forms](https://github.com/Zackriya-Solutions/meetily/issues/new/choose) for actionable bug reports, feature requests, and documentation problems; ask usage questions in the [Meetily community chat](https://discord.gg/crRymMQBFH).
 
 Thanks for all the contributions. Our community is what makes this project possible.
 

@@ -1,0 +1,41 @@
+name: Documentation
+description: Report incorrect or missing Meetily documentation.
+title: "[DOCS] "
+labels: [documentation]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search [issues](https://github.com/Zackriya-Solutions/meetily/issues?q=is%3Aissue) and [PRs](https://github.com/Zackriya-Solutions/meetily/pulls?q=is%3Apr) first. Add useful details to an existing report if it already covers the problem.
+        Straightforward documentation corrections can also go directly to a PR; an issue is not required just to submit a fix.
+  - type: checkboxes
+    id: duplicate-search
+    attributes:
+      label: Existing reports and corrections
+      options:
+        - label: I searched open and closed issues and PRs for this documentation problem.
+          required: true
+  - type: textarea
+    id: location
+    attributes:
+      label: Documentation location
+      description: Link the page or file and relevant section. If documentation is missing, say where you expected to find it.
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is incorrect or missing?
+      description: Explain the problem and why it matters. Include a redacted error or reproduction steps if an instruction fails.
+    validations:
+      required: true
+  - type: textarea
+    id: correction
+    attributes:
+      label: Suggested correction or supporting evidence
+      description: Share a proposed correction, relevant source code, or verified behavior if known. Do not include private meeting content or credentials.
+  - type: input
+    id: related-work
+    attributes:
+      label: Related issues or PRs
+      description: Link related reports or corrections. Leave blank if none apply.

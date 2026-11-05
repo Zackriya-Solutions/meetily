@@ -3,6 +3,11 @@ name: "Build and Test - Linux"
 on:
   workflow_dispatch:
     inputs:
+      release-clone:
+        description: 'Build release DEB and AppImage; ignores other options and uploads artifacts'
+        required: true
+        type: boolean
+        default: false
       build-type:
         description: 'Build type'
         required: true
@@ -52,7 +57,23 @@ env:
   WHISPER_NO_AVX2: ON
 
 jobs:
+  release-clone:
+    if: ${{ inputs.release-clone }}
+    permissions:
+      contents: write
+    uses: ./.github/workflows/build.yml
+    with:
+      ref: ${{ github.sha }}
+      platform: ubuntu-22.04
+      target: x86_64-unknown-linux-gnu
+      build-args: "--bundles deb,appimage"
+      sign-binaries: true
+      asset-prefix: meetily-linux-release-test
+      upload-artifacts: true
+    secrets: inherit
+
   build-linux:
+    if: ${{ !inputs.release-clone }}
     name: Build Linux (x64)
     runs-on: ${{ github.event.inputs.ubuntu-version || 'ubuntu-22.04' }}
     permissions:
