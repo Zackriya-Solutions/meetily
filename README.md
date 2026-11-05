@@ -105,14 +105,14 @@ Whether you're a defense consultant, enterprise executive, legal professional, o
 
 ### 🪟 **Windows**
 
-1. Download the latest `x64-setup.exe` from [Releases](https://github.com/Zackriya-Solutions/meeting-minutes/releases/latest)
+1. Download the latest `x64-setup.exe` from [Releases](https://github.com/Zackriya-Solutions/meetily/releases/latest)
 2. Run the installer
 
 > **Windows compatibility:** The packaged installer uses a Vulkan-enabled Whisper build. It requires an AVX2-capable x64 CPU; AVX-512 is not required. CUDA acceleration requires a source build configured with a compatible NVIDIA CUDA toolchain.
 
 ### 🍎 **macOS**
 
-1. Download `meetily_0.4.1_aarch64.dmg` from [Releases](https://github.com/Zackriya-Solutions/meeting-minutes/releases/latest)
+1. Download `meetily_0.4.1_aarch64.dmg` from [Releases](https://github.com/Zackriya-Solutions/meetily/releases/latest)
 2. Open the downloaded `.dmg` file
 3. Drag **Meetily** to your Applications folder
 4. Open **Meetily** from Applications folder
@@ -127,8 +127,8 @@ Build from source following our detailed guides:
 **Quick start:**
 
 ```bash
-git clone https://github.com/Zackriya-Solutions/meeting-minutes
-cd meeting-minutes/frontend
+git clone https://github.com/Zackriya-Solutions/meetily
+cd meetily/frontend
 pnpm install --frozen-lockfile
 ./build-gpu.sh
 ```
@@ -223,8 +223,6 @@ Meetily Community Edition will remain free and open source. PRO exists for users
 
 For the community that helped Meetily grow, we are making the upgrade easier: use coupon code **LAUNCH20** for **20% off Meetily PRO** until the next Meetily Community Edition release.
 
-Speaker diarization is planned for mid-June, bringing automatic speaker separation to PRO meetings.
-
 ### Key Advantages Over Community Edition:
 
 - **Enhanced Accuracy**: Superior transcription models for professional-grade accuracy
@@ -253,7 +251,7 @@ For organizations needing 100+ users or managed compliance solutions, explore [M
 
 ## Contributing
 
-We welcome contributions from the community! If you have any questions or suggestions, please open an issue or submit a pull request. Please follow the established project structure and guidelines. For more details, refer to the [CONTRIBUTING.md](CONTRIBUTING.md) file.
+We welcome contributions to Meetily! Before starting, search existing issues and PRs and read [CONTRIBUTING.md](CONTRIBUTING.md). Coding agents should also follow [AGENTS.md](AGENTS.md). Use the [issue forms](https://github.com/Zackriya-Solutions/meetily/issues/new/choose) for actionable bug reports, feature requests, and documentation problems; ask usage questions in the [Meetily community chat](https://discord.gg/crRymMQBFH).
 
 Thanks for all the contributions. Our community is what makes this project possible.
 
