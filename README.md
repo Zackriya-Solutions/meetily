@@ -112,7 +112,7 @@ Whether you're a defense consultant, enterprise executive, legal professional, o
 
 ### 🍎 **macOS**
 
-1. Download `meetily_0.4.1_aarch64.dmg` from [Releases](https://github.com/Zackriya-Solutions/meetily/releases/latest)
+1. Download the latest `meetily_<version>_aarch64.dmg` from [Releases](https://github.com/Zackriya-Solutions/meetily/releases/latest)
 2. Open the downloaded `.dmg` file
 3. Drag **Meetily** to your Applications folder
 4. Open **Meetily** from Applications folder
