@@ -279,16 +279,58 @@ fn closeout_bytes(available: usize, consumed: u64, cutoff: Option<u64>) -> usize
 }
 
 fn pump(mainloop: &mut Mainloop) -> Result<()> {
-    if matches!(mainloop.iterate(false), IterateResult::Err(_) | IterateResult::Quit(_)) {
-        return Err(anyhow!("Audio server mainloop stopped"));
+    // Drain pending events without starving sample delivery and stop checks.
+    for _ in 0..32 {
+        match mainloop.iterate(false) {
+            IterateResult::Success(0) => {
+                std::thread::sleep(Duration::from_millis(10));
+                return Ok(());
+            }
+            IterateResult::Success(_) => {}
+            IterateResult::Err(_) | IterateResult::Quit(_) => {
+                return Err(anyhow!("Audio server mainloop stopped"));
+            }
+        }
     }
-    std::thread::sleep(Duration::from_millis(10));
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use libpulse_binding::mainloop::api::Mainloop as _;
+
+    #[test]
+    fn pump_drains_pending_dispatches_before_returning() {
+        let mut mainloop = Mainloop::new().unwrap();
+        let count = std::rc::Rc::new(std::cell::Cell::new(0usize));
+        let dispatched = count.clone();
+        let _event = mainloop.new_deferred_event(Box::new(move |mut event| {
+            dispatched.set(dispatched.get() + 1);
+            if dispatched.get() == 3 {
+                event.disable();
+            }
+        })).unwrap();
+
+        pump(&mut mainloop).unwrap();
+        assert_eq!(count.get(), 3);
+    }
+
+    #[test]
+    fn pump_yields_while_dispatches_remain_pending() {
+        let mut mainloop = Mainloop::new().unwrap();
+        let count = std::rc::Rc::new(std::cell::Cell::new(0usize));
+        let dispatched = count.clone();
+        let _event = mainloop.new_deferred_event(Box::new(move |mut event| {
+            dispatched.set(dispatched.get() + 1);
+            if dispatched.get() == 10_000 {
+                event.disable();
+            }
+        })).unwrap();
+
+        pump(&mut mainloop).unwrap();
+        assert!(count.get() > 0 && count.get() < 10_000);
+    }
 
     #[test]
     fn cancelled_capture_exits_without_opening_server_or_delivering_samples() {

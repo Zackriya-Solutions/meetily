@@ -59,6 +59,8 @@ The mixed audio has two consumers with different requirements:
 
 The input-processing target is 48 kHz; VAD-selected transcription segments are sent at 16 kHz. Timing and buffering settings belong to the implementation, so inspect the current code rather than assuming a fixed mixing-window duration. During shutdown, the pipeline drains its channel and flushes remaining speech before completing.
 
+On Linux, [pulse_linux.rs](../frontend/src-tauri/src/audio/capture/pulse_linux.rs) captures microphone and system audio through the PulseAudio protocol, including on PipeWire. It dispatches pending mainloop events in bounded nonblocking bursts, sleeping only when idle, so capture can keep up without starving sample delivery or stop checks.
+
 For audio changes, start in the relevant subsystem:
 
 - Device discovery and platform configuration: [devices/](../frontend/src-tauri/src/audio/devices/).
