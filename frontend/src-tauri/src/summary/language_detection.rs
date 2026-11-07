@@ -137,6 +137,7 @@ fn summary_code_from_whatlang(lang: Lang) -> Option<&'static str> {
         Lang::Tam => Some("ta"),
         Lang::Tur => Some("tr"),
         Lang::Vie => Some("vi"),
+        Lang::Urd => Some("ur"),
         Lang::Tha => Some("th"),
         Lang::Ind => Some("id"),
         Lang::Swe => Some("sv"),
@@ -215,5 +216,14 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn transcript_summary_language_detects_urdu() {
+        let texts = strings(&[
+            "ٹیم نے اجلاس میں پروڈکٹ کی ترقی، صارفین کی رائے اور اگلی رہائی کے منصوبے پر تفصیلی بات کی۔ تمام شرکاء نے اہم فیصلوں کی منظوری دی اور ذمہ داریاں تقسیم کیں۔ اگلے ہفتے کے لیے واضح ہدف طے کیے گئے۔",
+        ]);
+
+        assert_eq!(detect_summary_language(&texts).language, Some("ur".to_string()));
     }
 }

@@ -182,6 +182,7 @@ pub(crate) fn language_name_from_code(code: &str) -> Option<&'static str> {
         "pl" => Some("Polish"),
         "ar" => Some("Arabic"),
         "hi" => Some("Hindi"),
+        "ur" => Some("Urdu"),
         "ta" => Some("Tamil"),
         "tr" => Some("Turkish"),
         "vi" => Some("Vietnamese"),
@@ -641,6 +642,20 @@ async fn normalize_markdown_to_english(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn language_name_from_code_resolves_urdu_and_regional_tags() {
+        assert_eq!(language_name_from_code("ur"), Some("Urdu"));
+        assert_eq!(language_name_from_code("UR"), Some("Urdu"));
+        assert_eq!(language_name_from_code("ur-PK"), Some("Urdu"));
+        assert_eq!(language_name_from_code("ur_PK"), Some("Urdu"));
+    }
+
+    #[test]
+    fn language_name_from_code_rejects_unknown_codes() {
+        assert_eq!(language_name_from_code("xx"), None);
+        assert_eq!(language_name_from_code("urdu"), None);
+    }
 
     #[test]
     fn chunk_text_preserves_content_after_early_sentence_boundary() {
