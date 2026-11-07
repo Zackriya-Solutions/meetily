@@ -622,6 +622,11 @@ async fn run_import<R: Runtime>(
         transcribed_count, processable_count, avg_confidence
     );
 
+    if let Some(warning) = empty_asr_warning(total_segments, transcribed_count) {
+        warn!("{}", warning.warning);
+        let _ = app.emit("import-warning", warning);
+    }
+
     // Check for cancellation
     if IMPORT_CANCELLED.load(Ordering::SeqCst) {
         let _ = std::fs::remove_dir_all(&meeting_folder);
@@ -672,6 +677,19 @@ async fn run_import<R: Runtime>(
         segments_count: segments.len(),
         duration_seconds,
     })
+}
+
+fn empty_asr_warning(total_segments: usize, transcribed_count: usize) -> Option<ImportWarning> {
+    if total_segments > 0 && transcribed_count == 0 {
+        return Some(ImportWarning {
+            warning: "Speech detected, but no transcribable text was produced".to_string(),
+            details: Some(
+                "The audio was imported successfully without transcript text. Check the selected model or try retranscription with another model.".to_string(),
+            ),
+        });
+    }
+
+    None
 }
 
 /// Emit progress event
@@ -1015,6 +1033,23 @@ mod tests {
         assert!(AUDIO_EXTENSIONS.contains(&"wav"));
         assert!(AUDIO_EXTENSIONS.contains(&"mp3"));
         assert!(!AUDIO_EXTENSIONS.contains(&"txt"));
+    }
+
+    #[test]
+    fn test_empty_asr_warning_requires_detected_speech() {
+        let warning = empty_asr_warning(2, 0).expect("speech with no text should warn");
+
+        assert_eq!(
+            warning.warning,
+            "Speech detected, but no transcribable text was produced"
+        );
+        assert!(warning.details.is_some());
+    }
+
+    #[test]
+    fn test_empty_asr_warning_is_absent_for_usable_or_silent_imports() {
+        assert!(empty_asr_warning(2, 1).is_none());
+        assert!(empty_asr_warning(0, 0).is_none());
     }
 
     #[test]
