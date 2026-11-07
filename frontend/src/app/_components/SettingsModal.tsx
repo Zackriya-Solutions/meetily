@@ -100,7 +100,7 @@ export function SettingsModals({
                         setModelConfig({
                           ...modelConfig,
                           provider,
-                          model: modelOptions[provider][0]
+                          model: modelOptions[provider][0] ?? modelConfig.model
                         });
                       }}
                     >
