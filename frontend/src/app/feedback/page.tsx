@@ -32,9 +32,9 @@ const cards = [
     links: [{ label: 'Explore team options', url: 'https://meetily.ai/enterprise?utm_source=open-source' }],
   },
   {
-    title: 'Curious about Meetily PRO?',
-    description: 'Learn about Meetily PRO. The Community Edition remains free and open source.',
-    links: [{ label: 'Learn about PRO', url: 'https://meetily.ai/pro?utm_source=open-source' }],
+    title: 'Need more from Meetily?',
+    description: 'Get speaker identification, automatic meeting detection, and API, CLI, and MCP access with Meetily PRO.',
+    links: [{ label: 'Explore PRO', url: 'https://meetily.ai/pro?utm_source=open-source' }],
   },
 ];
 
