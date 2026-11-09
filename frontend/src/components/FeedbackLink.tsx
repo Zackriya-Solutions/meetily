@@ -19,11 +19,9 @@ export default function FeedbackLink({ isCollapsed }: { isCollapsed: boolean }) 
           ? 'p-2'
           : 'w-full px-3 py-1.5 mt-1 mb-2 text-sm font-medium shadow-sm'
       } ${
-        isActive
-          ? 'bg-gray-300 text-gray-900'
-          : isCollapsed
-            ? 'text-gray-600 hover:bg-gray-100'
-            : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+        isCollapsed
+          ? `text-gray-600 ${isActive ? 'bg-gray-100' : 'hover:bg-gray-100'}`
+          : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
       }`}
     >
       <MessageSquareText aria-hidden="true" className={isCollapsed ? 'w-5 h-5' : 'w-4 h-4'} />
