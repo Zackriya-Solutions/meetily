@@ -1155,6 +1155,14 @@ pub async fn debug_backend_connection<R: Runtime>(app: AppHandle<R>) -> Result<S
     }
 }
 
+fn url_opener_result(result: std::io::Result<std::process::Output>) -> Result<(), String> {
+    match result {
+        Ok(output) if output.status.success() => Ok(()),
+        Ok(output) => Err(format!("Browser launcher failed: {}", output.status)),
+        Err(e) => Err(format!("Failed to open URL: {}", e)),
+    }
+}
+
 #[tauri::command]
 pub async fn open_external_url(url: String) -> Result<(), String> {
     use std::process::Command;
@@ -1168,10 +1176,7 @@ pub async fn open_external_url(url: String) -> Result<(), String> {
         Command::new("xdg-open").arg(&url).output()
     };
 
-    match result {
-        Ok(_) => Ok(()),
-        Err(e) => Err(format!("Failed to open URL: {}", e)),
-    }
+    url_opener_result(result)
 }
 
 // ===== CUSTOM OPENAI API COMMANDS =====
@@ -1399,5 +1404,30 @@ pub async fn api_test_custom_openai_connection<R: Runtime>(
                 Err(format!("Connection failed: {}", error))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod external_url_tests {
+    use super::url_opener_result;
+    #[cfg(unix)]
+    use std::os::unix::process::ExitStatusExt;
+    #[cfg(windows)]
+    use std::os::windows::process::ExitStatusExt;
+    use std::process::{ExitStatus, Output};
+
+    #[test]
+    fn external_url_distinguishes_success_failed_exit_and_spawn_error() {
+        let output = |code: u32| Output {
+            #[cfg(unix)]
+            status: ExitStatus::from_raw((code as i32) << 8),
+            #[cfg(windows)]
+            status: ExitStatus::from_raw(code),
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+        };
+        assert!(url_opener_result(Ok(output(0))).is_ok());
+        assert!(url_opener_result(Ok(output(7))).is_err());
+        assert!(url_opener_result(Err(std::io::ErrorKind::NotFound.into())).is_err());
     }
 }
