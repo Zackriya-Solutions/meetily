@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { MessageSquareText } from 'lucide-react';
+import { MessagesSquare } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 
 export default function FeedbackLink({ isCollapsed }: { isCollapsed: boolean }) {
@@ -24,7 +24,7 @@ export default function FeedbackLink({ isCollapsed }: { isCollapsed: boolean }) 
           : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
       }`}
     >
-      <MessageSquareText aria-hidden="true" className={isCollapsed ? 'w-5 h-5' : 'w-4 h-4'} />
+      <MessagesSquare aria-hidden="true" className={isCollapsed ? 'w-5 h-5' : 'w-4 h-4'} />
       {!isCollapsed && <span className="ml-2">Send Feedback</span>}
     </Link>
   );

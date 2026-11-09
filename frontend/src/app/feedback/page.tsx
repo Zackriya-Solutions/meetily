@@ -20,10 +20,10 @@ const cards = [
     title: 'Find us on socials',
     description: 'Follow Meetily for product updates and conversations with the community.',
     links: [
-      { label: 'X', url: 'https://x.com/meetilyai/' },
-      { label: 'Reddit', url: 'https://www.reddit.com/r/meetily/' },
-      { label: 'LinkedIn', url: 'https://www.linkedin.com/company/106363062/' },
-      { label: 'YouTube', url: 'https://www.youtube.com/@meetily' },
+      { label: 'X', url: 'https://x.com/meetilyai/', icon: 'x' },
+      { label: 'Reddit', url: 'https://www.reddit.com/r/meetily/', icon: 'reddit' },
+      { label: 'LinkedIn', url: 'https://www.linkedin.com/company/106363062/', icon: 'linkedin' },
+      { label: 'YouTube', url: 'https://www.youtube.com/@meetily', icon: 'youtube' },
     ],
   },
   {
@@ -61,7 +61,7 @@ export default function FeedbackPage() {
           <ArrowLeft aria-hidden="true" className="h-4 w-4" />
           Back
         </button>
-        <h1 className="mt-6 mb-8 text-3xl font-bold text-gray-900">Send Feedback</h1>
+        <h1 className="mt-6 mb-8 text-2xl font-medium text-gray-900">Send Feedback</h1>
 
         <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,300px),1fr))] gap-5">
           {cards.map(card => (
@@ -74,12 +74,20 @@ export default function FeedbackPage() {
                     key={link.url}
                     type="button"
                     onClick={() => void openExternalLink(link.url)}
-                    aria-label={`${link.label} (opens in your browser)`}
-                    title="Opens in your browser"
-                    className="inline-flex min-h-11 items-center gap-1 rounded text-sm font-semibold text-gray-700 transition-colors hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+                    aria-label={`${link.label}`}
+                    title={`${link.label}`}
+                    className={`inline-flex min-h-11 items-center justify-center gap-1 rounded text-sm font-semibold text-gray-700 transition-colors hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 ${'icon' in link ? 'min-w-11' : ''}`}
                   >
-                    {link.label}
-                    <ArrowUpRight aria-hidden="true" className="h-3 w-3" />
+                    {'icon' in link ? (
+                      <svg aria-hidden="true" focusable="false" className="h-5 w-5">
+                        <use href={`/social-icons.svg#${link.icon}`} />
+                      </svg>
+                    ) : (
+                      <>
+                        {link.label}
+                        <ArrowUpRight aria-hidden="true" className="h-3 w-3" />
+                      </>
+                    )}
                   </button>
                 ))}
               </div>

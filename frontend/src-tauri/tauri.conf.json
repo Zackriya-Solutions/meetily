@@ -13,8 +13,8 @@
         "windows": [
             {
                 "title": "meetily",
-                "width": 1200,
-                "height": 760,
+                "width": 1100,
+                "height": 700,
                 "preventOverflow": true,
                 "resizable": true,
                 "fullscreen": false,
