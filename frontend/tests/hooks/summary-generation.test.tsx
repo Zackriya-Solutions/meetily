@@ -27,6 +27,7 @@ let startProcess: () => Promise<{ process_id: string }>;
 let getSummary: (meetingId: string) => Promise<SummaryProcessResponse>;
 const invoke = mock(async (command: string, args?: Record<string, unknown>): Promise<unknown> => {
   if (command === 'api_get_meetings') return [];
+  if (command === 'doodle_sync') return null;
   if (command === 'api_get_summary') return getSummary(args!.meetingId as string);
   if (command === 'api_get_meeting_transcripts') return { transcripts: [{ text: 'Meeting transcript', timestamp: '00:00' }], total_count: 1 };
   if (command === 'get_ollama_models') return [{ name: 'test' }];
@@ -68,7 +69,12 @@ const timers = new Map<number, () => Promise<void>>();
 let nextTimer = 0;
 const realSetInterval = globalThis.setInterval;
 const realClearInterval = globalThis.clearInterval;
+const originalDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
 beforeEach(() => {
+  Object.defineProperty(globalThis, 'document', {
+    configurable: true,
+    value: Object.assign(new EventTarget(), { visibilityState: 'visible' }),
+  });
   renderer = undefined as unknown as ReactTestRenderer;
   configuredModel = 'test';
   timers.clear(); notify.mockClear(); trackCompletion.mockClear(); invoke.mockClear();
@@ -83,6 +89,8 @@ afterEach(async () => {
   if (renderer) await act(async () => renderer.unmount());
   globalThis.setInterval = realSetInterval;
   globalThis.clearInterval = realClearInterval;
+  if (originalDocument) Object.defineProperty(globalThis, 'document', originalDocument);
+  else Reflect.deleteProperty(globalThis, 'document');
 });
 async function show(initialSummary: SummaryProcessResponse | null, meetingId = 'meeting-a') {
   await act(async () => {

@@ -42,6 +42,7 @@ pub mod audio;
 pub mod config;
 pub mod console_utils;
 pub mod database;
+pub mod doodle;
 pub mod notifications;
 pub mod ollama;
 pub mod onboarding;
@@ -735,6 +736,7 @@ pub fn run() {
             get_transcription_status,
             read_audio_file,
             save_transcript,
+            doodle::doodle_sync,
             analytics::commands::init_analytics,
             analytics::commands::disable_analytics,
             analytics::commands::track_event,

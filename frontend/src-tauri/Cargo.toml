@@ -122,6 +122,7 @@ dirs = "5.0.1"
 
 # Additional dependencies for notification system
 url = "2.5.0"
+open = { version = "5.3.3", features = ["shellexecute-on-windows"] }
 
 
 # System monitoring for resource management

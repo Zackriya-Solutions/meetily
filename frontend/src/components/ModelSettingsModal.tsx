@@ -109,6 +109,15 @@ interface ModelSettingsModalProps {
   layout?: 'inline' | 'dialog';
 }
 
+async function openOllamaDownload() {
+  try {
+    await invoke('open_external_url', { url: 'https://ollama.com/download' });
+  } catch (error) {
+    console.error('Failed to open Ollama download page:', error);
+    toast.error('Could not open this link. Please check your default browser and try again.');
+  }
+}
+
 export function ModelSettingsModal({
   modelConfig: propsModelConfig,
   setModelConfig: propsSetModelConfig,
@@ -736,7 +745,7 @@ export function ModelSettingsModal({
           duration: 7000,
           action: {
             label: 'Download',
-            onClick: () => invoke('open_external_url', { url: 'https://ollama.com/download' })
+            onClick: openOllamaDownload
           }
         });
         // Update the installation status flag
@@ -1233,7 +1242,7 @@ export function ModelSettingsModal({
                     <Button
                       variant="default"
                       size="sm"
-                      onClick={() => invoke('open_external_url', { url: 'https://ollama.com/download' })}
+                      onClick={openOllamaDownload}
                       className="w-full bg-blue-600 hover:bg-blue-700"
                     >
                       <ExternalLink className="mr-2 h-4 w-4" />
