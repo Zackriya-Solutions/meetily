@@ -485,8 +485,12 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
             Ok(prefs) => {
                 info!("📋 Loaded recording preferences: auto_save={}, preferred_mic={:?}, preferred_system={:?}",
                       prefs.auto_save, prefs.preferred_mic_device, prefs.preferred_system_device);
-                prefs.validate_device_selection(prefs.preferred_mic_device.as_deref(), prefs.preferred_system_device.as_deref())?;
-                (prefs.auto_save, prefs.preferred_mic_device, prefs.preferred_system_device)
+                let (mic, system) = prefs.start_device_selection(
+                    prefs.preferred_mic_device.clone(),
+                    prefs.preferred_system_device.clone(),
+                    cfg!(target_os = "linux"),
+                )?;
+                (prefs.auto_save, mic, system)
             }
             Err(e) => {
                 return Err(format!("Failed to load recording preferences: {}", e));
