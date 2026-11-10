@@ -1155,28 +1155,28 @@ pub async fn debug_backend_connection<R: Runtime>(app: AppHandle<R>) -> Result<S
     }
 }
 
-fn url_opener_result(result: std::io::Result<std::process::Output>) -> Result<(), String> {
-    match result {
-        Ok(output) if output.status.success() => Ok(()),
-        Ok(output) => Err(format!("Browser launcher failed: {}", output.status)),
-        Err(e) => Err(format!("Failed to open URL: {}", e)),
+fn parse_external_url(raw: &str) -> Result<url::Url, String> {
+    let url = url::Url::parse(raw).map_err(|_| "Invalid external URL".to_string())?;
+    if url.scheme() != "https" || url.host_str().is_none() {
+        return Err("Only HTTPS external URLs are allowed".to_string());
     }
+    Ok(url)
 }
 
 #[tauri::command]
 pub async fn open_external_url(url: String) -> Result<(), String> {
-    use std::process::Command;
-
-    let result = if cfg!(target_os = "windows") {
-        Command::new("cmd").args(&["/C", "start", &url]).output()
-    } else if cfg!(target_os = "macos") {
-        Command::new("open").arg(&url).output()
-    } else {
-        // Linux and other Unix-like systems
-        Command::new("xdg-open").arg(&url).output()
-    };
-
-    url_opener_result(result)
+    let url = parse_external_url(&url)?;
+    // Desktop launchers can wait for a browser; never run them on an async worker.
+    tauri::async_runtime::spawn_blocking(move || {
+        // This feature uses ShellExecute on Windows, not cmd /C start.
+        #[cfg(windows)]
+        let result = open::that_detached(url.as_str());
+        #[cfg(not(windows))]
+        let result = open::that(url.as_str());
+        result.map_err(|error| format!("Failed to open URL: {error}"))
+    })
+    .await
+    .map_err(|error| format!("Failed to open URL: {error}"))?
 }
 
 // ===== CUSTOM OPENAI API COMMANDS =====
@@ -1409,25 +1409,28 @@ pub async fn api_test_custom_openai_connection<R: Runtime>(
 
 #[cfg(test)]
 mod external_url_tests {
-    use super::url_opener_result;
-    #[cfg(unix)]
-    use std::os::unix::process::ExitStatusExt;
-    #[cfg(windows)]
-    use std::os::windows::process::ExitStatusExt;
-    use std::process::{ExitStatus, Output};
+    use super::parse_external_url;
 
     #[test]
-    fn external_url_distinguishes_success_failed_exit_and_spawn_error() {
-        let output = |code: u32| Output {
-            #[cfg(unix)]
-            status: ExitStatus::from_raw((code as i32) << 8),
-            #[cfg(windows)]
-            status: ExitStatus::from_raw(code),
-            stdout: Vec::new(),
-            stderr: Vec::new(),
-        };
-        assert!(url_opener_result(Ok(output(0))).is_ok());
-        assert!(url_opener_result(Ok(output(7))).is_err());
-        assert!(url_opener_result(Err(std::io::ErrorKind::NotFound.into())).is_err());
+    fn external_url_preserves_https_query_parameters_and_escapes() {
+        let raw = "https://example.invalid/path?a=1&b=2&literal=%25PATH%25#section";
+        let url = parse_external_url(raw).unwrap();
+        assert_eq!(url.as_str(), raw);
+        assert_eq!(url.query_pairs().collect::<Vec<_>>(), [
+            ("a".into(), "1".into()),
+            ("b".into(), "2".into()),
+            ("literal".into(), "%PATH%".into()),
+        ]);
+    }
+
+    #[test]
+    fn external_url_rejects_invalid_urls_and_non_https_schemes() {
+        for raw in [
+            "", "not a URL", "/relative", "//example.invalid", "https://",
+            "http://example.invalid", "javascript:alert(1)", "data:text/html,test",
+            "file:///C:/Windows/System32/cmd.exe", "mailto:test@example.invalid",
+        ] {
+            assert!(parse_external_url(raw).is_err(), "accepted {raw:?}");
+        }
     }
 }

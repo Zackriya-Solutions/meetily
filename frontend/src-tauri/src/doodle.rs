@@ -1,7 +1,5 @@
 //! Seasonal sidebar icon (official builds only).
-//! When MEETILY_DOODLE_URL is set at compile time, the app sends at most one HTTPS GET per UTC day
-//! to that URL. The request carries nothing about the user: no ID, version, license, platform,
-//! settings, cookies, User-Agent or custom headers. Disclosed in PRIVACY_POLICY.md ("Seasonal icon").
+//! When MEETILY_DOODLE_URL is set at compile time, the app requests a seasonal icon over HTTPS.
 //! Forks and local builds without the variable make no request.
 
 use chrono::NaiveDate;
@@ -44,6 +42,7 @@ fn build_client(origin: Url, https_only: bool) -> reqwest::Result<reqwest::Clien
             if redirect_allowed(&origin, attempt.url(), attempt.previous().len()) {
                 attempt.follow()
             } else {
+                perf_debug!("doodle: redirect rejected by origin/path/hop policy");
                 attempt.stop()
             }
         }))
@@ -62,16 +61,22 @@ fn is_valid_png(bytes: &[u8]) -> bool {
 async fn fetch(client: &reqwest::Client, url: &str) -> reqwest::Result<Option<Vec<u8>>> {
     let mut response = client.get(url).send().await?;
     if response.status() != StatusCode::OK {
+        perf_debug!("doodle: no icon returned (HTTP {})", response.status());
         return Ok(None);
     }
     let mut buf = Vec::new();
     while let Some(chunk) = response.chunk().await? {
         if buf.len() + chunk.len() > MAX_BYTES {
+            perf_debug!("doodle: body exceeds {} bytes (received at least {})", MAX_BYTES, buf.len() + chunk.len());
             return Ok(None);
         }
         buf.extend_from_slice(&chunk);
     }
-    Ok(is_valid_png(&buf).then_some(buf))
+    let valid = is_valid_png(&buf);
+    if !valid {
+        perf_debug!("doodle: invalid PNG header or dimensions ({} bytes, maximum {} px)", buf.len(), MAX_PIXELS);
+    }
+    Ok(valid.then_some(buf))
 }
 
 fn sync_lock() -> &'static tokio::sync::Mutex<()> {

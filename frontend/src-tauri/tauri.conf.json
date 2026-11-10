@@ -33,7 +33,7 @@
             "assetProtocol": {
                 "enable": true,
                 "scope": [
-                    "$APPDATA/**"
+                    "$APPDATA/doodle/*"
                 ]
             },
             "capabilities": [
