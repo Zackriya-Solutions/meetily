@@ -271,15 +271,18 @@ jobs:
               ls "$dir" | grep -E "(wayland|fuse)" || echo "  No wayland/fuse libraries found"
             done
 
-            # Get appimagetool
-            wget -q https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+            # AppImageKit's runtime dlopens libfuse.so.2, which stock Ubuntu 22.04+ lacks; the type2 runtime is static.
+            wget -q https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
+            wget -q https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64
+            echo "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0  appimagetool-x86_64.AppImage" | sha256sum -c -
+            echo "2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d  runtime-x86_64" | sha256sum -c -
             chmod +x appimagetool-x86_64.AppImage
 
-            # Repackage AppImage with no-appstream to avoid warnings
-            ARCH=x86_64 ./appimagetool-x86_64.AppImage --no-appstream squashfs-root "$APPIMAGE_NAME"
+            # Repackage AppImage with no-appstream to avoid warnings; extract-and-run avoids needing FUSE for the tool itself
+            ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 ./appimagetool-x86_64.AppImage --no-appstream --runtime-file runtime-x86_64 squashfs-root "$APPIMAGE_NAME"
 
             # Clean up
-            rm -rf squashfs-root appimagetool-x86_64.AppImage
+            rm -rf squashfs-root appimagetool-x86_64.AppImage runtime-x86_64
 
             echo "libwayland-client.so removed from AppImage successfully"
           else
