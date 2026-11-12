@@ -49,6 +49,7 @@ impl MonitoredDevice {
         // Heuristic: check if device name contains bluetooth-related keywords
         let is_bluetooth = name.to_lowercase().contains("airpods")
             || name.to_lowercase().contains("bluetooth")
+            || name.to_lowercase().contains("bluez")
             || name.to_lowercase().contains("wireless");
 
         Self {
@@ -203,7 +204,14 @@ impl AudioDeviceMonitor {
     /// poll cycle.
     pub fn notify_mic_swapped(&self, new_mic_name: String, new_system_name: Option<String>) {
         if let Ok(mut mailbox) = self.device_update_mailbox.lock() {
-            *mailbox = Some((new_mic_name, new_system_name));
+            #[cfg(not(target_os = "linux"))]
+            { *mailbox = Some((new_mic_name, new_system_name)); }
+            #[cfg(target_os = "linux")]
+            {
+                let pending = mailbox.get_or_insert_with(|| (String::new(), None));
+                if !new_mic_name.is_empty() { pending.0 = new_mic_name; }
+                if new_system_name.is_some() { pending.1 = new_system_name; }
+            }
         }
     }
 
@@ -315,9 +323,22 @@ impl AudioDeviceMonitor {
             // consecutive_missing.
             if let Ok(mut mailbox) = device_update_mailbox.lock() {
                 if let Some((new_mic_name, new_system_name)) = mailbox.take() {
+                    #[cfg(target_os = "linux")]
+                    {
+                        if !new_mic_name.is_empty() && !monitored_devices.iter().any(|d| d.device_type == DeviceMonitorType::Microphone) {
+                            monitored_devices.push(MonitoredDevice::new(new_mic_name.clone(), DeviceMonitorType::Microphone));
+                        }
+                        if let Some(name) = &new_system_name {
+                            if !monitored_devices.iter().any(|d| d.device_type == DeviceMonitorType::SystemAudio) {
+                                monitored_devices.push(MonitoredDevice::new(name.clone(), DeviceMonitorType::SystemAudio));
+                            }
+                        }
+                    }
                     for dev in &mut monitored_devices {
                         match dev.device_type {
                             DeviceMonitorType::Microphone => {
+                                #[cfg(target_os = "linux")]
+                                if new_mic_name.is_empty() { continue; }
                                 info!("[DEVICE_MONITOR] Updated tracked mic: '{}' → '{}' (hot-swap)", dev.name, new_mic_name);
                                 *dev = MonitoredDevice::new(new_mic_name.clone(), dev.device_type.clone());
                             }
@@ -342,7 +363,15 @@ impl AudioDeviceMonitor {
 
             // Check each monitored device
             for monitored in &mut monitored_devices {
-                let device_found = current_devices.iter().any(|d| d.name == monitored.name);
+                let device_found = current_devices.iter().any(|d| {
+                    #[cfg(target_os = "linux")]
+                    { d.name == monitored.name && d.device_type == match monitored.device_type {
+                        DeviceMonitorType::Microphone => super::devices::DeviceType::Input,
+                        DeviceMonitorType::SystemAudio => super::devices::DeviceType::Output,
+                    } }
+                    #[cfg(not(target_os = "linux"))]
+                    { d.name == monitored.name }
+                });
 
                 if device_found {
                     // Device is present
