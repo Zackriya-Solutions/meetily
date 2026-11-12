@@ -27,12 +27,10 @@ const VAD_REDEMPTION_TIME_MS: u32 = 500;
 #[cfg(all(test, target_os = "linux"))]
 mod linux_mixing_tests {
     use super::*;
-    use std::time::{Duration, Instant};
 
     #[test]
     fn unequal_delivery_boundaries_do_not_expand_the_timeline() {
         let mut ring = AudioMixerRingBuffer::new(48000);
-        let now = Instant::now();
         let mut positions = [0u64; 2];
         let mut output = [Vec::new(), Vec::new()];
         for _ in 0..6 {
@@ -40,12 +38,12 @@ mod linux_mixing_tests {
                 let samples = (positions[index]..positions[index] + count).map(|n| n as f32).collect();
                 ring.add_samples_at(role, samples, positions[index]);
                 positions[index] += count;
-                while let Some((mic, system)) = ring.extract_aligned(now, false) {
+                while let Some((mic, system)) = ring.extract_aligned(false) {
                     output[0].extend(mic); output[1].extend(system);
                 }
             }
         }
-        while let Some((mic, system)) = ring.extract_aligned(now, true) {
+        while let Some((mic, system)) = ring.extract_aligned(true) {
             output[0].extend(mic); output[1].extend(system);
         }
         let expected: Vec<_> = (0..98304).map(|n| n as f32).collect();
@@ -54,22 +52,27 @@ mod linux_mixing_tests {
     }
 
     #[test]
-    fn late_counterpart_does_not_reappear_after_its_padded_interval() {
+    fn counterpart_within_lead_is_kept_and_beyond_lead_is_padded_once() {
         let mut ring = AudioMixerRingBuffer::new(48000);
-        let now = Instant::now();
-        ring.add_samples_at(DeviceType::Microphone, vec![1.0; 28800], 0);
-        assert!(ring.extract_aligned(now, false).is_none());
-        // Continued arrivals must not restart the deadline.
-        ring.add_samples_at(DeviceType::Microphone, vec![2.0; 100], 28800);
-        assert!(ring.extract_aligned(now + Duration::from_millis(99), false).is_none());
-        let (mic, system) = ring.extract_aligned(now + Duration::from_millis(100), false).unwrap();
-        assert_eq!(mic, vec![1.0; 28800]);
-        assert_eq!(system, vec![0.0; 28800]);
+        // Mic leads by 330 ms, the delivery spread measured between PipeWire sources.
+        ring.add_samples_at(DeviceType::Microphone, vec![1.0; 28800 + 15840], 0);
+        assert!(ring.extract_aligned(false).is_none());
         ring.add_samples_at(DeviceType::System, vec![3.0; 28800], 0);
-        let (mic, system) = ring.extract_aligned(now, true).unwrap();
-        assert_eq!(mic, vec![2.0; 100]);
-        assert_eq!(system, vec![0.0; 100]);
-        assert!(ring.extract_aligned(now, true).is_none());
+        let (mic, system) = ring.extract_aligned(false).unwrap();
+        assert_eq!(mic, vec![1.0; 28800]);
+        assert_eq!(system, vec![3.0; 28800]);
+        // A silent counterpart is padded only once the leader is a full second past the window.
+        ring.add_samples_at(DeviceType::Microphone, vec![2.0; 105599 - 44640], 44640);
+        assert!(ring.extract_aligned(false).is_none());
+        ring.add_samples_at(DeviceType::Microphone, vec![2.0], 105599);
+        let (mic, system) = ring.extract_aligned(false).unwrap();
+        assert_eq!(&mic[..15840], &[1.0; 15840]);
+        assert_eq!(system, vec![0.0; 28800]);
+        // Its late arrival is not replayed into later windows.
+        ring.add_samples_at(DeviceType::System, vec![3.0; 28800], 28800);
+        while let Some((_, system)) = ring.extract_aligned(true) {
+            assert!(system.iter().all(|&sample| sample == 0.0));
+        }
     }
 
     #[test]
@@ -77,7 +80,7 @@ mod linux_mixing_tests {
         let mut ring = AudioMixerRingBuffer::new(48000);
         ring.add_samples_at(DeviceType::System, vec![2.0; 3], 2);
         ring.add_samples_at(DeviceType::Microphone, vec![1.0; 5], 0);
-        let (mic, system) = ring.extract_aligned(Instant::now(), true).unwrap();
+        let (mic, system) = ring.extract_aligned(true).unwrap();
         assert_eq!(mic, vec![1.0; 5]);
         assert_eq!(system, vec![0.0, 0.0, 2.0, 2.0, 2.0]);
     }
@@ -87,7 +90,7 @@ mod linux_mixing_tests {
         let mut ring = AudioMixerRingBuffer::new(48000);
         ring.add_samples_at(DeviceType::System, vec![1.0; 3], 10);
         ring.add_samples_at(DeviceType::System, vec![2.0; 2], 15);
-        let (mic, system) = ring.extract_aligned(Instant::now(), true).unwrap();
+        let (mic, system) = ring.extract_aligned(true).unwrap();
         assert_eq!(mic, vec![0.0; 7]);
         assert_eq!(system, vec![1.0, 1.0, 1.0, 0.0, 0.0, 2.0, 2.0]);
     }
@@ -98,10 +101,10 @@ mod linux_mixing_tests {
             for gap in [230401, 6 * 48000] {
                 let mut ring = AudioMixerRingBuffer::new(48000);
                 ring.add_samples_at(role.clone(), vec![1.0; 28811], 0);
-                ring.extract_aligned(Instant::now(), true).unwrap();
+                ring.extract_aligned(true).unwrap();
                 ring.add_samples_at(role.clone(), vec![0.75; 960], 28811 + gap);
                 let mut output = Vec::new();
-                while let Some((mic, system)) = ring.extract_aligned(Instant::now(), true) {
+                while let Some((mic, system)) = ring.extract_aligned(true) {
                     output.extend(if role == DeviceType::Microphone { mic } else { system });
                 }
                 let mut expected = vec![1.0; 11];
@@ -120,11 +123,11 @@ mod linux_mixing_tests {
         ring.window_size_samples = 4;
         ring.add_samples_at(DeviceType::Microphone, vec![1.0, 2.0, 3.0, 4.0, 5.0], 10);
         ring.add_samples_at(DeviceType::Microphone, vec![9.0, 9.0, 6.0, 7.0], 13);
-        let (first, _) = ring.extract_aligned(Instant::now(), true).unwrap();
-        let (tail, _) = ring.extract_aligned(Instant::now(), true).unwrap();
+        let (first, _) = ring.extract_aligned(true).unwrap();
+        let (tail, _) = ring.extract_aligned(true).unwrap();
         assert_eq!(first, vec![1.0, 2.0, 3.0, 4.0]);
         assert_eq!(tail, vec![5.0, 6.0, 7.0]);
-        assert!(ring.extract_aligned(Instant::now(), true).is_none());
+        assert!(ring.extract_aligned(true).is_none());
     }
 
     #[test]
@@ -136,7 +139,7 @@ mod linux_mixing_tests {
         ring.add_samples_at(DeviceType::Microphone, vec![2.0; 6], 100);
         assert_eq!(ring.take_dropped_samples(), (1, 0));
         let mut output = Vec::new();
-        while let Some((mic, _)) = ring.extract_aligned(Instant::now(), true) {
+        while let Some((mic, _)) = ring.extract_aligned(true) {
             output.extend(mic);
         }
         assert_eq!(output.len(), 105);
@@ -165,10 +168,12 @@ struct AudioMixerRingBuffer {
     position: Option<u64>,
     #[cfg(target_os = "linux")]
     emitted: bool,
-    #[cfg(target_os = "linux")]
-    waiting_since: Option<std::time::Instant>,
 
 }
+
+/// How far one role may run ahead before the other is padded with silence (1 s at 48 kHz).
+#[cfg(target_os = "linux")]
+const LINUX_MAX_STREAM_LEAD_SAMPLES: u64 = 48_000;
 
 #[cfg(target_os = "linux")]
 struct PositionedAudio {
@@ -209,8 +214,6 @@ impl AudioMixerRingBuffer {
             position: None,
             #[cfg(target_os = "linux")]
             emitted: false,
-            #[cfg(target_os = "linux")]
-            waiting_since: None,
         }
     }
 
@@ -263,7 +266,7 @@ impl AudioMixerRingBuffer {
     }
 
     #[cfg(target_os = "linux")]
-    fn extract_aligned(&mut self, now: std::time::Instant, flush: bool) -> Option<(Vec<f32>, Vec<f32>)> {
+    fn extract_aligned(&mut self, flush: bool) -> Option<(Vec<f32>, Vec<f32>)> {
         let cursor = self.position?;
         let ends = [&self.mic_buffer, &self.system_buffer].map(|buffer|
             buffer.back().map_or(cursor, |packet| packet.start + packet.samples.len() as u64));
@@ -271,9 +274,11 @@ impl AudioMixerRingBuffer {
         if available == 0 || (!flush && available < self.window_size_samples as u64) { return None; }
         let count = available.min(self.window_size_samples as u64) as usize;
         let end = cursor + count as u64;
-        if !flush && ends[0].min(ends[1]) < end {
-            let since = self.waiting_since.get_or_insert(now);
-            if now.duration_since(*since) < std::time::Duration::from_millis(100) { return None; }
+        // Pad a lagging role only once the other is a full second past this window. Capture
+        // sources differ in delivery latency (150-330 ms measured on PipeWire), and padding sooner
+        // zero-filled the window and then discarded the real samples when they arrived.
+        if !flush && ends[0].min(ends[1]) < end && ends[0].max(ends[1]) < end + LINUX_MAX_STREAM_LEAD_SAMPLES {
+            return None;
         }
         let take = |buffer: &mut VecDeque<PositionedAudio>| {
             let mut samples = vec![0.0; count];
@@ -293,7 +298,6 @@ impl AudioMixerRingBuffer {
         let result = (take(&mut self.mic_buffer), take(&mut self.system_buffer));
         self.emitted = true;
         *self.position.as_mut().unwrap() += count as u64;
-        self.waiting_since = None;
         Some(result)
     }
 
@@ -1071,11 +1075,6 @@ impl AudioPipeline {
         // Previous bug: Loop checked `while self.state.is_recording()` which caused early exit when
         // stop_recording() was called, losing flush signals and remaining chunks in the pipeline
         loop {
-            #[cfg(target_os = "linux")]
-            let wait = self.ring_buffer.waiting_since.map(|since|
-                (since + std::time::Duration::from_millis(100)).saturating_duration_since(std::time::Instant::now()))
-                .unwrap_or(std::time::Duration::from_millis(50));
-            #[cfg(not(target_os = "linux"))]
             let wait = std::time::Duration::from_millis(50);
             // Receive audio chunks with timeout
             match tokio::time::timeout(
@@ -1105,11 +1104,7 @@ impl AudioPipeline {
 
                 }
                 Ok(None) => break,
-                Err(_) => {
-                    #[cfg(target_os = "linux")]
-                    self.mix_ready(false, 0.0);
-                    continue;
-                }
+                Err(_) => continue,
             }
         }
 
@@ -1122,7 +1117,7 @@ impl AudioPipeline {
     fn mix_ready(&mut self, flush: bool, timestamp: f64) {
         loop {
             #[cfg(target_os = "linux")]
-            let window = self.ring_buffer.extract_aligned(std::time::Instant::now(), flush);
+            let window = self.ring_buffer.extract_aligned(flush);
             #[cfg(not(target_os = "linux"))]
             let window = { let _ = flush; self.ring_buffer.extract_window() };
             let Some((mic, system)) = window else { break; };
