@@ -148,25 +148,24 @@ if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "win32" ]]; then
     SIDECAR_BINARY="llama-helper-$TARGET_TRIPLE.exe"
 fi
 
-# The binary is in the workspace target directory, which is one level up from frontend
-# if we are in frontend dir.
-WORKSPACE_ROOT="$FRONTEND_DIR/.."
-SRC_PATH="$WORKSPACE_ROOT/target/release/$BASE_BINARY"
-DEST_PATH="$BINARIES_DIR/$SIDECAR_BINARY"
-
-if [ ! -f "$SRC_PATH" ]; then
-    # Fallback: check if we are running from root and target is in root
-    SRC_PATH="target/release/$BASE_BINARY"
+# Ask cargo where it put the binary: this honors CARGO_TARGET_DIR and
+# build.target-dir. Fall back to the workspace target directory.
+TARGET_DIR=$(cd "$HELPER_DIR" && cargo metadata --format-version 1 --no-deps 2>/dev/null \
+    | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).target_directory))' 2>/dev/null) || true
+if [ -z "$TARGET_DIR" ]; then
+    TARGET_DIR="$FRONTEND_DIR/../target"
 fi
+SRC_PATH="$TARGET_DIR/release/$BASE_BINARY"
+DEST_PATH="$BINARIES_DIR/$SIDECAR_BINARY"
 
 if [ -f "$SRC_PATH" ]; then
     cp "$SRC_PATH" "$DEST_PATH"
     echo -e "${GREEN}✅ Copied binary to $DEST_PATH${NC}"
 else
     echo -e "${RED}❌ Binary not found at $SRC_PATH${NC}"
-    # List contents of target/release to help debugging
-    echo -e "${YELLOW}Contents of target/release:${NC}"
-    ls -la "$WORKSPACE_ROOT/target/release/" || ls -la "target/release/"
+    # List contents of the target directory to help debugging
+    echo -e "${YELLOW}Contents of $TARGET_DIR/release:${NC}"
+    ls -la "$TARGET_DIR/release/" || true
     exit 1
 fi
 
