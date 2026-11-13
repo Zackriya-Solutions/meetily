@@ -376,7 +376,8 @@ jobs:
           fi
 
           # Build llama-helper from workspace root
-          cargo build --release -p llama-helper $LLAMA_FEATURES
+          # llama.cpp's bundled cpp-httplib does not compile against OpenSSL 4 (const X509_NAME); the helper never uses HTTPS, so build it without OpenSSL.
+          CMAKE_DISABLE_FIND_PACKAGE_OpenSSL=TRUE cargo build --release -p llama-helper $LLAMA_FEATURES
 
           # Determine binary extension
           EXT=""

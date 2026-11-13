@@ -669,6 +669,8 @@ jobs:
           # llama-helper is for LLM inference and works fine on CPU
           Write-Host "Building llama-helper sidecar (CPU-only)..."
 
+          # llama.cpp's bundled cpp-httplib does not compile against OpenSSL 4 (const X509_NAME); the helper never uses HTTPS, so build it without OpenSSL.
+          $env:CMAKE_DISABLE_FIND_PACKAGE_OpenSSL = "TRUE"
           cargo build --release -p llama-helper
 
           if ($LASTEXITCODE -ne 0) {
