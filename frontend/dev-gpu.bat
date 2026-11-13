@@ -143,12 +143,15 @@ if defined TAURI_GPU_FEATURE (
 
 echo    Building in %HELPER_DIR% with features: %HELPER_FEATURES%
 pushd "%HELPER_DIR%"
+REM llama.cpp's bundled cpp-httplib does not compile against OpenSSL 4 (const X509_NAME); the helper never uses HTTPS, so build it without OpenSSL.
+set "CMAKE_DISABLE_FIND_PACKAGE_OpenSSL=TRUE"
 call cargo build %HELPER_FEATURES%
 if errorlevel 1 (
     echo ❌ Failed to build llama-helper
     popd
     exit /b 1
 )
+set "CMAKE_DISABLE_FIND_PACKAGE_OpenSSL="
 popd
 echo ✅ llama-helper built successfully
 
