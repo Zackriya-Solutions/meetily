@@ -1,7 +1,7 @@
 {
     "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
     "productName": "meetily",
-    "version": "0.4.1",
+    "version": "0.5.0",
     "identifier": "com.meetily.ai",
     "build": {
         "frontendDist": "../out",
@@ -15,6 +15,7 @@
                 "title": "meetily",
                 "width": 1100,
                 "height": 700,
+                "preventOverflow": true,
                 "resizable": true,
                 "fullscreen": false,
                 "theme": "Light",
@@ -26,13 +27,13 @@
             "csp": {
                 "default-src": "'self'",
                 "style-src": "'self' 'unsafe-inline'",
-                "img-src": "'self' asset: https://asset.localhost data:",
+                "img-src": "'self' asset: http://asset.localhost https://asset.localhost data:",
                 "connect-src": "'self' http://localhost:11434 http://localhost:5167 http://localhost:8178 https://api.ollama.ai"
             },
             "assetProtocol": {
                 "enable": true,
                 "scope": [
-                    "$APPDATA/**"
+                    "$APPDATA/doodle/*"
                 ]
             },
             "capabilities": [
@@ -80,6 +81,11 @@
     },
     "bundle": {
         "active": true,
+        "shortDescription": "Privacy-first AI meeting assistant",
+        "longDescription": "Meetily Community Edition is a free, open-source AI meeting assistant. Record meetings, transcribe audio locally and create AI summaries using local models or a provider you choose. Your recordings and transcripts stay on your device.",
+        "category": "Productivity",
+        "publisher": "Meetily",
+        "homepage": "https://meetily.ai",
         "targets": [
             "deb",
             "appimage",
@@ -91,6 +97,11 @@
         "createUpdaterArtifacts": true,
         "icon": [
             "icons/icon.png",
+            "icons/icon_512x512.png",
+            "icons/icon_256x256.png",
+            "icons/128x128.png",
+            "icons/32x32.png",
+            "icons/icon_16x16.png",
             "icons/app_icon.icns",
             "icons/app_icon.ico"
         ],
@@ -101,6 +112,11 @@
             "binaries/llama-helper",
             "binaries/ffmpeg"
         ],
+        "linux": {
+            "deb": {
+                "depends": ["libvulkan1", "libpulse0", "libasound2"]
+            }
+        },
         "macOS": {
             "entitlements": "entitlements.plist",
             "signingIdentity": "-",

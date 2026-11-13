@@ -298,6 +298,7 @@ All workflows require these secrets to be configured:
 
 ### Application Configuration
 - `MEETILY_RSA_PUBLIC_KEY` - License validation public key
+- `MEETILY_DOODLE_URL` - Seasonal sidebar icon URL (repository variable, not a secret; unset = feature off)
 - `SUPABASE_URL` - Online license verification
 - `SUPABASE_ANON_KEY` - Supabase anonymous key
 

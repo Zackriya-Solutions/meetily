@@ -16,6 +16,13 @@ pub struct RecordingPreferences {
     pub save_folder: PathBuf,
     pub auto_save: bool,
     pub file_format: String,
+    /// Microphone, then system audio: 0 is legacy, 1 is an exact ID.
+    #[serde(default)]
+    pub device_selection_version: [u8; 2],
+    #[serde(skip)]
+    unresolved_devices: [bool; 2],
+    #[serde(skip)]
+    migrated_from: [Option<String>; 2],
     #[serde(default)]
     pub preferred_mic_device: Option<String>,
     #[serde(default)]
@@ -31,10 +38,193 @@ impl Default for RecordingPreferences {
             save_folder: get_default_recordings_folder(),
             auto_save: true,
             file_format: "mp4".to_string(),
+            device_selection_version: [1; 2],
+            unresolved_devices: [false; 2],
+            migrated_from: [None, None],
             preferred_mic_device: None,
             preferred_system_device: None,
             #[cfg(target_os = "macos")]
             system_audio_backend: Some("coreaudio".to_string()),
+        }
+    }
+}
+
+// Legacy selections appended a role suffix; current IDs must remain literal.
+fn normalize_device_preferences(
+    prefs: &mut RecordingPreferences,
+    devices: &[super::devices::AudioDevice],
+) {
+    use super::devices::DeviceType;
+    for (index, (selection, role, suffix)) in [
+        (
+            &mut prefs.preferred_mic_device,
+            DeviceType::Input,
+            " (input)",
+        ),
+        (
+            &mut prefs.preferred_system_device,
+            DeviceType::Output,
+            " (output)",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        prefs.unresolved_devices[index] = false;
+        if prefs.device_selection_version[index] != 0 {
+            continue;
+        }
+        if let Some(id) = selection {
+            let exists = |name: &str| {
+                devices
+                    .iter()
+                    .any(|d| d.device_type == role && d.name == name)
+            };
+            if exists(id) {
+                prefs.device_selection_version[index] = 1;
+                continue;
+            }
+            if let Some(raw) = id.strip_suffix(suffix).filter(|raw| exists(raw)) {
+                prefs.migrated_from[index] = Some(id.clone());
+                *id = raw.to_string();
+            } else {
+                prefs.unresolved_devices[index] = true;
+            }
+        }
+        if !prefs.unresolved_devices[index] {
+            prefs.device_selection_version[index] = 1;
+        }
+    }
+}
+
+/// Start-time handling of a legacy selection that can't be resolved now. Linux rejects it
+/// (legacy IDs never map to Pulse names). Elsewhere the mic keeps its ID so
+/// `resolve_mic_or_default` falls back to the default mic with the switched toast, and system
+/// audio records the default output. The saved preference is untouched, so it still migrates
+/// once the device is back.
+fn unresolved_start_device(index: usize, id: String, linux: bool) -> Result<Option<String>, String> {
+    let role = if index == 0 { "microphone" } else { "system-audio" };
+    if linux {
+        return Err(format!(
+            "Your saved {} selection needs updating. Choose a device in Recording Settings.",
+            role
+        ));
+    }
+    if index == 0 {
+        return Ok(Some(id));
+    }
+    warn!("Saved system-audio device is unavailable; recording the default output instead");
+    Ok(None)
+}
+
+impl RecordingPreferences {
+    pub(super) fn start_device_selection(
+        &self,
+        mic: Option<String>,
+        system: Option<String>,
+        linux: bool,
+    ) -> Result<(Option<String>, Option<String>), String> {
+        let mut requested = [mic, system];
+        let saved = [
+            self.preferred_mic_device.as_deref(),
+            self.preferred_system_device.as_deref(),
+        ];
+        for index in 0..2 {
+            if self.unresolved_devices[index]
+                && requested[index].is_some()
+                && requested[index].as_deref() == saved[index]
+            {
+                let id = requested[index].take().unwrap();
+                requested[index] = unresolved_start_device(index, id, linux)?;
+            }
+        }
+        let [mic, system] = requested;
+        Ok((mic, system))
+    }
+}
+
+fn resolve_cached_legacy_id<'a>(
+    id: &'a str,
+    saved: Option<&str>,
+    version: u8,
+    role: super::devices::DeviceType,
+    devices: &[super::devices::AudioDevice],
+) -> Option<&'a str> {
+    let exists = |name: &str| {
+        devices
+            .iter()
+            .any(|device| device.device_type == role && device.name == name)
+    };
+    if exists(id) {
+        return Some(id);
+    }
+    let suffix = match role {
+        super::devices::DeviceType::Input => " (input)",
+        super::devices::DeviceType::Output => " (output)",
+    };
+    id.strip_suffix(suffix)
+        .filter(|stripped| version == 1 && saved == Some(*stripped) && exists(stripped))
+}
+
+pub(super) async fn resolve_start_devices(
+    prefs: &RecordingPreferences,
+    mic: Option<String>,
+    system: Option<String>,
+) -> Result<(Option<String>, Option<String>), String> {
+    use super::devices::DeviceType;
+    let linux = cfg!(target_os = "linux");
+    let mut requested = [mic, system];
+    for (index, role) in [DeviceType::Input, DeviceType::Output]
+        .into_iter()
+        .enumerate()
+    {
+        if requested[index].is_some() && requested[index] == prefs.migrated_from[index] {
+            requested[index] = if index == 0 {
+                prefs.preferred_mic_device.clone()
+            } else {
+                prefs.preferred_system_device.clone()
+            };
+        }
+        let suffix = if index == 0 { " (input)" } else { " (output)" };
+        let saved = if index == 0 {
+            prefs.preferred_mic_device.as_deref()
+        } else {
+            prefs.preferred_system_device.as_deref()
+        };
+        // An unresolved saved choice is judged by start_device_selection, not re-resolved.
+        if prefs.unresolved_devices[index] && requested[index].as_deref() == saved {
+            continue;
+        }
+        // A cached legacy argument may outlive migration by another preferences reader.
+        if let Some(id) = requested[index].clone().filter(|id| id.ends_with(suffix)) {
+            let devices = super::devices::list_audio_devices().await;
+            let resolved = devices.as_ref().ok().and_then(|devices| {
+                resolve_cached_legacy_id(&id, saved, prefs.device_selection_version[index], role, devices)
+                    .map(str::to_owned)
+            });
+            requested[index] = match (resolved, devices) {
+                (Some(resolved), _) => Some(resolved),
+                (None, Err(e)) if linux => return Err(e.to_string()),
+                (None, _) => unresolved_start_device(index, id, linux)?,
+            };
+        }
+    }
+    let [mic, system] = requested;
+    prefs.start_device_selection(mic, system, linux)
+}
+
+async fn normalize_legacy_preferences(prefs: &mut RecordingPreferences) {
+    if prefs.device_selection_version.contains(&0) {
+        match super::devices::list_audio_devices().await {
+            Ok(devices) => normalize_device_preferences(prefs, &devices),
+            Err(e) => {
+                warn!("Cannot resolve legacy device preferences: {}", e);
+                prefs.unresolved_devices = [
+                    prefs.device_selection_version[0] == 0 && prefs.preferred_mic_device.is_some(),
+                    prefs.device_selection_version[1] == 0
+                        && prefs.preferred_system_device.is_some(),
+                ];
+            }
         }
     }
 }
@@ -100,13 +290,15 @@ pub async fn load_recording_preferences<R: Runtime>(
     let store = match app.store("recording_preferences.json") {
         Ok(store) => store,
         Err(e) => {
-            warn!("Failed to access store: {}, using defaults", e);
-            return Ok(RecordingPreferences::default());
+            return Err(anyhow::anyhow!(
+                "Failed to access recording preferences: {}",
+                e
+            ));
         }
     };
 
     // Try to get the preferences from store
-    let prefs = if let Some(value) = store.get("preferences") {
+    let mut prefs = if let Some(value) = store.get("preferences") {
         match serde_json::from_value::<RecordingPreferences>(value.clone()) {
             Ok(mut p) => {
                 info!("Loaded recording preferences from store");
@@ -128,6 +320,20 @@ pub async fn load_recording_preferences<R: Runtime>(
         RecordingPreferences::default()
     };
 
+    if prefs.device_selection_version.contains(&0) {
+        let previous = serde_json::to_value(&prefs)?;
+        normalize_legacy_preferences(&mut prefs).await;
+        let migrated = serde_json::to_value(&prefs)?;
+        if previous != migrated {
+            store.set("preferences", migrated);
+            if let Err(e) = store.save() {
+                // Keep the cached store equal to disk so the next load retries the migration.
+                store.set("preferences", previous);
+                warn!("Could not save migrated device preferences; using them for this session: {}", e);
+            }
+        }
+    }
+
     info!("Loaded recording preferences: save_folder={:?}, auto_save={}, format={}, mic={:?}, system={:?}",
           prefs.save_folder, prefs.auto_save, prefs.file_format,
           prefs.preferred_mic_device, prefs.preferred_system_device);
@@ -148,17 +354,42 @@ pub async fn save_recording_preferences<R: Runtime>(
         .store("recording_preferences.json")
         .map_err(|e| anyhow::anyhow!("Failed to access store: {}", e))?;
 
+    let mut normalized = preferences.clone();
+    if let Some(value) = store.get("preferences") {
+        if let Ok(saved) = serde_json::from_value::<RecordingPreferences>(value) {
+            for (index, unchanged) in [
+                saved.preferred_mic_device == normalized.preferred_mic_device,
+                saved.preferred_system_device == normalized.preferred_system_device,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                if unchanged && saved.device_selection_version[index] == 1 {
+                    normalized.device_selection_version[index] = 1;
+                }
+            }
+        }
+    }
+    normalize_legacy_preferences(&mut normalized).await;
+    let preferences = &normalized;
+
     // Serialize preferences to JSON value
     let prefs_value = serde_json::to_value(preferences)
         .map_err(|e| anyhow::anyhow!("Failed to serialize preferences: {}", e))?;
 
     // Save to store
+    let previous = store.get("preferences");
     store.set("preferences", prefs_value);
 
     // Persist to disk
-    store
-        .save()
-        .map_err(|e| anyhow::anyhow!("Failed to save store to disk: {}", e))?;
+    if let Err(e) = store.save() {
+        if let Some(previous) = previous {
+            store.set("preferences", previous);
+        } else {
+            store.delete("preferences");
+        }
+        return Err(anyhow::anyhow!("Failed to save store to disk: {}", e));
+    }
 
     info!("Successfully persisted recording preferences to disk");
 
@@ -385,3 +616,329 @@ pub async fn get_audio_backend_info() -> Result<Vec<BackendInfo>, String> {
     }
 }
 
+#[cfg(test)]
+mod device_preference_tests {
+    use super::*;
+    use crate::audio::devices::{AudioDevice, DeviceType};
+
+    fn mic(id: &str) -> AudioDevice {
+        AudioDevice::new(id.into(), DeviceType::Input)
+    }
+
+    #[tokio::test]
+    async fn just_migrated_explicit_argument_uses_selected_device_and_default_stays_default() {
+        let mut prefs = RecordingPreferences::default();
+        prefs.device_selection_version = [0; 2];
+        prefs.preferred_mic_device = Some("USB Mic (input)".into());
+        normalize_device_preferences(&mut prefs, &[mic("USB Mic")]);
+        let (selected, _) = resolve_start_devices(&prefs, Some("USB Mic (input)".into()), None)
+            .await
+            .unwrap();
+        assert_eq!(selected.as_deref(), Some("USB Mic"));
+        assert_eq!(
+            resolve_start_devices(&prefs, None, None).await.unwrap(),
+            (None, None)
+        );
+    }
+
+    #[tokio::test]
+    async fn cached_arguments_resolve_after_migration_roundtrip_and_default_stays_default() {
+        let mut prefs = RecordingPreferences::default();
+        prefs.device_selection_version = [0; 2];
+        prefs.preferred_mic_device = Some("USB Mic (input)".into());
+        prefs.preferred_system_device = Some("USB Speaker (output)".into());
+        let devices = [
+            mic("USB Mic"),
+            AudioDevice::new("USB Speaker".into(), DeviceType::Output),
+        ];
+        normalize_device_preferences(&mut prefs, &devices);
+        let reloaded: RecordingPreferences =
+            serde_json::from_value(serde_json::to_value(prefs).unwrap()).unwrap();
+        assert_eq!(reloaded.migrated_from, [None, None]);
+        assert_eq!(reloaded.device_selection_version, [1; 2]);
+        for (index, (id, saved, role, expected)) in [
+            (
+                "USB Mic (input)",
+                reloaded.preferred_mic_device.as_deref(),
+                DeviceType::Input,
+                "USB Mic",
+            ),
+            (
+                "USB Speaker (output)",
+                reloaded.preferred_system_device.as_deref(),
+                DeviceType::Output,
+                "USB Speaker",
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert_eq!(
+                resolve_cached_legacy_id(
+                    id,
+                    saved,
+                    reloaded.device_selection_version[index],
+                    role,
+                    &devices,
+                ),
+                Some(expected),
+            );
+        }
+        assert_eq!(
+            resolve_start_devices(&reloaded, None, None).await.unwrap(),
+            (None, None),
+        );
+    }
+
+    #[test]
+    fn cached_argument_prefers_exact_literal_id_for_the_same_role() {
+        for (role, id) in [
+            (DeviceType::Input, "USB (input)"),
+            (DeviceType::Output, "USB (output)"),
+        ] {
+            let devices = [
+                AudioDevice::new("USB".into(), role.clone()),
+                AudioDevice::new(id.into(), role.clone()),
+            ];
+            for version in [0, 1] {
+                assert_eq!(
+                    resolve_cached_legacy_id(id, Some("USB"), version, role.clone(), &devices),
+                    Some(id),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cached_argument_rejects_unproven_or_unresolved_aliases() {
+        for (role, other_role, id) in [
+            (DeviceType::Input, DeviceType::Output, "USB (input)"),
+            (DeviceType::Output, DeviceType::Input, "USB (output)"),
+        ] {
+            let canonical = [AudioDevice::new("USB".into(), role.clone())];
+            let wrong_role = [
+                AudioDevice::new("USB".into(), other_role.clone()),
+                AudioDevice::new(id.into(), other_role),
+            ];
+            for (saved, version, devices) in [
+                (Some("USB"), 1, wrong_role.as_slice()),
+                (Some("USB"), 1, &[][..]),
+                (Some("unrelated"), 1, canonical.as_slice()),
+                (None, 1, canonical.as_slice()),
+                (Some("USB"), 0, canonical.as_slice()),
+                (Some(id), 0, canonical.as_slice()),
+            ] {
+                assert_eq!(
+                    resolve_cached_legacy_id(id, saved, version, role.clone(), devices),
+                    None,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cached_argument_strips_exactly_one_role_suffix() {
+        for (role, id, saved) in [
+            (DeviceType::Input, "USB (input) (input)", "USB (input)"),
+            (DeviceType::Output, "USB (output) (output)", "USB (output)"),
+        ] {
+            let devices = [
+                AudioDevice::new("USB".into(), role.clone()),
+                AudioDevice::new(saved.into(), role.clone()),
+            ];
+            assert_eq!(
+                resolve_cached_legacy_id(id, Some(saved), 1, role.clone(), &devices),
+                Some(saved),
+            );
+            assert_eq!(
+                resolve_cached_legacy_id(id, Some("USB"), 1, role, &devices),
+                None,
+            );
+        }
+    }
+
+    #[test]
+    fn resolved_role_is_not_reinterpreted_when_other_role_is_still_legacy() {
+        let mut prefs = RecordingPreferences::default();
+        prefs.device_selection_version = [0; 2];
+        prefs.preferred_mic_device = Some("USB (input) (input)".into());
+        prefs.preferred_system_device = Some("missing (output)".into());
+        normalize_device_preferences(&mut prefs, &[mic("USB (input)")]);
+        assert_eq!(prefs.device_selection_version, [1, 0]);
+        let mut reloaded: RecordingPreferences =
+            serde_json::from_value(serde_json::to_value(prefs).unwrap()).unwrap();
+        normalize_device_preferences(&mut reloaded, &[mic("USB")]);
+        assert_eq!(
+            reloaded.preferred_mic_device.as_deref(),
+            Some("USB (input)")
+        );
+    }
+
+    #[test]
+    fn absent_version_is_legacy_and_partial_resolution_survives_roundtrip() {
+        let mut value = serde_json::to_value(RecordingPreferences::default()).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("device_selection_version");
+        value["preferred_mic_device"] = serde_json::json!("USB Mic (input)");
+        value["preferred_system_device"] = serde_json::json!("missing (output)");
+        let mut prefs: RecordingPreferences = serde_json::from_value(value).unwrap();
+        assert_eq!(prefs.device_selection_version[0], 0);
+        normalize_device_preferences(&mut prefs, &[mic("USB Mic")]);
+        assert_eq!(prefs.preferred_mic_device.as_deref(), Some("USB Mic"));
+        assert_eq!(prefs.device_selection_version, [1, 0]);
+        let started =
+            prefs.start_device_selection(Some("USB Mic".into()), Some("missing (output)".into()), cfg!(target_os = "linux"));
+        if cfg!(target_os = "linux") {
+            assert!(started.is_err());
+        } else {
+            assert_eq!(started.unwrap(), (Some("USB Mic".into()), None));
+        }
+        prefs.auto_save = false;
+        let mut reloaded: RecordingPreferences =
+            serde_json::from_value(serde_json::to_value(prefs).unwrap()).unwrap();
+        normalize_device_preferences(&mut reloaded, &[mic("USB Mic")]);
+        assert_eq!(
+            reloaded.preferred_system_device.as_deref(),
+            Some("missing (output)")
+        );
+        let started =
+            reloaded.start_device_selection(None, Some("missing (output)".into()), cfg!(target_os = "linux"));
+        if cfg!(target_os = "linux") {
+            assert!(started.is_err());
+        } else {
+            assert_eq!(started.unwrap(), (None, None));
+        }
+    }
+
+    #[test]
+    fn wrong_role_or_empty_inventory_cannot_resolve_legacy_choice() {
+        let mut prefs = RecordingPreferences::default();
+        prefs.device_selection_version = [0; 2];
+        prefs.preferred_mic_device = Some("USB (input)".into());
+        normalize_device_preferences(
+            &mut prefs,
+            &[AudioDevice::new("USB".into(), DeviceType::Output)],
+        );
+        assert_eq!(prefs.device_selection_version[0], 0);
+        normalize_device_preferences(&mut prefs, &[]);
+        assert_eq!(
+            prefs
+                .start_device_selection(Some("USB (input)".into()), None, cfg!(target_os = "linux"))
+                .is_err(),
+            cfg!(target_os = "linux")
+        );
+    }
+
+    #[test]
+    fn legacy_selection_keeps_the_selected_mic_instead_of_default() {
+        let mut prefs = RecordingPreferences::default();
+        prefs.device_selection_version = [0; 2];
+        prefs.preferred_mic_device = Some("USB Mic (input)".into());
+        normalize_device_preferences(&mut prefs, &[mic("Laptop Mic"), mic("USB Mic")]);
+        assert_eq!(prefs.preferred_mic_device.as_deref(), Some("USB Mic"));
+        assert_eq!(prefs.device_selection_version, [1; 2]);
+    }
+
+    #[test]
+    fn exact_ids_win_and_current_ids_are_never_suffix_parsed() {
+        for version in [0, 1] {
+            let mut prefs = RecordingPreferences::default();
+            prefs.device_selection_version = [version; 2];
+            prefs.preferred_mic_device = Some("USB (input)".into());
+            normalize_device_preferences(&mut prefs, &[mic("USB"), mic("USB (input)")]);
+            assert_eq!(prefs.preferred_mic_device.as_deref(), Some("USB (input)"));
+        }
+        let mut prefs = RecordingPreferences::default();
+        prefs.preferred_mic_device = Some("USB (input)".into());
+        normalize_device_preferences(&mut prefs, &[mic("USB")]);
+        assert_eq!(prefs.preferred_mic_device.as_deref(), Some("USB (input)"));
+    }
+
+    #[test]
+    fn unresolved_legacy_choice_survives_and_blocks_only_that_choice() {
+        let mut prefs = RecordingPreferences::default();
+        prefs.device_selection_version = [0; 2];
+        prefs.preferred_mic_device = Some("Old ALSA (input)".into());
+        let devices = vec![mic("pulse-source")];
+        normalize_device_preferences(&mut prefs, &devices);
+        assert_eq!(prefs.device_selection_version[0], 0);
+        assert_eq!(
+            prefs.preferred_mic_device.as_deref(),
+            Some("Old ALSA (input)")
+        );
+        assert_eq!(
+            prefs
+                .start_device_selection(Some("Old ALSA (input)".into()), None, cfg!(target_os = "linux"))
+                .is_err(),
+            cfg!(target_os = "linux")
+        );
+        assert!(prefs.start_device_selection(None, None, cfg!(target_os = "linux")).is_ok());
+        assert!(prefs
+            .start_device_selection(Some("pulse-source".into()), None, cfg!(target_os = "linux"))
+            .is_ok());
+        prefs.preferred_mic_device = None;
+        normalize_device_preferences(&mut prefs, &devices);
+        assert_eq!(prefs.device_selection_version, [1; 2]);
+    }
+
+    #[tokio::test]
+    async fn unresolved_legacy_selection_falls_back_off_linux_and_keeps_saved_value() {
+        let mut prefs = RecordingPreferences::default();
+        prefs.device_selection_version = [0; 2];
+        prefs.preferred_mic_device = Some("AirPods (input)".into());
+        prefs.preferred_system_device = Some("BlackHole (output)".into());
+        normalize_device_preferences(&mut prefs, &[]);
+        let started = resolve_start_devices(&prefs, Some("AirPods (input)".into()), None).await;
+        if cfg!(target_os = "linux") {
+            assert!(started.is_err());
+        } else {
+            assert_eq!(started.unwrap(), (Some("AirPods (input)".into()), None));
+        }
+        let started = resolve_start_devices(&prefs, None, Some("BlackHole (output)".into())).await;
+        if cfg!(target_os = "linux") {
+            assert!(started.is_err());
+        } else {
+            assert_eq!(started.unwrap(), (None, None));
+        }
+        assert_eq!(prefs.preferred_mic_device.as_deref(), Some("AirPods (input)"));
+        assert_eq!(prefs.device_selection_version, [0; 2]);
+        assert_eq!(prefs.preferred_system_device.as_deref(), Some("BlackHole (output)"));
+        normalize_device_preferences(&mut prefs, &[mic("AirPods")]);
+        assert_eq!(prefs.preferred_mic_device.as_deref(), Some("AirPods"));
+        assert_eq!(prefs.device_selection_version[0], 1);
+    }
+
+    #[test]
+    fn unresolved_legacy_start_policy_per_platform() {
+        let mut prefs = RecordingPreferences::default();
+        prefs.device_selection_version = [0; 2];
+        prefs.preferred_mic_device = Some("AirPods (input)".into());
+        prefs.preferred_system_device = Some("BlackHole (output)".into());
+        normalize_device_preferences(&mut prefs, &[]);
+        let saved = || (Some("AirPods (input)".to_string()), Some("BlackHole (output)".to_string()));
+
+        let (mic, system) = saved();
+        assert!(prefs.start_device_selection(mic, system, true).unwrap_err().contains("microphone"));
+        assert!(prefs.start_device_selection(None, saved().1, true).unwrap_err().contains("system-audio"));
+
+        let (mic, system) = saved();
+        assert_eq!(
+            prefs.start_device_selection(mic, system, false).unwrap(),
+            (Some("AirPods (input)".into()), None)
+        );
+        for linux in [true, false] {
+            assert_eq!(
+                prefs.start_device_selection(Some("New Mic".into()), Some("New Speaker".into()), linux).unwrap(),
+                (Some("New Mic".into()), Some("New Speaker".into()))
+            );
+            assert_eq!(prefs.start_device_selection(None, None, linux).unwrap(), (None, None));
+        }
+
+        assert_eq!(prefs.device_selection_version, [0; 2]);
+        normalize_device_preferences(&mut prefs, &[AudioDevice::new("BlackHole".into(), DeviceType::Output)]);
+        assert_eq!(prefs.preferred_system_device.as_deref(), Some("BlackHole"));
+        assert_eq!(prefs.device_selection_version[1], 1);
+    }
+}
