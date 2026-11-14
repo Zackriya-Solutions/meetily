@@ -106,26 +106,46 @@ Whether you're a defense consultant, enterprise executive, legal professional, o
 
 ## Installation
 
-### 🪟 **Windows**
+### Windows and macOS
 
-1. Download the latest `x64-setup.exe` from [Releases](https://github.com/Zackriya-Solutions/meetily/releases/latest)
-2. Run the installer
+| Platform | Download Link | Instructions |
+|----------|---------------|-------------|
+| **Windows (x64)** | [.exe installer](https://github.com/Zackriya-Solutions/meetily/releases/download/v0.5.0/meetily_0.5.0_x64-setup.exe) | Download and run the installer |
+| **macOS (Apple Silicon)** | [.dmg installer](https://github.com/Zackriya-Solutions/meetily/releases/download/v0.5.0/meetily_0.5.0_aarch64.dmg) | Open the installer, drag **Meetily** to Applications, then open it from Applications |
 
 > **Windows compatibility:** The packaged installer uses a Vulkan-enabled Whisper build. It requires an AVX2-capable x64 CPU; AVX-512 is not required. CUDA acceleration requires a source build configured with a compatible NVIDIA CUDA toolchain.
 
-### 🍎 **macOS**
+### Linux (recommended): one-line install
 
-1. Download the latest `meetily_<version>_aarch64.dmg` from [Releases](https://github.com/Zackriya-Solutions/meetily/releases/latest)
-2. Open the downloaded `.dmg` file
-3. Drag **Meetily** to your Applications folder
-4. Open **Meetily** from Applications folder
+Requires x86_64 Linux with glibc 2.35 or newer (.deb preferred, otherwise AppImage).
 
-### 🐧 **Linux**
+```sh
+curl -fsSL https://raw.githubusercontent.com/Zackriya-Solutions/meetily/main/scripts/install-linux.sh | sh
+```
 
-1. Download the latest `.deb` or `.AppImage` package for Linux x64 from [Releases](https://github.com/Zackriya-Solutions/meetily/releases/latest).
-2. Install or run your preferred package:
-   - **Debian/Ubuntu (.deb):** Open a terminal in the download folder and run `sudo apt install ./<downloaded-file>.deb`.
-   - **AppImage:** Open the file’s properties, allow it to run as a program, then double-click it to launch **Meetily**.
+<details>
+<summary><b>Linux: installer options and manual installation</b></summary>
+
+Pass options after `sh -s --`:
+
+```sh
+# Install the AppImage instead of the .deb
+curl -fsSL https://raw.githubusercontent.com/Zackriya-Solutions/meetily/main/scripts/install-linux.sh | sh -s -- --appimage
+
+# Uninstall (keeps your meetings and settings unless you add --purge)
+curl -fsSL https://raw.githubusercontent.com/Zackriya-Solutions/meetily/main/scripts/install-linux.sh | sh -s -- --uninstall
+```
+
+Run it with `--help` to see all options.
+
+#### Manual install (.deb / AppImage)
+
+| Package | Download Link | Instructions |
+|---------|---------------|--------------|
+| **.deb** (x64, Debian/Ubuntu-compatible) | [.deb package](https://github.com/Zackriya-Solutions/meetily/releases/download/v0.5.0/meetily_0.5.0_amd64.deb) | `sudo apt install ./meetily_0.5.0_amd64.deb`, or alternatively `sudo dpkg -i meetily_0.5.0_amd64.deb` |
+| **AppImage** (x64) | [AppImage](https://github.com/Zackriya-Solutions/meetily/releases/download/v0.5.0/meetily_0.5.0_amd64.AppImage) | `chmod +x meetily_0.5.0_amd64.AppImage`, then `./meetily_0.5.0_amd64.AppImage`. System dependencies still apply; see the [Linux guide](https://github.com/Zackriya-Solutions/meetily/blob/main/docs/building_in_linux.md) |
+
+</details>
 
 To build from source, see [Building on Linux](docs/building_in_linux.md) or [General Build Instructions](docs/BUILDING.md).
 
