@@ -153,7 +153,7 @@ To build from source, see [Building on Linux](docs/building_in_linux.md) or [Gen
 
 ### 🎯 Local Transcription
 
-Transcribe meetings entirely on your device using **Whisper** or **Parakeet** models. No cloud required.
+Transcribe meetings entirely on your device using **Whisper** or **Parakeet** models. No cloud required. Configure your provider in Settings → Transcription. See [Transcription Providers](docs/transcription-providers.md) for details on `localWhisper`, `parakeet`, and the new **Remote HTTPS** option.
 
 <p align="center">
     <img src="docs/home.png" width="650" style="border-radius: 10px;" alt="Meetily Demo" />
