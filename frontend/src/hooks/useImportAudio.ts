@@ -30,6 +30,11 @@ export interface ImportError {
   error: string;
 }
 
+export interface ImportWarning {
+  warning: string;
+  details?: string | null;
+}
+
 export type ImportStatus = 'idle' | 'validating' | 'processing' | 'complete' | 'error';
 
 export interface UseImportAudioOptions {
@@ -42,6 +47,7 @@ export interface UseImportAudioReturn {
   fileInfo: AudioFileInfo | null;
   progress: ImportProgress | null;
   error: string | null;
+  warning: string | null;
   isProcessing: boolean;
   isBusy: boolean;
   selectFile: () => Promise<AudioFileInfo | null>;
@@ -65,6 +71,7 @@ export function useImportAudio({
   const [fileInfo, setFileInfo] = useState<AudioFileInfo | null>(null);
   const [progress, setProgress] = useState<ImportProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
 
   // Stable refs for callbacks to avoid listener re-registration on every render
   const onCompleteRef = useRef(onComplete);
@@ -96,6 +103,30 @@ export function useImportAudio({
       }
       unlisteners.push(unlistenProgress);
 
+      // Non-fatal outcome warning (for example, speech detected but no usable
+      // ASR text). Keep the import successful while making the distinction
+      // visible to both the dialog and the toast notification.
+      const unlistenWarning = await listen<ImportWarning>(
+        'import-warning',
+        (event) => {
+          if (isCancelledRef.current) return;
+
+          const message = event.payload.details
+            ? `${event.payload.warning}: ${event.payload.details}`
+            : event.payload.warning;
+          setWarning(message);
+          toast.warning(event.payload.warning, {
+            description: event.payload.details || undefined,
+          });
+        }
+      );
+      if (cleanedUpRef.current) {
+        unlistenWarning();
+        unlisteners.forEach(u => u());
+        return;
+      }
+      unlisteners.push(unlistenWarning);
+
       // Completion event
       const unlistenComplete = await listen<ImportResult>(
         'import-complete',
@@ -105,7 +136,8 @@ export function useImportAudio({
           await Analytics.track('import_audio_completed', {
             success: 'true',
             duration_seconds: event.payload.duration_seconds.toString(),
-            segments_count: event.payload.segments_count.toString()
+            segments_count: event.payload.segments_count.toString(),
+            transcript_status: event.payload.segments_count > 0 ? 'available' : 'none',
           });
 
           setStatus('complete');
@@ -213,6 +245,7 @@ export function useImportAudio({
       isCancelledRef.current = false;
       setStatus('processing');
       setError(null);
+      setWarning(null);
       setProgress(null);
 
       try {
@@ -265,6 +298,7 @@ export function useImportAudio({
     setFileInfo(null);
     setProgress(null);
     setError(null);
+    setWarning(null);
   }, []);
 
   return {
@@ -272,6 +306,7 @@ export function useImportAudio({
     fileInfo,
     progress,
     error,
+    warning,
     isProcessing: status === 'processing',
     isBusy: status === 'processing' || status === 'validating',
     selectFile,
