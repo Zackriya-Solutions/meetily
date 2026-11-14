@@ -24,6 +24,7 @@ export const LANGUAGE_OPTIONS: LanguageOption[] = [
   { code: 'pl', label: 'Polish' },
   { code: 'ar', label: 'Arabic' },
   { code: 'hi', label: 'Hindi' },
+  { code: 'ur', label: 'Urdu' },
   { code: 'ta', label: 'Tamil' },
   { code: 'tr', label: 'Turkish' },
   { code: 'vi', label: 'Vietnamese' },
