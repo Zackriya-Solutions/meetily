@@ -12,6 +12,24 @@ use std::path::Path;
 
 pub type DecoderState = (Array3<f32>, Array3<f32>);
 
+#[cfg(test)]
+mod config_tests {
+    use super::*;
+
+    #[test]
+    fn config_is_optional_but_incompatible_exports_fail_before_loading() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(ParakeetModel::validate_config(dir.path()).is_ok());
+        let path = dir.path().join("config.json");
+        fs::write(&path, r#"{"model_type":"nemo-conformer-tdt","features_size":128,"subsampling_factor":8}"#).unwrap();
+        assert!(ParakeetModel::validate_config(dir.path()).is_ok());
+        for invalid in ["{", "{}", r#"{"model_type":"nemo-conformer-tdt","features_size":80,"subsampling_factor":8}"#] {
+            fs::write(&path, invalid).unwrap();
+            assert!(matches!(ParakeetModel::new(dir.path(), true), Err(ParakeetError::InvalidConfig(_))));
+        }
+    }
+}
+
 const SUBSAMPLING_FACTOR: usize = 8;
 const WINDOW_SIZE: f32 = 0.01;
 const MAX_TOKENS_PER_STEP: usize = 3;
@@ -43,6 +61,8 @@ pub enum ParakeetError {
     TensorShape(String),
     #[error("ONNX Runtime unavailable: {0}")]
     RuntimeUnavailable(String),
+    #[error("Invalid Parakeet model configuration: {0}")]
+    InvalidConfig(String),
 }
 
 pub struct ParakeetModel {
@@ -62,6 +82,7 @@ impl Drop for ParakeetModel {
 
 impl ParakeetModel {
     pub fn new<P: AsRef<Path>>(model_dir: P, quantized: bool) -> Result<Self, ParakeetError> {
+        Self::validate_config(model_dir.as_ref())?;
         let encoder = Self::init_session(&model_dir, "encoder-model", None, quantized)?;
         let decoder_joint = Self::init_session(&model_dir, "decoder_joint-model", None, quantized)?;
         let preprocessor = Self::init_session(&model_dir, "nemo128", None, false)?;
@@ -83,6 +104,28 @@ impl ParakeetModel {
             blank_idx,
             vocab_size,
         })
+    }
+
+    // Older model directories do not include a config. When supplied, reject
+    // incompatible exports before handing tensors to the native runtime.
+    fn validate_config(model_dir: &Path) -> Result<(), ParakeetError> {
+        let path = model_dir.join("config.json");
+        let bytes = match fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error.into()),
+        };
+        let config: serde_json::Value = serde_json::from_slice(&bytes)
+            .map_err(|error| ParakeetError::InvalidConfig(error.to_string()))?;
+        if config["model_type"] != "nemo-conformer-tdt"
+            || config["features_size"] != 128
+            || config["subsampling_factor"] != SUBSAMPLING_FACTOR
+        {
+            return Err(ParakeetError::InvalidConfig(
+                "expected NeMo TDT, 128 features and 8x subsampling".into(),
+            ));
+        }
+        Ok(())
     }
 
     fn init_session<P: AsRef<Path>>(

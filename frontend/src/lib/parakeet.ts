@@ -52,6 +52,12 @@ export interface ModelDisplayInfo {
 }
 
 export const MODEL_DISPLAY_CONFIG: Record<string, ModelDisplayInfo> = {
+  'orukeet-v0.1.0-int8': {
+    friendlyName: 'Orukeet',
+    icon: '🦜',
+    tagline: '25 European languages • CC BY-SA 4.0',
+    tier: 'balanced'
+  },
   'parakeet-tdt-0.6b-v3-int8': {
     friendlyName: 'Lightning',
     icon: '⚡',
@@ -77,6 +83,12 @@ export const MODEL_DISPLAY_CONFIG: Record<string, ModelDisplayInfo> = {
 // Supported models: parakeet-tdt-0.6b in v2 and v3 variants
 // Source: https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx
 export const PARAKEET_MODEL_CONFIGS: Record<string, Partial<ParakeetModelInfo>> = {
+  'orukeet-v0.1.0-int8': {
+    description: 'Local transcription in 25 European languages. Weights: CC BY-SA 4.0.',
+    size_mb: 672,
+    speed: 'Fast',
+    quantization: 'Int8'
+  },
   'parakeet-tdt-0.6b-v3-int8': {
     description: 'Real time on M4 Max, optimized for speed',
     size_mb: 670, // Actual download: 652MB encoder + 18.2MB decoder + 0.2MB extras
