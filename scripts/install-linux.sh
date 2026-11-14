@@ -220,7 +220,7 @@ cat <<'EOF'
  |_|  |_|\___|\___|\__|_|_|\__, |
                            |___/
 EOF
-printf ' Privacy-first AI meeting assistant%s\n\n  Version: v%s\n  Package: %s\n\n' "$RESET" "$VERSION" "$PKG"
+printf ' Privacy-first AI meeting note taker%s\n\n  Version: v%s\n  Package: %s\n\n' "$RESET" "$VERSION" "$PKG"
 
 download() {
   if ! curl -fL --progress-bar -o "$WORK_DIR/$1" "$BASE_URL/$1"; then
@@ -290,7 +290,7 @@ else
 [Desktop Entry]
 Type=Application
 Name=Meetily
-Comment=Privacy-first AI meeting assistant
+Comment=Privacy-first AI meeting note taker
 Exec="$APPIMAGE"
 TryExec=$APPIMAGE
 Icon=$ICON
