@@ -7,6 +7,7 @@ import { useRecordingState } from './RecordingStateContext';
 import { transcriptService } from '@/services/transcriptService';
 import { recordingService } from '@/services/recordingService';
 import { indexedDBService } from '@/services/indexedDBService';
+import { formatMeetingTitle } from '@/lib/utils';
 
 interface TranscriptContextType {
   transcripts: Transcript[];
@@ -105,8 +106,7 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
             // Get meeting name
             const meetingName = await recordingService.getRecordingMeetingName();
 
-            // Use a better fallback that matches the backend's naming pattern
-            const effectiveTitle = meetingName || `Meeting ${new Date().toISOString().slice(0, 19).replace('T', '_').replace(/:/g, '-')}`;
+            const effectiveTitle = meetingName || formatMeetingTitle();
 
             // Initialize meeting metadata in IndexedDB
             await indexedDBService.saveMeetingMetadata({

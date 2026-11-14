@@ -6,6 +6,7 @@ import { useConfig } from '@/contexts/ConfigContext';
 import { useRecordingState, RecordingStatus } from '@/contexts/RecordingStateContext';
 import { recordingService } from '@/services/recordingService';
 import Analytics from '@/lib/analytics';
+import { formatMeetingTitle } from '@/lib/utils';
 import { showRecordingNotification } from '@/lib/recordingNotification';
 import {
   getProviderCommands,
@@ -57,16 +58,7 @@ export function useRecordingStart(
   const { setStatus } = useRecordingState();
 
   // Generate meeting title with timestamp
-  const generateMeetingTitle = useCallback(() => {
-    const now = new Date();
-    const day = String(now.getDate()).padStart(2, '0');
-    const month = String(now.getMonth() + 1).padStart(2, '0');
-    const year = String(now.getFullYear()).slice(-2);
-    const hours = String(now.getHours()).padStart(2, '0');
-    const minutes = String(now.getMinutes()).padStart(2, '0');
-    const seconds = String(now.getSeconds()).padStart(2, '0');
-    return `Meeting ${day}_${month}_${year}_${hours}_${minutes}_${seconds}`;
-  }, []);
+  const generateMeetingTitle = useCallback(() => formatMeetingTitle(), []);
 
   const getTranscriptionProvider = useCallback(async (): Promise<string> => {
     try {
