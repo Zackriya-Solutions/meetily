@@ -106,7 +106,8 @@
             "icons/app_icon.ico"
         ],
         "resources": [
-            "templates/*.json"
+            "templates/*.json",
+            "config/*.json"
         ],
         "externalBin": [
             "binaries/llama-helper",
