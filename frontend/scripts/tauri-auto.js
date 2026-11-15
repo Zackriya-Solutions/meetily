@@ -50,7 +50,10 @@ if (platform === 'linux' && feature === 'cuda') {
 // Build the tauri command
 let tauriCmd = `tauri ${command}`;
 if (feature && feature !== 'none') {
-  tauriCmd += ` -- --features ${feature}`;
+  // custom-protocol must be passed explicitly: the `--` below routes features
+  // straight to cargo, bypassing the CLI's own injection. Without it a GPU build
+  // compiles in dev mode and loads devUrl instead of the bundled frontend.
+  tauriCmd += ` -- --features ${feature},tauri/custom-protocol`;
   console.log(`🚀 Running: tauri ${command} with features: ${feature}`);
 } else {
   console.log(`🚀 Running: tauri ${command} (CPU-only mode)`);
