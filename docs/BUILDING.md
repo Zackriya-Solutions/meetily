@@ -97,14 +97,29 @@ If you're new to building on Linux, start here. These simple commands work for m
 ```bash
 # Ubuntu/Debian
 sudo apt update
-sudo apt install build-essential cmake git
+sudo apt install build-essential cmake git pkg-config \
+  libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev \
+  libjavascriptcoregtk-4.1-dev librsvg2-dev \
+  libayatana-appindicator3-dev libasound2-dev libssl-dev \
+  patchelf clang libclang-dev
 
 # Fedora/RHEL
-sudo dnf install gcc-c++ cmake git
+sudo dnf install gcc-c++ cmake git pkg-config \
+  webkit2gtk4.1-devel gtk3-devel libsoup3-devel \
+  librsvg2-devel libappindicator-gtk3-devel alsa-lib-devel \
+  openssl-devel patchelf clang clang-devel
 
 # Arch Linux
-sudo pacman -S base-devel cmake git
+sudo pacman -S base-devel cmake git pkg-config \
+  webkit2gtk-4.1 gtk3 libsoup3 librsvg \
+  libayatana-appindicator alsa-lib openssl \
+  patchelf clang
 ```
+
+The Tauri prerequisites (WebKitGTK, GTK, libsoup, appindicator, ALSA, OpenSSL) are required
+to link the desktop app; `patchelf` is needed to bundle the AppImage. `clang` and its
+development headers are required by the `llama-helper` sidecar, whose bindgen step fails
+with `'stdbool.h' file not found` if only the `libclang` runtime library is present.
 
 #### 2. Build and Run
 
@@ -215,11 +230,11 @@ CMAKE_POSITION_INDEPENDENT_CODE=ON \
 
 Vulkan works on NVIDIA, AMD, and Intel GPUs. Good choice if CUDA/ROCm don't work.
 
-##### Step 1: Install Vulkan SDK and BLAS
+##### Step 1: Install Vulkan headers and BLAS
 
 ```bash
 # Ubuntu/Debian
-sudo apt install vulkan-sdk libopenblas-dev
+sudo apt install libvulkan-dev libopenblas-dev
 
 # Fedora
 sudo dnf install vulkan-devel openblas-devel
