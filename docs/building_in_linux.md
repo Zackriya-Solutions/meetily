@@ -144,14 +144,19 @@ Vulkan works on NVIDIA, AMD, and Intel GPUs. Good choice if CUDA/ROCm don't work
 
 ```bash
 # Ubuntu/Debian
-sudo apt install libvulkan-dev libopenblas-dev
+sudo apt install libvulkan-dev vulkan-tools libopenblas-dev
 
 # Fedora
-sudo dnf install vulkan-devel openblas-devel
+sudo dnf install vulkan-devel vulkan-tools openblas-devel
 
 # Arch Linux
-sudo pacman -S vulkan-devel openblas
+sudo pacman -S vulkan-devel vulkan-tools openblas
 ```
+
+`vulkan-sdk` is not in the default Ubuntu/Debian archives; it comes from LunarG's
+repository, which the CI workflow configures. The packages above are the equivalent from
+the standard archives. `vulkan-tools` provides the `vulkaninfo` binary that GPU
+auto-detection checks for.
 
 #### Step 2: Configure Environment
 
@@ -339,10 +344,10 @@ Both `dev-gpu.sh` and `build-gpu.sh` work the same way:
 5. **Feature selection:** `scripts/auto-detect-gpu.js` checks hardware
 6. **Build with features:** Tauri builds with the detected feature plus `custom-protocol`
 
-> ⚠️ **Building with `cargo` directly?** Always include `custom-protocol`, e.g.
-> `cargo build --release --features vulkan,tauri/custom-protocol`. Without it Tauri
-> compiles in dev mode and the app tries to load the dev server URL instead of the
-> bundled frontend, showing *"Could not connect to localhost"*.
+> ⚠️ **Bypassing the Tauri CLI?** If you invoke `cargo` yourself instead of using the
+> scripts, include `tauri/custom-protocol` in the feature list. Without it the app tries
+> to load the dev server URL instead of the bundled frontend, showing *"Could not connect
+> to localhost"*. The scripts and `pnpm run tauri:build` add it for you.
 
 ### Environment Variables Reference
 
@@ -392,7 +397,7 @@ export ROCM_PATH=/opt/rocm
 
 ```bash
 # Install
-sudo apt install libvulkan-dev libopenblas-dev
+sudo apt install libvulkan-dev vulkan-tools libopenblas-dev
 
 # Configure
 export VULKAN_SDK=/usr
