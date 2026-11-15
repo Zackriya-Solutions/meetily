@@ -97,23 +97,38 @@ If you're new to building on Linux, start here. These simple commands work for m
 ```bash
 # Ubuntu/Debian
 sudo apt update
-sudo apt install build-essential cmake git
+sudo apt install build-essential cmake git pkg-config \
+  libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev \
+  libjavascriptcoregtk-4.1-dev librsvg2-dev \
+  libayatana-appindicator3-dev libasound2-dev libssl-dev \
+  patchelf clang libclang-dev
 
 # Fedora/RHEL
-sudo dnf install gcc-c++ cmake git
+sudo dnf install gcc-c++ cmake git pkg-config \
+  webkit2gtk4.1-devel gtk3-devel libsoup3-devel \
+  librsvg2-devel libappindicator-gtk3-devel alsa-lib-devel \
+  openssl-devel patchelf clang clang-devel
 
 # Arch Linux
-sudo pacman -S base-devel cmake git
+sudo pacman -S base-devel cmake git pkg-config \
+  webkit2gtk-4.1 gtk3 libsoup3 librsvg \
+  libayatana-appindicator alsa-lib openssl \
+  patchelf clang
 ```
+
+The Tauri prerequisites (WebKitGTK, GTK, libsoup, appindicator, ALSA, OpenSSL) are required
+to link the desktop app; `patchelf` is needed to bundle the AppImage. `clang` and its
+development headers are required by the `llama-helper` sidecar, whose bindgen step fails
+with `'stdbool.h' file not found` if only the `libclang` runtime library is present.
 
 #### 2. Build and Run
 
 ```bash
 # Development mode (with hot reload)
-./dev-gpu.sh
+./frontend/dev-gpu.sh
 
 # Production build
-./build-gpu.sh
+./frontend/build-gpu.sh
 ```
 
 **That's it!** The scripts automatically detect your GPU and configure acceleration.
@@ -192,7 +207,7 @@ nvcc --version      # Shows CUDA version
 CMAKE_CUDA_ARCHITECTURES=75 \
 CMAKE_CUDA_STANDARD=17 \
 CMAKE_POSITION_INDEPENDENT_CODE=ON \
-./build-gpu.sh
+./frontend/build-gpu.sh
 ```
 
 > 💡 **Finding Your Compute Capability:**
@@ -215,18 +230,23 @@ CMAKE_POSITION_INDEPENDENT_CODE=ON \
 
 Vulkan works on NVIDIA, AMD, and Intel GPUs. Good choice if CUDA/ROCm don't work.
 
-##### Step 1: Install Vulkan SDK and BLAS
+##### Step 1: Install Vulkan headers and BLAS
 
 ```bash
 # Ubuntu/Debian
-sudo apt install vulkan-sdk libopenblas-dev
+sudo apt install libvulkan-dev vulkan-tools libopenblas-dev
 
 # Fedora
-sudo dnf install vulkan-devel openblas-devel
+sudo dnf install vulkan-devel vulkan-tools openblas-devel
 
 # Arch Linux
-sudo pacman -S vulkan-devel openblas
+sudo pacman -S vulkan-devel vulkan-tools openblas
 ```
+
+`vulkan-sdk` is not in the default Ubuntu/Debian archives; it comes from LunarG's
+repository, which the CI workflow configures. The packages above are the equivalent from
+the standard archives. `vulkan-tools` provides the `vulkaninfo` binary that GPU
+auto-detection checks for.
 
 ##### Step 2: Configure Environment
 
@@ -242,7 +262,7 @@ source ~/.bashrc
 ##### Step 3: Build
 
 ```bash
-./build-gpu.sh
+./frontend/build-gpu.sh
 ```
 
 The script will automatically detect Vulkan and build with `--features vulkan`.
@@ -266,7 +286,7 @@ rocm-smi            # Shows GPU info
 hipcc --version     # Shows ROCm version
 
 # Build
-./build-gpu.sh
+./frontend/build-gpu.sh
 ```
 
 ---
@@ -279,24 +299,24 @@ Want to force a specific acceleration method? Use the `TAURI_GPU_FEATURE` enviro
 
 ```bash
 # Force CUDA (ignore auto-detection)
-TAURI_GPU_FEATURE=cuda ./dev-gpu.sh
-TAURI_GPU_FEATURE=cuda ./build-gpu.sh
+TAURI_GPU_FEATURE=cuda ./frontend/dev-gpu.sh
+TAURI_GPU_FEATURE=cuda ./frontend/build-gpu.sh
 
 # Force Vulkan
-TAURI_GPU_FEATURE=vulkan ./dev-gpu.sh
-TAURI_GPU_FEATURE=vulkan ./build-gpu.sh
+TAURI_GPU_FEATURE=vulkan ./frontend/dev-gpu.sh
+TAURI_GPU_FEATURE=vulkan ./frontend/build-gpu.sh
 
 # Force ROCm (HIPBlas)
-TAURI_GPU_FEATURE=hipblas ./dev-gpu.sh
-TAURI_GPU_FEATURE=hipblas ./build-gpu.sh
+TAURI_GPU_FEATURE=hipblas ./frontend/dev-gpu.sh
+TAURI_GPU_FEATURE=hipblas ./frontend/build-gpu.sh
 
 # Force CPU-only (for testing)
-TAURI_GPU_FEATURE="" ./dev-gpu.sh
-TAURI_GPU_FEATURE="" ./build-gpu.sh
+TAURI_GPU_FEATURE="" ./frontend/dev-gpu.sh
+TAURI_GPU_FEATURE="" ./frontend/build-gpu.sh
 
 # Force OpenBLAS (CPU-optimized)
-TAURI_GPU_FEATURE=openblas ./dev-gpu.sh
-TAURI_GPU_FEATURE=openblas ./build-gpu.sh
+TAURI_GPU_FEATURE=openblas ./frontend/dev-gpu.sh
+TAURI_GPU_FEATURE=openblas ./frontend/build-gpu.sh
 ```
 
 #### Build Output Location
