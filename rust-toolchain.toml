@@ -1,0 +1,6 @@
+# Rust 1.100.0 changed where build scripts write their output, and ort-sys
+# 2.0.0-rc.10 derives the DLL copy destination from that path. On Windows its
+# build script then panics with "path not found" (build.rs:126). Stay on 1.99.1
+# until ort-sys is upgraded past the affected release.
+[toolchain]
+channel = "1.99.1"
