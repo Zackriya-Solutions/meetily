@@ -412,7 +412,15 @@ export const AISummary = ({ summary, status, error, onSummaryChange, onRegenerat
           } else {
             handleUndo();
           }
-        } else if (e.key === 'c') {
+        } else if (e.key === 'c' && selectedBlocks.length > 0) {
+          const target = e.target as HTMLElement | null;
+          // Inside an editable element the native copy must win — writing the
+          // block selection here would overwrite the clipboard with the
+          // wrong content (or an empty string when only text is selected).
+          if (target?.closest('input, textarea, [contenteditable]')) {
+            return;
+          }
+          e.preventDefault();
           const blockContents = selectedBlocks.map(blockId => {
             for (const [sectionKey, section] of Object.entries(currentSummary)) {
               const block = section.blocks.find(b => b.id === blockId);
