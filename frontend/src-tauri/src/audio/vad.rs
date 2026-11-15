@@ -8,6 +8,9 @@ use std::time::Duration;
 /// sample count and timestamp inside this module is expressed in it.
 const VAD_SAMPLE_RATE: u32 = 16000;
 
+/// Silence retained inside the Silero session before it is trimmed (30s).
+const MAX_SILENT_SESSION_SAMPLES: usize = VAD_SAMPLE_RATE as usize * 30;
+
 /// Represents a complete speech segment detected by VAD
 #[derive(Debug, Clone)]
 pub struct SpeechSegment {
@@ -283,6 +286,18 @@ impl ContinuousVadProcessor {
 
         let transitions = self.session.process(chunk)
             .map_err(|e| anyhow!("VAD processing failed: {}", e))?;
+
+        // Silero keeps every sample it is given until a speech segment ends, so
+        // a long silent stretch grows its buffer without bound. Trimming is only
+        // safe in true silence: a non-zero silence count means the last frame
+        // was below the negative threshold, which rules out a speech candidate
+        // whose start still points into the buffer.
+        if self.session.session_audio_samples() > MAX_SILENT_SESSION_SAMPLES
+            && !self.session.is_speaking()
+            && self.session.current_silence_samples() > 0
+        {
+            self.session.trim_start_silence();
+        }
 
         // Log transitions for debugging
         if !transitions.is_empty() {
@@ -717,6 +732,40 @@ pub(crate) mod tests {
             processor.processed_samples,
             processor.speech_start_sample as f64 / VAD_SAMPLE_RATE as f64,
             processor.processed_samples as f64 / VAD_SAMPLE_RATE as f64,
+        );
+    }
+
+    #[test]
+    fn test_long_silence_does_not_grow_the_session_buffer() {
+        let silence_secs = 40.0_f32;
+        let audio = generate_late_speech_audio(silence_secs, 3.0, 16000);
+        let silence_samples = (silence_secs * 16000.0) as usize;
+
+        let mut processor =
+            ContinuousVadProcessor::new(16000, 2000).expect("Failed to create processor");
+        processor
+            .process_audio(&audio[..silence_samples])
+            .expect("process_audio failed");
+
+        assert!(
+            processor.session.session_audio_samples() <= MAX_SILENT_SESSION_SAMPLES + processor.chunk_size,
+            "session buffer holds {} samples after {}s of silence",
+            processor.session.session_audio_samples(),
+            silence_secs
+        );
+
+        processor
+            .process_audio(&audio[silence_samples..])
+            .expect("process_audio failed");
+        let segments = processor.flush().expect("flush failed");
+
+        assert_eq!(segments.len(), 1, "speech after trimmed silence must still be one segment");
+        let start_secs = segments[0].start_timestamp_ms / 1000.0;
+        assert!(
+            (start_secs - silence_secs as f64).abs() < 1.5,
+            "segment starts at {:.2}s, expected about {}s",
+            start_secs,
+            silence_secs
         );
     }
 

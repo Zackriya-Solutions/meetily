@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { ChevronDown, ChevronRight, File, Settings, ChevronLeftCircle, ChevronRightCircle, Calendar, StickyNote, Home, Trash2, Mic, Square, Plus, Search, Pencil, NotebookPen, SearchIcon, X, Upload, Gem } from 'lucide-react';
 import { useRouter, usePathname } from 'next/navigation';
 import { useSidebar } from './SidebarProvider';
@@ -35,6 +35,8 @@ import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from '
 import { MISSING_STAGE_FILTERS, missingStage, type MeetingStage } from './meetingStages';
 import type { SidebarItem } from './SidebarProvider';
 import { cn } from '@/lib/utils';
+
+const SEARCH_DEBOUNCE_MS = 250;
 
 const Sidebar: React.FC = () => {
   const router = useRouter();
@@ -229,14 +231,20 @@ const Sidebar: React.FC = () => {
   };
 
   // Handle search input changes
-  const handleSearchChange = useCallback(async (value: string) => {
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+  }, []);
+
+  const handleSearchChange = useCallback((value: string) => {
     setSearchQuery(value);
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
 
     // If search query is empty, just return to normal view
     if (!value.trim()) return;
 
-    // Search through transcripts
-    await searchTranscripts(value);
+    // Each search is a full-text query over every meeting, so wait for a pause in typing.
+    searchDebounceRef.current = setTimeout(() => void searchTranscripts(value), SEARCH_DEBOUNCE_MS);
 
     // Make sure the meetings folder is expanded when searching
     if (!expandedFolders.has('meetings')) {
