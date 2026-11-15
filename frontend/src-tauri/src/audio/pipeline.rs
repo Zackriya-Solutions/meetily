@@ -24,6 +24,27 @@ use super::vad::{ContinuousVadProcessor};
 /// during continuous speech is tracked separately in #756.
 const VAD_REDEMPTION_TIME_MS: u32 = 500;
 
+#[cfg(test)]
+mod source_energy_tests {
+    use super::*;
+
+    #[test]
+    fn source_energy_tags_dominant_source_and_prunes() {
+        let mut tracker = SourceEnergyTracker::new();
+        // 600ms windows at 1 kHz: mic speech, system speech with mic echo, mic over faint system.
+        tracker.record(&[0.2; 600], &[0.0; 600], 1000);
+        tracker.record(&[0.05; 600], &[0.1; 600], 1000);
+        tracker.record(&[0.3; 600], &[0.01; 600], 1000);
+        assert_eq!(tracker.classify(0.0, 600.0), DeviceType::Microphone);
+        assert_eq!(tracker.windows.len(), 2);
+        assert_eq!(tracker.classify(600.0, 1200.0), DeviceType::System);
+        assert_eq!(tracker.classify(1200.0, 1800.0), DeviceType::Microphone);
+        assert!(tracker.windows.is_empty());
+        // No energy recorded for the span: default to microphone.
+        assert_eq!(tracker.classify(5000.0, 6000.0), DeviceType::Microphone);
+    }
+}
+
 #[cfg(all(test, target_os = "linux"))]
 mod linux_mixing_tests {
     use super::*;
@@ -972,6 +993,85 @@ impl PipelineLogStats {
     }
 }
 
+/// Per-mixing-window microphone/system energy, used to tag each VAD speech
+/// segment with its dominant source for speaker identification. Only energy
+/// sums are kept (no audio), and windows are pruned as segments are emitted.
+struct SourceEnergyTracker {
+    windows: std::collections::VecDeque<EnergyWindow>,
+    position_ms: f64,
+}
+
+struct EnergyWindow {
+    start_ms: f64,
+    end_ms: f64,
+    mic_sq: f64,
+    system_sq: f64,
+    samples: usize,
+}
+
+impl SourceEnergyTracker {
+    /// ~1 hour of 600ms windows; bounds memory if VAD never closes a segment.
+    const MAX_WINDOWS: usize = 6000;
+    /// The microphone must be this much louder (RMS) than system audio to count as
+    /// the local speaker. Mic is loudness-normalised, so system echo picked up by
+    /// the mic stays at or below system level and does not flip the decision.
+    const MIC_DOMINANCE_RATIO: f64 = 2.0;
+    /// System RMS below this is treated as silence.
+    const SYSTEM_SILENCE_RMS: f64 = 1e-4;
+
+    fn new() -> Self {
+        Self { windows: std::collections::VecDeque::new(), position_ms: 0.0 }
+    }
+
+    /// Records one mixing window, which the VAD consumes as the next contiguous audio.
+    fn record(&mut self, mic: &[f32], system: &[f32], sample_rate: u32) {
+        let samples = mic.len().max(system.len());
+        if samples == 0 {
+            return;
+        }
+        let sum_sq = |s: &[f32]| s.iter().map(|&x| (x as f64) * (x as f64)).sum::<f64>();
+        let start_ms = self.position_ms;
+        self.position_ms += samples as f64 * 1000.0 / sample_rate as f64;
+        self.windows.push_back(EnergyWindow {
+            start_ms,
+            end_ms: self.position_ms,
+            mic_sq: sum_sq(mic),
+            system_sq: sum_sq(system),
+            samples,
+        });
+        while self.windows.len() > Self::MAX_WINDOWS {
+            self.windows.pop_front();
+        }
+    }
+
+    /// Dominant source over `[start_ms, end_ms]`, then drops windows before `end_ms`.
+    fn classify(&mut self, start_ms: f64, end_ms: f64) -> DeviceType {
+        let (mut mic_sq, mut system_sq, mut samples) = (0.0, 0.0, 0usize);
+        for w in self.windows.iter().filter(|w| w.end_ms > start_ms && w.start_ms < end_ms) {
+            mic_sq += w.mic_sq;
+            system_sq += w.system_sq;
+            samples += w.samples;
+        }
+        while self.windows.front().map_or(false, |w| w.end_ms <= end_ms) {
+            self.windows.pop_front();
+        }
+        Self::dominant(mic_sq, system_sq, samples)
+    }
+
+    fn dominant(mic_sq: f64, system_sq: f64, samples: usize) -> DeviceType {
+        if samples == 0 {
+            return DeviceType::Microphone;
+        }
+        let mic_rms = (mic_sq / samples as f64).sqrt();
+        let system_rms = (system_sq / samples as f64).sqrt();
+        if system_rms < Self::SYSTEM_SILENCE_RMS || mic_rms > system_rms * Self::MIC_DOMINANCE_RATIO {
+            DeviceType::Microphone
+        } else {
+            DeviceType::System
+        }
+    }
+}
+
 /// VAD-driven audio processing pipeline
 /// Uses Voice Activity Detection to segment speech in real-time and send only speech to Whisper
 pub struct AudioPipeline {
@@ -988,6 +1088,8 @@ pub struct AudioPipeline {
     mixer: ProfessionalAudioMixer,
     // Recording sender for pre-mixed audio
     recording_sender_for_mixed: Option<mpsc::UnboundedSender<AudioChunk>>,
+    // Dominant-source tagging for speaker identification
+    source_energy: SourceEnergyTracker,
 }
 
 impl AudioPipeline {
@@ -1063,6 +1165,7 @@ impl AudioPipeline {
             ring_buffer,
             mixer,
             recording_sender_for_mixed: None,  // Will be set by manager
+            source_energy: SourceEnergyTracker::new(),
         })
     }
 
@@ -1137,6 +1240,9 @@ impl AudioPipeline {
         // Previous 2x gain was causing excessive limiting/distortion
         let mixed_with_gain = mixed_clean;
 
+        // Track per-source energy on the same timeline the VAD consumes.
+        self.source_energy.record(mic_window, sys_window, self.sample_rate);
+
         // STEP 3: Send mixed audio for transcription (VAD + Whisper)
         match self.vad_processor.process_audio(&mixed_with_gain) {
             Ok(speech_segments) => {
@@ -1144,12 +1250,17 @@ impl AudioPipeline {
                     let duration_ms = segment.end_timestamp_ms - segment.start_timestamp_ms;
                     if segment.samples.len() >= 800 {
                         self.log_stats.record_segment(duration_ms);
+                        // device_type on transcription chunks = dominant source of the
+                        // segment (used for speaker identification); audio is still mixed.
+                        let dominant_source = self
+                            .source_energy
+                            .classify(segment.start_timestamp_ms, segment.end_timestamp_ms);
                         let transcription_chunk = AudioChunk {
                             data: segment.samples,
                             sample_rate: 16000,
                             timestamp: segment.start_timestamp_ms / 1000.0,
                             chunk_id: self.chunk_id_counter,
-                            device_type: DeviceType::Microphone,
+                            device_type: dominant_source,
                         };
                         if self.transcription_sender.send(transcription_chunk).is_err() {
                             self.log_stats.send_failures += 1;
@@ -1186,12 +1297,17 @@ impl AudioPipeline {
                     let duration_ms = segment.end_timestamp_ms - segment.start_timestamp_ms;
                     if segment.samples.len() >= 800 {
                         self.log_stats.record_segment(duration_ms);
+                        // device_type on transcription chunks = dominant source of the
+                        // segment (used for speaker identification); audio is still mixed.
+                        let dominant_source = self
+                            .source_energy
+                            .classify(segment.start_timestamp_ms, segment.end_timestamp_ms);
                         let transcription_chunk = AudioChunk {
                             data: segment.samples,
                             sample_rate: 16000,
                             timestamp: segment.start_timestamp_ms / 1000.0,
                             chunk_id: self.chunk_id_counter,
-                            device_type: DeviceType::Microphone,
+                            device_type: dominant_source,
                         };
                         if self.transcription_sender.send(transcription_chunk).is_err() {
                             self.log_stats.send_failures += 1;

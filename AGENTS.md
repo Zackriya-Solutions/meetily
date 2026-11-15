@@ -60,6 +60,7 @@ See [build and platform setup](docs/BUILDING.md), [development commands and debu
 | Whisper model loading and acceleration | [whisper_engine/](frontend/src-tauri/src/whisper_engine/) |
 | Parakeet model loading and inference | [parakeet_engine/](frontend/src-tauri/src/parakeet_engine/) |
 | Summary providers and orchestration | [summary/](frontend/src-tauri/src/summary/) |
+| Speaker identification (voiceprints, clustering) | [speaker/](frontend/src-tauri/src/speaker/) |
 | Recording UI and shared frontend state | [page.tsx](frontend/src/app/page.tsx), [SidebarProvider.tsx](frontend/src/components/Sidebar/SidebarProvider.tsx), [RecordingStateContext.tsx](frontend/src/contexts/RecordingStateContext.tsx) |
 
 ## Verification and Privacy

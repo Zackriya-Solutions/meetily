@@ -18,6 +18,7 @@ import {
   readCachedDetectedSummaryLanguage,
 } from '@/lib/summary-language-preferences';
 import { parseSummaryContent, readSummaryMetadata } from '@/lib/summary-content';
+import { fetchSpeakerNames, speakerTextPrefix, SpeakerNames } from '@/lib/speakers';
 
 async function resolveSummaryLanguage(
   meetingId: string,
@@ -433,7 +434,7 @@ export function useSummaryGeneration({
     }
   }, []);
 
-  const buildSummaryTranscriptPayload = useCallback((allTranscripts: Transcript[]) => {
+  const buildSummaryTranscriptPayload = useCallback((allTranscripts: Transcript[], speakerNames: SpeakerNames = {}) => {
     const formatTime = (seconds: number | undefined, fallbackTimestamp: string): string => {
       if (seconds === undefined) {
         return fallbackTimestamp;
@@ -444,7 +445,7 @@ export function useSummaryGeneration({
 
     return {
       transcriptText: allTranscripts
-        .map((transcript) => `${formatTime(transcript.audio_start_time, transcript.timestamp)} ${transcript.text}`)
+        .map((transcript) => `${formatTime(transcript.audio_start_time, transcript.timestamp)} ${speakerTextPrefix(transcript.speaker, speakerNames)}${transcript.text}`)
         .join('\n'),
       transcriptTexts: allTranscripts.map((transcript) => transcript.text),
     };
@@ -499,8 +500,10 @@ export function useSummaryGeneration({
       return;
     }
 
+    // Speaker labels ("Alice: ...") let the model attribute decisions and action items.
+    const speakerNames = allTranscripts.some((t) => t.speaker) ? await fetchSpeakerNames(meeting.id) : {};
     await processSummary({
-      ...buildSummaryTranscriptPayload(allTranscripts),
+      ...buildSummaryTranscriptPayload(allTranscripts, speakerNames),
       customPrompt,
     });
   }, [
@@ -524,8 +527,9 @@ export function useSummaryGeneration({
       return;
     }
 
+    const speakerNames = allTranscripts.some((t) => t.speaker) ? await fetchSpeakerNames(meeting.id) : {};
     await processSummary({
-      ...buildSummaryTranscriptPayload(allTranscripts),
+      ...buildSummaryTranscriptPayload(allTranscripts, speakerNames),
       isRegeneration: true
     });
   }, [meeting.id, fetchAllTranscripts, buildSummaryTranscriptPayload, processSummary]);

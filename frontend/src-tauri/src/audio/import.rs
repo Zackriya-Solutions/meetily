@@ -542,11 +542,20 @@ async fn run_import<R: Runtime>(
         }
     }
 
+    // Cut segments at speaker changes and label each piece (no-op without the voice model).
+    emit_progress(&app, "transcribing", 30, "Identifying speakers...");
+    let (processable_segments, segment_speakers): (Vec<_>, Vec<_>) =
+        crate::speaker::split_segments_by_speaker(processable_segments)
+            .await
+            .into_iter()
+            .unzip();
+
     let processable_count = processable_segments.len();
     info!("Processing {} segments (after splitting)", processable_count);
 
     // Process each speech segment
     let mut all_transcripts: Vec<(String, f64, f64)> = Vec::new();
+    let mut kept_speakers: Vec<Option<String>> = Vec::new(); // speaker id per transcript
     let mut total_confidence = 0.0f32;
 
     for (i, segment) in processable_segments.iter().enumerate() {
@@ -604,6 +613,7 @@ async fn run_import<R: Runtime>(
                 if trimmed.len() > 80 { let mut end = 80; while !trimmed.is_char_boundary(end) { end -= 1; } &trimmed[..end] } else { trimmed }
             );
             all_transcripts.push((text, segment.start_timestamp_ms, segment.end_timestamp_ms));
+            kept_speakers.push(segment_speakers[i].clone());
             total_confidence += conf;
         } else {
             debug!("Segment {}/{}: {:.1}s — empty transcription", i + 1, processable_count, segment_duration_sec);
@@ -628,10 +638,14 @@ async fn run_import<R: Runtime>(
         return Err(anyhow!("Import cancelled"));
     }
 
-    emit_progress(&app, "saving", 85, "Creating meeting...");
-
     // Create transcript segments
-    let segments = create_transcript_segments(&all_transcripts);
+    let mut segments = create_transcript_segments(&all_transcripts);
+
+    for (segment, speaker) in segments.iter_mut().zip(kept_speakers) {
+        segment.speaker = speaker;
+    }
+
+    emit_progress(&app, "saving", 85, "Creating meeting...");
 
     // Save to database
     let app_state = app
@@ -720,8 +734,8 @@ async fn create_meeting_with_transcripts(
     // Insert transcripts
     for segment in segments {
         sqlx::query(
-            "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration)
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration, speaker)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&segment.id)
         .bind(&meeting_id)
@@ -730,6 +744,7 @@ async fn create_meeting_with_transcripts(
         .bind(segment.audio_start_time)
         .bind(segment.audio_end_time)
         .bind(segment.duration)
+        .bind(&segment.speaker)
         .execute(&mut *tx)
         .await
         .map_err(|e| anyhow!("Failed to insert transcript: {}", e))?;
@@ -1182,6 +1197,7 @@ mod tests {
                 audio_start_time: Some(0.0),
                 audio_end_time: Some(1.5),
                 duration: Some(1.5),
+                speaker: None,
             },
             TranscriptSegment {
                 id: "t-2".to_string(),
@@ -1190,6 +1206,7 @@ mod tests {
                 audio_start_time: Some(2.0),
                 audio_end_time: Some(3.5),
                 duration: Some(1.5),
+                speaker: None,
             },
         ];
 

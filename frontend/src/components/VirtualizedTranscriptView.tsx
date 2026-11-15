@@ -9,6 +9,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { RecordingStatusBar } from "./RecordingStatusBar";
 import { motion, AnimatePresence } from "framer-motion";
 import { TranscriptSegmentData } from "@/types";
+import { SpeakerNames, speakerColorClasses, speakerDisplayName } from "@/lib/speakers";
 
 export interface VirtualizedTranscriptViewProps {
     /** Transcript segments to display */
@@ -34,6 +35,12 @@ export interface VirtualizedTranscriptViewProps {
     totalCount?: number;
     loadedCount?: number;
     onLoadMore?: () => void;
+
+    // Speaker identification
+    /** Custom speaker names for this meeting (speaker id → name) */
+    speakerNames?: SpeakerNames;
+    /** When set, speaker chips are clickable (e.g. to rename) */
+    onSpeakerClick?: (speakerId: string) => void;
 }
 
 // Threshold for enabling virtualization (below this, use simple rendering)
@@ -71,6 +78,9 @@ const TranscriptSegment = memo(function TranscriptSegment({
     confidence,
     isStreaming,
     showConfidence,
+    speakerId,
+    speakerLabel,
+    onSpeakerClick,
 }: {
     id: string;
     timestamp: number;
@@ -78,11 +88,33 @@ const TranscriptSegment = memo(function TranscriptSegment({
     confidence?: number;
     isStreaming: boolean;
     showConfidence: boolean;
+    /** Set only on the first segment of a speaker turn */
+    speakerId?: string | null;
+    speakerLabel?: string;
+    onSpeakerClick?: (speakerId: string) => void;
 }) {
     const displayText = cleanStopWords(text) || (text.trim() === '' ? '[Silence]' : text);
 
     return (
-        <div id={`segment-${id}`} className="mb-3">
+        <div id={`segment-${id}`} className={speakerId ? "mb-3 mt-4 first:mt-0" : "mb-3"}>
+            {speakerId && (
+                <div className="mb-1 ml-[58px]">
+                    {onSpeakerClick ? (
+                        <button
+                            type="button"
+                            onClick={() => onSpeakerClick(speakerId)}
+                            title="Rename speaker"
+                            className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium hover:brightness-95 focus:outline-none focus:ring-1 focus:ring-blue-500 ${speakerColorClasses(speakerId)}`}
+                        >
+                            {speakerLabel}
+                        </button>
+                    ) : (
+                        <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${speakerColorClasses(speakerId)}`}>
+                            {speakerLabel}
+                        </span>
+                    )}
+                </div>
+            )}
             <div className="flex items-start gap-2">
                 <Tooltip>
                     <TooltipTrigger>
@@ -124,7 +156,22 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
     totalCount = 0,
     loadedCount = 0,
     onLoadMore,
+    speakerNames,
+    onSpeakerClick,
 }) => {
+    // Speaker chip only at the start of each speaker turn
+    const speakerTurnProps = (index: number) => {
+        const speaker = segments[index]?.speaker;
+        if (!speaker || segments[index - 1]?.speaker === speaker) {
+            return {};
+        }
+        return {
+            speakerId: speaker,
+            speakerLabel: speakerDisplayName(speaker, speakerNames),
+            onSpeakerClick,
+        };
+    };
+
     // Create scroll ref first - shared between virtualizer and auto-scroll hook
     const scrollRef = useRef<HTMLDivElement>(null);
     // Ref for infinite scroll trigger element
@@ -296,6 +343,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                         confidence={segment.confidence}
                                         isStreaming={isStreaming}
                                         showConfidence={showConfidence}
+                                        {...speakerTurnProps(virtualRow.index)}
                                     />
                                 </div>
                             );
@@ -335,7 +383,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                 // Simple rendering for small lists (better animations)
                 <>
                     <div className="space-y-1">
-                        {segments.map((segment) => {
+                        {segments.map((segment, index) => {
                             const isStreaming = streamingSegmentId === segment.id;
 
                             return (
@@ -352,6 +400,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                         confidence={segment.confidence}
                                         isStreaming={isStreaming}
                                         showConfidence={showConfidence}
+                                        {...speakerTurnProps(index)}
                                     />
                                 </motion.div>
                             );

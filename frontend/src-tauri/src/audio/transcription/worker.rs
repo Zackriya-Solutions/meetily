@@ -172,15 +172,22 @@ pub struct TranscriptUpdate {
     pub audio_start_time: f64, // Seconds from recording start (e.g., 125.3)
     pub audio_end_time: f64,   // Seconds from recording start (e.g., 128.6)
     pub duration: f64,          // Segment duration in seconds (e.g., 3.3)
+    /// Speaker id ('me', 'others', 'speaker_N'), None when identification is off.
+    #[serde(default)]
+    pub speaker: Option<String>,
 }
 
 // NOTE: get_transcript_history and get_recording_meeting_name functions
 // have been moved to recording_commands.rs where they have access to RECORDING_MANAGER
 
 /// Optimized parallel transcription task ensuring ZERO chunk loss
+///
+/// `source_aware` is true when system audio is captured, so each chunk's
+/// dominant source (mic vs. system) can inform speaker identification.
 pub fn start_transcription_task<R: Runtime>(
     app: AppHandle<R>,
     transcription_receiver: tokio::sync::mpsc::UnboundedReceiver<AudioChunk>,
+    source_aware: bool,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         info!("Starting transcription worker task");
@@ -199,6 +206,25 @@ pub fn start_transcription_task<R: Runtime>(
             }
         };
 
+        // Speaker identification state is per recording session.
+        let speaker_enabled = crate::speaker::is_enabled();
+        let speaker_model = if speaker_enabled {
+            crate::speaker::get_model().await
+        } else {
+            None
+        };
+        let speaker_clusterer = speaker_enabled.then(|| {
+            Arc::new(tokio::sync::Mutex::new(
+                crate::speaker::OnlineSpeakerClusterer::new(source_aware),
+            ))
+        });
+        info!(
+            "Speaker identification: enabled={}, voiceprint_model={}, source_aware={}",
+            speaker_enabled,
+            speaker_model.is_some(),
+            source_aware
+        );
+
         const NUM_WORKERS: usize = 1;
         let (work_sender, work_receiver) = tokio::sync::mpsc::unbounded_channel::<AudioChunk>();
         let work_receiver = Arc::new(tokio::sync::Mutex::new(work_receiver));
@@ -216,6 +242,8 @@ pub fn start_transcription_task<R: Runtime>(
             let work_receiver_clone = work_receiver.clone();
             let chunks_completed_clone = chunks_completed.clone();
             let chunks_queued_clone = chunks_queued.clone();
+            let speaker_model = speaker_model.clone();
+            let speaker_clusterer = speaker_clusterer.clone();
 
             worker_handles.push(tokio::spawn(async move {
                 let mut stats = WorkerLogStats::default();
@@ -235,6 +263,25 @@ pub fn start_transcription_task<R: Runtime>(
                     let chunk_timestamp = chunk.timestamp;
                     let chunk_duration = chunk.data.len() as f64 / chunk.sample_rate as f64;
                     let processing_started = Instant::now();
+                    let speaker_source = match chunk.device_type {
+                        crate::audio::recording_state::DeviceType::System => {
+                            crate::speaker::SpeakerSource::System
+                        }
+                        crate::audio::recording_state::DeviceType::Microphone => {
+                            crate::speaker::SpeakerSource::Microphone
+                        }
+                    };
+                    let speaker_samples = speaker_model.as_ref().map(|_| {
+                        if chunk.sample_rate == 16000 {
+                            chunk.data.clone()
+                        } else {
+                            crate::audio::audio_processing::resample_audio(
+                                &chunk.data,
+                                chunk.sample_rate,
+                                16000,
+                            )
+                        }
+                    });
 
                     if !engine_clone.is_model_loaded().await {
                         stats.record_failure(WorkerFailureCategory::ModelNotLoaded);
@@ -267,6 +314,23 @@ pub fn start_transcription_task<R: Runtime>(
                                         stats.record_failure(WorkerFailureCategory::SpeechDetectedEmit);
                                     }
 
+                                    let speaker = match &speaker_clusterer {
+                                        Some(clusterer) => {
+                                            let embedding = match (&speaker_model, speaker_samples) {
+                                                (Some(model), Some(samples)) => {
+                                                    crate::speaker::embed(model, samples).await
+                                                }
+                                                _ => None,
+                                            };
+                                            clusterer.lock().await.assign(
+                                                embedding.as_deref(),
+                                                speaker_source,
+                                                chunk_duration as f32,
+                                            )
+                                        }
+                                        None => None,
+                                    };
+
                                     let sequence_id =
                                         SEQUENCE_COUNTER.fetch_add(1, Ordering::SeqCst);
                                     let update = TranscriptUpdate {
@@ -280,6 +344,7 @@ pub fn start_transcription_task<R: Runtime>(
                                         audio_start_time: chunk_timestamp,
                                         audio_end_time: chunk_timestamp + chunk_duration,
                                         duration: chunk_duration,
+                                        speaker,
                                     };
 
                                     if app_clone.emit("transcript-update", &update).is_ok() {

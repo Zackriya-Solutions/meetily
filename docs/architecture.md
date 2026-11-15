@@ -74,3 +74,13 @@ For audio changes, start in the relevant subsystem:
 Local speech recognition is implemented through the Whisper and Parakeet providers under [audio/transcription/](../frontend/src-tauri/src/audio/transcription/). Whisper model discovery, downloads, loading, and cached context are managed by [whisper_engine.rs](../frontend/src-tauri/src/whisper_engine/whisper_engine.rs).
 
 Model directories and acceleration behavior depend on application configuration and the compiled backend. Use the current initialization and loading code as the source of truth rather than hardcoding storage paths or assuming runtime GPU fallback. See the [build instructions](BUILDING.md) and [GPU acceleration guide](GPU_ACCELERATION.md) for platform setup.
+
+## Speaker Identification
+
+[speaker/](../frontend/src-tauri/src/speaker/) labels transcript segments with a stable speaker id stored in `transcripts.speaker`: `me`, `others`, or `speaker_<n>`. Custom names are kept per meeting in `meeting_speakers`, so renaming never rewrites transcript rows.
+
+- **Source:** during live recording, the pipeline records microphone and system energy for each mixing window and tags each VAD segment with its dominant source. The tag travels as the transcription chunk's `device_type`; the audio sent to transcription and recording is still the unchanged mix.
+- **Voiceprint:** an optional local CAM++ ONNX model (downloaded from settings, verified by SHA-256) turns each segment into an embedding. Live chunks are clustered online, per source when system audio is captured, and the first microphone voice becomes `me`. Import and re-transcription run on the mixed file, so they use offline agglomerative clustering without source information.
+- **Fallback:** without the model, recordings that capture system audio still separate `me` from `others`; microphone-only recordings get no speaker labels.
+
+The copy and AI-summary transcript text prefixes each line with the speaker's display name.

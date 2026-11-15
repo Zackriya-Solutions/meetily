@@ -51,6 +51,7 @@ pub mod anthropic;
 pub mod groq;
 pub mod openrouter;
 pub mod parakeet_engine;
+pub mod speaker;
 pub mod state;
 pub mod summary;
 pub mod tray;
@@ -670,6 +671,9 @@ pub fn run() {
             // Set Parakeet models directory
             parakeet_engine::commands::set_models_directory(&_app.handle());
 
+            // Speaker identification: voiceprint model directory and saved preference
+            speaker::init(&_app.handle());
+
             // Initialize Parakeet engine on startup
             tauri::async_runtime::spawn(async {
                 if let Err(e) = parakeet_engine::commands::parakeet_init().await {
@@ -776,6 +780,14 @@ pub fn run() {
             whisper_engine::commands::whisper_delete_corrupted_model,
             // Parakeet engine commands
             parakeet_engine::commands::parakeet_init,
+            speaker::commands::speaker_get_status,
+            speaker::commands::speaker_set_enabled,
+            speaker::commands::speaker_download_model,
+            speaker::commands::speaker_delete_model,
+            speaker::commands::api_get_meeting_speakers,
+            speaker::commands::api_rename_meeting_speaker,
+            speaker::commands::api_merge_meeting_speakers,
+            speaker::commands::api_set_transcript_speaker,
             parakeet_engine::commands::parakeet_get_available_models,
             parakeet_engine::commands::parakeet_load_model,
             parakeet_engine::commands::parakeet_get_current_model,

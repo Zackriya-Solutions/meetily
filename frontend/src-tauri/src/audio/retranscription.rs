@@ -333,11 +333,20 @@ async fn run_retranscription<R: Runtime>(
         }
     }
 
+    // Cut segments at speaker changes and label each piece (no-op without the voice model).
+    emit_progress(&app, &meeting_id, "transcribing", 25, "Identifying speakers...");
+    let (processable_segments, segment_speakers): (Vec<_>, Vec<_>) =
+        crate::speaker::split_segments_by_speaker(processable_segments)
+            .await
+            .into_iter()
+            .unzip();
+
     let processable_count = processable_segments.len();
     info!("Processing {} segments (after splitting)", processable_count);
 
     // Process each speech segment with progress updates
     let mut all_transcripts: Vec<(String, f64, f64)> = Vec::new(); // (text, start_ms, end_ms)
+    let mut kept_speakers: Vec<Option<String>> = Vec::new(); // speaker id per transcript
     let mut total_confidence = 0.0f32;
 
     for (i, segment) in processable_segments.iter().enumerate() {
@@ -394,6 +403,7 @@ async fn run_retranscription<R: Runtime>(
                 if trimmed.len() > 80 { let mut end = 80; while !trimmed.is_char_boundary(end) { end -= 1; } &trimmed[..end] } else { trimmed }
             );
             all_transcripts.push((text, segment.start_timestamp_ms, segment.end_timestamp_ms));
+            kept_speakers.push(segment_speakers[i].clone());
             total_confidence += conf;
         } else {
             debug!("Segment {}/{}: {:.1}s — empty transcription", i + 1, processable_count, segment_duration_sec);
@@ -417,10 +427,14 @@ async fn run_retranscription<R: Runtime>(
         return Err(anyhow!("Retranscription cancelled"));
     }
 
-    emit_progress(&app, &meeting_id, "saving", 80, "Saving transcripts...");
-
     // Create transcript segments with proper timestamps from VAD
-    let segments = create_transcript_segments(&all_transcripts);
+    let mut segments = create_transcript_segments(&all_transcripts);
+
+    for (segment, speaker) in segments.iter_mut().zip(kept_speakers) {
+        segment.speaker = speaker;
+    }
+
+    emit_progress(&app, &meeting_id, "saving", 80, "Saving transcripts...");
 
     // Save to database
     let app_state = app
@@ -440,10 +454,17 @@ async fn run_retranscription<R: Runtime>(
         .await
         .map_err(|e| anyhow!("Failed to delete existing transcripts: {}", e))?;
 
+    // Speaker ids are regenerated, so earlier custom names no longer apply.
+    sqlx::query("DELETE FROM meeting_speakers WHERE meeting_id = ?")
+        .bind(&meeting_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| anyhow!("Failed to reset speaker names: {}", e))?;
+
     for segment in &segments {
         sqlx::query(
-            "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration)
-             VALUES (?, ?, ?, ?, ?, ?, ?)"
+            "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration, speaker)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
         )
         .bind(&segment.id)
         .bind(&meeting_id)
@@ -452,6 +473,7 @@ async fn run_retranscription<R: Runtime>(
         .bind(segment.audio_start_time)
         .bind(segment.audio_end_time)
         .bind(segment.duration)
+        .bind(&segment.speaker)
         .execute(&mut *tx)
         .await
         .map_err(|e| anyhow!("Failed to insert transcript: {}", e))?;

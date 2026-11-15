@@ -4,7 +4,9 @@ import { Transcript, TranscriptSegmentData } from '@/types';
 import { TranscriptView } from '@/components/TranscriptView';
 import { VirtualizedTranscriptView } from '@/components/VirtualizedTranscriptView';
 import { TranscriptButtonGroup } from './TranscriptButtonGroup';
-import { useMemo } from 'react';
+import { SpeakersBar } from './SpeakersBar';
+import { useEffect, useMemo, useState } from 'react';
+import { SpeakerNames, fetchSpeakerNames, speakersInOrder } from '@/lib/speakers';
 
 interface TranscriptPanelProps {
   transcripts: Transcript[];
@@ -61,8 +63,31 @@ export function TranscriptPanel({
       endTime: t.audio_end_time,
       text: t.text,
       confidence: t.confidence,
+      speaker: t.speaker ?? null,
     }));
   }, [transcripts, usePagination, segments]);
+
+  // Speaker identification: per-meeting custom names and the edit dialog
+  const [speakerNames, setSpeakerNames] = useState<SpeakerNames>({});
+  const [editingSpeaker, setEditingSpeaker] = useState<string | null>(null);
+  const speakers = useMemo(() => speakersInOrder(convertedSegments), [convertedSegments]);
+  const hasSpeakers = speakers.length > 0;
+  // Segment ids change when a meeting is re-transcribed, which also resets custom names.
+  const firstSegmentId = convertedSegments[0]?.id;
+
+  useEffect(() => {
+    if (!meetingId || !hasSpeakers) {
+      setSpeakerNames({});
+      return;
+    }
+    let cancelled = false;
+    fetchSpeakerNames(meetingId).then((names) => {
+      if (!cancelled) setSpeakerNames(names);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [meetingId, hasSpeakers, firstSegmentId]);
 
   return (
     <div className="flex h-full min-w-0 w-full bg-white flex-col relative @container">
@@ -77,6 +102,18 @@ export function TranscriptPanel({
           onRefetchTranscripts={onRefetchTranscripts}
         />
       </div>
+
+      {meetingId && !isRecording && (
+        <SpeakersBar
+          meetingId={meetingId}
+          speakers={speakers}
+          speakerNames={speakerNames}
+          onSpeakerNamesChange={setSpeakerNames}
+          editingSpeaker={editingSpeaker}
+          onEditingSpeakerChange={setEditingSpeaker}
+          onTranscriptsChanged={onRefetchTranscripts}
+        />
+      )}
 
       {/* Transcript content - use virtualized view for better performance */}
       <div className="flex-1 overflow-hidden pb-4">
@@ -94,6 +131,8 @@ export function TranscriptPanel({
           totalCount={totalCount}
           loadedCount={loadedCount}
           onLoadMore={onLoadMore}
+          speakerNames={speakerNames}
+          onSpeakerClick={meetingId && !isRecording ? setEditingSpeaker : undefined}
         />
       </div>
 
