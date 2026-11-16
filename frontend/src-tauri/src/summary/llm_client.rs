@@ -6,8 +6,6 @@ use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 use log::{info, warn};
 
-const REQUEST_TIMEOUT_DURATION: Duration = Duration::from_secs(300);
-
 async fn await_or_cancel<T>(
     operation: impl Future<Output = T>,
     cancellation_token: Option<&CancellationToken>,
@@ -254,6 +252,7 @@ impl LLMProvider {
 /// * `top_p` - Optional top_p (for CustomOpenAI provider)
 /// * `app_data_dir` - Optional app data directory (for BuiltInAI provider)
 /// * `cancellation_token` - Optional token to cancel the request
+/// * `request_timeout` - Maximum duration for each provider request
 ///
 /// The generated visible content and whether private reasoning was removed.
 pub(crate) async fn generate_summary(
@@ -270,6 +269,7 @@ pub(crate) async fn generate_summary(
     top_p: Option<f32>,
     app_data_dir: Option<&PathBuf>,
     cancellation_token: Option<&CancellationToken>,
+    request_timeout: Duration,
 ) -> Result<LlmCompletion, String> {
     // Check if cancelled before starting
     if let Some(token) = cancellation_token {
@@ -289,6 +289,7 @@ pub(crate) async fn generate_summary(
             system_prompt,
             user_prompt,
             cancellation_token,
+            request_timeout,
         )
         .await
         .map(|content| LlmCompletion {
@@ -398,7 +399,7 @@ pub(crate) async fn generate_summary(
         .post(api_url.clone())
         .headers(headers.clone())
         .json(&request_body)
-        .timeout(REQUEST_TIMEOUT_DURATION)
+        .timeout(request_timeout)
         .send();
 
     // Use tokio::select to race between cancellation and request completion
@@ -409,7 +410,7 @@ pub(crate) async fn generate_summary(
                     if e.is_timeout() {
                         format!(
                             "LLM request timed out after {} seconds",
-                            REQUEST_TIMEOUT_DURATION.as_secs()
+                            request_timeout.as_secs()
                         )
                     } else {
                         format!("Failed to send request to LLM: {}", e)
@@ -425,7 +426,7 @@ pub(crate) async fn generate_summary(
             if e.is_timeout() {
                 format!(
                     "LLM request timed out after {} seconds",
-                    REQUEST_TIMEOUT_DURATION.as_secs()
+                    request_timeout.as_secs()
                 )
             } else {
                 format!("Failed to send request to LLM: {}", e)
@@ -458,7 +459,7 @@ pub(crate) async fn generate_summary(
             .post(api_url)
             .headers(headers)
             .json(&retry_body)
-            .timeout(REQUEST_TIMEOUT_DURATION)
+            .timeout(request_timeout)
             .send();
         await_or_cancel(retry_future, cancellation_token)
             .await?
@@ -466,7 +467,7 @@ pub(crate) async fn generate_summary(
                 if e.is_timeout() {
                     format!(
                         "LLM retry request timed out after {} seconds",
-                        REQUEST_TIMEOUT_DURATION.as_secs()
+                        request_timeout.as_secs()
                     )
                 } else {
                     format!("Failed to send retry request to LLM: {}", e)
@@ -577,6 +578,62 @@ mod tests {
             .map(|position| position + 4)
             .expect("request should contain complete headers");
         serde_json::from_slice(&request[headers_end..]).expect("request body should be valid JSON")
+    }
+
+    #[tokio::test]
+    async fn configured_timeout_controls_headers_body_and_ollama_retry() {
+        for retry in [false, true] {
+            for delay_body in [false, true] {
+                for (request_timeout, should_complete) in [
+                    (Duration::from_millis(100), false),
+                    (Duration::from_secs(3), true),
+                ] {
+                    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+                    let server = tokio::spawn(async move {
+                        let (mut stream, _) = listener.accept().await.unwrap();
+                        read_http_request(&mut stream).await;
+                        if retry {
+                            let body = r#"{"error":{"param":"reasoning_effort"}}"#;
+                            let response = format!(
+                                "HTTP/1.1 400 Bad Request\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                                body.len()
+                            );
+                            stream.write_all(response.as_bytes()).await.unwrap();
+                            drop(stream);
+                            (stream, _) = listener.accept().await.unwrap();
+                            let request = read_http_request(&mut stream).await;
+                            assert!(request_json(&request).get("reasoning_effort").is_none());
+                        }
+                        let body = r##"{"choices":[{"message":{"content":"# Delayed summary"}}]}"##;
+                        let headers = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            body.len()
+                        );
+                        if delay_body {
+                            stream.write_all(headers.as_bytes()).await.unwrap();
+                        }
+                        tokio::time::sleep(Duration::from_millis(300)).await;
+                        if !delay_body && stream.write_all(headers.as_bytes()).await.is_err() {
+                            return;
+                        }
+                        let _ = stream.write_all(body.as_bytes()).await;
+                    });
+                    let provider = if retry { LLMProvider::Ollama } else { LLMProvider::CustomOpenAI };
+                    let result = timeout(Duration::from_secs(5), generate_summary(
+                        &Client::builder().no_proxy().build().unwrap(), &provider, "model", "",
+                        "system", "user", Some(&endpoint), Some(&endpoint), None, None, None,
+                        None, None, request_timeout,
+                    )).await.expect("request should honor its timeout");
+                    if should_complete {
+                        assert_eq!(result.unwrap().content, "# Delayed summary");
+                    } else {
+                        assert!(result.is_err(), "short timeout should stop the delayed provider");
+                    }
+                    server.await.unwrap();
+                }
+            }
+        }
     }
 
     #[test]
@@ -694,6 +751,7 @@ mod tests {
             None,
             None,
             None,
+            Duration::from_secs(300),
         )
         .await
         .expect_err("custom provider failure should preserve its response body");
@@ -778,6 +836,7 @@ mod tests {
             None,
             None,
             Some(&cancellation_token),
+            Duration::from_secs(300),
         );
         tokio::pin!(generation);
 
@@ -864,6 +923,7 @@ mod tests {
             None,
             None,
             Some(&cancellation_token),
+            Duration::from_secs(300),
         );
         tokio::pin!(generation);
 
@@ -942,6 +1002,7 @@ mod tests {
                 None,
                 None,
                 Some(&cancellation_token),
+                Duration::from_secs(300),
             ),
         )
         .await;

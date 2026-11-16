@@ -863,6 +863,8 @@ pub fn run() {
             // Summary commands
             summary::commands::api_process_transcript,
             summary::commands::api_get_summary,
+            summary::preferences::api_get_summary_timeout,
+            summary::preferences::api_save_summary_timeout,
             summary::commands::api_save_meeting_summary,
             summary::commands::api_get_meeting_summary_language,
             summary::commands::api_save_meeting_summary_language,

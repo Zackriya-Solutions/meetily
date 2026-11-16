@@ -365,7 +365,7 @@ pub async fn api_get_summary<R: Runtime>(
     );
     let pool = state.db_manager.pool();
 
-    match SummaryProcessesRepository::get_summary_data_for_meeting(pool, &meeting_id).await {
+    match get_current_summary_process(pool, &meeting_id).await {
         Ok(Some(process)) => {
             let mut status = process.status.to_lowercase();
             let mut error = process.error;
@@ -453,6 +453,35 @@ pub async fn api_get_summary<R: Runtime>(
             Err(format!("Failed to retrieve summary: {}", e))
         }
     }
+}
+
+async fn get_current_summary_process(
+    pool: &sqlx::SqlitePool,
+    meeting_id: &str,
+) -> Result<Option<crate::database::models::SummaryProcess>, sqlx::Error> {
+    // A pending row is created before its token. Serialize with starts so that
+    // this gap cannot be mistaken for a job interrupted by an app restart.
+    let _start_guard = SUMMARY_START_LOCK.lock().await;
+    let process = SummaryProcessesRepository::get_summary_data_for_meeting(pool, meeting_id).await?;
+    if let Some(process) = &process {
+        if process.status.eq_ignore_ascii_case("pending")
+            && !SummaryService::is_summary_active(meeting_id, process.start_time)
+        {
+            // The conditional update preserves a concurrent completion and
+            // restores backed-up notes when an interrupted job is recovered.
+            if let Some(started_at) = process.start_time {
+                SummaryProcessesRepository::update_process_failed(
+                    pool,
+                    meeting_id,
+                    started_at,
+                    "Summary generation was interrupted. Please generate the summary again.",
+                )
+                .await?;
+                return SummaryProcessesRepository::get_summary_data_for_meeting(pool, meeting_id).await;
+            }
+        }
+    }
+    Ok(process)
 }
 
 /// Processes transcript and generates summary (Native SQLx implementation)
@@ -606,6 +635,51 @@ pub async fn api_cancel_summary<R: Runtime>(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn interrupted_jobs_recover_notes_without_failing_active_or_completed_jobs() {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::raw_sql(
+            "CREATE TABLE summary_processes (
+                meeting_id TEXT PRIMARY KEY, status TEXT NOT NULL,
+                created_at TEXT, updated_at TEXT, start_time TEXT,
+                result TEXT, result_backup TEXT, result_backup_timestamp TEXT,
+                end_time TEXT, chunk_count INTEGER NOT NULL DEFAULT 0,
+                processing_time REAL NOT NULL DEFAULT 0, error TEXT, metadata TEXT
+            );
+            CREATE TABLE transcript_chunks (meeting_id TEXT);"
+        ).execute(&pool).await.unwrap();
+        let meeting_id = uuid::Uuid::new_v4().to_string();
+        let started_at = Utc::now();
+        SummaryProcessesRepository::create_or_reset_process(&pool, &meeting_id, started_at).await.unwrap();
+        sqlx::query("INSERT INTO transcript_chunks (meeting_id) VALUES (?)")
+            .bind(&meeting_id).execute(&pool).await.unwrap();
+        sqlx::query("UPDATE summary_processes SET result_backup = ? WHERE meeting_id = ?")
+            .bind(r#"{"markdown":"Previous notes"}"#).bind(&meeting_id)
+            .execute(&pool).await.unwrap();
+        let recovered = get_current_summary_process(&pool, &meeting_id).await.unwrap().unwrap();
+        assert_eq!(recovered.status, "failed");
+        assert!(recovered.error.unwrap().contains("interrupted"));
+        assert_eq!(recovered.result.as_deref(), Some(r#"{"markdown":"Previous notes"}"#));
+        assert!(recovered.result_backup.is_none());
+
+        let active_start = started_at + Duration::seconds(1);
+        SummaryProcessesRepository::create_or_reset_process(&pool, &meeting_id, active_start).await.unwrap();
+        SummaryService::register_cancellation_token(&meeting_id, active_start);
+        let active = get_current_summary_process(&pool, &meeting_id).await.unwrap().unwrap();
+        assert_eq!(active.status, "PENDING");
+        assert!(!SummaryService::is_summary_active(&meeting_id, Some(started_at)));
+
+        SummaryProcessesRepository::update_process_completed(
+            &pool, &meeting_id, active_start, json!({"markdown": "Finished"}), 1, 1.0,
+        ).await.unwrap();
+        assert!(!SummaryProcessesRepository::update_process_failed(
+            &pool, &meeting_id, active_start, "interrupted",
+        ).await.unwrap());
+        let completed = get_current_summary_process(&pool, &meeting_id).await.unwrap().unwrap();
+        assert_eq!(completed.status, "completed");
+        assert!(completed.result.unwrap().contains("Finished"));
+    }
 
     #[test]
     fn redacts_only_flagged_historical_reasoning() {
