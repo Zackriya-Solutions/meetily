@@ -74,3 +74,7 @@ For audio changes, start in the relevant subsystem:
 Local speech recognition is implemented through the Whisper and Parakeet providers under [audio/transcription/](../frontend/src-tauri/src/audio/transcription/). Whisper model discovery, downloads, loading, and cached context are managed by [whisper_engine.rs](../frontend/src-tauri/src/whisper_engine/whisper_engine.rs).
 
 Model directories and acceleration behavior depend on application configuration and the compiled backend. Use the current initialization and loading code as the source of truth rather than hardcoding storage paths or assuming runtime GPU fallback. See the [build instructions](BUILDING.md) and [GPU acceleration guide](GPU_ACCELERATION.md) for platform setup.
+
+## Summary Request Timeout
+
+In Settings > Summary, set **Summary request timeout (seconds)** and select **Save timeout** to allow slower models more time. Leave the field blank to keep the provider default of 300 seconds, or 900 seconds for built-in models. The saved value applies to each provider request in new generations, including regeneration. A long transcript may need several requests, so the full summary can take longer than this setting.

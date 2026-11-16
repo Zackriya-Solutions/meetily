@@ -229,7 +229,6 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
   ) => {
     stopSummaryPolling(meetingId);
     let pollCount = 0;
-    const maxPolls = 200;
     const poll = async () => {
       const entry = summaryPollsRef.current.get(meetingId);
       if (!entry || entry.processId !== processId || entry.inFlight) {
@@ -238,22 +237,6 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
       entry.inFlight = true;
       try {
         pollCount += 1;
-        if (pollCount >= maxPolls) {
-          await onUpdate({
-            status: 'error',
-            meetingName: null,
-            meeting_id: meetingId,
-            start: processId,
-            end: null,
-            data: null,
-            error: 'Summary generation timed out after 15 minutes. Please try again or check your model configuration.',
-          });
-          if (summaryPollsRef.current.get(meetingId) === entry) {
-            stopSummaryPolling(meetingId, processId);
-          }
-          return;
-        }
-
         const result = await invoke<SummaryProcessResponse>('api_get_summary', { meetingId });
         const current = summaryPollsRef.current.get(meetingId);
         if (current !== entry || result.start !== processId) {

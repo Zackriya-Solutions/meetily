@@ -214,6 +214,14 @@ fn extract_cached_english_markdown(
 pub struct SummaryService;
 
 impl SummaryService {
+    pub(crate) fn is_summary_active(meeting_id: &str, started_at: Option<DateTime<Utc>>) -> bool {
+        CANCELLATION_REGISTRY
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(meeting_id)
+            .is_some_and(|entry| Some(entry.started_at) == started_at)
+    }
+
     /// Registers a new cancellation token for a meeting.
     pub(crate) fn register_cancellation_token(
         meeting_id: &str,
@@ -548,6 +556,13 @@ impl SummaryService {
         };
 
         let client = reqwest::Client::new();
+        let request_timeout = match super::preferences::load_request_timeout(&_app, &provider) {
+            Ok(timeout) => timeout,
+            Err(error) => {
+                Self::fail_and_cleanup(&pool, &meeting_id, started_at, &error).await;
+                return;
+            }
+        };
         let result = generate_meeting_summary(
             &client,
             &provider,
@@ -565,6 +580,7 @@ impl SummaryService {
             custom_openai_top_p,
             app_data_dir.as_ref(),
             Some(&cancellation_token),
+            request_timeout,
             summary_language.as_deref(),
             detected_summary_language.as_deref(),
             cached_english.as_deref(),

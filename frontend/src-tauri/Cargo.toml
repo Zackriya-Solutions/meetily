@@ -204,6 +204,7 @@ futures-channel = "0.3.31"
 libpulse-binding = "2.30.1"
 
 [dev-dependencies]
+tauri = { version = "2.6.2", features = ["test"] }
 tempfile = "3.3.0"
 infer = "0.15"
 criterion = { version = "0.5.1", features = ["async_tokio"] }

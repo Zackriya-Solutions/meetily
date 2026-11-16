@@ -25,7 +25,15 @@ mock.module('../../src/lib/analytics', () => ({ default: {
 } }));
 let startProcess: () => Promise<{ process_id: string }>;
 let getSummary: (meetingId: string) => Promise<SummaryProcessResponse>;
+let storedTimeout: number | null = null
+let failTimeoutSave = false
 const invoke = mock(async (command: string, args?: Record<string, unknown>): Promise<unknown> => {
+  if (command === 'api_get_summary_timeout') return storedTimeout
+  if (command === 'api_save_summary_timeout') {
+    if (failTimeoutSave) throw new Error('Disk unavailable')
+    storedTimeout = args!.seconds as number | null
+    return
+  }
   if (command === 'api_get_meetings') return [];
   if (command === 'doodle_sync') return null;
   if (command === 'api_get_summary') return getSummary(args!.meetingId as string);
@@ -43,6 +51,7 @@ mock.module('../../src/lib/summary-language-preferences', () => ({
 }));
 const { SidebarProvider, useSidebar } = await import('../../src/components/Sidebar/SidebarProvider');
 const { useSummaryGeneration } = await import('../../src/hooks/meeting-details/useSummaryGeneration');
+const { SummaryTimeoutSettings } = await import('../../src/components/SummaryTimeoutSettings')
 
 const response = (overrides: Partial<SummaryProcessResponse> = {}): SummaryProcessResponse => ({
   meeting_id: 'meeting-a', status: 'pending', start: 'attempt-a', end: null,
@@ -70,13 +79,22 @@ let nextTimer = 0;
 const realSetInterval = globalThis.setInterval;
 const realClearInterval = globalThis.clearInterval;
 const originalDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
+const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
 beforeEach(() => {
+  mock.module('@tauri-apps/api/core', () => ({ invoke }))
+  // Other suites may have loaded a component with the real Tauri module.
+  // Route that module's IPC bridge through the same native-command fixture.
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true, value: { __TAURI_INTERNALS__: { invoke } },
+  })
   Object.defineProperty(globalThis, 'document', {
     configurable: true,
     value: Object.assign(new EventTarget(), { visibilityState: 'visible' }),
   });
   renderer = undefined as unknown as ReactTestRenderer;
   configuredModel = 'test';
+  storedTimeout = null
+  failTimeoutSave = false
   timers.clear(); notify.mockClear(); trackCompletion.mockClear(); invoke.mockClear();
   getSummary = async () => response();
   startProcess = async () => ({ process_id: 'attempt-a' });
@@ -91,6 +109,8 @@ afterEach(async () => {
   globalThis.clearInterval = realClearInterval;
   if (originalDocument) Object.defineProperty(globalThis, 'document', originalDocument);
   else Reflect.deleteProperty(globalThis, 'document');
+  if (originalWindow) Object.defineProperty(globalThis, 'window', originalWindow)
+  else Reflect.deleteProperty(globalThis, 'window')
 });
 async function show(initialSummary: SummaryProcessResponse | null, meetingId = 'meeting-a') {
   await act(async () => {
@@ -103,7 +123,68 @@ async function tick() {
   await act(async () => { for (const callback of [...timers.values()]) callback(); });
 }
 
+describe('summary timeout settings', () => {
+  const showSettings = async () => {
+    await act(async () => { renderer = create(<SummaryTimeoutSettings />) })
+  }
+  const input = () => renderer.root.findByType('input')
+  const change = async (value: string) => {
+    await act(async () => input().props.onChange({ target: { value } }))
+  }
+  const save = async () => {
+    await act(async () => renderer.root.findByType('button').props.onClick())
+  }
+
+  test('saves a longer timeout, reloads it and restores provider defaults', async () => {
+    await showSettings()
+    expect(input().props.value).toBe('')
+    await change('1200')
+    await save()
+    expect(storedTimeout).toBe(1200)
+    expect(text()).toContain('timeout saved')
+    await act(async () => renderer.unmount())
+    await showSettings()
+    expect(input().props.value).toBe('1200')
+    await change('')
+    await save()
+    expect(storedTimeout).toBeNull()
+  })
+
+  test.each(['0', '-1', '1.5', 'NaN', 'Infinity', '4294967296'])('rejects invalid timeout %s', async value => {
+    await showSettings()
+    await change(value)
+    await save()
+    expect(input().props['aria-invalid']).toBe(true)
+    expect(input().props.value).toBe(value)
+    expect(invoke.mock.calls.some(([command]) => command === 'api_save_summary_timeout')).toBe(false)
+  })
+
+  test('keeps the entered timeout after a save failure and allows retry', async () => {
+    await showSettings()
+    await change('1200')
+    failTimeoutSave = true
+    await save()
+    expect(input().props.value).toBe('1200')
+    expect(storedTimeout).toBeNull()
+    expect(text()).toContain('Could not save')
+    failTimeoutSave = false
+    await save()
+    expect(storedTimeout).toBe(1200)
+  })
+})
+
 describe('summary state restored when returning to a meeting', () => {
+  test('keeps polling long jobs until the native process finishes', async () => {
+    await show(response());
+    for (let poll = 0; poll < 210; poll += 1) await tick();
+    expect(timers.size).toBe(1);
+    expect(text()).not.toContain('timed out');
+    getSummary = async () => response({ status: 'completed', data: { markdown: '# Finished' } });
+    await tick();
+    expect(text()).toContain('Finished');
+    expect(timers.size).toBe(0);
+  });
+
   test('repeated recovery read failures end regeneration and retain visible notes', async () => {
     await show(response({ data: { markdown: 'Previous summary' } }));
     getSummary = async () => { throw new Error('Database unavailable'); };

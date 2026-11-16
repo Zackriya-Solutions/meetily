@@ -127,6 +127,7 @@ fn get_cached_model_path(app_data_dir: &PathBuf, model_name: &str) -> Result<Pat
 /// * `system_prompt` - System instructions for the model
 /// * `user_prompt` - User message/task
 /// * `cancellation_token` - Optional token for cancellation
+/// * `request_timeout` - Maximum duration for the sidecar request
 ///
 /// # Returns
 /// Generated text
@@ -136,6 +137,7 @@ pub async fn generate_with_builtin(
     system_prompt: &str,
     user_prompt: &str,
     cancellation_token: Option<&CancellationToken>,
+    request_timeout: Duration,
 ) -> Result<String> {
     // Check cancellation at start
     if let Some(token) = cancellation_token {
@@ -198,7 +200,7 @@ pub async fn generate_with_builtin(
     let request_json = serde_json::to_string(&request)?;
 
     // Send request with timeout
-    let timeout = Duration::from_secs(models::GENERATION_TIMEOUT_SECS);
+    let timeout = request_timeout;
 
     log::info!("Sending generation request to sidecar");
 
