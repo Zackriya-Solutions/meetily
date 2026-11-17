@@ -1,6 +1,6 @@
 use super::defaults;
 use super::types::Template;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
 use once_cell::sync::Lazy;
 use std::sync::RwLock;
@@ -147,6 +147,40 @@ pub fn validate_and_parse_template(json_content: &str) -> Result<Template, Strin
     Ok(template)
 }
 
+/// IDs of the `.json` template files in `dir` (empty if it does not exist)
+fn template_ids_in(dir: &Path, kind: &str) -> Vec<String> {
+    if !dir.exists() {
+        return Vec::new();
+    }
+    match std::fs::read_dir(dir) {
+        Ok(entries) => entries
+            .flatten()
+            .filter_map(|entry| {
+                let filename = entry.file_name();
+                let id = filename.to_str()?.strip_suffix(".json")?;
+                Some(id.to_string())
+            })
+            .collect(),
+        Err(e) => {
+            warn!("Failed to read {} templates directory: {}", kind, e);
+            Vec::new()
+        }
+    }
+}
+
+/// Bundled template IDs to offer in the picker
+///
+/// A build or install made over an older one keeps the files of templates
+/// retired since then. `get_template` loads the replacement for each, so
+/// listing them would show the replacement's name once per leftover file.
+/// A custom file with a retired ID is still listed: it loads as itself.
+fn bundled_template_ids_in(dir: &Path) -> Vec<String> {
+    template_ids_in(dir, "bundled")
+        .into_iter()
+        .filter(|id| defaults::replacement_for_retired_template(id).is_none())
+        .collect()
+}
+
 /// List all available template identifiers
 ///
 /// Returns a combined list of:
@@ -162,23 +196,9 @@ pub fn list_template_ids() -> Vec<String> {
     // Add bundled templates if directory is set
     if let Ok(bundled_dir_lock) = BUNDLED_TEMPLATES_DIR.read() {
         if let Some(bundled_dir) = bundled_dir_lock.as_ref() {
-            if bundled_dir.exists() {
-                match std::fs::read_dir(bundled_dir) {
-                    Ok(entries) => {
-                        for entry in entries.flatten() {
-                            if let Some(filename) = entry.file_name().to_str() {
-                                if filename.ends_with(".json") {
-                                    let id = filename.trim_end_matches(".json").to_string();
-                                    if !ids.contains(&id) {
-                                        ids.push(id);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        warn!("Failed to read bundled templates directory: {}", e);
-                    }
+            for id in bundled_template_ids_in(bundled_dir) {
+                if !ids.contains(&id) {
+                    ids.push(id);
                 }
             }
         }
@@ -186,23 +206,9 @@ pub fn list_template_ids() -> Vec<String> {
 
     // Add custom templates if directory exists
     if let Some(custom_dir) = get_custom_templates_dir() {
-        if custom_dir.exists() {
-            match std::fs::read_dir(&custom_dir) {
-                Ok(entries) => {
-                    for entry in entries.flatten() {
-                        if let Some(filename) = entry.file_name().to_str() {
-                            if filename.ends_with(".json") {
-                                let id = filename.trim_end_matches(".json").to_string();
-                                if !ids.contains(&id) {
-                                    ids.push(id);
-                                }
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    warn!("Failed to read custom templates directory: {}", e);
-                }
+        for id in template_ids_in(&custom_dir, "custom") {
+            if !ids.contains(&id) {
+                ids.push(id);
             }
         }
     }
@@ -263,6 +269,29 @@ mod tests {
                 .unwrap_or_else(|e| panic!("retired '{}' failed to load: {}", retired, e));
             assert_eq!(loaded.name, get_template(replacement).unwrap().name);
         }
+    }
+
+    /// The laptop's build folder still held the five retired files on
+    /// 2026-11-16, and the picker listed 11 templates instead of 6.
+    #[test]
+    fn test_leftover_retired_files_are_not_listed() {
+        let dir = tempfile::tempdir().unwrap();
+        for id in [
+            "delivery_sync",
+            "standard_meeting",
+            "daily_standup",
+            "project_sync",
+            "sales_marketing_client_call",
+            "retrospective",
+            "psychatric_session",
+        ] {
+            std::fs::write(dir.path().join(format!("{id}.json")), "{}").unwrap();
+        }
+        std::fs::write(dir.path().join("README.md"), "").unwrap();
+
+        let mut ids = bundled_template_ids_in(dir.path());
+        ids.sort();
+        assert_eq!(ids, ["delivery_sync", "standard_meeting"]);
     }
 
     #[test]
