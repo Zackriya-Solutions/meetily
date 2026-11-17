@@ -39,12 +39,16 @@ const PENDING_MEETINGS_SQL: &str = r#"
 "#;
 
 /// `transcribed` excludes a transcript saved before live transcription
-/// finished, so it agrees with [`PENDING_MEETINGS_SQL`] on what still needs
-/// transcribing.
+/// finished. `transcript_needed` is [`PENDING_MEETINGS_SQL`]'s test for what
+/// still needs transcribing: a meeting with no recording to transcribe, such
+/// as one made from a Teams recap alone, lacks a transcript without needing one.
 const MEETING_LIST_SQL: &str = r#"
     SELECT m.id, m.title, m.created_at,
            (m.transcription_incomplete = 0
             AND EXISTS (SELECT 1 FROM transcripts t WHERE t.meeting_id = m.id)) AS transcribed,
+           ((m.folder_path IS NOT NULL AND m.folder_path <> ''
+             AND NOT EXISTS (SELECT 1 FROM transcripts t WHERE t.meeting_id = m.id))
+            OR m.transcription_incomplete = 1) AS transcript_needed,
            EXISTS (SELECT 1 FROM summary_processes sp
                    WHERE sp.meeting_id = m.id AND sp.status = 'completed') AS summarized,
            EXISTS (SELECT 1 FROM obsidian_exports oe WHERE oe.meeting_id = m.id) AS obsidian_exported
@@ -499,6 +503,10 @@ mod tests {
         insert_transcript(&pool, "summary-running").await;
         insert_summary_process(&pool, "summary-running", "PENDING").await;
 
+        // Made from a recap alone: a summary, and no recording to transcribe.
+        insert_meeting(&pool, "recap-only", None).await;
+        insert_summary_process(&pool, "recap-only", "completed").await;
+
         insert_meeting(&pool, "done", None).await;
         insert_transcript(&pool, "done").await;
         insert_transcript(&pool, "done").await;
@@ -512,18 +520,19 @@ mod tests {
         .unwrap();
 
         let meetings = MeetingsRepository::get_meetings(&pool).await.unwrap();
-        let mut stages: Vec<(&str, bool, bool, bool)> = meetings
+        let mut stages: Vec<(&str, bool, bool, bool, bool)> = meetings
             .iter()
-            .map(|m| (m.id.as_str(), m.transcribed, m.summarized, m.obsidian_exported))
+            .map(|m| (m.id.as_str(), m.transcribed, m.transcript_needed, m.summarized, m.obsidian_exported))
             .collect();
         stages.sort();
         assert_eq!(
             stages,
             vec![
-                ("done", true, true, true),
-                ("partial", false, false, false),
-                ("recorded", false, false, false),
-                ("summary-running", true, false, false),
+                ("done", true, false, true, true),
+                ("partial", false, true, false, false),
+                ("recap-only", false, false, true, false),
+                ("recorded", false, true, false, false),
+                ("summary-running", true, false, false, false),
             ]
         );
     }

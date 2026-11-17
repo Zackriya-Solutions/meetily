@@ -38,6 +38,9 @@ pub struct Meeting {
     pub created_at: crate::database::models::DateTimeUtc,
     /// Has a transcript that live transcription finished writing.
     pub transcribed: bool,
+    /// Has a recording still to transcribe; false when there is no audio to
+    /// recover a transcript from.
+    pub transcript_needed: bool,
     /// Has a completed AI summary.
     pub summarized: bool,
     /// The meeting has a note in the Obsidian vault.

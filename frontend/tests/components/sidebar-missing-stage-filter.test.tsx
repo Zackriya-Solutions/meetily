@@ -27,10 +27,12 @@ mock.module('@tauri-apps/api/event', () => ({
   },
 }));
 
+// `recap` has no transcript and no recording to make one from, as a meeting made from a Teams recap.
 let backendMeetings = [
-  { id: 'recorded', title: 'Recorded', transcribed: false, summarized: false, obsidian_exported: false },
-  { id: 'transcribed', title: 'Transcribed', transcribed: true, summarized: false, obsidian_exported: false },
-  { id: 'done', title: 'Done', transcribed: true, summarized: true, obsidian_exported: true },
+  { id: 'recorded', title: 'Recorded', transcribed: false, transcript_needed: true, summarized: false, obsidian_exported: false },
+  { id: 'transcribed', title: 'Transcribed', transcribed: true, transcript_needed: false, summarized: false, obsidian_exported: false },
+  { id: 'done', title: 'Done', transcribed: true, transcript_needed: false, summarized: true, obsidian_exported: true },
+  { id: 'recap', title: 'Recap', transcribed: false, transcript_needed: false, summarized: true, obsidian_exported: true },
 ];
 mock.module('@tauri-apps/api/core', () => ({
   ...originalCore,
@@ -59,7 +61,7 @@ describe('sidebar missing-stage filter', () => {
     await act(async () => { renderer = create(<SidebarProvider><Probe /></SidebarProvider>); });
     await flush();
 
-    expect(shown(null)).toEqual(['recorded', 'transcribed', 'done']);
+    expect(shown(null)).toEqual(['recorded', 'transcribed', 'done', 'recap']);
     expect(shown('transcribed')).toEqual(['recorded']);
     expect(shown('summarized')).toEqual(['recorded', 'transcribed']);
     expect(shown('obsidianExported')).toEqual(['recorded', 'transcribed']);
@@ -69,7 +71,7 @@ describe('sidebar missing-stage filter', () => {
     await flush();
     expect(shown('summarized')).toEqual(['recorded']);
 
-    backendMeetings = backendMeetings.map(m => m.id === 'recorded' ? { ...m, transcribed: true } : m);
+    backendMeetings = backendMeetings.map(m => m.id === 'recorded' ? { ...m, transcribed: true, transcript_needed: false } : m);
     await act(async () => { handlers.get('meetings-changed')!({ payload: { meeting_id: 'recorded' } }); });
     await flush();
     expect(shown('transcribed')).toEqual([]);

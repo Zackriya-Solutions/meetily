@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useSidebar, type CurrentMeeting } from '@/components/Sidebar/SidebarProvider';
-import { MISSING_STAGE_FILTERS, type MeetingStage } from '@/components/Sidebar/meetingStages';
+import { MISSING_STAGE_FILTERS, isMissingStage, type MeetingStage } from '@/components/Sidebar/meetingStages';
 import { useConfig } from '@/contexts/ConfigContext';
 import { useTauriEvent } from '@/hooks/useTauriEvent';
 import { ModalType } from '@/hooks/useModalState';
@@ -191,7 +191,7 @@ export function HomeDashboard({ recordingControls, showModal }: HomeDashboardPro
 
   const missingCounts = useMemo(
     () => Object.fromEntries(
-      MISSING_STAGE_FILTERS.map(({ stage }) => [stage, meetings.filter((m) => !m[stage]).length])
+      MISSING_STAGE_FILTERS.map(({ stage }) => [stage, meetings.filter((m) => isMissingStage(m, stage)).length])
     ) as Record<MeetingStage, number>,
     [meetings]
   );

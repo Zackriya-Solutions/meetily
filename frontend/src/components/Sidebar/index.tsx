@@ -32,7 +32,7 @@ import Info from '../Info';
 import { ComplianceNotification } from '../ComplianceNotification';
 import { Input } from '../ui/input';
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from '../ui/input-group';
-import { MISSING_STAGE_FILTERS, missingStage, type MeetingStage } from './meetingStages';
+import { MISSING_STAGE_FILTERS, isMissingStage, missingStage, type MeetingStage } from './meetingStages';
 import type { SidebarItem } from './SidebarProvider';
 import { cn } from '@/lib/utils';
 
@@ -318,7 +318,7 @@ const Sidebar: React.FC = () => {
 
   const missingCounts = useMemo(
     () => Object.fromEntries(
-      MISSING_STAGE_FILTERS.map(({ stage }) => [stage, meetings.filter(m => !m[stage]).length])
+      MISSING_STAGE_FILTERS.map(({ stage }) => [stage, meetings.filter(m => isMissingStage(m, stage)).length])
     ) as Record<MeetingStage, number>,
     [meetings]
   );

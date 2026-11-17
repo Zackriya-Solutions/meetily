@@ -113,11 +113,12 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
       try {
         const meetings = await invoke('api_get_meetings') as Array<{
           id: string, title: string, created_at: string,
-          transcribed: boolean, summarized: boolean, obsidian_exported: boolean
+          transcribed: boolean, transcript_needed: boolean, summarized: boolean, obsidian_exported: boolean
         }>;
         if (requestId !== meetingsRequestIdRef.current) return;
-        const transformedMeetings = meetings.map(({ obsidian_exported, created_at, ...meeting }) => ({
+        const transformedMeetings = meetings.map(({ obsidian_exported, transcript_needed, created_at, ...meeting }) => ({
           ...meeting,
+          transcriptNeeded: transcript_needed,
           createdAt: created_at,
           obsidianExported: obsidian_exported,
         }));
