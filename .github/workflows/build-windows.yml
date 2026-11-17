@@ -689,7 +689,7 @@ jobs:
       - name: Cache FFmpeg binary
         uses: actions/cache@v4
         with:
-          path: frontend/src-tauri/binaries/ffmpeg-*.exe
+          path: frontend/src-tauri/binaries/meetily-ffmpeg-*.exe
           key: ${{ runner.os }}-ffmpeg-${{ hashFiles('frontend/src-tauri/build.rs', 'frontend/src-tauri/build/ffmpeg.rs') }}
       - name: Cache Windows ONNX Runtime
         uses: actions/cache@v4
