@@ -50,6 +50,8 @@ pub struct ProcessedAudioChunk {
 pub enum AudioError {
     DeviceDisconnected,
     StreamFailed,
+    #[cfg(target_os = "linux")]
+    LinuxCapture(String),
     ProcessingFailed,
     TranscriptionFailed,
     ChannelClosed,
@@ -67,6 +69,8 @@ impl AudioError {
             // Device disconnect is now recoverable - we can attempt reconnection
             AudioError::DeviceDisconnected => true,
             AudioError::StreamFailed => true,
+            #[cfg(target_os = "linux")]
+            AudioError::LinuxCapture(_) => true,
             AudioError::ProcessingFailed => true,
             AudioError::TranscriptionFailed => true,
             AudioError::ChannelClosed => false,
@@ -79,10 +83,12 @@ impl AudioError {
     }
 
     /// Get user-friendly error message
-    pub fn user_message(&self) -> &'static str {
+    pub fn user_message(&self) -> &str {
         match self {
             AudioError::DeviceDisconnected => "Audio device was disconnected",
             AudioError::StreamFailed => "Audio stream encountered an error",
+            #[cfg(target_os = "linux")]
+            AudioError::LinuxCapture(message) => message,
             AudioError::ProcessingFailed => "Audio processing failed",
             AudioError::TranscriptionFailed => "Speech transcription failed",
             AudioError::ChannelClosed => "Audio channel was closed unexpectedly",
@@ -99,7 +105,7 @@ impl AudioError {
 /// `src/lib/recording-error.ts`; change both together.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct RecordingErrorPayload {
-    pub message: &'static str,
+    pub message: String,
     pub recoverable: bool,
     /// True on the one event whose error made the backend stop recording.
     /// The frontend runs the normal stop flow when it sees this.
@@ -109,7 +115,7 @@ pub struct RecordingErrorPayload {
 impl RecordingErrorPayload {
     pub fn new(error: &AudioError, recording_stopped: bool) -> Self {
         Self {
-            message: error.user_message(),
+            message: error.user_message().to_string(),
             recoverable: error.is_recoverable(),
             recording_stopped,
         }
@@ -133,6 +139,8 @@ pub struct RecordingStats {
 
 /// Unified state management for audio recording
 pub struct RecordingState {
+    #[cfg(target_os = "linux")]
+    pub(crate) capture_cancel: Mutex<Arc<AtomicBool>>,
     // Core recording state
     is_recording: AtomicBool,
     is_paused: AtomicBool,
@@ -179,6 +187,8 @@ const NOT_RECORDING: u64 = u64::MAX;
 impl RecordingState {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
+            #[cfg(target_os = "linux")]
+            capture_cancel: Mutex::new(Arc::new(AtomicBool::new(false))),
             is_recording: AtomicBool::new(false),
             is_paused: AtomicBool::new(false),
             microphone_device: Mutex::new(None),
@@ -346,38 +356,50 @@ impl RecordingState {
     fn report_error_at(&self, error: AudioError, now_nanos: u64) {
         let was_recording = self.is_recording();
 
-        // Track recoverable vs non-recoverable errors separately
-        if error.is_recoverable() {
-            // A recoverable error long after the previous one starts a new
-            // episode. Both counters restart: the total below is in practice
-            // a recoverable count too (non-recoverable errors stop at once),
-            // so leaving it to accumulate would reintroduce the session-wide
-            // limit through the back door.
-            let last = self.last_recoverable_error_nanos.swap(now_nanos, Ordering::SeqCst);
-            if last != NOT_RECORDING
-                && now_nanos.saturating_sub(last) > RECOVERABLE_ERROR_QUIET_PERIOD.as_nanos() as u64
-            {
-                self.recoverable_error_count.store(0, Ordering::SeqCst);
-                self.error_count.store(0, Ordering::SeqCst);
+        #[cfg(target_os = "linux")]
+        let supervisor_managed = matches!(&error, AudioError::LinuxCapture(_));
+        #[cfg(not(target_os = "linux"))]
+        let supervisor_managed = false;
+
+        let count = if supervisor_managed {
+            // Native recovery and total-loss shutdown belong to the Linux supervisor.
+            log::warn!("Supervisor-managed audio error: {:?}", error);
+            0
+        } else {
+            // Track recoverable vs non-recoverable errors separately
+            if error.is_recoverable() {
+                // A recoverable error long after the previous one starts a new
+                // episode. Both counters restart: the total below is in practice
+                // a recoverable count too (non-recoverable errors stop at once),
+                // so leaving it to accumulate would reintroduce the session-wide
+                // limit through the back door.
+                let last = self.last_recoverable_error_nanos.swap(now_nanos, Ordering::SeqCst);
+                if last != NOT_RECORDING
+                    && now_nanos.saturating_sub(last) > RECOVERABLE_ERROR_QUIET_PERIOD.as_nanos() as u64
+                {
+                    self.recoverable_error_count.store(0, Ordering::SeqCst);
+                    self.error_count.store(0, Ordering::SeqCst);
+                }
             }
-        }
 
-        let count = self.error_count.fetch_add(1, Ordering::SeqCst) + 1;
+            let count = self.error_count.fetch_add(1, Ordering::SeqCst) + 1;
 
-        if error.is_recoverable() {
-            let recoverable_count = self.recoverable_error_count.fetch_add(1, Ordering::SeqCst) + 1;
-            log::warn!("Recoverable audio error ({}): {:?}", recoverable_count, error);
+            if error.is_recoverable() {
+                let recoverable_count = self.recoverable_error_count.fetch_add(1, Ordering::SeqCst) + 1;
+                log::warn!("Recoverable audio error ({}): {:?}", recoverable_count, error);
 
-            // Allow more recoverable errors before stopping
-            if recoverable_count >= 10 {
-                log::error!("Too many recoverable errors ({}), stopping recording", recoverable_count);
+                // Allow more recoverable errors before stopping
+                if recoverable_count >= 10 {
+                    log::error!("Too many recoverable errors ({}), stopping recording", recoverable_count);
+                    self.stop_recording();
+                }
+            } else {
+                log::error!("Non-recoverable audio error: {:?}", error);
+                // Stop immediately for non-recoverable errors
                 self.stop_recording();
             }
-        } else {
-            log::error!("Non-recoverable audio error: {:?}", error);
-            // Stop immediately for non-recoverable errors
-            self.stop_recording();
-        }
+            count
+        };
 
         // Fallback: stop recording after too many total errors
         if count >= 15 {
@@ -492,6 +514,8 @@ impl RecordingState {
 impl Default for RecordingState {
     fn default() -> Self {
         Self {
+            #[cfg(target_os = "linux")]
+            capture_cancel: Mutex::new(Arc::new(AtomicBool::new(false))),
             is_recording: AtomicBool::new(false),
             is_paused: AtomicBool::new(false),
             microphone_device: Mutex::new(None),
@@ -612,5 +636,96 @@ mod tests {
             serde_json::to_string(&payload).unwrap(),
             r#"{"message":"Audio device was disconnected","recoverable":true,"recording_stopped":true}"#
         );
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod linux_capture_error_tests {
+    use super::*;
+
+    fn audio_chunk() -> AudioChunk {
+        AudioChunk {
+            data: vec![0.25, -0.25],
+            sample_rate: 48_000,
+            timestamp: 1.0,
+            chunk_id: 1,
+            device_type: DeviceType::Microphone,
+        }
+    }
+
+    #[test]
+    fn native_errors_preserve_recording_audio_and_diagnostics() {
+        let state = RecordingState::new();
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        state.set_audio_sender(sender);
+        state.start_recording().unwrap();
+        let callbacks = Arc::new(AtomicU32::new(0));
+        let callback_count = callbacks.clone();
+        state.set_error_callback(move |error, _stopped| {
+            assert!(matches!(error, AudioError::LinuxCapture(_)));
+            callback_count.fetch_add(1, Ordering::SeqCst);
+        });
+
+        for index in 0..20 {
+            let message = format!("Native capture failed {index}");
+            state.report_error(AudioError::LinuxCapture(message.clone()));
+
+            assert!(state.is_active());
+            assert_eq!(state.get_error_count(), 0);
+            assert_eq!(state.get_recoverable_error_count(), 0);
+            assert!(!state.has_fatal_error());
+            assert!(matches!(
+                state.get_last_error(),
+                Some(AudioError::LinuxCapture(actual)) if actual == message
+            ));
+            assert_eq!(callbacks.load(Ordering::SeqCst), index + 1);
+            state.send_audio_chunk(audio_chunk()).unwrap();
+            assert_eq!(receiver.try_recv().unwrap().data, vec![0.25, -0.25]);
+        }
+    }
+
+    #[test]
+    fn native_errors_do_not_consume_or_reset_ordinary_error_budget() {
+        let state = RecordingState::new();
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        state.set_audio_sender(sender);
+        state.start_recording().unwrap();
+        let callbacks = Arc::new(AtomicU32::new(0));
+        let callback_count = callbacks.clone();
+        state.set_error_callback(move |_, _| {
+            callback_count.fetch_add(1, Ordering::SeqCst);
+        });
+
+        for count in 1..=9 {
+            state.report_error(AudioError::ProcessingFailed);
+            state.report_error(AudioError::LinuxCapture("Native capture failed".to_owned()));
+
+            assert!(state.is_active());
+            assert_eq!(state.get_error_count(), count);
+            assert_eq!(state.get_recoverable_error_count(), count);
+            assert_eq!(callbacks.load(Ordering::SeqCst), count * 2);
+            assert!(matches!(
+                state.get_last_error(),
+                Some(AudioError::LinuxCapture(_))
+            ));
+            state.send_audio_chunk(audio_chunk()).unwrap();
+            assert_eq!(receiver.try_recv().unwrap().data, vec![0.25, -0.25]);
+        }
+
+        state.report_error(AudioError::ProcessingFailed);
+
+        assert!(!state.is_recording());
+        assert_eq!(state.get_error_count(), 10);
+        assert_eq!(state.get_recoverable_error_count(), 10);
+        assert_eq!(callbacks.load(Ordering::SeqCst), 19);
+        assert!(matches!(
+            state.get_last_error(),
+            Some(AudioError::ProcessingFailed)
+        ));
+        assert!(state.send_audio_chunk(audio_chunk()).is_err());
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(mpsc::error::TryRecvError::Disconnected)
+        ));
     }
 }

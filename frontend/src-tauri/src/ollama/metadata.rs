@@ -76,18 +76,16 @@ impl ModelMetadataCache {
             if let Some(entry) = cache.get(&cache_key) {
                 // Check if entry is still valid (within TTL)
                 if entry.fetched_at.elapsed() < self.ttl {
-                    tracing::debug!(
-                        "Cache hit for model {}: context_size={}",
-                        model_name,
-                        entry.metadata.context_size
-                    );
+                    log::debug!("Cache hit for model {}: context_size={}",
+                    model_name,
+                    entry.metadata.context_size);
                     return Ok(entry.metadata.clone());
                 }
             }
         }
 
         // Cache miss or expired - fetch from API
-        tracing::info!("Fetching metadata for model: {}", model_name);
+        log::info!("Fetching metadata for model: {}", model_name);
         let metadata = fetch_model_info(model_name, endpoint).await?;
 
         // Store in cache
@@ -110,7 +108,7 @@ impl ModelMetadataCache {
     pub async fn clear(&self) {
         let mut cache = self.cache.write().await;
         cache.clear();
-        tracing::info!("Model metadata cache cleared");
+        log::info!("Model metadata cache cleared");
     }
 }
 
@@ -223,7 +221,7 @@ fn extract_context_from_model_info(
     for key in possible_keys {
         if let Some(value) = model_info.get(&key) {
             if let Some(ctx) = value.as_u64() {
-                tracing::info!("Found context size in model_info[{}]: {} tokens", key, ctx);
+                log::info!("Found context size in model_info[{}]: {} tokens", key, ctx);
                 return Some(ctx as usize);
             }
         }
@@ -275,11 +273,9 @@ fn get_fallback_metadata(model_name: &str) -> ModelMetadata {
         .unwrap_or("unknown")
         .to_string();
 
-    tracing::warn!(
-        "Using fallback metadata for {}: context_size={}",
-        model_name,
-        context_size
-    );
+    log::warn!("Using fallback metadata for {}: context_size={}",
+    model_name,
+    context_size);
 
     ModelMetadata {
         name: model_name.to_string(),

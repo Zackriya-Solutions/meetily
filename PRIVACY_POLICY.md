@@ -14,6 +14,8 @@ Meetily is built on the principle that your meeting data should remain private a
 - **Meeting content**: Remains on your infrastructure
 - **AI summaries**: Generated locally or through your chosen LLM provider
 
+Official builds may fetch seasonal assets from meetily.ai.
+
 ### Your Data Ownership
 - You own all meeting data, transcripts, and recordings
 - Data is stored locally on your device
@@ -74,6 +76,8 @@ If you choose to use external LLM providers:
 - **PostHog**: Used for usage analytics when enabled
 - **Data**: Only anonymized usage patterns, no meeting content
 - **Control**: Completely optional, off by default, and user-controlled
+
+
 
 ## Your Privacy Rights
 

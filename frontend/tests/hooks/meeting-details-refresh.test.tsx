@@ -47,6 +47,7 @@ const transcriptPage = {
 let savedSummary: SummaryProcessResponse;
 const invoke = mock(async (command: string, args?: Record<string, unknown>): Promise<unknown> => {
   if (command === 'api_get_meetings') return [];
+  if (command === 'doodle_sync') return null;
   if (command === 'api_get_summary') return { ...savedSummary, meeting_id: args!.meetingId };
   if (command === 'api_get_meeting_metadata') return readMetadata(args!.meetingId as string);
   if (command === 'api_get_meeting_transcripts') return readTranscripts(args!.meetingId as string);
@@ -82,7 +83,12 @@ const timers = new Map<number, () => Promise<void>>();
 let nextTimer = 0;
 const realSetInterval = globalThis.setInterval;
 const realClearInterval = globalThis.clearInterval;
+const originalDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
 beforeEach(() => {
+  Object.defineProperty(globalThis, 'document', {
+    configurable: true,
+    value: Object.assign(new EventTarget(), { visibilityState: 'visible' }),
+  });
   selectedMeeting = 'meeting-a';
   readMetadata = async id => metadata(id);
   readTranscripts = async () => transcriptPage;
@@ -98,6 +104,8 @@ afterEach(async () => {
   renderer = undefined;
   globalThis.setInterval = realSetInterval;
   globalThis.clearInterval = realClearInterval;
+  if (originalDocument) Object.defineProperty(globalThis, 'document', originalDocument);
+  else Reflect.deleteProperty(globalThis, 'document');
 });
 async function show() {
   await act(async () => {

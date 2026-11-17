@@ -20,7 +20,7 @@ use std::process::Stdio;
 use std::time::Duration;
 use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use log::{info, warn};
 
 const COPILOT_TIMEOUT: Duration = Duration::from_secs(300);
 

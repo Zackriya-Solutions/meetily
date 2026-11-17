@@ -2,7 +2,7 @@ use crate::api::{Meeting, MeetingDetails, MeetingTranscript};
 use crate::database::models::{MeetingModel, PendingMeetingModel, Transcript};
 use chrono::Utc;
 use sqlx::{Connection, Error as SqlxError, SqliteConnection, SqlitePool};
-use tracing::{error, info};
+use log::{error, info};
 
 pub struct MeetingsRepository;
 
