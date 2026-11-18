@@ -95,6 +95,13 @@
             "prosemirror-tables": "1.8.1"
         }
     },
+    "overrides": {
+        "prosemirror-model": "1.25.3",
+        "prosemirror-state": "1.4.3",
+        "prosemirror-view": "1.41.3",
+        "prosemirror-transform": "1.10.4",
+        "prosemirror-tables": "1.8.1"
+    },
     "devDependencies": {
         "@tailwindcss/container-queries": "^0.1.1",
         "@tailwindcss/typography": "^0.5.15",
