@@ -213,7 +213,7 @@ jobs:
           # Check environment variables
           Write-Host "Environment Variables:"
           Write-Host "  SM_HOST: $env:SM_HOST"
-          Write-Host "  SM_API_KEY: $($env:SM_API_KEY.Substring(0, [Math]::Min(20, $env:SM_API_KEY.Length)))..."
+          Write-Host "  SM_API_KEY: $(if ($env:SM_API_KEY) { '***SET***' } else { 'NOT SET' })"
           Write-Host "  SM_CLIENT_CERT_FILE: $env:SM_CLIENT_CERT_FILE"
           Write-Host "  SM_CLIENT_CERT_PASSWORD: $(if ($env:SM_CLIENT_CERT_PASSWORD) { '***SET***' } else { 'NOT SET' })"
           Write-Host ""
@@ -254,7 +254,7 @@ jobs:
           Write-Host ""
           Write-Host "Environment Configuration:"
           Write-Host "  SM_HOST: $($env:SM_HOST ?? 'NOT SET')"
-          Write-Host "  SM_API_KEY: $(if ($env:SM_API_KEY) { $env:SM_API_KEY.Substring(0, [Math]::Min(20, $env:SM_API_KEY.Length)) + '...' } else { 'NOT SET' })"
+          Write-Host "  SM_API_KEY: $(if ($env:SM_API_KEY) { '***SET***' } else { 'NOT SET' })"
           Write-Host "  SM_CLIENT_CERT_FILE: $($env:SM_CLIENT_CERT_FILE ?? 'NOT SET')"
           Write-Host "  SM_CODE_SIGNING_CERT_SHA1_HASH: $($env:SM_CODE_SIGNING_CERT_SHA1_HASH ?? 'NOT SET')"
 
@@ -495,8 +495,9 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pnpm-store-
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust 1.99.1
+        # Pinned: Rust 1.100's cargo moved build-script OUT_DIR one level deeper; tauri-build 2.6.1 and ort-sys 2.0.0-rc.10 assume the old depth. Unpin after upgrading to tauri-build >= 2.7 and ort >= 2.0.0-rc.14.
+        uses: dtolnay/rust-toolchain@1.99.1
         with:
           targets: x86_64-pc-windows-msvc
 
@@ -669,6 +670,8 @@ jobs:
           # llama-helper is for LLM inference and works fine on CPU
           Write-Host "Building llama-helper sidecar (CPU-only)..."
 
+          # llama.cpp's bundled cpp-httplib does not compile against OpenSSL 4 (const X509_NAME); the helper never uses HTTPS, so build it without OpenSSL.
+          $env:CMAKE_DISABLE_FIND_PACKAGE_OpenSSL = "TRUE"
           cargo build --release -p llama-helper
 
           if ($LASTEXITCODE -ne 0) {
@@ -704,6 +707,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           # License validation RSA public key (embedded at build time)
           MEETILY_RSA_PUBLIC_KEY: ${{ secrets.MEETILY_RSA_PUBLIC_KEY }}
+          MEETILY_DOODLE_URL: ${{ vars.MEETILY_DOODLE_URL }}
           # Supabase configuration (for online license verification)
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
