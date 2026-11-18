@@ -18,6 +18,7 @@ macro_rules! perf_debug {
 }
 
 #[cfg(debug_assertions)]
+#[allow(unused_macros)]
 macro_rules! perf_trace {
     ($($arg:tt)*) => {
         log::trace!($($arg)*)
@@ -25,6 +26,7 @@ macro_rules! perf_trace {
 }
 
 #[cfg(not(debug_assertions))]
+#[allow(unused_macros)]
 macro_rules! perf_trace {
     ($($arg:tt)*) => {};
 }
