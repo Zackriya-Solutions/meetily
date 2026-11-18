@@ -1,0 +1,18 @@
+[workspace]
+resolver = "2"
+members = [
+    "frontend/src-tauri",
+    "llama-helper"
+]
+
+# Shared workspace settings
+[workspace.package]
+edition = "2021"
+rust-version = "1.77"
+
+# Shared dependencies that can be inherited by workspace members
+[workspace.dependencies]
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.32.0", features = ["full"] }
