@@ -1,3 +1,4 @@
+use crate::audio::recording_commands::StopOutcome;
 use tauri::{
     Emitter,
     menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem},
@@ -139,7 +140,7 @@ fn toggle_recording_handler<R: Runtime>(app: &AppHandle<R>) {
 
             // Handle result
             match stop_result {
-                Ok(_) => {
+                Ok(StopOutcome::Stopped) => {
                     log::info!("Tray toggle: Recording stopped successfully");
 
                     // Trigger frontend post-processing via event (works from any page)
@@ -148,6 +149,8 @@ fn toggle_recording_handler<R: Runtime>(app: &AppHandle<R>) {
                         log::error!("Tray toggle: Failed to emit recording-stop-complete event: {}", e);
                     }
                 }
+                Ok(StopOutcome::AlreadyStopping) => {},
+                Ok(StopOutcome::NotActive) => update_tray_menu_async(&app_clone).await,
                 Err(e) => {
                     log::error!("Tray toggle: Failed to stop recording: {}", e);
                     // Revert tray state on error
@@ -228,7 +231,7 @@ fn stop_recording_handler<R: Runtime>(app: &AppHandle<R>) {
 
         // Handle result
         match stop_result {
-            Ok(_) => {
+            Ok(StopOutcome::Stopped) => {
                 log::info!("Tray: Recording stopped successfully");
 
                 // Trigger frontend post-processing via event (works from any page)
@@ -237,6 +240,8 @@ fn stop_recording_handler<R: Runtime>(app: &AppHandle<R>) {
                     log::error!("Tray: Failed to emit recording-stop-complete event: {}", e);
                 }
             }
+            Ok(StopOutcome::AlreadyStopping) => {},
+            Ok(StopOutcome::NotActive) => update_tray_menu_async(&app_clone).await,
             Err(e) => {
                 log::error!("Tray: Failed to stop recording: {}", e);
                 // Revert tray state on error

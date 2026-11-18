@@ -54,7 +54,8 @@ mock.module('@tauri-apps/api/event', () => ({
 const invokeCalls: string[] = [];
 mock.module('@tauri-apps/api/core', () => ({
   ...originals.core,
-  invoke: async (command: string) => { invokeCalls.push(command); return false; },
+  // stop_recording answers with a StopOutcome; only 'stopped' runs post-processing.
+  invoke: async (command: string) => { invokeCalls.push(command); return command === 'stop_recording' ? 'stopped' : false; },
 }));
 mock.module('@tauri-apps/api/path', () => ({ ...originals.path, appDataDir: async () => '/data' }));
 mock.module('../../src/lib/analytics', () => ({ default: { trackTranscriptionError() {}, trackTranscriptionSuccess() {}, trackButtonClick() {} } }));

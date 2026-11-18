@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use silero_rs::{VadConfig, VadSession, VadTransition};
 use log::{debug, info, warn};
 use std::collections::VecDeque;
@@ -31,7 +31,6 @@ pub struct ContinuousVadProcessor {
     in_speech: bool,
     processed_samples: usize,
     speech_start_sample: usize,
-    // State tracking for smart logging
     last_logged_state: bool,
     /// Buffer size at which the "speech buffer is large" warning last fired, so
     /// it reports growth instead of repeating on every chunk.
@@ -88,7 +87,6 @@ impl ContinuousVadProcessor {
             in_speech: false,
             processed_samples: 0,
             speech_start_sample: 0,
-            // Initialize state tracking
             last_logged_state: false,
             last_large_buffer_warn: 0,
         })
@@ -181,9 +179,6 @@ impl ContinuousVadProcessor {
                 resampled.push(filtered_samples[source_index]);
             }
         }
-
-        debug!("Resampled from {} samples ({}Hz) to {} samples (16kHz) with anti-aliasing",
-               samples.len(), self.sample_rate, resampled.len());
 
         Ok(resampled)
     }
@@ -284,8 +279,7 @@ impl ContinuousVadProcessor {
                   current_speech_size, current_speech_size as f64 / 16000.0);
         }
 
-        let transitions = self.session.process(chunk)
-            .map_err(|e| anyhow!("VAD processing failed: {}", e))?;
+        let transitions = self.session.process(chunk).context("VAD processing failed")?;
 
         // Silero keeps every sample it is given until a speech segment ends, so
         // a long silent stretch grows its buffer without bound. Trimming is only
@@ -350,10 +344,8 @@ impl ContinuousVadProcessor {
                             confidence: 0.9, // VAD confidence
                         };
 
-                        info!("VAD: Completed speech segment: {:.1}ms duration, {} samples",
-                              end_timestamp_ms - start_timestamp_ms, segment.samples.len());
-
                         self.speech_segments.push_back(segment);
+
                     }
 
                     self.current_speech.clear();

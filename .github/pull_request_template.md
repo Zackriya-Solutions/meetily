@@ -1,36 +1,34 @@
-## Description
-[Provide a detailed description of your changes]
+> Use synthetic or redacted examples in screenshots, recordings, transcripts, and logs. Do not include private meeting content or credentials.
 
-## Related Issue
-[Link to the issue this PR addresses (e.g., "Fixes #123")]
+## What and why
 
-## Type of Change
-- [ ] Bug fix
-- [ ] New feature
-- [ ] Documentation update
-- [ ] Performance improvement
-- [ ] Code refactoring
-- [ ] Other (please describe)
+<!-- Describe the problem and the focused change.
+Call out breaking changes, stored-data migrations, or privacy/permission changes when applicable. -->
 
-## Testing
-- [ ] Unit tests added/updated
-- [ ] Manual testing performed
-- [ ] All tests pass
+## Related work
 
-## Documentation
-- [ ] Documentation updated
-- [ ] No documentation needed
+<!-- Link existing issues/discussions and any overlapping PRs. If none apply, say so.
+Explain what differs if a related PR exists. Do not create an issue just to fill this section. -->
 
-## Checklist
-- [ ] Code follows project style
-- [ ] Self-reviewed the code
-- [ ] Added comments for complex code
-- [ ] Updated README if needed
-- [ ] Branch is up to date with devtest
-- [ ] No merge conflicts
+- [ ] I searched open and closed issues and PRs for the same problem or change.
 
-## Screenshots (if applicable)
-[Add screenshots here if your changes affect the UI]
+## Verification
 
-## Additional Notes
-[Add any additional information that might be helpful for reviewers] 
+<!-- Report only checks you actually ran. Provide evidence relevant to the change:
+- UI: screenshots or a short demonstration.
+- Bug fix: reproduction and fixed behavior, with regression coverage where practical.
+- Audio/transcription: relevant device, model, and platform details plus observed output.
+- Performance: reproducible before/after measurements.
+- Docs/configuration: relevant link, instruction, or configuration checks; no app recording required.
+-->
+
+- Environment/platform:
+- Commands or manual steps:
+- Observed results:
+- Not tested and why:
+
+## Before review
+
+- [ ] I reviewed and understand the submitted changes.
+- [ ] This PR follows the [contribution guide](https://github.com/Zackriya-Solutions/meetily/blob/main/CONTRIBUTING.md) and targets `devtest`.
+- [ ] Related documentation is updated, or I explained why none is needed.

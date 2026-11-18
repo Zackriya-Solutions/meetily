@@ -1,6 +1,6 @@
 [package]
 name = "meetily"
-version = "0.4.1"
+version = "0.5.0"
 description = "A Tauri App for meeting minutes"
 authors = ["Sujith S"]
 license = "MIT"
@@ -88,8 +88,11 @@ chrono = { version = "0.4.31", features = ["serde"] }
 
 # Log
 log = "0.4"
+tauri-plugin-log = { version = "2.6.0", features = ["colored"] }
+# Fork decision (upstream 0.5.0 merge, 2026-11-17): upstream dropped
+# env_logger for tauri-plugin-log; this fork keeps env_logger for its file
+# log under the data root, panic hook and build banner (main.rs).
 env_logger = "0.11"
-tracing = "0.1.40"
 which = "6.0.1"
 
 # Bytes
@@ -134,10 +137,10 @@ dirs = "5.0.1"
 
 # Additional dependencies for notification system
 url = "2.5.0"
-
-# Opens a Teams join link in the default browser ("Join and record" in the
-# calendar nudge; docs/CALENDAR_MEETING_DETECTION_SPEC.md).
-open = "5"
+# Opens external links in the default browser: upstream's open_external_url,
+# and the Teams join link ("Join and record" in the calendar nudge;
+# docs/CALENDAR_MEETING_DETECTION_SPEC.md).
+open = { version = "5.3.3", features = ["shellexecute-on-windows"] }
 
 
 # System monitoring for resource management
@@ -224,6 +227,10 @@ windows = { version = "0.61.3", features = [
 [target.'cfg(target_os = "linux")'.dependencies]
 whisper-rs = { version = "0.13.2", features = ["raw-api"] }
 futures-channel = "0.3.31"
+
+# Native PipeWire/PulseAudio client for system-audio capture (bypasses cpal's
+# ALSA-only host on Linux, no ~/.asoundrc setup required)
+libpulse-binding = "2.30.1"
 
 [dev-dependencies]
 # Test-only: lets unit tests build a mock AppHandle (tauri::test::mock_app)

@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex as StdMutex;
 // Removed unused import
@@ -44,6 +45,7 @@ pub mod database;
 pub mod diarization;
 pub mod meeting_detection;
 pub mod calendar;
+pub mod doodle;
 pub mod notifications;
 pub mod obsidian;
 pub mod ollama;
@@ -70,6 +72,132 @@ use std::sync::Arc;
 use tauri::{AppHandle, Manager, Runtime};
 use tokio::sync::RwLock;
 
+/// Off: this fork logs through env_logger (see the note in `run()`).
+const UPSTREAM_PLUGIN_LOGGER: bool = false;
+
+type SplitLogger = (log::LevelFilter, Box<dyn log::Log>);
+
+enum StartupLogDestination {
+    Persistent(PathBuf),
+    Stream,
+}
+
+fn startup_log_directory(app_data_dir: &Path) -> PathBuf {
+    #[cfg(debug_assertions)]
+    {
+        app_data_dir.join("logs-dev")
+    }
+
+    #[cfg(not(debug_assertions))]
+    {
+        app_data_dir.join("logs")
+    }
+}
+
+fn acquire_startup_logger<T, E>(
+    app_data_dir: Option<PathBuf>,
+    mut acquire: impl FnMut(StartupLogDestination) -> Result<T, E>,
+) -> Result<(T, bool), E> {
+    if let Some(app_data_dir) = app_data_dir {
+        if let Ok(logger) = acquire(StartupLogDestination::Persistent(
+            startup_log_directory(&app_data_dir),
+        )) {
+            return Ok((logger, true));
+        }
+    }
+
+    acquire(StartupLogDestination::Stream).map(|logger| (logger, false))
+}
+
+fn meetily_log_builder(
+    targets: Vec<tauri_plugin_log::Target>,
+    verbose: bool,
+) -> tauri_plugin_log::Builder {
+    let builder = tauri_plugin_log::Builder::new()
+        .targets(targets)
+        .rotation_strategy({
+            #[cfg(debug_assertions)]
+            {
+                tauri_plugin_log::RotationStrategy::KeepSome(10)
+            }
+            #[cfg(not(debug_assertions))]
+            {
+                tauri_plugin_log::RotationStrategy::KeepSome(5)
+            }
+        })
+        .max_file_size(10_000_000)
+        .timezone_strategy(tauri_plugin_log::TimezoneStrategy::UseLocal)
+        .format(|out, message, record| {
+            let line = utils::bounded_log_line(format_args!(
+                "[{}][{}][{}][{}:{}] {}",
+                chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"),
+                record.level(),
+                record.target(),
+                record.file().unwrap_or("unknown"),
+                record.line().unwrap_or(0),
+                message
+            ));
+            out.finish(format_args!("{}", line))
+        });
+
+    if verbose {
+        builder
+            .level(log::LevelFilter::Info)
+            .level_for("app_lib", log::LevelFilter::Debug)
+    } else {
+        builder
+            .level(log::LevelFilter::Warn)
+            .level_for("app_lib", log::LevelFilter::Info)
+    }
+}
+
+fn split_startup_logger<R: Runtime>(
+    app: &AppHandle<R>,
+    app_data_dir: Option<PathBuf>,
+    verbose: bool,
+) -> Result<(SplitLogger, bool), tauri_plugin_log::Error> {
+    acquire_startup_logger(app_data_dir, |destination| {
+        let targets = match destination {
+            StartupLogDestination::Persistent(path) => {
+                #[cfg(debug_assertions)]
+                {
+                    vec![
+                        tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
+                        tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Folder {
+                            path,
+                            file_name: None,
+                        }),
+                    ]
+                }
+                #[cfg(not(debug_assertions))]
+                {
+                    vec![tauri_plugin_log::Target::new(
+                        tauri_plugin_log::TargetKind::Folder {
+                            path,
+                            file_name: None,
+                        },
+                    )]
+                }
+            }
+            StartupLogDestination::Stream => {
+                #[cfg(debug_assertions)]
+                {
+                    vec![tauri_plugin_log::Target::new(
+                        tauri_plugin_log::TargetKind::Stdout,
+                    )]
+                }
+                #[cfg(not(debug_assertions))]
+                {
+                    vec![tauri_plugin_log::Target::new(
+                        tauri_plugin_log::TargetKind::Stderr,
+                    )]
+                }
+            }
+        };
+        let (_, level, logger) = meetily_log_builder(targets, verbose).split(app)?;
+        Ok((level, logger))
+    })
+}
 static RECORDING_FLAG: AtomicBool = AtomicBool::new(false);
 
 #[cfg(target_os = "windows")]
@@ -152,12 +280,11 @@ async fn start_recording<R: Runtime>(
     system_device_name: Option<String>,
     meeting_name: Option<String>,
 ) -> Result<(), String> {
-    log_info!("🔥 CALLED start_recording with meeting: {:?}", meeting_name);
     log_info!(
-        "📋 Backend received parameters - mic: {:?}, system: {:?}, meeting: {:?}",
-        mic_device_name,
-        system_device_name,
-        meeting_name
+        "Recording start requested; microphone_configured={}, system_audio_configured={}, meeting_name_configured={}",
+        mic_device_name.is_some(),
+        system_device_name.is_some(),
+        meeting_name.is_some()
     );
 
     if is_recording().await {
@@ -207,14 +334,8 @@ async fn start_recording<R: Runtime>(
 }
 
 #[tauri::command]
-async fn stop_recording<R: Runtime>(app: AppHandle<R>, args: RecordingArgs) -> Result<(), String> {
+async fn stop_recording<R: Runtime>(app: AppHandle<R>, args: RecordingArgs) -> Result<audio::recording_commands::StopOutcome, String> {
     log_info!("Attempting to stop recording...");
-
-    // Check the actual audio recording system state instead of the flag
-    if !audio::recording_commands::is_recording().await {
-        log_info!("Recording is already stopped");
-        return Ok(());
-    }
 
     // Call the actual audio recording system to stop
     match audio::recording_commands::stop_recording(
@@ -225,7 +346,7 @@ async fn stop_recording<R: Runtime>(app: AppHandle<R>, args: RecordingArgs) -> R
     )
     .await
     {
-        Ok(_) => {
+        Ok(audio::recording_commands::StopOutcome::Stopped) => {
             RECORDING_FLAG.store(false, Ordering::SeqCst);
             tray::update_tray_menu(&app);
 
@@ -258,8 +379,9 @@ async fn stop_recording<R: Runtime>(app: AppHandle<R>, args: RecordingArgs) -> R
                 log_info!("Successfully showed recording stopped notification");
             }
 
-            Ok(())
+            Ok(audio::recording_commands::StopOutcome::Stopped)
         }
+        Ok(outcome) => Ok(outcome),
         Err(e) => {
             log_error!("Failed to stop audio recording: {}", e);
             // Still update the flag even if stopping failed
@@ -294,7 +416,7 @@ fn read_audio_file(file_path: String) -> Result<Vec<u8>, String> {
 
 #[tauri::command]
 async fn save_transcript(file_path: String, content: String) -> Result<(), String> {
-    log_info!("Saving transcript to: {}", file_path);
+    log_info!("Saving transcript");
 
     // Ensure parent directory exists
     if let Some(parent) = std::path::Path::new(&file_path).parent() {
@@ -375,37 +497,24 @@ async fn start_recording_with_devices_and_meeting<R: Runtime>(
     system_device_name: Option<String>,
     meeting_name: Option<String>,
 ) -> Result<(), String> {
-    log_info!("🚀 CALLED start_recording_with_devices_and_meeting - Mic: {:?}, System: {:?}, Meeting: {:?}",
-             mic_device_name, system_device_name, meeting_name);
-
-    // Clone meeting_name for notification use later
+    log_info!(
+        "Recording start requested; microphone_configured={}, system_audio_configured={}, meeting_name_configured={}",
+        mic_device_name.is_some(),
+        system_device_name.is_some(),
+        meeting_name.is_some()
+    );
     let meeting_name_for_notification = meeting_name.clone();
-
-    // Call the recording module functions that support meeting names
-    let recording_result = match (mic_device_name.clone(), system_device_name.clone()) {
-        (None, None) => {
-            log_info!(
-                "No devices specified, starting with defaults and meeting: {:?}",
-                meeting_name
-            );
-            audio::recording_commands::start_recording_with_meeting_name(app.clone(), meeting_name)
-                .await
-        }
-        _ => {
-            log_info!(
-                "Starting with specified devices: mic={:?}, system={:?}, meeting={:?}",
-                mic_device_name,
-                system_device_name,
-                meeting_name
-            );
-            audio::recording_commands::start_recording_with_devices_and_meeting(
-                app.clone(),
-                mic_device_name,
-                system_device_name,
-                meeting_name,
-            )
+    let recording_result = if mic_device_name.is_none() && system_device_name.is_none() {
+        audio::recording_commands::start_recording_with_meeting_name(app.clone(), meeting_name)
             .await
-        }
+    } else {
+        audio::recording_commands::start_recording_with_devices_and_meeting(
+            app.clone(),
+            mic_device_name,
+            system_device_name,
+            meeting_name,
+        )
+        .await
     };
 
     match recording_result {
@@ -465,9 +574,9 @@ pub fn run() {
     {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
             log_info!(
-                "Second app instance requested with args: {:?}, cwd: {:?}",
-                args,
-                cwd
+                "Second app instance requested; argument_count={}, cwd_present={}",
+                args.len(),
+                !cwd.is_empty()
             );
 
             tray::focus_main_window(app);
@@ -477,6 +586,7 @@ pub fn run() {
     builder
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_store::Builder::default().build())
+        .plugin(tauri_plugin_log::Builder::new().skip_logger().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
@@ -490,6 +600,30 @@ pub fn run() {
         .manage(audio::init_system_audio_state())
         .manage(summary::summary_engine::ModelManagerState(Arc::new(tokio::sync::Mutex::new(None))))
         .setup(|_app| {
+            // Fork decision (upstream 0.5.0 merge, 2026-11-17): main.rs
+            // installs the fork's env_logger (file log under the data root,
+            // panic hook, build banner) before Tauri starts. Upstream's
+            // rotating plugin logger can only attach when no logger is
+            // installed yet, so it stays off. Its code is kept unchanged to
+            // keep later upstream merges free of conflicts.
+            if UPSTREAM_PLUGIN_LOGGER {
+                let verbose = cfg!(debug_assertions)
+                    || std::env::var("MEETILY_DEBUG_LOG")
+                        .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+                        .unwrap_or(false);
+                let app_data_dir = _app.path().app_data_dir().ok();
+                match split_startup_logger(_app.handle(), app_data_dir, verbose) {
+                    Ok(((level, logger), persistent)) => {
+                        if tauri_plugin_log::attach_logger(level, logger).is_err() || !persistent {
+                            eprintln!("Meetily logging is unavailable or degraded.");
+                        }
+                    }
+                    Err(_) => eprintln!("Meetily logging is unavailable or degraded."),
+                }
+
+                log::info!("Starting application...");
+            }
+
             #[cfg(target_os = "windows")]
             match _app.path().resolve(
                 "onnxruntime.dll",
@@ -518,7 +652,6 @@ pub fn run() {
                     error
                 )),
             };
-
             log::info!("Application setup complete");
 
             // Resolve the data root before anything touches disk. main() already
@@ -695,6 +828,7 @@ pub fn run() {
             get_transcription_status,
             read_audio_file,
             save_transcript,
+            doodle::doodle_sync,
             analytics::commands::init_analytics,
             analytics::commands::disable_analytics,
             analytics::commands::track_event,
@@ -994,4 +1128,64 @@ pub fn run() {
                 _ => {}
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{acquire_startup_logger, startup_log_directory, StartupLogDestination};
+    use std::cell::RefCell;
+
+    #[test]
+    fn logging_startup_falls_back_when_log_path_is_a_file() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let app_data_dir = temp_dir.path().join("app-data");
+        std::fs::write(&app_data_dir, "").unwrap();
+        let attempts = RefCell::new(Vec::new());
+
+        let logger = acquire_startup_logger(Some(app_data_dir), |destination| match destination {
+            StartupLogDestination::Persistent(path) => {
+                attempts.borrow_mut().push("persistent");
+                std::fs::create_dir_all(path).map(|_| "persistent")
+            }
+            StartupLogDestination::Stream => {
+                attempts.borrow_mut().push("stream");
+                Ok("stream")
+            }
+        })
+        .unwrap();
+
+        assert_eq!(logger, ("stream", false));
+        assert_eq!(*attempts.borrow(), ["persistent", "stream"]);
+    }
+
+    #[test]
+    fn logging_startup_uses_persistent_sink_when_writable() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let app_data_dir = temp_dir.path().join("app-data");
+        let expected_log_dir = startup_log_directory(&app_data_dir);
+
+        let logger = acquire_startup_logger(Some(app_data_dir), |destination| match destination {
+            StartupLogDestination::Persistent(path) => {
+                std::fs::create_dir_all(&path)?;
+                Ok::<_, std::io::Error>(path)
+            }
+            StartupLogDestination::Stream => unreachable!("stream fallback was not needed"),
+        })
+        .unwrap();
+
+        assert!(logger.1);
+        assert_eq!(logger.0, expected_log_dir);
+        assert!(logger.0.is_dir());
+    }
+
+    #[test]
+    fn logging_startup_handles_missing_data_dir() {
+        let logger = acquire_startup_logger(None, |destination| match destination {
+            StartupLogDestination::Persistent(_) => unreachable!("no persistent path was provided"),
+            StartupLogDestination::Stream => Ok::<_, std::io::Error>("stream"),
+        })
+        .unwrap();
+
+        assert_eq!(logger, ("stream", false));
+    }
 }

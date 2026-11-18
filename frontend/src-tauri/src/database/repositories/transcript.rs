@@ -2,7 +2,7 @@ use crate::api::{TranscriptSearchResult, TranscriptSegment};
 use crate::database::models::MeetingSpeaker;
 use chrono::Utc;
 use sqlx::{Connection, Error as SqlxError, SqlitePool};
-use tracing::{error, info, warn};
+use log::{error, info, warn};
 use uuid::Uuid;
 
 pub struct TranscriptsRepository;
@@ -40,7 +40,7 @@ impl TranscriptsRepository {
         .await;
 
         if let Err(e) = result {
-            error!("Failed to create meeting '{}': {}", meeting_title, e);
+            error!("Failed to create meeting with id: {}", meeting_id);
             transaction.rollback().await?;
             return Err(e);
         }
@@ -66,10 +66,7 @@ impl TranscriptsRepository {
             .await;
 
             if let Err(e) = result {
-                error!(
-                    "Failed to save transcript segment for meeting {}: {}",
-                    meeting_id, e
-                );
+                error!("Failed to save transcript segment for meeting {}", meeting_id);
                 transaction.rollback().await?;
                 return Err(e);
             }

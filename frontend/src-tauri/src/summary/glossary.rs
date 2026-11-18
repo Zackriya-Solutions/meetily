@@ -5,7 +5,7 @@
 //! framed as spelling corrections for garbled terms, never as content.
 
 use std::path::{Path, PathBuf};
-use tracing::{info, warn};
+use log::{info, warn};
 
 const FILE_NAME: &str = "glossary.txt";
 const DEFAULT_GLOSSARY: &str = include_str!("default_glossary.txt");
