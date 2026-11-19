@@ -192,8 +192,8 @@ devDependencies:
     specifier: ^2.1.0
     version: 2.11.3
   '@tauri-apps/plugin-fs':
-    specifier: ~2.4.0
-    version: 2.4.5
+    specifier: ~2.5.0
+    version: 2.5.2
   '@types/bun':
     specifier: 1.3.14
     version: 1.3.14
@@ -3235,8 +3235,8 @@ packages:
       '@tauri-apps/cli-win32-x64-msvc': 2.11.3
     dev: true
 
-  /@tauri-apps/plugin-fs@2.4.5:
-    resolution: {integrity: sha512-dVxWWGE6VrOxC7/jlhyE+ON/Cc2REJlM35R3PJX3UvFw2XwYhLGQVAIyrehenDdKjotipjYEVc4YjOl3qq90fA==}
+  /@tauri-apps/plugin-fs@2.5.2:
+    resolution: {integrity: sha512-XXvMSnFiob+G1H+YHCDf+bzWVumseQuEIhzpbOJzevUfL4k0U+sTApZWJHpoLiamggnVPJm5dJ5sDsniRyWxlg==}
     dependencies:
       '@tauri-apps/api': 2.11.1
     dev: true
