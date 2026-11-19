@@ -34,6 +34,8 @@ static SESSIONS: Mutex<()> = Mutex::const_new(());
 struct Connections {
     host_id: String,
     active: Option<String>,
+    #[serde(default)]
+    summary_default: bool,
     profiles: Vec<Profile>,
 }
 
@@ -90,6 +92,7 @@ impl TokenResponse {
 
 #[derive(Serialize)]
 pub struct ConnectionStatus {
+    summary_default: bool,
     pub active_model: Option<String>,
     profiles: Vec<ProfileStatus>,
 }
@@ -109,6 +112,7 @@ impl Connections {
             Err(error) if error.kind() == ErrorKind::NotFound => Ok(Self {
                 host_id: format!("urn:uuid:{}", uuid::Uuid::new_v4()),
                 active: None,
+                summary_default: false,
                 profiles: vec![],
             }),
             Err(_) => Err("Could not open the ChatGPT connection.".into()),
@@ -134,6 +138,7 @@ impl Connections {
 
     fn status(&self) -> ConnectionStatus {
         ConnectionStatus {
+            summary_default: self.summary_default,
             active_model: self
                 .profiles
                 .iter()
@@ -324,6 +329,22 @@ pub async fn chatgpt_plan_status<R: Runtime>(
         return Ok(None);
     }
     Ok(Some(Connections::load(&app_path(&app)?)?.status()))
+}
+
+#[tauri::command]
+pub async fn chatgpt_plan_set_summary_default<R: Runtime>(
+    app: AppHandle<R>,
+    enabled: bool,
+) -> Result<ConnectionStatus, String> {
+    let _sessions = SESSIONS.lock().await;
+    let path = app_path(&app)?;
+    let mut data = Connections::load(&path)?;
+    if enabled && data.status().active_model.is_none() {
+        return Err(RECONNECT.into());
+    }
+    data.summary_default = enabled;
+    data.save(&path)?;
+    Ok(data.status())
 }
 
 #[tauri::command]
@@ -523,6 +544,9 @@ pub(super) async fn access_token(
     let _sessions = SESSIONS.lock().await;
     let path = path(dir);
     let mut data = Connections::load(&path)?;
+    if !data.summary_default {
+        return Err("Choose ChatGPT plan as your summary provider in Settings.".into());
+    }
     let profile = data
         .profiles
         .iter_mut()

@@ -118,7 +118,7 @@ export function SummaryModelSettings({ refetchTrigger }: SummaryModelSettingsPro
       toast.success('Model settings saved successfully');
     } catch (error) {
       console.error('Error saving model config:', error);
-      toast.error('Failed to save model settings');
+      throw new Error('Failed to save model settings');
     }
   };
 

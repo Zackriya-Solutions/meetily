@@ -462,28 +462,31 @@ export function useSummaryGeneration({
     toast.error(message);
   }, []);
 
-  const handleGenerateSummary = useCallback(async (customPrompt: string = '', useChatGPT = false) => {
+  const generateSummary = useCallback(async (customPrompt: string, {
+    regenerate = false,
+    automatic = false,
+  }: { regenerate?: boolean; automatic?: boolean } = {}) => {
     if (isModelConfigLoading) {
       toast.info('Loading model configuration, please wait...');
       return;
     }
     let chatGPT: { model: string; profileId: string } | undefined;
-    if (useChatGPT) {
-      try {
-        const status = await invokeTauri<ChatGPTPlanStatus | null>('chatgpt_plan_status');
-        const account = status?.profiles.find(profile => profile.active);
-        if (!status?.active_model || !account) {
+    try {
+      const status = await invokeTauri<ChatGPTPlanStatus | null>('chatgpt_plan_status');
+      if (status?.summary_default) {
+        if (automatic || !mountedRef.current || visibleMeetingIdRef.current !== meeting.id) return;
+        const account = status.profiles.find(profile => profile.active);
+        if (!status.active_model || !account) {
           toast.info('Connect your ChatGPT plan in Summary Settings first.');
           onOpenModelSettings?.();
           return;
         }
-        if (!mountedRef.current || visibleMeetingIdRef.current !== meeting.id) return;
         if (!window.confirm(`Send this meeting transcript to OpenAI to generate a summary using the ChatGPT plan for ${account.email}?`)) return;
         chatGPT = { model: status.active_model, profileId: account.id };
-      } catch (error) {
-        toast.error(String(error));
-        return;
       }
+    } catch (error) {
+      toast.error(String(error));
+      return;
     }
     const allTranscripts = await fetchAllTranscripts(meeting.id);
     if (!allTranscripts.length) {
@@ -492,7 +495,7 @@ export function useSummaryGeneration({
     }
 
     try {
-      if (!chatGPT && modelConfig.provider === 'ollama') {
+      if (!regenerate && !chatGPT && modelConfig.provider === 'ollama') {
         const models = await invokeTauri<unknown[]>('get_ollama_models', {
           endpoint: modelConfig.ollamaEndpoint || null,
         });
@@ -501,7 +504,7 @@ export function useSummaryGeneration({
           return;
         }
       }
-      if (!chatGPT && modelConfig.provider === 'builtin-ai') {
+      if (!regenerate && !chatGPT && modelConfig.provider === 'builtin-ai') {
         if (!modelConfig.model) {
           showPreflightError('No built-in AI model selected. Please select a model in settings.');
           onOpenModelSettings?.();
@@ -528,7 +531,7 @@ export function useSummaryGeneration({
       ...buildSummaryTranscriptPayload(allTranscripts),
       customPrompt,
       chatGPT,
-      isRegeneration: useChatGPT && !!parseSummaryContent(restored?.data),
+      isRegeneration: regenerate || (!!chatGPT && !!parseSummaryContent(restored?.data)),
     });
   }, [
     buildSummaryTranscriptPayload,
@@ -542,21 +545,14 @@ export function useSummaryGeneration({
     showPreflightError,
   ]);
 
-  // Public API: Regenerate summary from the current saved transcript
-  const handleRegenerateSummary = useCallback(async () => {
-    const allTranscripts = await fetchAllTranscripts(meeting.id);
+  const handleGenerateSummary = useCallback((customPrompt = '') =>
+    generateSummary(customPrompt), [generateSummary]);
 
-    if (!allTranscripts.length) {
-      console.error('No transcripts available for regeneration');
-      toast.error('No transcripts available for summary regeneration');
-      return;
-    }
+  const handleAutoGenerateSummary = useCallback(() =>
+    generateSummary('', { automatic: true }), [generateSummary]);
 
-    await processSummary({
-      ...buildSummaryTranscriptPayload(allTranscripts),
-      isRegeneration: true
-    });
-  }, [meeting.id, fetchAllTranscripts, buildSummaryTranscriptPayload, processSummary]);
+  const handleRegenerateSummary = useCallback(() =>
+    generateSummary('', { regenerate: true }), [generateSummary]);
 
   // Public API: Stop ongoing summary generation
   const handleStopGeneration = useCallback(async () => {
@@ -616,6 +612,7 @@ export function useSummaryGeneration({
     summaryStatus,
     summaryError,
     handleGenerateSummary,
+    handleAutoGenerateSummary,
     handleRegenerateSummary,
     handleStopGeneration,
     getSummaryStatusMessage,

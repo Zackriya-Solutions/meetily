@@ -112,7 +112,7 @@ export default function PageContent({
       toast.success('Model settings saved successfully');
     } catch (error) {
       console.error('Failed to save model config:', error);
-      toast.error('Failed to save model settings');
+      throw new Error('Failed to save model settings');
     }
   };
 
@@ -172,7 +172,7 @@ export default function PageContent({
     autoGenerationStartedMeetingIdRef.current = meeting.id;
     console.log(`🤖 Auto-generating summary with ${modelConfig.provider}/${modelConfig.model}...`);
     onAutoGenerateComplete?.();
-    void summaryGeneration.handleGenerateSummary('');
+    void summaryGeneration.handleAutoGenerateSummary();
   }, [
     shouldAutoGenerate,
     meeting.id,
@@ -180,7 +180,7 @@ export default function PageContent({
     isModelConfigLoading,
     modelConfig.provider,
     modelConfig.model,
-    summaryGeneration.handleGenerateSummary,
+    summaryGeneration.handleAutoGenerateSummary,
     summaryGeneration.summaryStatus,
     onAutoGenerateComplete,
   ]);

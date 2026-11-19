@@ -191,7 +191,7 @@ All data stays on your machine. Transcription models, recordings, and transcript
 
 ### ChatGPT plan summaries on macOS
 
-Connect an eligible plan under **Settings → Summary → ChatGPT plan**. Open a meeting and choose **Generate with ChatGPT** to use that plan for this summary. Meetily asks before sending the transcript to OpenAI. The regular summary button continues to use your configured provider. You can sign out or open ChatGPT usage settings from the same settings section.
+Choose **ChatGPT plan** under **Settings → Summary**, connect an eligible account, and save. Then use the usual **Generate Summary** button. Meetily asks before sending a transcript to OpenAI, and automatic summaries are paused while the plan is selected. Select another provider and save to switch back.
 
 ### 🌐 Custom OpenAI Endpoint Support
 

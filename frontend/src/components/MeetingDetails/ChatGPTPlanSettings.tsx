@@ -1,34 +1,29 @@
 "use client";
 
 import { invoke } from '@tauri-apps/api/core';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 
 export type ChatGPTPlanStatus = {
+  summary_default: boolean;
   active_model: string | null;
   profiles: { id: string; email: string; active: boolean }[];
 };
 
 const usageUrl = 'https://chatgpt.com/settings/usage';
 
-export function ChatGPTPlanSettings() {
-  const [status, setStatus] = useState<ChatGPTPlanStatus | null>(null);
+export function ChatGPTPlanSettings({ status, onStatusChange }: {
+  status: ChatGPTPlanStatus;
+  onStatusChange: (status: ChatGPTPlanStatus) => void;
+}) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
-
-  useEffect(() => {
-    let mounted = true;
-    invoke<ChatGPTPlanStatus>('chatgpt_plan_status')
-      .then(value => { if (mounted && value) setStatus(value); })
-      .catch(error => { if (mounted) setMessage(String(error)); });
-    return () => { mounted = false; };
-  }, []);
 
   async function connect(profileId: string | null) {
     setBusy(true);
     setMessage('Finish signing in in your browser.');
     try {
-      setStatus(await invoke<ChatGPTPlanStatus>('chatgpt_plan_connect', { profileId }));
+      onStatusChange(await invoke<ChatGPTPlanStatus>('chatgpt_plan_connect', { profileId }));
       setMessage('Connected.');
     } catch (error) {
       setMessage(String(error));
@@ -41,7 +36,7 @@ export function ChatGPTPlanSettings() {
     setBusy(true);
     try {
       const revoked = await invoke<boolean>('chatgpt_plan_disconnect');
-      setStatus(await invoke<ChatGPTPlanStatus>('chatgpt_plan_status'));
+      onStatusChange(await invoke<ChatGPTPlanStatus>('chatgpt_plan_status'));
       setMessage(revoked ? 'Signed out.' : 'Signed out here. Manage the connection in ChatGPT Settings.');
     } catch (error) {
       setMessage(String(error));
@@ -50,12 +45,11 @@ export function ChatGPTPlanSettings() {
     }
   }
 
-  if (!status) return message ? <p role="status" className="text-sm">{message}</p> : null;
   return (
     <section className="space-y-2 border-t pt-4" aria-label="ChatGPT plan">
       <p className="text-sm font-medium">ChatGPT plan</p>
       <p className="text-sm text-muted-foreground">
-        Use an eligible ChatGPT plan for summaries. Choose Generate with ChatGPT in a meeting to send its transcript to OpenAI.
+        Use an eligible ChatGPT plan for summaries. Meetily asks before sending a transcript to OpenAI. Automatic summaries are paused while this provider is selected.
       </p>
       {status.profiles.map((profile, index) => (
         <div key={profile.id} className="flex flex-wrap items-center gap-2 text-sm">
