@@ -1,6 +1,6 @@
 [package]
 name = "meetily"
-version = "0.4.1"
+version = "0.5.0"
 description = "A Tauri App for meeting minutes"
 authors = ["Sujith S"]
 license = "MIT"
@@ -93,8 +93,7 @@ chrono = { version = "0.4.31", features = ["serde"] }
 
 # Log
 log = "0.4"
-env_logger = "0.11"
-tracing = "0.1.40"
+tauri-plugin-log = { version = "2.6.0", features = ["colored"] }
 which = "6.0.1"
 
 # Bytes
@@ -137,6 +136,7 @@ dirs = "5.0.1"
 
 # Additional dependencies for notification system
 url = "2.5.0"
+open = { version = "5.3.3", features = ["shellexecute-on-windows"] }
 
 
 # System monitoring for resource management
@@ -178,6 +178,7 @@ tauri-plugin-single-instance = "=2.3.7"
 [target.'cfg(target_os = "macos")'.dependencies]
 objc = "0.2.7"
 tauri-plugin-log = { version = "2.6.0", features = ["colored"] }
+anyhow = "1.0"
 time = { version = "0.3", features = ["formatting"] }
 core-graphics = "0.23"
 cidre = { git = "https://github.com/yury/cidre", rev = "a9587fa", features = ["av"] }
@@ -219,6 +220,10 @@ sherpa-onnx = "1.13"
 whisper-rs = { version = "0.16.0", features = ["raw-api"] }
 futures-channel = "0.3.31"
 
+# Native PipeWire/PulseAudio client for system-audio capture (bypasses cpal's
+# ALSA-only host on Linux, no ~/.asoundrc setup required)
+libpulse-binding = "2.30.1"
+
 [dev-dependencies]
 tempfile = "3.3.0"
 infer = "0.15"
@@ -226,7 +231,6 @@ criterion = { version = "0.5.1", features = ["async_tokio"] }
 memory-stats = "1.0"
 strsim = "0.10.0"
 futures = "0.3.31"
-tracing-subscriber = "0.3.16"
 
 [patch.crates-io]
 cpal = { git = "https://github.com/RustAudio/cpal", rev = "51c3b43" }

@@ -232,7 +232,8 @@ fi
 echo -e "   Building in $HELPER_DIR with features: ${HELPER_FEATURES:-none}"
 # Keep $HELPER_FEATURES unquoted: it deliberately word-splits into
 # ("--features", "<value>"). Quoting would pass one argv entry and break cargo.
-if ! (cd "$HELPER_DIR" && cargo build --release $HELPER_FEATURES); then
+# llama.cpp's bundled cpp-httplib does not compile against OpenSSL 4 (const X509_NAME); the helper never uses HTTPS, so build it without OpenSSL.
+if ! (cd "$HELPER_DIR" && CMAKE_DISABLE_FIND_PACKAGE_OpenSSL=TRUE cargo build --release $HELPER_FEATURES); then
     echo -e "${RED}❌ Failed to build llama-helper${NC}"
     exit 1
 fi
