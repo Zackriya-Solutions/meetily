@@ -18,6 +18,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Sparkles, Settings, Loader2, FileText, Check, Square } from 'lucide-react';
 import Analytics from '@/lib/analytics';
+import { invoke } from '@tauri-apps/api/core';
 import { useState, useEffect, ReactNode } from 'react';
 
 interface SummaryGeneratorButtonGroupProps {
@@ -25,7 +26,7 @@ interface SummaryGeneratorButtonGroupProps {
   modelConfig: ModelConfig;
   setModelConfig: (config: ModelConfig | ((prev: ModelConfig) => ModelConfig)) => void;
   onSaveModelConfig: (config?: ModelConfig) => Promise<void>;
-  onGenerateSummary: (customPrompt: string) => Promise<void>;
+  onGenerateSummary: (customPrompt: string, useChatGPT?: boolean) => Promise<void>;
   onStopGeneration: () => void;
   customPrompt: string;
   summaryStatus: 'idle' | 'processing' | 'summarizing' | 'regenerating' | 'completed' | 'error';
@@ -55,6 +56,14 @@ export function SummaryGeneratorButtonGroup({
   onOpenModelSettings,
   languageSlot
 }: SummaryGeneratorButtonGroupProps) {
+  const [supportsChatGPTPlan, setSupportsChatGPTPlan] = useState(false);
+  useEffect(() => {
+    let mounted = true;
+    invoke('chatgpt_plan_status').then(status => {
+      if (mounted && status) setSupportsChatGPTPlan(true);
+    }).catch(() => {});
+    return () => { mounted = false; };
+  }, []);
   const [settingsDialogOpen, setSettingsDialogOpen] = useState(false);
 
   // Expose the function to open the modal via callback registration
@@ -124,6 +133,13 @@ export function SummaryGeneratorButtonGroup({
               <span className="hidden @[24rem]:inline">{hasSummary ? 'Regenerate Summary' : 'Generate Summary'}</span>
             </>
           )}
+        </Button>
+      )}
+
+      {!isGenerating && supportsChatGPTPlan && (
+        <Button type="button" variant="outline" size="sm" disabled={isModelConfigLoading}
+          onClick={() => void onGenerateSummary(customPrompt, true)}>
+          Generate with ChatGPT
         </Button>
       )}
 

@@ -1,3 +1,4 @@
+import { ChatGPTPlanSettings } from '@/components/MeetingDetails/ChatGPTPlanSettings';
 import { useState, useEffect, useRef } from 'react';
 import { useSidebar } from './Sidebar/SidebarProvider';
 import { invoke } from '@tauri-apps/api/core';
@@ -952,6 +953,8 @@ export function ModelSettingsModal({
             )}
           </div>
         </div>
+
+        <ChatGPTPlanSettings />
 
         {/* Custom OpenAI Configuration Section */}
         {modelConfig.provider === 'custom-openai' && (

@@ -472,8 +472,13 @@ pub async fn api_process_transcript<R: Runtime>(
     template_id: Option<String>,
     summary_language: Option<String>,
     _auth_token: Option<String>,
+    chatgpt_plan_profile_id: Option<String>,
 ) -> Result<ProcessTranscriptResponse, String> {
     use uuid::Uuid;
+
+    if model.eq_ignore_ascii_case("chatgpt-plan") && chatgpt_plan_profile_id.as_deref().is_none_or(str::is_empty) {
+        return Err("Confirm sending this transcript to OpenAI before using your ChatGPT plan.".into());
+    }
 
     let m_id = meeting_id.unwrap_or_else(|| format!("meeting-{}", Uuid::new_v4()));
     log_info!(
@@ -539,6 +544,7 @@ pub async fn api_process_transcript<R: Runtime>(
             final_prompt,
             final_template_id,
             summary_language,
+            chatgpt_plan_profile_id,
         )
         .await;
     });

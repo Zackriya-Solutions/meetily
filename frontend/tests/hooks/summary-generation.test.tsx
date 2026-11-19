@@ -30,6 +30,10 @@ const invoke = mock(async (command: string, args?: Record<string, unknown>): Pro
   if (command === 'doodle_sync') return null;
   if (command === 'api_get_summary') return getSummary(args!.meetingId as string);
   if (command === 'api_get_meeting_transcripts') return { transcripts: [{ text: 'Meeting transcript', timestamp: '00:00' }], total_count: 1 };
+  if (command === 'chatgpt_plan_status') return {
+    active_model: 'test-plan-model',
+    profiles: [{ id: 'oaiapp_test', email: 'test@example.com', active: true }],
+  };
   if (command === 'get_ollama_models') return [{ name: 'test' }];
   if (command === 'api_process_transcript') return startProcess();
   if (command === 'api_cancel_summary') return { cancelled: true };
@@ -70,6 +74,7 @@ let nextTimer = 0;
 const realSetInterval = globalThis.setInterval;
 const realClearInterval = globalThis.clearInterval;
 const originalDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
+const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
 beforeEach(() => {
   Object.defineProperty(globalThis, 'document', {
     configurable: true,
@@ -91,6 +96,8 @@ afterEach(async () => {
   globalThis.clearInterval = realClearInterval;
   if (originalDocument) Object.defineProperty(globalThis, 'document', originalDocument);
   else Reflect.deleteProperty(globalThis, 'document');
+  if (originalWindow) Object.defineProperty(globalThis, 'window', originalWindow);
+  else Reflect.deleteProperty(globalThis, 'window');
 });
 async function show(initialSummary: SummaryProcessResponse | null, meetingId = 'meeting-a') {
   await act(async () => {
@@ -278,4 +285,28 @@ describe('summary state restored when returning to a meeting', () => {
     expect(state.summaryStatus).toBe('completed');
     expect(text()).toContain('Finished summary');
   });
+});
+
+test('only a confirmed manual ChatGPT summary sends the transcript using the selected account', async () => {
+  const confirm = mock(() => false);
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: { confirm } });
+  await show(response({ status: 'completed', data: { markdown: 'Existing notes' } }));
+
+  await act(async () => state.handleGenerateSummary('', true));
+  expect(invoke.mock.calls.some(([command]) => command === 'api_get_meeting_transcripts')).toBe(false);
+  expect(invoke.mock.calls.some(([command]) => command === 'api_process_transcript')).toBe(false);
+
+  confirm.mockReturnValue(true);
+  await act(async () => state.handleGenerateSummary('', true));
+  const cloud = invoke.mock.calls.find(([command]) => command === 'api_process_transcript')?.[1];
+  expect(cloud).toMatchObject({
+    model: 'chatgpt-plan', modelName: 'test-plan-model', chatgptPlanProfileId: 'oaiapp_test', meetingId: 'meeting-a',
+  });
+
+  invoke.mockClear();
+  await act(async () => state.handleGenerateSummary());
+  const local = invoke.mock.calls.find(([command]) => command === 'api_process_transcript')?.[1];
+  expect(local).toMatchObject({ model: 'ollama', modelName: 'test' });
+  expect(local?.chatgptPlanProfileId).toBeUndefined();
+  expect(confirm).toHaveBeenCalledTimes(2);
 });

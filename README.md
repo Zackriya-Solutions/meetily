@@ -189,6 +189,10 @@ All data stays on your machine. Transcription models, recordings, and transcript
     <img src="docs/settings.png" width="650" style="border-radius: 10px;" alt="Local Transcription and storage" />
 </p>
 
+### ChatGPT plan summaries on macOS
+
+Connect an eligible plan under **Settings → Summary → ChatGPT plan**. Open a meeting and choose **Generate with ChatGPT** to use that plan for this summary. Meetily asks before sending the transcript to OpenAI. The regular summary button continues to use your configured provider. You can sign out or open ChatGPT usage settings from the same settings section.
+
 ### 🌐 Custom OpenAI Endpoint Support
 
 Use your own OpenAI-compatible endpoint for AI summaries. Perfect for organizations with custom AI infrastructure or preferred providers.

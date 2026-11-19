@@ -40,7 +40,7 @@ interface SummaryPanelProps {
   modelConfig: ModelConfig;
   setModelConfig: (config: ModelConfig | ((prev: ModelConfig) => ModelConfig)) => void;
   onSaveModelConfig: (config?: ModelConfig) => Promise<void>;
-  onGenerateSummary: (customPrompt: string) => Promise<void>;
+  onGenerateSummary: (customPrompt: string, useChatGPT?: boolean) => Promise<void>;
   onStopGeneration: () => void;
   customPrompt: string;
   onSaveSummary: (summary: MeetingSummary) => Promise<void>;

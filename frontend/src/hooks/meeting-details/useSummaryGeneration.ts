@@ -1,3 +1,4 @@
+import type { ChatGPTPlanStatus } from '@/components/MeetingDetails/ChatGPTPlanSettings';
 import { useState, useCallback, useRef, useEffect } from 'react';
 import {
   CancelSummaryResponse,
@@ -108,7 +109,7 @@ export function useSummaryGeneration({
   const trackedAttemptRef = useRef<{
     generationId: number;
     startedAt: number;
-    provider: ModelConfig['provider'];
+    provider: ModelConfig['provider'] | 'chatgpt-plan';
     model: ModelConfig['model'];
     finished: boolean;
   } | null>(null);
@@ -309,12 +310,16 @@ export function useSummaryGeneration({
     transcriptTexts,
     customPrompt = '',
     isRegeneration = false,
+    chatGPT,
   }: {
     transcriptText: string;
     transcriptTexts?: string[];
     customPrompt?: string;
     isRegeneration?: boolean;
+    chatGPT?: { model: string; profileId: string };
   }) => {
+    const provider = chatGPT ? 'chatgpt-plan' : modelConfig.provider;
+    const model = chatGPT?.model ?? modelConfig.model;
     const previousAttempt = trackedAttemptRef.current;
     if (previousAttempt && !previousAttempt.finished) {
       await finishGeneration(previousAttempt.generationId, 'cancelled');
@@ -335,13 +340,13 @@ export function useSummaryGeneration({
       trackedAttemptRef.current = {
         generationId,
         startedAt: Date.now(),
-        provider: modelConfig.provider,
-        model: modelConfig.model,
+        provider,
+        model,
         finished: false,
       };
       await Analytics.trackSummaryGenerationStarted(
-        modelConfig.provider,
-        modelConfig.model,
+        provider,
+        model,
         transcriptText.length,
         timeSinceRecording,
       );
@@ -349,7 +354,7 @@ export function useSummaryGeneration({
         await Analytics.trackCustomPromptUsed(customPrompt.trim().length);
       }
       toast.info(`${isRegeneration ? 'Regenerating' : 'Generating'} summary...`, {
-        description: `Using ${modelConfig.provider}/${modelConfig.model}`,
+        description: `Using ${provider}/${model}`,
         duration: 3000,
       });
 
@@ -363,8 +368,9 @@ export function useSummaryGeneration({
 
       const result = await invokeTauri<ProcessTranscriptResponse>('api_process_transcript', {
         text: transcriptText,
-        model: modelConfig.provider,
-        modelName: modelConfig.model,
+        model: provider,
+        chatgptPlanProfileId: chatGPT?.profileId,
+        modelName: model,
         meetingId: meeting.id,
         chunkSize: 40000,
         overlap: 1000,
@@ -383,7 +389,7 @@ export function useSummaryGeneration({
       startSummaryPolling(meeting.id, processId, result =>
         pollingResultRef.current(result, generationId, isRegeneration));
     } catch (error) {
-      await failGeneration(generationId, isRegeneration, error instanceof Error ? error.message : 'Summary generation failed.');
+      await failGeneration(generationId, isRegeneration, error instanceof Error ? error.message : typeof error === 'string' ? error : 'Summary generation failed.');
     }
   }, [
     failGeneration,
@@ -456,10 +462,28 @@ export function useSummaryGeneration({
     toast.error(message);
   }, []);
 
-  const handleGenerateSummary = useCallback(async (customPrompt: string = '') => {
+  const handleGenerateSummary = useCallback(async (customPrompt: string = '', useChatGPT = false) => {
     if (isModelConfigLoading) {
       toast.info('Loading model configuration, please wait...');
       return;
+    }
+    let chatGPT: { model: string; profileId: string } | undefined;
+    if (useChatGPT) {
+      try {
+        const status = await invokeTauri<ChatGPTPlanStatus | null>('chatgpt_plan_status');
+        const account = status?.profiles.find(profile => profile.active);
+        if (!status?.active_model || !account) {
+          toast.info('Connect your ChatGPT plan in Summary Settings first.');
+          onOpenModelSettings?.();
+          return;
+        }
+        if (!mountedRef.current || visibleMeetingIdRef.current !== meeting.id) return;
+        if (!window.confirm(`Send this meeting transcript to OpenAI to generate a summary using the ChatGPT plan for ${account.email}?`)) return;
+        chatGPT = { model: status.active_model, profileId: account.id };
+      } catch (error) {
+        toast.error(String(error));
+        return;
+      }
     }
     const allTranscripts = await fetchAllTranscripts(meeting.id);
     if (!allTranscripts.length) {
@@ -468,7 +492,7 @@ export function useSummaryGeneration({
     }
 
     try {
-      if (modelConfig.provider === 'ollama') {
+      if (!chatGPT && modelConfig.provider === 'ollama') {
         const models = await invokeTauri<unknown[]>('get_ollama_models', {
           endpoint: modelConfig.ollamaEndpoint || null,
         });
@@ -477,7 +501,7 @@ export function useSummaryGeneration({
           return;
         }
       }
-      if (modelConfig.provider === 'builtin-ai') {
+      if (!chatGPT && modelConfig.provider === 'builtin-ai') {
         if (!modelConfig.model) {
           showPreflightError('No built-in AI model selected. Please select a model in settings.');
           onOpenModelSettings?.();
@@ -499,14 +523,18 @@ export function useSummaryGeneration({
       return;
     }
 
+    if (!mountedRef.current || visibleMeetingIdRef.current !== meeting.id) return;
     await processSummary({
       ...buildSummaryTranscriptPayload(allTranscripts),
       customPrompt,
+      chatGPT,
+      isRegeneration: useChatGPT && !!parseSummaryContent(restored?.data),
     });
   }, [
     buildSummaryTranscriptPayload,
     fetchAllTranscripts,
     isModelConfigLoading,
+    restored?.data,
     meeting.id,
     modelConfig,
     onOpenModelSettings,
