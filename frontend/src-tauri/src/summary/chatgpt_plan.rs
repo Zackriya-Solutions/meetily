@@ -578,12 +578,6 @@ pub(super) async fn access_token(
     Ok(access)
 }
 
-#[derive(Default)]
-struct SummaryStream {
-    text: String,
-    data: Vec<String>,
-}
-
 fn provider_error(code: &str) -> String {
     match code {
         "subscription_sharing_usage_limit_exceeded" => {
@@ -597,39 +591,33 @@ fn provider_error(code: &str) -> String {
     .into()
 }
 
-impl SummaryStream {
-    fn line(&mut self, line: &str) -> Result<bool, String> {
-        if let Some(data) = line.strip_prefix("data:") {
-            self.data.push(data.trim_start().to_owned());
-        } else if line.is_empty() && !self.data.is_empty() {
-            let event: Value = serde_json::from_str(&std::mem::take(&mut self.data).join("\n"))
-                .map_err(|_| "OpenAI returned an invalid summary stream.")?;
-            match event["type"].as_str() {
-                Some("response.output_text.delta") => {
-                    let delta = event["delta"]
-                        .as_str()
-                        .ok_or("OpenAI returned an invalid text event.")?;
-                    if self.text.len() + delta.len() > 2_000_000 {
-                        return Err("ChatGPT summary exceeded the result size limit.".into());
-                    }
-                    self.text.push_str(delta);
-                }
-                Some("response.completed") if !self.text.trim().is_empty() => return Ok(true),
-                Some("response.completed") => {
-                    return Err("ChatGPT returned an empty summary.".into())
-                }
-                Some("response.failed" | "response.incomplete" | "error") => {
-                    return Err(provider_error(
-                        event["response"]["error"]["code"]
-                            .as_str()
-                            .or(event["code"].as_str())
-                            .unwrap_or_default(),
-                    ))
-                }
-                _ => {}
+fn completed_summary(data: &str) -> Result<Option<String>, String> {
+    let event: Value =
+        serde_json::from_str(data).map_err(|_| "OpenAI returned an invalid summary stream.")?;
+    match event["type"].as_str() {
+        Some("response.completed") => {
+            let text = event["response"]["output"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|item| item["type"] == "message" && item["role"] == "assistant")
+                .flat_map(|item| item["content"].as_array().into_iter().flatten())
+                .filter(|part| part["type"] == "output_text")
+                .filter_map(|part| part["text"].as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            if text.trim().is_empty() {
+                return Err("ChatGPT returned an empty summary.".into());
             }
+            Ok(Some(text))
         }
-        Ok(false)
+        Some("response.failed" | "response.incomplete" | "error") => Err(provider_error(
+            event["response"]["error"]["code"]
+                .as_str()
+                .or(event["code"].as_str())
+                .unwrap_or_default(),
+        )),
+        _ => Ok(None),
     }
 }
 
@@ -657,7 +645,7 @@ pub(super) async fn summarize(
             error["error"]["code"].as_str().unwrap_or_default(),
         ));
     }
-    let mut stream = SummaryStream::default();
+    let mut event = String::new();
     let mut line = Vec::new();
     while let Some(chunk) = response
         .chunk()
@@ -672,8 +660,18 @@ pub(super) async fn summarize(
             if part.ends_with(b"\n") {
                 let text =
                     std::str::from_utf8(&line).map_err(|_| "ChatGPT returned invalid UTF-8.")?;
-                if stream.line(text.trim_end_matches(['\r', '\n']))? {
-                    return Ok(stream.text);
+                let text = text.trim_end_matches(['\r', '\n']);
+                if let Some(data) = text.strip_prefix("data:") {
+                    if event.len() + data.len() > 2_000_000 {
+                        return Err("ChatGPT returned an oversized stream event.".into());
+                    }
+                    event.push_str(data.strip_prefix(' ').unwrap_or(data));
+                    event.push('\n');
+                } else if text.is_empty() && !event.is_empty() {
+                    if let Some(summary) = completed_summary(&event)? {
+                        return Ok(summary);
+                    }
+                    event.clear();
                 }
                 line.clear();
             }
@@ -740,29 +738,25 @@ mod tests {
     }
 
     #[test]
-    fn partial_summary_fails_on_plan_limit() {
-        let mut stream = SummaryStream::default();
-        assert!(!stream
-            .line(r#"data: {"type":"response.output_text.delta","delta":"Partial"}"#)
-            .unwrap());
-        assert!(!stream.line("").unwrap());
-        stream.line(r#"data: {"type":"response.failed","response":{"error":{"code":"subscription_sharing_usage_limit_exceeded"}}}"#).unwrap();
-        assert!(stream.line("").unwrap_err().contains("plan limit"));
-    }
-
-    #[test]
-    fn summary_is_available_only_after_completed_event() {
-        let mut stream = SummaryStream::default();
-        stream.line("event: response.output_text.delta").unwrap();
-        stream
-            .line(r#"data: {"type":"response.output_text.delta","delta":"Meeting notes"}"#)
-            .unwrap();
-        assert!(!stream.line("").unwrap());
-        stream
-            .line(r#"data: {"type":"response.completed"}"#)
-            .unwrap();
-        assert!(stream.line("").unwrap());
-        assert_eq!(stream.text, "Meeting notes");
+    fn only_completed_assistant_text_becomes_the_summary() {
+        assert_eq!(
+            completed_summary(r#"{"type":"response.output_text.delta","delta":"Partial"}"#),
+            Ok(None)
+        );
+        assert!(completed_summary(r#"{"type":"response.failed","response":{"error":{"code":"subscription_sharing_usage_limit_exceeded"}}}"#)
+            .unwrap_err().contains("plan limit"));
+        assert_eq!(
+            completed_summary(
+                r#"{"type":"response.completed","response":{"output":[
+            {"type":"reasoning","content":[{"type":"output_text","text":"Internal"}]},
+            {"type":"message","role":"assistant","content":[{"type":"output_text","text":"Meeting notes"}]}
+        ]}}"#
+            ),
+            Ok(Some("Meeting notes".into()))
+        );
+        assert!(
+            completed_summary(r#"{"type":"response.completed","response":{"output":[]}}"#).is_err()
+        );
     }
 
     #[cfg(unix)]
