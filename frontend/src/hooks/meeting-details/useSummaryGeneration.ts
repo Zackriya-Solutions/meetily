@@ -481,7 +481,8 @@ export function useSummaryGeneration({
           onOpenModelSettings?.();
           return;
         }
-        if (!window.confirm(`Send this meeting transcript to OpenAI to generate a summary using the ChatGPT plan for ${account.email}?`)) return;
+        const accepted = await invokeTauri<boolean>('chatgpt_plan_confirm_summary', { profileId: account.id });
+        if (accepted !== true || !mountedRef.current || visibleMeetingIdRef.current !== meeting.id) return;
         chatGPT = { model: status.active_model, profileId: account.id };
       }
     } catch (error) {

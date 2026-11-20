@@ -24,6 +24,7 @@ mock.module('../../src/lib/analytics', () => ({ default: {
   trackSummaryGenerationCompleted: trackCompletion,
 } }));
 let chatGPTDefault = false;
+const confirmSummary = mock(async () => false);
 let startProcess: () => Promise<{ process_id: string }>;
 let getSummary: (meetingId: string) => Promise<SummaryProcessResponse>;
 const invoke = mock(async (command: string, args?: Record<string, unknown>): Promise<unknown> => {
@@ -36,6 +37,7 @@ const invoke = mock(async (command: string, args?: Record<string, unknown>): Pro
     active_model: 'test-plan-model',
     profiles: [{ id: 'oaiapp_test', email: 'test@example.com', active: true }],
   };
+  if (command === 'chatgpt_plan_confirm_summary') return confirmSummary();
   if (command === 'get_ollama_models') return [{ name: 'test' }];
   if (command === 'api_process_transcript') return startProcess();
   if (command === 'api_cancel_summary') return { cancelled: true };
@@ -76,7 +78,6 @@ let nextTimer = 0;
 const realSetInterval = globalThis.setInterval;
 const realClearInterval = globalThis.clearInterval;
 const originalDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
-const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
 beforeEach(() => {
   Object.defineProperty(globalThis, 'document', {
     configurable: true,
@@ -85,6 +86,8 @@ beforeEach(() => {
   renderer = undefined as unknown as ReactTestRenderer;
   configuredModel = 'test';
   chatGPTDefault = false;
+  confirmSummary.mockReset();
+  confirmSummary.mockResolvedValue(false);
   timers.clear(); notify.mockClear(); trackCompletion.mockClear(); invoke.mockClear();
   getSummary = async () => response();
   startProcess = async () => ({ process_id: 'attempt-a' });
@@ -99,8 +102,6 @@ afterEach(async () => {
   globalThis.clearInterval = realClearInterval;
   if (originalDocument) Object.defineProperty(globalThis, 'document', originalDocument);
   else Reflect.deleteProperty(globalThis, 'document');
-  if (originalWindow) Object.defineProperty(globalThis, 'window', originalWindow);
-  else Reflect.deleteProperty(globalThis, 'window');
 });
 async function show(initialSummary: SummaryProcessResponse | null, meetingId = 'meeting-a') {
   await act(async () => {
@@ -292,17 +293,20 @@ describe('summary state restored when returning to a meeting', () => {
 
 test('the saved ChatGPT provider requires confirmation and skips automatic summaries', async () => {
   chatGPTDefault = true;
-  const confirm = mock(() => false);
-  Object.defineProperty(globalThis, 'window', { configurable: true, value: { confirm } });
   await show(response({ status: 'completed', data: { markdown: 'Existing notes' } }));
 
   await act(async () => state.handleAutoGenerateSummary());
-  expect(confirm).not.toHaveBeenCalled();
-  await act(async () => state.handleGenerateSummary());
+  expect(confirmSummary).not.toHaveBeenCalled();
+  let decline!: () => void;
+  confirmSummary.mockImplementationOnce(() => new Promise<boolean>(resolve => { decline = () => resolve(false); }));
+  let pending!: Promise<void>;
+  await act(async () => { pending = state.handleGenerateSummary(); });
+  expect(invoke.mock.calls.some(([command]) => command === 'api_get_meeting_transcripts')).toBe(false);
+  await act(async () => { decline(); await pending; });
   expect(invoke.mock.calls.some(([command]) => command === 'api_get_meeting_transcripts')).toBe(false);
   expect(invoke.mock.calls.some(([command]) => command === 'api_process_transcript')).toBe(false);
 
-  confirm.mockReturnValue(true);
+  confirmSummary.mockResolvedValue(true);
   await act(async () => state.handleGenerateSummary());
   const cloud = invoke.mock.calls.find(([command]) => command === 'api_process_transcript')?.[1];
   expect(cloud).toMatchObject({
@@ -319,5 +323,5 @@ test('the saved ChatGPT provider requires confirmation and skips automatic summa
   const local = invoke.mock.calls.find(([command]) => command === 'api_process_transcript')?.[1];
   expect(local).toMatchObject({ model: 'ollama', modelName: 'test' });
   expect(local?.chatgptPlanProfileId).toBeUndefined();
-  expect(confirm).toHaveBeenCalledTimes(3);
+  expect(confirmSummary).toHaveBeenCalledTimes(3);
 });

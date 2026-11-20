@@ -476,7 +476,7 @@ pub async fn api_process_transcript<R: Runtime>(
 ) -> Result<ProcessTranscriptResponse, String> {
     use uuid::Uuid;
 
-    if model.eq_ignore_ascii_case("chatgpt-plan") && chatgpt_plan_profile_id.as_deref().is_none_or(str::is_empty) {
+    if model.eq_ignore_ascii_case("chatgpt-plan") && chatgpt_plan_profile_id.as_deref().map_or(true, str::is_empty) {
         return Err("Confirm sending this transcript to OpenAI before using your ChatGPT plan.".into());
     }
 

@@ -216,7 +216,7 @@ fn callback(
     match (client, code) {
         (Some(client), Some(code))
             if client.starts_with("oaiapp_")
-                && expected_client.is_none_or(|expected| client == expected) =>
+                && expected_client.map_or(true, |expected| client == expected) =>
         {
             Some(Ok((client.to_owned(), code.to_string())))
         }
@@ -332,6 +332,32 @@ pub async fn chatgpt_plan_status<R: Runtime>(
 }
 
 #[tauri::command]
+pub async fn chatgpt_plan_confirm_summary<R: Runtime>(
+    app: AppHandle<R>,
+    profile_id: String,
+) -> Result<bool, String> {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+
+    let data = Connections::load(&app_path(&app)?)?;
+    let profile = data
+        .profiles
+        .iter()
+        .find(|p| p.client_id == profile_id && p.tokens.is_some())
+        .filter(|_| data.summary_default && data.active.as_ref() == Some(&profile_id))
+        .ok_or(RECONNECT)?;
+    let (answer, result) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .message(format!(
+            "Send this meeting transcript to OpenAI to generate a summary using the ChatGPT plan for {}?",
+            profile.email
+        ))
+        .title("Generate summary with ChatGPT")
+        .buttons(MessageDialogButtons::OkCancelCustom("Generate Summary".into(), "Cancel".into()))
+        .show(move |accepted| { let _ = answer.send(accepted); });
+    Ok(result.await.unwrap_or(false))
+}
+
+#[tauri::command]
 pub async fn chatgpt_plan_set_summary_default<R: Runtime>(
     app: AppHandle<R>,
     enabled: bool,
@@ -437,7 +463,7 @@ pub async fn chatgpt_plan_connect<R: Runtime>(
         .await
         .map_err(|_| "Could not verify the ChatGPT account.")?;
     let identity = verify_identity(&tokens.id_token, &keys, &client_id, &nonce)
-        .filter(|claims| returning.is_none_or(|p| p.subject == claims.sub))
+        .filter(|claims| returning.map_or(true, |p| p.subject == claims.sub))
         .ok_or("Could not verify the ChatGPT account.")?;
     let catalog: Value = client
         .get(format!("{RESOURCE}/models"))
