@@ -84,6 +84,12 @@ pub struct PipelineSettings {
     #[serde(default = "default_overlap")]
     pub summary_overlap: i32,
 
+    /// Identify speakers when the pipeline transcribes a meeting. On-device
+    /// transcription needs the speaker model downloaded; without it the
+    /// meeting is transcribed without speakers instead of failing.
+    #[serde(default = "default_true")]
+    pub diarization: bool,
+
     /// Consecutive hard failures before a meeting is left for manual retry.
     #[serde(default = "default_max_attempts")]
     pub max_attempts: i64,
@@ -107,6 +113,7 @@ impl Default for PipelineSettings {
             summary_template_id: default_template_id(),
             summary_chunk_size: default_chunk_size(),
             summary_overlap: default_overlap(),
+            diarization: default_true(),
             max_attempts: default_max_attempts(),
             run_state: PipelineRunState::default(),
             last_scan_at: None,
@@ -206,6 +213,7 @@ mod tests {
         let settings: PipelineSettings = serde_json::from_str(r#"{"idle_minutes": 12}"#).unwrap();
         assert_eq!(settings.idle_minutes, 12);
         assert!(settings.enabled);
+        assert!(settings.diarization);
         assert_eq!(settings.summary_template_id, "standard_meeting");
         assert_eq!(settings.run_state, PipelineRunState::Running);
     }

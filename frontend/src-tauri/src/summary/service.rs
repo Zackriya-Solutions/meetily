@@ -317,6 +317,22 @@ impl SummaryService {
         }
     }
 
+    /// Cancels whichever generation is running for the meeting. For a caller
+    /// that knows only the meeting, such as the pipeline's stop.
+    pub fn cancel_active_summary(meeting_id: &str) -> bool {
+        let registry = CANCELLATION_REGISTRY
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match registry.get(meeting_id) {
+            Some(entry) => {
+                info!("Cancelling summary generation for meeting: {}", meeting_id);
+                entry.token.cancel();
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Cleans up only the matching generation token after processing completes.
     /// Run one summary attempt so it always ends in a terminal state. A Rust
     /// panic (unwind) inside the attempt marks *that* attempt failed via the

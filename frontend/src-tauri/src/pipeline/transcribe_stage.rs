@@ -62,7 +62,20 @@ pub async fn run_transcribe_stage<R: Runtime>(
     meeting_id: &str,
     folder_path: &str,
     config: &TranscriptConfig,
+    identify_speakers: bool,
 ) -> Result<(), StageError> {
+    let diarization = wants_diarization(
+        identify_speakers,
+        config.is_remote(),
+        crate::diarization::engine::is_model_available,
+    );
+    if identify_speakers && !diarization {
+        log::info!(
+            "[pipeline] speaker model not downloaded; transcribing meeting {} without speakers",
+            meeting_id
+        );
+    }
+
     PIPELINE_RETRANSCRIPTION.claim(meeting_id);
 
     let result = start_retranscription(
@@ -74,9 +87,7 @@ pub async fn run_transcribe_stage<R: Runtime>(
         crate::get_language_preference_internal(),
         config.model.clone(),
         config.provider.clone(),
-        // The automatic pipeline does not ask for diarization; the user opts
-        // into it per job from the retranscribe dialog.
-        false,
+        diarization,
     )
     .await;
 
@@ -101,6 +112,20 @@ pub async fn run_transcribe_stage<R: Runtime>(
             }
         }
     }
+}
+
+/// Whether an automatic transcription asks for speakers.
+///
+/// A remote provider does its own speaker identification, or ignores the
+/// request. On-device transcription fails outright when asked for speakers
+/// without the model, and an unattended run must not fail on a setting, so it
+/// asks only once the model is there.
+fn wants_diarization(
+    identify_speakers: bool,
+    remote: bool,
+    model_available: impl FnOnce() -> bool,
+) -> bool {
+    identify_speakers && (remote || model_available())
 }
 
 /// Phrases a transcription stage treats as retry-later: cancellation (how the
@@ -199,6 +224,19 @@ mod tests {
                 "{message}"
             );
         }
+    }
+
+    #[test]
+    fn speakers_are_requested_only_when_they_can_be_identified() {
+        // Setting off: never, and the model is not even looked at.
+        assert!(!wants_diarization(false, false, || panic!("model checked")));
+        assert!(!wants_diarization(false, true, || panic!("model checked")));
+        // On-device: only with the model, so a missing download cannot fail
+        // every automatic transcription.
+        assert!(wants_diarization(true, false, || true));
+        assert!(!wants_diarization(true, false, || false));
+        // Remote providers do not use the local model.
+        assert!(wants_diarization(true, true, || panic!("model checked")));
     }
 
     #[test]

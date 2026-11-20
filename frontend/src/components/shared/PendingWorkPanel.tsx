@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { toast } from 'sonner';
-import { Loader2, Pause, Play, Trash2, LogIn } from 'lucide-react';
+import { Loader2, Pause, Play, Square, Trash2, LogIn } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ConfirmationModal } from '@/components/ConfirmationModel/confirmation-modal';
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
@@ -66,8 +66,9 @@ const STAGE_BADGE: Record<PipelineStage, string> = {
  * (`src-tauri/src/pipeline`), which keeps running with the window closed —
  * this panel only observes `pipeline-status` and `retranscription-progress`
  * events and offers the manual overrides: process a meeting now (skipping
- * the idle wait and a pause), pause/resume, sign in to SharePoint, and
- * remove a meeting that keeps failing.
+ * the idle wait and a pause), pause/resume, stop (cancel the meeting in
+ * progress and empty the queue), sign in to SharePoint, and remove a meeting
+ * that keeps failing.
  */
 export function PendingWorkPanel() {
   const { refetchMeetings } = useSidebar();
@@ -180,6 +181,22 @@ export function PendingWorkPanel() {
       setBusy(false);
     }
   }, [status]);
+
+  const handleStop = useCallback(async () => {
+    setBusy(true);
+    try {
+      await invoke('pipeline_stop');
+      toast.success('Stopped', {
+        description: 'The meetings stay in the list. Resume or Process now picks them up again.',
+      });
+    } catch (error) {
+      toast.error('Could not stop the pipeline', {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setBusy(false);
+    }
+  }, []);
 
   const handleSignIn = useCallback(async () => {
     setBusy(true);
@@ -379,6 +396,19 @@ export function PendingWorkPanel() {
                 </>
               )}
             </Button>
+            {(current || queuedIds.length > 0) && (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={handleStop}
+                disabled={busy}
+                className="mr-auto text-red-600 hover:text-red-700 hover:bg-red-50"
+                title="Cancel the meeting in progress, empty the queue and pause the pipeline"
+              >
+                <Square className="w-4 h-4" />
+                Stop
+              </Button>
+            )}
             <Button size="sm" onClick={handleProcessNow} disabled={selected.size === 0 || busy}>
               {`Process now${selected.size > 0 ? ` (${selected.size})` : ''}`}
             </Button>

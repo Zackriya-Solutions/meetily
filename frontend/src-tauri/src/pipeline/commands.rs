@@ -56,6 +56,39 @@ pub async fn pipeline_resume(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Stop everything the user can see in the pending-work panel: pause the
+/// pipeline, drop every "Process now" request, and cancel the meeting being
+/// transcribed or summarized. The meetings stay pending, with no failure
+/// recorded, so Resume or Process now picks them up again.
+#[tauri::command]
+pub async fn pipeline_stop(app: AppHandle) -> Result<(), String> {
+    let pipeline = handle().ok_or("The pipeline is not running")?;
+
+    // Pause before touching the running stage, so the loop cannot start the
+    // next meeting in between.
+    pipeline.set_run_state(PipelineRunState::PausedByUser).await;
+    settings::save_run_state(&app, &PipelineRunState::PausedByUser).await;
+    let unqueued = pipeline.clear_all_forced();
+
+    let current = pipeline.current().await;
+    if let Some(current) = &current {
+        pipeline.request_stop();
+        if current.stage == "transcribe" {
+            crate::audio::retranscription::cancel_retranscription(Some(&current.meeting_id));
+        } else {
+            crate::summary::service::SummaryService::cancel_active_summary(&current.meeting_id);
+        }
+    }
+    log::info!(
+        "[pipeline] stopped by the user ({} queued meeting(s) released, stage in progress: {})",
+        unqueued,
+        current.as_ref().map(|c| c.stage.as_str()).unwrap_or("none")
+    );
+
+    orchestrator::emit_status(&app).await;
+    Ok(())
+}
+
 /// Process the given meetings now: clears their retry state and lets them
 /// skip the grace window, the idle gate, and a user pause (but never a live
 /// recording).

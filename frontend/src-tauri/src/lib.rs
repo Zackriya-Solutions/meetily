@@ -990,6 +990,7 @@ pub fn run() {
             pipeline::commands::pipeline_set_settings,
             pipeline::commands::pipeline_pause,
             pipeline::commands::pipeline_resume,
+            pipeline::commands::pipeline_stop,
             pipeline::commands::pipeline_process_now,
             pipeline::commands::pipeline_sign_in_to_sharepoint,
             audio::recording_preferences::get_recording_preferences,

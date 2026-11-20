@@ -35,6 +35,7 @@ pub mod transcribe_stage;
 
 use serde::Serialize;
 use settings::PipelineRunState;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use tokio::sync::{Notify, RwLock};
@@ -143,6 +144,9 @@ pub struct PipelineHandle {
     /// Meetings the user explicitly asked to process now: these skip the
     /// grace window and the idle gate.
     forced: Mutex<Vec<String>>,
+    /// Set by a user stop while a stage is running, so the orchestrator can
+    /// tell that stage's cancellation apart from a failure.
+    stop_requested: AtomicBool,
 }
 
 impl PipelineHandle {
@@ -152,6 +156,7 @@ impl PipelineHandle {
             state: RwLock::new(state),
             current: RwLock::new(None),
             forced: Mutex::new(Vec::new()),
+            stop_requested: AtomicBool::new(false),
         }
     }
 
@@ -206,6 +211,38 @@ impl PipelineHandle {
         if let Ok(mut forced) = self.forced.lock() {
             forced.retain(|id| id != meeting_id);
         }
+    }
+
+    /// Drop every "Process now" request. Returns how many were queued.
+    pub(crate) fn clear_all_forced(&self) -> usize {
+        self.forced
+            .lock()
+            .map(|mut forced| {
+                let count = forced.len();
+                forced.clear();
+                count
+            })
+            .unwrap_or(0)
+    }
+
+    /// The user asked to stop the stage that is running now.
+    pub(crate) fn request_stop(&self) {
+        self.stop_requested.store(true, Ordering::SeqCst);
+    }
+
+    /// A new stage is starting: a stop aimed at an earlier one no longer applies.
+    pub(crate) fn begin_stage(&self) {
+        self.stop_requested.store(false, Ordering::SeqCst);
+    }
+
+    pub(crate) fn stop_requested(&self) -> bool {
+        self.stop_requested.load(Ordering::SeqCst)
+    }
+
+    /// Whether the stage that just ended was stopped by the user. Clears the
+    /// request, so it is answered once.
+    pub(crate) fn take_stop_request(&self) -> bool {
+        self.stop_requested.swap(false, Ordering::SeqCst)
     }
 
     pub fn wake(&self) {
@@ -357,6 +394,33 @@ mod tests {
         handle.clear_forced("m1");
         assert!(!handle.is_forced("m1"));
         assert!(handle.is_forced("m2"));
+    }
+
+    #[test]
+    fn stopping_empties_the_queue() {
+        let handle = PipelineHandle::new(PipelineRunState::Running);
+        handle.force(&["m1".to_string(), "m2".to_string()]);
+        assert_eq!(handle.clear_all_forced(), 2);
+        assert!(!handle.is_forced("m1"));
+        assert!(!handle.is_forced("m2"));
+        assert_eq!(handle.clear_all_forced(), 0);
+    }
+
+    #[test]
+    fn a_stop_request_applies_to_one_stage_only() {
+        let handle = PipelineHandle::new(PipelineRunState::Running);
+        assert!(!handle.take_stop_request());
+
+        handle.request_stop();
+        assert!(handle.stop_requested());
+        assert!(handle.take_stop_request());
+        // Answered once: the next stage's failure is a real failure.
+        assert!(!handle.take_stop_request());
+
+        // A stop left over from an earlier stage does not reach the next one.
+        handle.request_stop();
+        handle.begin_stage();
+        assert!(!handle.take_stop_request());
     }
 
     #[tokio::test]

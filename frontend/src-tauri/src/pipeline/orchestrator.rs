@@ -253,6 +253,7 @@ async fn process_one(
                 }
             };
 
+            pipeline.begin_stage();
             pipeline
                 .set_current(Some(CurrentItem {
                     meeting_id: item.meeting_id.clone(),
@@ -274,13 +275,18 @@ async fn process_one(
             )
             .await;
 
-            transcribe_stage::run_transcribe_stage(
-                app,
-                &item.meeting_id,
-                &folder,
-                &transcript_config,
-            )
-            .await
+            if pipeline.stop_requested() {
+                Err(stopped_before_start())
+            } else {
+                transcribe_stage::run_transcribe_stage(
+                    app,
+                    &item.meeting_id,
+                    &folder,
+                    &transcript_config,
+                    config.diarization,
+                )
+                .await
+            }
         }
         Stage::Summarize => {
             // A local summariser (Ollama / on-device sidecar) competes with the
@@ -304,6 +310,7 @@ async fn process_one(
                 }
             }
 
+            pipeline.begin_stage();
             pipeline
                 .set_current(Some(CurrentItem {
                     meeting_id: item.meeting_id.clone(),
@@ -322,10 +329,17 @@ async fn process_one(
             )
             .await;
 
-            summary_stage::run_summary_stage(app, pool, &item.meeting_id, config).await
+            if pipeline.stop_requested() {
+                Err(stopped_before_start())
+            } else {
+                summary_stage::run_summary_stage(app, pool, &item.meeting_id, config).await
+            }
         }
     };
 
+    // Read while the item is still current: a stop that arrives later finds
+    // nothing running and leaves no request behind.
+    let stopped_by_user = pipeline.take_stop_request();
     pipeline.set_current(None).await;
     if item.stage == Stage::Transcribe {
         crate::api::emit_meetings_changed(app, &item.meeting_id);
@@ -345,6 +359,18 @@ async fn process_one(
                 pipeline.clear_forced(&item.meeting_id);
             }
             true
+        }
+        // The user stopped this stage: not a failure, so no backoff and no
+        // error on the row. The meeting simply stays pending.
+        Err(_) if stopped_by_user => {
+            log::info!(
+                "[pipeline] {} of meeting {} stopped by the user",
+                item.stage.as_str(),
+                item.meeting_id
+            );
+            meta::reset(pool, &item.meeting_id).await;
+            pipeline.clear_forced(&item.meeting_id);
+            false
         }
         Err(e) => {
             log::warn!(
@@ -368,6 +394,12 @@ async fn process_one(
             false
         }
     }
+}
+
+/// The user pressed Stop between this meeting being picked and its stage
+/// starting, before there was anything to cancel.
+fn stopped_before_start() -> StageError {
+    StageError::transient("Stopped before it started")
 }
 
 async fn meeting_folder(pool: &SqlitePool, meeting_id: &str) -> Option<String> {

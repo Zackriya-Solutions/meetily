@@ -25,6 +25,7 @@ interface PipelineSettings {
   summary_template_id: string;
   summary_chunk_size: number;
   summary_overlap: number;
+  diarization: boolean;
   max_attempts: number;
   run_state: unknown;
   last_scan_at: string | null;
@@ -549,6 +550,23 @@ export function PreferenceSettings() {
                 checked={pipelineSettings.enabled}
                 onCheckedChange={(checked) =>
                   setPipelineSettings({ ...pipelineSettings, enabled: checked })
+                }
+              />
+            </div>
+
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="font-medium">Identify speakers</div>
+                <div className="text-xs text-gray-600">
+                  Automatic transcriptions also work out who spoke, which takes several extra
+                  minutes per meeting. On-device transcription needs the speaker model: download
+                  it once from a meeting&apos;s retranscribe dialog.
+                </div>
+              </div>
+              <Switch
+                checked={pipelineSettings.diarization}
+                onCheckedChange={(checked) =>
+                  setPipelineSettings({ ...pipelineSettings, diarization: checked })
                 }
               />
             </div>

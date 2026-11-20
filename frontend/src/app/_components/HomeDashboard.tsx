@@ -286,7 +286,7 @@ export function HomeDashboard({ recordingControls, showModal }: HomeDashboardPro
               <Mic className="inline w-3.5 h-3.5 mr-1 -mt-0.5" />
               {selectedDevices?.micDevice || 'Default microphone'}
               <span className="mx-2 text-gray-300">·</span>
-              {selectedDevices?.systemDevice || 'No system audio'}
+              {selectedDevices?.systemDevice || 'Default system audio'}
             </p>
           </div>
           <Button variant="ghost" size="sm" onClick={() => showModal('deviceSettings')} title="Choose devices">
