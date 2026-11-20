@@ -48,7 +48,44 @@ struct Profile {
     subject: String,
     email: String,
     model: String,
+    #[serde(default)]
+    models: Vec<PlanModel>,
     tokens: Option<Session>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+struct PlanModel {
+    slug: String,
+    display_name: String,
+}
+
+impl Profile {
+    fn update_models(&mut self, models: Vec<PlanModel>) {
+        if self.models.is_empty() || !models.iter().any(|model| model.slug == self.model) {
+            self.model = default_model(&models).unwrap_or_default().to_owned();
+        }
+        self.models = models;
+    }
+}
+
+fn default_model(models: &[PlanModel]) -> Option<&str> {
+    [
+        "gpt-6-luna",
+        "gpt-5.6-luna",
+        "gpt-6.1-terra",
+        "gpt-5.6-terra",
+    ]
+    .into_iter()
+    .find(|slug| models.iter().any(|model| &model.slug == slug))
+    .or_else(|| models.first().map(|model| model.slug.as_str()))
+}
+
+fn summary_effort(model: &str) -> Option<&'static str> {
+    match model {
+        "gpt-6-luna" | "gpt-5.6-luna" => Some("medium"),
+        "gpt-6.1-terra" | "gpt-5.6-terra" => Some("low"),
+        _ => None,
+    }
 }
 
 #[derive(Deserialize, Serialize)]
@@ -98,6 +135,7 @@ pub struct ConnectionStatus {
     summary_default: bool,
     pub auto_summary_allowed: bool,
     pub active_model: Option<String>,
+    models: Vec<PlanModel>,
     profiles: Vec<ProfileStatus>,
 }
 
@@ -215,17 +253,18 @@ impl Connections {
     }
 
     fn status(&self) -> ConnectionStatus {
+        let profile = self
+            .profiles
+            .iter()
+            .find(|p| self.active.as_ref() == Some(&p.client_id) && p.tokens.is_some());
         ConnectionStatus {
             summary_default: self.summary_default,
             auto_summary_allowed: self
                 .active
                 .as_deref()
                 .is_some_and(|id| self.auto_summary_allowed(id)),
-            active_model: self
-                .profiles
-                .iter()
-                .find(|p| self.active.as_ref() == Some(&p.client_id) && p.tokens.is_some())
-                .map(|p| p.model.clone()),
+            active_model: profile.map(|p| p.model.clone()),
+            models: profile.map(|p| p.models.clone()).unwrap_or_default(),
             profiles: self
                 .profiles
                 .iter()
@@ -414,17 +453,57 @@ async fn exchange(client: &Client, form: &[(&str, &str)]) -> Result<TokenRespons
         .map_err(|_| "OpenAI returned an invalid ChatGPT session.".into())
 }
 
+async fn fetch_models(client: &Client, token: &str) -> Result<Vec<PlanModel>, String> {
+    let catalog: Value = client
+        .get(format!("{RESOURCE}/models"))
+        .bearer_auth(token)
+        .send()
+        .await
+        .and_then(reqwest::Response::error_for_status)
+        .map_err(|_| "Could not list models for this ChatGPT plan.")?
+        .json()
+        .await
+        .map_err(|_| "Could not list models for this ChatGPT plan.")?;
+    let models: Vec<PlanModel> = catalog["models"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|model| model["visibility"] == "list")
+        .filter_map(|model| serde_json::from_value::<PlanModel>(model.clone()).ok())
+        .filter(|model| !model.slug.trim().is_empty() && !model.display_name.trim().is_empty())
+        .collect();
+    if models.is_empty() {
+        return Err("No models are available for this ChatGPT plan.".into());
+    }
+    Ok(models)
+}
+
 #[tauri::command]
 pub async fn chatgpt_plan_status<R: Runtime>(
     app: AppHandle<R>,
+    refresh_models: Option<bool>,
 ) -> Result<Option<ConnectionStatus>, String> {
     if !cfg!(target_os = "macos") {
         return Ok(None);
     }
     let _sessions = SESSIONS.lock().await;
-    Ok(Some(
-        Connections::load(&app_data_dir(&app)?).await?.status(),
-    ))
+    let dir = app_data_dir(&app)?;
+    let mut data = Connections::load(&dir).await?;
+    if refresh_models == Some(true) {
+        let index = data
+            .profiles
+            .iter()
+            .position(|p| data.active.as_ref() == Some(&p.client_id) && p.tokens.is_some())
+            .ok_or(RECONNECT)?;
+        let (token, renewed) = profile_token(&mut data.profiles[index]).await?;
+        if renewed {
+            data.save(&dir).await?;
+        }
+        let client = http_client(Duration::from_secs(20))?;
+        data.profiles[index].update_models(fetch_models(&client, &token).await?);
+        data.save(&dir).await?;
+    }
+    Ok(Some(data.status()))
 }
 
 pub(super) async fn confirm_summary<R: Runtime>(
@@ -483,6 +562,7 @@ pub async fn chatgpt_plan_set_summary_default<R: Runtime>(
     app: AppHandle<R>,
     enabled: Option<bool>,
     automatic: Option<bool>,
+    model: Option<String>,
 ) -> Result<ConnectionStatus, String> {
     let _sessions = SESSIONS.lock().await;
     let dir = app_data_dir(&app)?;
@@ -514,6 +594,23 @@ pub async fn chatgpt_plan_set_summary_default<R: Runtime>(
     } else {
         None
     };
+    if enabled {
+        if let Some(model) = model {
+            let profile = data
+                .profiles
+                .iter_mut()
+                .find(|p| data.active.as_ref() == Some(&p.client_id) && p.tokens.is_some())
+                .ok_or(RECONNECT)?;
+            if !profile
+                .models
+                .iter()
+                .any(|available| available.slug == model)
+            {
+                return Err("Choose a model available to this ChatGPT plan.".into());
+            }
+            profile.model = model;
+        }
+    }
     data.summary_default = enabled;
     data.save(&dir).await?;
     Ok(data.status())
@@ -611,38 +708,23 @@ pub async fn chatgpt_plan_connect<R: Runtime>(
     let identity = verify_identity(&tokens.id_token, &keys, &client_id, &nonce)
         .filter(|claims| returning.map_or(true, |p| p.subject == claims.sub))
         .ok_or("Could not verify the ChatGPT account.")?;
-    let catalog: Value = client
-        .get(format!("{RESOURCE}/models"))
-        .bearer_auth(&tokens.access_token)
-        .send()
-        .await
-        .and_then(reqwest::Response::error_for_status)
-        .map_err(|_| "Could not list models for this ChatGPT plan.")?
-        .json()
-        .await
-        .map_err(|_| "Could not list models for this ChatGPT plan.")?;
-    let model = catalog["models"]
-        .as_array()
-        .and_then(|models| {
-            models
-                .iter()
-                .filter(|model| model["visibility"] == "list")
-                .find_map(|model| model["slug"].as_str().filter(|s| !s.is_empty()))
-        })
-        .ok_or("No models are available for this ChatGPT plan.")?
-        .to_owned();
+    let models = fetch_models(&client, &tokens.access_token).await?;
 
     let _sessions = SESSIONS.lock().await;
     let mut data = Connections::load(&dir).await?;
-    data.profiles.retain(|p| p.client_id != client_id);
-    data.active = Some(client_id.clone());
-    data.profiles.push(Profile {
-        client_id,
+    let previous = data.profiles.iter().find(|p| p.client_id == client_id);
+    let mut profile = Profile {
+        client_id: client_id.clone(),
         subject: identity.sub,
         email: identity.email,
-        model,
+        model: previous.map(|p| p.model.clone()).unwrap_or_default(),
+        models: previous.map(|p| p.models.clone()).unwrap_or_default(),
         tokens: Some(tokens),
-    });
+    };
+    profile.update_models(models);
+    data.profiles.retain(|p| p.client_id != client_id);
+    data.active = Some(client_id);
+    data.profiles.push(profile);
     data.save(&dir).await?;
     Ok(data.status())
 }
@@ -728,9 +810,17 @@ pub(super) async fn access_token(
                 && p.client_id == approved_profile
         })
         .ok_or(RECONNECT)?;
+    let (access, renewed) = profile_token(profile).await?;
+    if renewed {
+        data.save(dir).await?;
+    }
+    Ok(access)
+}
+
+async fn profile_token(profile: &mut Profile) -> Result<(String, bool), String> {
     let tokens = profile.tokens.as_ref().ok_or(RECONNECT)?;
     if tokens.expires_at > chrono::Utc::now().timestamp() + 60 {
-        return Ok(tokens.access_token.clone());
+        return Ok((tokens.access_token.clone(), false));
     }
     let client = http_client(Duration::from_secs(20))?;
     let replacement = exchange(
@@ -746,8 +836,7 @@ pub(super) async fn access_token(
     .session(Some(tokens.id_token.clone()))?;
     let access = replacement.access_token.clone();
     profile.tokens = Some(replacement);
-    data.save(dir).await?;
-    Ok(access)
+    Ok((access, true))
 }
 
 fn provider_error(code: &str) -> String {
@@ -800,11 +889,15 @@ pub(super) async fn summarize(
     input: &str,
 ) -> Result<String, String> {
     let client = http_client(Duration::from_secs(300))?;
+    let mut payload = json!({"model": model, "instructions": instructions,
+        "input": [{"role": "user", "content": input}], "store": false, "stream": true});
+    if let Some(effort) = summary_effort(model) {
+        payload["reasoning"] = json!({"effort": effort});
+    }
     let mut response = client
         .post(format!("{RESOURCE}/responses"))
         .bearer_auth(token)
-        .json(&json!({"model": model, "instructions": instructions,
-            "input": [{"role": "user", "content": input}], "store": false, "stream": true}))
+        .json(&payload)
         .send()
         .await
         .map_err(|_| "Could not reach OpenAI to generate the summary.")?;
@@ -974,6 +1067,31 @@ mod tests {
         .unwrap();
         assert_eq!(connection.host_id, "keychain-host");
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn summary_default_prefers_available_luna_then_terra() {
+        let model = |slug: &str| PlanModel {
+            slug: slug.into(),
+            display_name: slug.into(),
+        };
+        let models = [
+            model("gpt-6.2-sol"),
+            model("gpt-6.1-terra"),
+            model("gpt-6-luna"),
+        ];
+        assert_eq!(default_model(&models), Some("gpt-6-luna"));
+        assert_eq!(default_model(&models[..2]), Some("gpt-6.1-terra"));
+        assert_eq!(default_model(&models[..1]), Some("gpt-6.2-sol"));
+        assert_eq!(
+            summary_effort(default_model(&models).unwrap()),
+            Some("medium")
+        );
+        assert_eq!(
+            summary_effort(default_model(&models[..2]).unwrap()),
+            Some("low")
+        );
+        assert_eq!(summary_effort(default_model(&models[..1]).unwrap()), None);
     }
 
     #[test]

@@ -191,7 +191,7 @@ All data stays on your machine. Transcription models, recordings, and transcript
 
 ### ChatGPT plan summaries on macOS
 
-Choose **ChatGPT plan** under **Settings → Summary**, connect an eligible account, and save. Then use the usual **Generate Summary** button. Meetily asks before sending a transcript to OpenAI for a manual summary. Turn on **Auto Summary** and approve automatic uploads to generate summaries after recording. Select another provider and save to switch back.
+Choose **ChatGPT plan** under **Settings → Summary**, connect an eligible account, pick one of its available models, and save. Meetily recommends Luna with Medium reasoning when available. Then use the usual **Generate Summary** button. Meetily asks before sending a transcript to OpenAI for a manual summary. Turn on **Auto Summary** and approve automatic uploads to generate summaries after recording. Select another provider and save to switch back.
 
 ### 🌐 Custom OpenAI Endpoint Support
 

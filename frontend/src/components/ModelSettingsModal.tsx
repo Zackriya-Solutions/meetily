@@ -648,6 +648,7 @@ export function ModelSettingsModal({
         const status = await invoke<ChatGPTPlanStatus>('chatgpt_plan_set_summary_default', {
           enabled: true,
           automatic: configContext?.isAutoSummary ?? false,
+          model: chatGPTStatus?.models.length ? chatGPTStatus.active_model : null,
         });
         setChatGPTStatus(status);
         toast.success('ChatGPT plan saved as your summary provider');
@@ -1000,7 +1001,11 @@ export function ModelSettingsModal({
         </div>
 
         {useChatGPT && chatGPTStatus && (
-          <ChatGPTPlanSettings status={chatGPTStatus} onStatusChange={setChatGPTStatus} />
+          <ChatGPTPlanSettings
+            status={chatGPTStatus}
+            onStatusChange={setChatGPTStatus}
+            onModelChange={model => setChatGPTStatus({ ...chatGPTStatus, active_model: model })}
+          />
         )}
 
         {/* Custom OpenAI Configuration Section */}
