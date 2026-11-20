@@ -474,6 +474,7 @@ pub async fn api_process_transcript<R: Runtime>(
     summary_language: Option<String>,
     _auth_token: Option<String>,
     chatgpt_plan_profile_id: Option<String>,
+    chatgpt_plan_automatic: Option<bool>,
 ) -> Result<Option<ProcessTranscriptResponse>, String> {
     use uuid::Uuid;
 
@@ -486,7 +487,9 @@ pub async fn api_process_transcript<R: Runtime>(
         let id = meeting_id.as_deref().ok_or("Choose a meeting to summarize.")?;
         let meeting = MeetingsRepository::get_meeting_metadata(&pool, id).await
             .map_err(|_| "Could not read the meeting.")?.ok_or("The meeting no longer exists.")?;
-        if !super::chatgpt_plan::confirm_summary(&app, profile_id, &meeting.title).await? {
+        if !super::chatgpt_plan::confirm_summary(
+            &app, profile_id, &meeting.title, chatgpt_plan_automatic.unwrap_or(false),
+        ).await? {
             return Ok(None);
         }
         Some(guard)

@@ -37,6 +37,8 @@ struct Connections {
     active: Option<String>,
     #[serde(default)]
     summary_default: bool,
+    #[serde(default)]
+    auto_summary_profile: Option<String>,
     profiles: Vec<Profile>,
 }
 
@@ -94,6 +96,7 @@ impl TokenResponse {
 #[derive(Serialize)]
 pub struct ConnectionStatus {
     summary_default: bool,
+    pub auto_summary_allowed: bool,
     pub active_model: Option<String>,
     profiles: Vec<ProfileStatus>,
 }
@@ -157,6 +160,7 @@ impl Connections {
                         host_id: format!("urn:uuid:{}", uuid::Uuid::new_v4()),
                         active: None,
                         summary_default: false,
+                        auto_summary_profile: None,
                         profiles: vec![],
                     });
                 }
@@ -200,9 +204,23 @@ impl Connections {
         .await
     }
 
+    fn auto_summary_allowed(&self, profile_id: &str) -> bool {
+        self.summary_default
+            && self.active.as_deref() == Some(profile_id)
+            && self.auto_summary_profile.as_deref() == Some(profile_id)
+            && self
+                .profiles
+                .iter()
+                .any(|p| p.client_id == profile_id && p.tokens.is_some())
+    }
+
     fn status(&self) -> ConnectionStatus {
         ConnectionStatus {
             summary_default: self.summary_default,
+            auto_summary_allowed: self
+                .active
+                .as_deref()
+                .is_some_and(|id| self.auto_summary_allowed(id)),
             active_model: self
                 .profiles
                 .iter()
@@ -413,9 +431,8 @@ pub(super) async fn confirm_summary<R: Runtime>(
     app: &AppHandle<R>,
     profile_id: &str,
     meeting_title: &str,
+    automatic: bool,
 ) -> Result<bool, String> {
-    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
-
     let data = {
         let _sessions = SESSIONS.lock().await;
         Connections::load(&app_data_dir(app)?).await?
@@ -426,29 +443,77 @@ pub(super) async fn confirm_summary<R: Runtime>(
         .find(|p| p.client_id == profile_id && p.tokens.is_some())
         .filter(|_| data.summary_default && data.active.as_deref() == Some(profile_id))
         .ok_or(RECONNECT)?;
-    let (answer, result) = tokio::sync::oneshot::channel();
-    app.dialog()
-        .message(format!(
+    if automatic {
+        return Ok(data.auto_summary_allowed(profile_id));
+    }
+    Ok(confirm(
+        app,
+        "Generate summary with ChatGPT",
+        format!(
             "Send the transcript of “{meeting_title}” to OpenAI to generate a summary using the ChatGPT plan for {}?",
             profile.email
+        ),
+        "Generate Summary",
+    ).await)
+}
+
+async fn confirm<R: Runtime>(
+    app: &AppHandle<R>,
+    title: &str,
+    message: String,
+    action: &str,
+) -> bool {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+    let (answer, result) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .message(message)
+        .title(title)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            action.into(),
+            "Cancel".into(),
         ))
-        .title("Generate summary with ChatGPT")
-        .buttons(MessageDialogButtons::OkCancelCustom("Generate Summary".into(), "Cancel".into()))
-        .show(move |accepted| { let _ = answer.send(accepted); });
-    Ok(result.await.unwrap_or(false))
+        .show(move |accepted| {
+            let _ = answer.send(accepted);
+        });
+    result.await.unwrap_or(false)
 }
 
 #[tauri::command]
 pub async fn chatgpt_plan_set_summary_default<R: Runtime>(
     app: AppHandle<R>,
-    enabled: bool,
+    enabled: Option<bool>,
+    automatic: Option<bool>,
 ) -> Result<ConnectionStatus, String> {
     let _sessions = SESSIONS.lock().await;
     let dir = app_data_dir(&app)?;
     let mut data = Connections::load(&dir).await?;
-    if enabled && data.status().active_model.is_none() {
+    let enabled = enabled.unwrap_or(data.summary_default);
+    let automatic = enabled && automatic.unwrap_or(false);
+    if enabled && (!data.summary_default || automatic) && data.status().active_model.is_none() {
         return Err(RECONNECT.into());
     }
+
+    data.auto_summary_profile = if automatic {
+        let profile = data
+            .profiles
+            .iter()
+            .find(|p| data.active.as_ref() == Some(&p.client_id) && p.tokens.is_some())
+            .ok_or(RECONNECT)?;
+        if !data.auto_summary_allowed(&profile.client_id) && !confirm(
+            &app,
+            "Allow automatic ChatGPT summaries",
+            format!(
+                "When Auto Summary is on, Meetily sends new meeting transcripts to OpenAI after recording to summarize them using the ChatGPT plan for {}.",
+                profile.email
+            ),
+            "Allow Auto Summary",
+        ).await {
+            return Err("Auto Summary was not authorized.".into());
+        }
+        Some(profile.client_id.clone())
+    } else {
+        None
+    };
     data.summary_default = enabled;
     data.save(&dir).await?;
     Ok(data.status())
@@ -599,6 +664,7 @@ pub async fn chatgpt_plan_disconnect<R: Runtime>(app: AppHandle<R>) -> Result<bo
         .find(|p| p.client_id == active)
         .ok_or(RECONNECT)?;
     let tokens = profile.tokens.take().ok_or(RECONNECT)?;
+    data.auto_summary_profile = None;
     // End local use even when OpenAI cannot confirm remote revocation.
     data.save(&dir).await?;
     let client = http_client(Duration::from_secs(5))?;
@@ -908,6 +974,28 @@ mod tests {
         .unwrap();
         assert_eq!(connection.host_id, "keychain-host");
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn automatic_summaries_require_consent_for_the_active_connection() {
+        let mut data: Connections = serde_json::from_value(json!({
+            "host_id": "host", "active": "first", "summary_default": true,
+            "profiles": [{
+                "client_id": "first", "subject": "subject", "email": "test@example.invalid",
+                "model": "test", "tokens": {
+                    "access_token": "test", "refresh_token": "test", "id_token": "test", "expires_at": 1
+                }
+            }]
+        })).unwrap();
+        assert!(!data.auto_summary_allowed("first"));
+        data.auto_summary_profile = Some("first".into());
+        assert!(data.auto_summary_allowed("first"));
+        data.active = Some("second".into());
+        assert!(!data.auto_summary_allowed("first"));
+        assert!(!data.auto_summary_allowed("second"));
+        data.active = Some("first".into());
+        data.summary_default = false;
+        assert!(!data.auto_summary_allowed("first"));
     }
 
     #[test]

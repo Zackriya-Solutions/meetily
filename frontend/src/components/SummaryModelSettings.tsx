@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
 import { ModelConfig, ModelSettingsModal } from '@/components/ModelSettingsModal';
+import type { ChatGPTPlanStatus } from '@/components/MeetingDetails/ChatGPTPlanSettings';
 import { SummaryLanguageSettings } from '@/components/SummaryLanguageSettings';
 import { Switch } from './ui/switch';
 import { useConfig } from '@/contexts/ConfigContext';
@@ -22,6 +23,23 @@ export function SummaryModelSettings({ refetchTrigger }: SummaryModelSettingsPro
   });
 
   const { isAutoSummary, toggleIsAutoSummary } = useConfig();
+
+  const [savingAutoSummary, setSavingAutoSummary] = useState(false);
+
+  const saveAutoSummary = async (enabled: boolean) => {
+    setSavingAutoSummary(true);
+    try {
+      const chatGPT = await invoke<ChatGPTPlanStatus | null>('chatgpt_plan_status');
+      if (chatGPT?.summary_default) {
+        await invoke('chatgpt_plan_set_summary_default', { automatic: enabled });
+      }
+      toggleIsAutoSummary(enabled);
+    } catch (error) {
+      toast.error(String(error));
+    } finally {
+      setSavingAutoSummary(false);
+    }
+  };
 
   // Reusable fetch function
   const fetchModelConfig = useCallback(async () => {
@@ -128,9 +146,9 @@ export function SummaryModelSettings({ refetchTrigger }: SummaryModelSettingsPro
         <div className="flex items-center justify-between">
           <div>
             <h3 className="text-lg font-semibold text-gray-900 mb-2">Auto Summary</h3>
-            <p className="text-sm text-gray-600">Auto Generating summary after meeting completion(Stopping)</p>
+            <p className="text-sm text-gray-600">Generate a summary after recording stops. Cloud providers receive the transcript.</p>
           </div>
-          <Switch checked={isAutoSummary} onCheckedChange={toggleIsAutoSummary} />
+          <Switch checked={isAutoSummary} disabled={savingAutoSummary} onCheckedChange={saveAutoSummary} />
         </div>
       </div>
 

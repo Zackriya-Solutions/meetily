@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 
 export type ChatGPTPlanStatus = {
   summary_default: boolean;
+  auto_summary_allowed: boolean;
   active_model: string | null;
   profiles: { id: string; email: string; active: boolean }[];
 };
@@ -49,7 +50,7 @@ export function ChatGPTPlanSettings({ status, onStatusChange }: {
     <section className="space-y-2 border-t pt-4" aria-label="ChatGPT plan">
       <p className="text-sm font-medium">ChatGPT plan</p>
       <p className="text-sm text-muted-foreground">
-        Use an eligible ChatGPT plan for summaries. Meetily asks before sending a transcript to OpenAI. Automatic summaries are paused while this provider is selected.
+        Use an eligible ChatGPT plan for summaries. Meetily asks before sending a transcript for a manual summary. Turn on Auto Summary to send transcripts to OpenAI after recording.
       </p>
       {status.profiles.map((profile, index) => (
         <div key={profile.id} className="flex flex-wrap items-center gap-2 text-sm">

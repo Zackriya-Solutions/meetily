@@ -26,6 +26,7 @@ mock.module('../../src/lib/analytics', () => ({ default: {
   trackSummaryGenerationCompleted: trackCompletion,
 } }));
 let chatGPTDefault = false;
+let chatGPTAutoAllowed = false;
 let startProcess: () => Promise<{ process_id: string } | null>;
 let getSummary: (meetingId: string) => Promise<SummaryProcessResponse>;
 const invoke = mock(async (command: string, args?: Record<string, unknown>): Promise<unknown> => {
@@ -35,6 +36,7 @@ const invoke = mock(async (command: string, args?: Record<string, unknown>): Pro
   if (command === 'api_get_meeting_transcripts') return { transcripts: [{ text: 'Meeting transcript', timestamp: '00:00' }], total_count: 1 };
   if (command === 'chatgpt_plan_status') return {
     summary_default: chatGPTDefault,
+    auto_summary_allowed: chatGPTAutoAllowed,
     active_model: 'test-plan-model',
     profiles: [{ id: 'oaiapp_test', email: 'test@example.com', active: true }],
   };
@@ -86,6 +88,7 @@ beforeEach(() => {
   renderer = undefined as unknown as ReactTestRenderer;
   configuredModel = 'test';
   chatGPTDefault = false;
+  chatGPTAutoAllowed = false;
   timers.clear(); notify.mockClear(); trackStart.mockClear(); trackPrompt.mockClear(); trackCompletion.mockClear(); invoke.mockClear();
   getSummary = async () => response();
   startProcess = async () => ({ process_id: 'attempt-a' });
@@ -296,6 +299,8 @@ test('the saved ChatGPT provider waits for native consent and only starts once',
 
   await act(async () => state.handleAutoGenerateSummary());
   expect(starts()).toHaveLength(0);
+  expect(notify).toHaveBeenCalledWith('Save ChatGPT plan settings to allow Auto Summary.');
+  notify.mockClear();
   let decline!: () => void;
   startProcess = () => new Promise(resolve => { decline = () => resolve(null); });
   let pending!: Promise<void>;
@@ -323,7 +328,8 @@ test('the saved ChatGPT provider waits for native consent and only starts once',
   });
   const cloud = invoke.mock.calls.find(([command]) => command === 'api_process_transcript')?.[1];
   expect(cloud).toMatchObject({
-    model: 'chatgpt-plan', modelName: 'test-plan-model', chatgptPlanProfileId: 'oaiapp_test', meetingId: 'meeting-a',
+    model: 'chatgpt-plan', modelName: 'test-plan-model', chatgptPlanProfileId: 'oaiapp_test',
+    chatgptPlanAutomatic: false, meetingId: 'meeting-a',
   });
 
   invoke.mockClear();
@@ -336,4 +342,16 @@ test('the saved ChatGPT provider waits for native consent and only starts once',
   const local = invoke.mock.calls.find(([command]) => command === 'api_process_transcript')?.[1];
   expect(local).toMatchObject({ model: 'ollama', modelName: 'test' });
   expect(local?.chatgptPlanProfileId).toBeUndefined();
+});
+
+test('Auto Summary uses the ChatGPT plan once automatic uploads are allowed', async () => {
+  await show(response({ status: 'completed' }));
+  chatGPTDefault = true;
+  chatGPTAutoAllowed = true;
+
+  await act(async () => state.handleAutoGenerateSummary());
+  const request = invoke.mock.calls.find(([command]) => command === 'api_process_transcript')?.[1];
+  expect(request).toMatchObject({
+    model: 'chatgpt-plan', chatgptPlanProfileId: 'oaiapp_test', chatgptPlanAutomatic: true, meetingId: 'meeting-a',
+  });
 });

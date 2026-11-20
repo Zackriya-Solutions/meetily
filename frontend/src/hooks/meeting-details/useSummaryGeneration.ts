@@ -317,7 +317,7 @@ export function useSummaryGeneration({
     transcriptTexts?: string[];
     customPrompt?: string;
     isRegeneration?: boolean;
-    chatGPT?: { model: string; profileId: string };
+    chatGPT?: { model: string; profileId: string; automatic: boolean };
   }) => {
     const provider = chatGPT ? 'chatgpt-plan' : modelConfig.provider;
     const model = chatGPT?.model ?? modelConfig.model;
@@ -375,6 +375,7 @@ export function useSummaryGeneration({
         text: transcriptText,
         model: provider,
         chatgptPlanProfileId: chatGPT?.profileId,
+        chatgptPlanAutomatic: chatGPT?.automatic,
         modelName: model,
         meetingId: meeting.id,
         chunkSize: 40000,
@@ -483,18 +484,22 @@ export function useSummaryGeneration({
       toast.info('Loading model configuration, please wait...');
       return;
     }
-    let chatGPT: { model: string; profileId: string } | undefined;
+    let chatGPT: { model: string; profileId: string; automatic: boolean } | undefined;
     try {
       const status = await invokeTauri<ChatGPTPlanStatus | null>('chatgpt_plan_status');
       if (status?.summary_default) {
-        if (automatic || !mountedRef.current || visibleMeetingIdRef.current !== meeting.id) return;
+        if (!mountedRef.current || visibleMeetingIdRef.current !== meeting.id) return;
+        if (automatic && !status.auto_summary_allowed) {
+          toast.info('Save ChatGPT plan settings to allow Auto Summary.');
+          return;
+        }
         const account = status.profiles.find(profile => profile.active);
         if (!status.active_model || !account) {
           toast.info('Connect your ChatGPT plan in Summary Settings first.');
           onOpenModelSettings?.();
           return;
         }
-        chatGPT = { model: status.active_model, profileId: account.id };
+        chatGPT = { model: status.active_model, profileId: account.id, automatic };
       }
     } catch (error) {
       toast.error(String(error));

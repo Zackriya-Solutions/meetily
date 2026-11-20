@@ -645,7 +645,10 @@ export function ModelSettingsModal({
     setSaving(true);
     try {
       if (useChatGPT) {
-        const status = await invoke<ChatGPTPlanStatus>('chatgpt_plan_set_summary_default', { enabled: true });
+        const status = await invoke<ChatGPTPlanStatus>('chatgpt_plan_set_summary_default', {
+          enabled: true,
+          automatic: configContext?.isAutoSummary ?? false,
+        });
         setChatGPTStatus(status);
         toast.success('ChatGPT plan saved as your summary provider');
         onSettingsSaved?.();

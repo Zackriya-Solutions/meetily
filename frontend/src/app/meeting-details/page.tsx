@@ -1,4 +1,5 @@
 "use client"
+import type { ChatGPTPlanStatus } from '@/components/MeetingDetails/ChatGPTPlanSettings';
 import { useSidebar } from "@/components/Sidebar/SidebarProvider";
 import { useState, useEffect, useCallback, Suspense } from "react";
 import { MeetingSummary, SummaryProcessResponse, Transcript } from "@/types";
@@ -82,6 +83,13 @@ function MeetingDetailsContent() {
     }
 
     try {
+      const chatGPT = await invoke<ChatGPTPlanStatus | null>('chatgpt_plan_status');
+      if (chatGPT?.summary_default) {
+        setShouldAutoGenerate(true);
+        setHasCheckedAutoGen(true);
+        return;
+      }
+
       // Check what's currently in database
       const currentConfig = await invoke('api_get_model_config') as any;
 
