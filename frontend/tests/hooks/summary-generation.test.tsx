@@ -24,8 +24,7 @@ mock.module('../../src/lib/analytics', () => ({ default: {
   trackSummaryGenerationCompleted: trackCompletion,
 } }));
 let chatGPTDefault = false;
-const confirmSummary = mock(async () => false);
-let startProcess: () => Promise<{ process_id: string }>;
+let startProcess: () => Promise<{ process_id: string } | null>;
 let getSummary: (meetingId: string) => Promise<SummaryProcessResponse>;
 const invoke = mock(async (command: string, args?: Record<string, unknown>): Promise<unknown> => {
   if (command === 'api_get_meetings') return [];
@@ -37,7 +36,6 @@ const invoke = mock(async (command: string, args?: Record<string, unknown>): Pro
     active_model: 'test-plan-model',
     profiles: [{ id: 'oaiapp_test', email: 'test@example.com', active: true }],
   };
-  if (command === 'chatgpt_plan_confirm_summary') return confirmSummary();
   if (command === 'get_ollama_models') return [{ name: 'test' }];
   if (command === 'api_process_transcript') return startProcess();
   if (command === 'api_cancel_summary') return { cancelled: true };
@@ -86,8 +84,6 @@ beforeEach(() => {
   renderer = undefined as unknown as ReactTestRenderer;
   configuredModel = 'test';
   chatGPTDefault = false;
-  confirmSummary.mockReset();
-  confirmSummary.mockResolvedValue(false);
   timers.clear(); notify.mockClear(); trackCompletion.mockClear(); invoke.mockClear();
   getSummary = async () => response();
   startProcess = async () => ({ process_id: 'attempt-a' });
@@ -291,22 +287,25 @@ describe('summary state restored when returning to a meeting', () => {
   });
 });
 
-test('the saved ChatGPT provider requires confirmation and skips automatic summaries', async () => {
+test('the saved ChatGPT provider waits for native consent and only starts once', async () => {
   chatGPTDefault = true;
   await show(response({ status: 'completed', data: { markdown: 'Existing notes' } }));
+  const starts = () => invoke.mock.calls.filter(([command]) => command === 'api_process_transcript');
 
   await act(async () => state.handleAutoGenerateSummary());
-  expect(confirmSummary).not.toHaveBeenCalled();
+  expect(starts()).toHaveLength(0);
   let decline!: () => void;
-  confirmSummary.mockImplementationOnce(() => new Promise<boolean>(resolve => { decline = () => resolve(false); }));
+  startProcess = () => new Promise(resolve => { decline = () => resolve(null); });
   let pending!: Promise<void>;
   await act(async () => { pending = state.handleGenerateSummary(); });
-  expect(invoke.mock.calls.some(([command]) => command === 'api_get_meeting_transcripts')).toBe(false);
+  await act(async () => state.handleGenerateSummary());
+  expect(starts()).toHaveLength(1);
   await act(async () => { decline(); await pending; });
-  expect(invoke.mock.calls.some(([command]) => command === 'api_get_meeting_transcripts')).toBe(false);
-  expect(invoke.mock.calls.some(([command]) => command === 'api_process_transcript')).toBe(false);
+  expect(state.summaryStatus).toBe('completed');
+  expect(text()).toContain('Existing notes');
 
-  confirmSummary.mockResolvedValue(true);
+  startProcess = async () => ({ process_id: 'attempt-a' });
+  invoke.mockClear();
   await act(async () => state.handleGenerateSummary());
   const cloud = invoke.mock.calls.find(([command]) => command === 'api_process_transcript')?.[1];
   expect(cloud).toMatchObject({
@@ -323,5 +322,4 @@ test('the saved ChatGPT provider requires confirmation and skips automatic summa
   const local = invoke.mock.calls.find(([command]) => command === 'api_process_transcript')?.[1];
   expect(local).toMatchObject({ model: 'ollama', modelName: 'test' });
   expect(local?.chatgptPlanProfileId).toBeUndefined();
-  expect(confirmSummary).toHaveBeenCalledTimes(3);
 });

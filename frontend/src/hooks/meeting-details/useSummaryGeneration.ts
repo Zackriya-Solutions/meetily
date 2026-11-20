@@ -106,6 +106,7 @@ export function useSummaryGeneration({
   visibleMeetingIdRef.current = meeting.id;
   const generationIdRef = useRef(0);
   const activeProcessIdRef = useRef<string | null>(null);
+  const chatGPTStartPending = useRef(false);
   const trackedAttemptRef = useRef<{
     generationId: number;
     startedAt: number;
@@ -366,7 +367,7 @@ export function useSummaryGeneration({
         return;
       }
 
-      const result = await invokeTauri<ProcessTranscriptResponse>('api_process_transcript', {
+      const result = await invokeTauri<ProcessTranscriptResponse | null>('api_process_transcript', {
         text: transcriptText,
         model: provider,
         chatgptPlanProfileId: chatGPT?.profileId,
@@ -378,8 +379,15 @@ export function useSummaryGeneration({
         templateId: selectedTemplate,
         summaryLanguage,
       });
-      const processId = result.process_id;
       if (!mountedRef.current || visibleMeetingIdRef.current !== meeting.id) return;
+      if (!result) {
+        if (generationId === generationIdRef.current) {
+          setSummaryStatus(isRegeneration ? 'completed' : 'idle');
+          await finishGeneration(generationId, 'cancelled');
+        }
+        return;
+      }
+      const processId = result.process_id;
       if (generationId !== generationIdRef.current) {
         await invokeTauri('api_cancel_summary', { meetingId: meeting.id, processId }).catch(() => {});
         return;
@@ -481,8 +489,6 @@ export function useSummaryGeneration({
           onOpenModelSettings?.();
           return;
         }
-        const accepted = await invokeTauri<boolean>('chatgpt_plan_confirm_summary', { profileId: account.id });
-        if (accepted !== true || !mountedRef.current || visibleMeetingIdRef.current !== meeting.id) return;
         chatGPT = { model: status.active_model, profileId: account.id };
       }
     } catch (error) {
@@ -528,12 +534,18 @@ export function useSummaryGeneration({
     }
 
     if (!mountedRef.current || visibleMeetingIdRef.current !== meeting.id) return;
-    await processSummary({
-      ...buildSummaryTranscriptPayload(allTranscripts),
-      customPrompt,
-      chatGPT,
-      isRegeneration: regenerate || (!!chatGPT && !!parseSummaryContent(restored?.data)),
-    });
+    if (chatGPT && chatGPTStartPending.current) return;
+    if (chatGPT) chatGPTStartPending.current = true;
+    try {
+      await processSummary({
+        ...buildSummaryTranscriptPayload(allTranscripts),
+        customPrompt,
+        chatGPT,
+        isRegeneration: regenerate || (!!chatGPT && !!parseSummaryContent(restored?.data)),
+      });
+    } finally {
+      if (chatGPT) chatGPTStartPending.current = false;
+    }
   }, [
     buildSummaryTranscriptPayload,
     fetchAllTranscripts,

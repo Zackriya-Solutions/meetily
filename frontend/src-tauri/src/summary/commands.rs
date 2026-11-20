@@ -22,6 +22,7 @@ use tauri::{AppHandle, Runtime};
 
 static SUMMARY_START_LOCK: LazyLock<tokio::sync::Mutex<()>> =
     LazyLock::new(|| tokio::sync::Mutex::new(()));
+static CHATGPT_SUMMARY_START: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static LAST_SUMMARY_START: LazyLock<Mutex<Option<DateTime<Utc>>>> =
     LazyLock::new(|| Mutex::new(None));
 fn next_summary_start(now: DateTime<Utc>) -> DateTime<Utc> {
@@ -473,12 +474,25 @@ pub async fn api_process_transcript<R: Runtime>(
     summary_language: Option<String>,
     _auth_token: Option<String>,
     chatgpt_plan_profile_id: Option<String>,
-) -> Result<ProcessTranscriptResponse, String> {
+) -> Result<Option<ProcessTranscriptResponse>, String> {
     use uuid::Uuid;
 
-    if model.eq_ignore_ascii_case("chatgpt-plan") && chatgpt_plan_profile_id.as_deref().map_or(true, str::is_empty) {
-        return Err("Confirm sending this transcript to OpenAI before using your ChatGPT plan.".into());
-    }
+    let pool = state.db_manager.pool().clone();
+    let _chatgpt_start = if model.eq_ignore_ascii_case("chatgpt-plan") {
+        let guard = CHATGPT_SUMMARY_START.try_lock()
+            .map_err(|_| "A ChatGPT summary confirmation is already in progress.")?;
+        let profile_id = chatgpt_plan_profile_id.as_deref()
+            .filter(|id| !id.is_empty()).ok_or("Choose a ChatGPT account for this summary.")?;
+        let id = meeting_id.as_deref().ok_or("Choose a meeting to summarize.")?;
+        let meeting = MeetingsRepository::get_meeting_metadata(&pool, id).await
+            .map_err(|_| "Could not read the meeting.")?.ok_or("The meeting no longer exists.")?;
+        if !super::chatgpt_plan::confirm_summary(&app, profile_id, &meeting.title).await? {
+            return Ok(None);
+        }
+        Some(guard)
+    } else {
+        None
+    };
 
     let m_id = meeting_id.unwrap_or_else(|| format!("meeting-{}", Uuid::new_v4()));
     log_info!(
@@ -487,7 +501,6 @@ pub async fn api_process_transcript<R: Runtime>(
         &model
     );
 
-    let pool = state.db_manager.pool().clone();
     let final_prompt = custom_prompt.unwrap_or_else(|| "".to_string());
     let final_template_id = template_id.unwrap_or_else(|| "daily_standup".to_string());
 
@@ -550,10 +563,10 @@ pub async fn api_process_transcript<R: Runtime>(
     });
 
     log_info!("🚀 Background task spawned for meeting_id: {}", &m_id);
-    Ok(ProcessTranscriptResponse {
+    Ok(Some(ProcessTranscriptResponse {
         message: "Summary generation started".to_string(),
         process_id: started_at.to_rfc3339_opts(SecondsFormat::Nanos, true),
-    })
+    }))
 }
 
 /// Cancels an ongoing summary generation process

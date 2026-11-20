@@ -3653,6 +3653,7 @@ dependencies = [
  "ring",
  "ringbuf",
  "rubato 0.15.0",
+ "security-framework",
  "serde",
  "serde_json",
  "sha2",
