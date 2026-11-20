@@ -1,3 +1,4 @@
+import { ChatGPTPlanSettings, type ChatGPTPlanStatus } from '@/components/MeetingDetails/ChatGPTPlanSettings';
 import { useState, useEffect, useRef } from 'react';
 import { useSidebar } from './Sidebar/SidebarProvider';
 import { invoke } from '@tauri-apps/api/core';
@@ -104,7 +105,8 @@ const GROQ_FALLBACK_MODELS = [
 interface ModelSettingsModalProps {
   modelConfig: ModelConfig;
   setModelConfig: (config: ModelConfig | ((prev: ModelConfig) => ModelConfig)) => void;
-  onSave: (config: ModelConfig) => void;
+  onSave: (config: ModelConfig) => void | Promise<void>;
+  onSettingsSaved?: () => void;
   skipInitialFetch?: boolean; // Optional: skip fetching config from backend if parent manages it
   layout?: 'inline' | 'dialog';
 }
@@ -122,6 +124,7 @@ export function ModelSettingsModal({
   modelConfig: propsModelConfig,
   setModelConfig: propsSetModelConfig,
   onSave,
+  onSettingsSaved,
   skipInitialFetch = false,
   layout = 'inline',
 }: ModelSettingsModalProps) {
@@ -131,6 +134,21 @@ export function ModelSettingsModal({
   const setModelConfig = configContext?.setModelConfig || propsSetModelConfig;
   const providerApiKeys = configContext?.providerApiKeys;
   const updateProviderApiKey = configContext?.updateProviderApiKey;
+
+  const [chatGPTStatus, setChatGPTStatus] = useState<ChatGPTPlanStatus | null>(null);
+  const [useChatGPT, setUseChatGPT] = useState(false);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    let mounted = true;
+    invoke<ChatGPTPlanStatus | null>('chatgpt_plan_status')
+      .then(status => {
+        if (!mounted) return;
+        setChatGPTStatus(status);
+        setUseChatGPT(status?.summary_default ?? false);
+      })
+      .catch(() => {});
+    return () => { mounted = false; };
+  }, []);
 
   const [models, setModels] = useState<OllamaModel[]>([]);
   const [error, setError] = useState<string>('');
@@ -258,10 +276,10 @@ export function ModelSettingsModal({
     !customOpenAIModel.trim()
   );
 
-  const isDoneDisabled =
-    (requiresApiKey && (!apiKey || (typeof apiKey === 'string' && !apiKey.trim()))) ||
+  const isModelInvalid = (requiresApiKey && !apiKey?.trim()) ||
     (modelConfig.provider === 'ollama' && ollamaEndpointChanged) ||
     isCustomOpenAIInvalid;
+  const isDoneDisabled = saving || (useChatGPT ? !chatGPTStatus?.active_model : isModelInvalid);
 
   useEffect(() => {
     const fetchModelConfig = async () => {
@@ -624,6 +642,28 @@ export function ModelSettingsModal({
   }, [models, openRouterModels, builtinAiModels, openaiModels, claudeModels, groqModels, modelConfig.provider]);
 
   const handleSave = async () => {
+    setSaving(true);
+    try {
+      if (useChatGPT) {
+        const status = await invoke<ChatGPTPlanStatus>('chatgpt_plan_set_summary_default', {
+          enabled: true,
+          automatic: configContext?.isAutoSummary ?? false,
+          model: chatGPTStatus?.models.length ? chatGPTStatus.active_model : null,
+        });
+        setChatGPTStatus(status);
+        toast.success('ChatGPT plan saved as your summary provider');
+        onSettingsSaved?.();
+      } else {
+        await saveModelConfig();
+      }
+    } catch (error) {
+      toast.error(String(error));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const saveModelConfig = async () => {
     // For custom-openai provider, save the custom config first
     if (modelConfig.provider === 'custom-openai') {
       try {
@@ -674,7 +714,11 @@ export function ModelSettingsModal({
       updateProviderApiKey(updatedConfig.provider, updatedConfig.apiKey);
     }
 
-    onSave(updatedConfig);
+    await onSave(updatedConfig);
+    if (chatGPTStatus?.summary_default) {
+      setChatGPTStatus(await invoke<ChatGPTPlanStatus>('chatgpt_plan_set_summary_default', { enabled: false }));
+    }
+    onSettingsSaved?.();
   };
 
   // Test custom OpenAI connection
@@ -821,8 +865,10 @@ export function ModelSettingsModal({
           <Label>Summarization Model</Label>
           <div className="flex space-x-2 mt-1">
             <Select
-              value={modelConfig.provider}
+              value={useChatGPT ? 'chatgpt-plan' : modelConfig.provider}
               onValueChange={(value) => {
+                setUseChatGPT(value === 'chatgpt-plan');
+                if (value === 'chatgpt-plan' || (useChatGPT && value === modelConfig.provider)) return;
                 const provider = value as ModelConfig['provider'];
 
                 // Clear error state when switching providers
@@ -884,6 +930,7 @@ export function ModelSettingsModal({
               </SelectTrigger>
               <SelectContent className="max-h-64 overflow-y-auto">
                 <SelectItem value="builtin-ai">Built-in AI (Offline, No API needed)</SelectItem>
+                {chatGPTStatus && <SelectItem value="chatgpt-plan">ChatGPT plan</SelectItem>}
                 <SelectItem value="claude">Claude</SelectItem>
                 <SelectItem value="custom-openai">Custom Server (OpenAI)</SelectItem>
                 <SelectItem value="groq">Groq</SelectItem>
@@ -893,7 +940,7 @@ export function ModelSettingsModal({
               </SelectContent>
             </Select>
 
-            {modelConfig.provider !== 'builtin-ai' && modelConfig.provider !== 'custom-openai' && (
+            {!useChatGPT && modelConfig.provider !== 'builtin-ai' && modelConfig.provider !== 'custom-openai' && (
               <Popover open={modelComboboxOpen} onOpenChange={setModelComboboxOpen} modal={true}>
                 <PopoverTrigger asChild>
                   <Button
@@ -953,8 +1000,16 @@ export function ModelSettingsModal({
           </div>
         </div>
 
+        {useChatGPT && chatGPTStatus && (
+          <ChatGPTPlanSettings
+            status={chatGPTStatus}
+            onStatusChange={setChatGPTStatus}
+            onModelChange={model => setChatGPTStatus({ ...chatGPTStatus, active_model: model })}
+          />
+        )}
+
         {/* Custom OpenAI Configuration Section */}
-        {modelConfig.provider === 'custom-openai' && (
+        {!useChatGPT && modelConfig.provider === 'custom-openai' && (
           <div className="space-y-4 border-t pt-4">
             <div>
               <Label htmlFor="custom-endpoint">Endpoint URL *</Label>
@@ -1079,7 +1134,7 @@ export function ModelSettingsModal({
           </div>
         )}
 
-        {requiresApiKey && (
+        {!useChatGPT && requiresApiKey && (
           <div>
             <Label>API Key</Label>
             <div className="relative mt-1">
@@ -1123,7 +1178,7 @@ export function ModelSettingsModal({
           </div>
         )}
 
-        {modelConfig.provider === 'ollama' && (
+        {!useChatGPT && modelConfig.provider === 'ollama' && (
           <div>
             <div
               className="flex items-center justify-between cursor-pointer py-2"
@@ -1201,7 +1256,7 @@ export function ModelSettingsModal({
           </div>
         )}
 
-        {modelConfig.provider === 'ollama' && (
+        {!useChatGPT && modelConfig.provider === 'ollama' && (
           <div>
             <div className="flex items-center justify-between mb-4">
               <h4 className="text-sm font-bold">Available Ollama Models</h4>
@@ -1368,7 +1423,7 @@ export function ModelSettingsModal({
         )}
 
         {/* Built-in AI Models Section */}
-        {modelConfig.provider === 'builtin-ai' && (
+        {!useChatGPT && modelConfig.provider === 'builtin-ai' && (
           <div className="mt-6">
             <BuiltInModelManager
               selectedModel={modelConfig.model}

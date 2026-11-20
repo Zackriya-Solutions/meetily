@@ -1,3 +1,4 @@
+pub mod chatgpt_plan;
 /// Summary module - handles all meeting summary generation functionality
 ///
 /// This module contains:
