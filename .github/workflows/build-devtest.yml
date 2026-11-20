@@ -41,6 +41,10 @@ jobs:
             platform-name: Windows
             target: x86_64-pc-windows-msvc
             args: --target x86_64-pc-windows-msvc
+          - platform: windows-11-arm
+            platform-name: Windows ARM64
+            target: aarch64-pc-windows-msvc
+            args: --target aarch64-pc-windows-msvc
           - platform: ubuntu-22.04
             platform-name: Linux (Ubuntu 22.04)
             target: x86_64-unknown-linux-gnu
@@ -101,9 +105,11 @@ jobs:
         run: |
           $cmakeHook = (Join-Path $env:GITHUB_WORKSPACE ".github/force-portable-ggml.cmake").Replace('\', '/')
           "CMAKE_PROJECT_INCLUDE=$cmakeHook" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "RUSTFLAGS=-C target-cpu=x86-64-v2" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          if ('${{ matrix.target }}' -eq 'x86_64-pc-windows-msvc') {
+            "RUSTFLAGS=-C target-cpu=x86-64-v2" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          }
 
-          $buildDirectory = "target/x86_64-pc-windows-msvc/release"
+          $buildDirectory = "target/${{ matrix.target }}/release"
           $configPath = (Join-Path $env:RUNNER_TEMP "tauri.windows-portable.conf.json").Replace('\', '/')
           @{
             build = @{
@@ -114,6 +120,11 @@ jobs:
             }
           } | ConvertTo-Json -Depth 4 | Set-Content -Path $configPath -Encoding utf8
           "args=--config `"$configPath`"" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Configure Windows ARM64 toolchain
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        shell: pwsh
+        run: ./frontend/scripts/windows-arm64-env.ps1 -GitHubEnv
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -161,7 +172,7 @@ jobs:
           sudo apt-get install -y mesa-vulkan-drivers
 
       - name: Install Vulkan SDK (Windows)
-        if: contains(matrix.platform, 'windows')
+        if: matrix.platform == 'windows-latest'
         uses: humbletim/install-vulkan-sdk@v1.2
         with:
           version: 1.4.309.0
@@ -341,7 +352,7 @@ jobs:
           FEATURES=""
 
           # Windows: Use Vulkan for GPU acceleration
-          if [[ "${{ matrix.platform }}" == *"windows"* ]]; then
+          if [[ "${{ matrix.platform }}" == "windows-latest" ]]; then
             FEATURES="--features vulkan"
             echo "Windows build with Vulkan GPU acceleration"
           fi
@@ -369,7 +380,7 @@ jobs:
           if [[ "${{ matrix.platform }}" == *"macos"* ]]; then
             LLAMA_FEATURES="--features metal"
             echo "Using Metal GPU acceleration for macOS"
-          elif [[ "${{ matrix.platform }}" == *"windows"* ]]; then
+          elif [[ "${{ matrix.platform }}" == "windows-latest" ]]; then
             LLAMA_FEATURES="--features vulkan"
             echo "Using Vulkan GPU acceleration for Windows"
           else
@@ -496,7 +507,7 @@ jobs:
         if: contains(matrix.platform, 'windows') && github.event.inputs.sign-build == 'true'
         shell: pwsh
         run: |
-          $msiPath = Get-ChildItem -Path "target/x86_64-pc-windows-msvc/release/bundle/msi" -Filter "*.msi" | Select-Object -First 1 -ExpandProperty FullName
+          $msiPath = Get-ChildItem -Path "target/${{ matrix.target }}/release/bundle/msi" -Filter "*.msi" | Select-Object -First 1 -ExpandProperty FullName
           if ($msiPath) {
             Write-Host "Verifying MSI signature: $msiPath"
             Get-AuthenticodeSignature -FilePath "$msiPath" | Format-List
@@ -513,10 +524,10 @@ jobs:
             target/aarch64-apple-darwin/release/bundle/macos/*.app
             target/aarch64-apple-darwin/release/bundle/macos/*.app.tar.gz
             target/aarch64-apple-darwin/release/bundle/macos/*.app.tar.gz.sig
-            target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
-            target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi.sig
-            target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
-            target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe.sig
+            target/*-pc-windows-msvc/release/bundle/msi/*.msi
+            target/*-pc-windows-msvc/release/bundle/msi/*.msi.sig
+            target/*-pc-windows-msvc/release/bundle/nsis/*.exe
+            target/*-pc-windows-msvc/release/bundle/nsis/*.exe.sig
             target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb
             target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage
             target/x86_64-unknown-linux-gnu/release/bundle/rpm/*.rpm

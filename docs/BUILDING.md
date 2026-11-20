@@ -398,6 +398,14 @@ pnpm tauri:build
 
 By default, the application will be built with CPU-only processing. To enable GPU acceleration, see the [GPU Acceleration Guide](GPU_ACCELERATION.md).
 
+### Windows on ARM64
+
+ARM64 builds are CPU-only. In Visual Studio 2022, also install **MSVC ARM64 build tools**, **C++ Clang Compiler for Windows**, and **C++ CMake tools for Windows**. Then, from `frontend/`, load the ARM64 environment before the normal steps above, and name the sidecar `llama-helper-aarch64-pc-windows-msvc.exe`:
+
+```powershell
+. .\scripts\windows-arm64-env.ps1
+```
+
 ### Windows Distribution Builds
 
 The commands above create a local source build. Use the production Windows build workflow for an installer intended for other computers: it enables Vulkan. Rust targets `x86-64-v2`; native Whisper retains AVX2 with host-native specialization and AVX-512 disabled.

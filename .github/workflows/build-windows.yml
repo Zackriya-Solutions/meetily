@@ -38,8 +38,14 @@ env:
 
 jobs:
   build-windows:
-    name: Build Windows (x64)
-    runs-on: windows-latest
+    name: Build Windows (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x64, runner: windows-latest, target: x86_64-pc-windows-msvc }
+          - { arch: arm64, runner: windows-11-arm, target: aarch64-pc-windows-msvc }
     permissions:
       contents: write
 
@@ -499,7 +505,7 @@ jobs:
         # Pinned: Rust 1.100's cargo moved build-script OUT_DIR one level deeper; tauri-build 2.6.1 and ort-sys 2.0.0-rc.10 assume the old depth. Unpin after upgrading to tauri-build >= 2.7 and ort >= 2.0.0-rc.14.
         uses: dtolnay/rust-toolchain@1.99.1
         with:
-          targets: x86_64-pc-windows-msvc
+          targets: ${{ matrix.target }}
 
       - name: Configure portable Windows native build
         id: windows-portability
@@ -509,9 +515,11 @@ jobs:
         run: |
           $cmakeHook = (Join-Path $env:GITHUB_WORKSPACE ".github/force-portable-ggml.cmake").Replace('\', '/')
           "CMAKE_PROJECT_INCLUDE=$cmakeHook" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "RUSTFLAGS=-C target-cpu=x86-64-v2" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          if ('${{ matrix.arch }}' -eq 'x64') {
+            "RUSTFLAGS=-C target-cpu=x86-64-v2" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          }
 
-          $buildDirectory = "target/x86_64-pc-windows-msvc/$env:PORTABLE_BUILD_PROFILE"
+          $buildDirectory = "target/${{ matrix.target }}/$env:PORTABLE_BUILD_PROFILE"
           $configPath = (Join-Path $env:RUNNER_TEMP "tauri.windows-portable.conf.json").Replace('\', '/')
           @{
             build = @{
@@ -523,6 +531,11 @@ jobs:
           } | ConvertTo-Json -Depth 4 | Set-Content -Path $configPath -Encoding utf8
           "args=--config `"$configPath`"" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
+      - name: Configure Windows ARM64 toolchain
+        if: matrix.arch == 'arm64'
+        shell: pwsh
+        run: ./frontend/scripts/windows-arm64-env.ps1 -GitHubEnv
+
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
@@ -531,12 +544,14 @@ jobs:
           key: windows-x64-vulkan-v2
 
       - name: Install Vulkan SDK
+        if: matrix.arch == 'x64'
         uses: humbletim/install-vulkan-sdk@v1.2
         with:
           version: 1.4.309.0
           cache: true
 
       - name: Verify and Configure Vulkan SDK
+        if: matrix.arch == 'x64'
         shell: pwsh
         run: |
           Write-Host "=== Vulkan SDK Configuration ==="
@@ -605,6 +620,7 @@ jobs:
           Write-Host "=== Vulkan SDK Configuration Complete ==="
 
       - name: Copy Vulkan runtime for bundling
+        if: matrix.arch == 'x64'
         shell: pwsh
         run: |
           # Create runtime directory
@@ -681,7 +697,7 @@ jobs:
 
           # Copy binary to binaries directory
           New-Item -ItemType Directory -Force -Path "frontend/src-tauri/binaries" | Out-Null
-          Copy-Item "target/release/llama-helper.exe" -Destination "frontend/src-tauri/binaries/llama-helper-x86_64-pc-windows-msvc.exe"
+          Copy-Item "target/release/llama-helper.exe" -Destination "frontend/src-tauri/binaries/llama-helper-${{ matrix.target }}.exe"
 
           Write-Host "Copied llama-helper to frontend/src-tauri/binaries/"
           Get-ChildItem "frontend/src-tauri/binaries/"
@@ -695,7 +711,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: frontend/src-tauri/binaries/onnxruntime
-          key: ${{ runner.os }}-onnxruntime-x86_64-pc-windows-msvc-${{ hashFiles('frontend/src-tauri/build/onnxruntime.rs') }}
+          key: ${{ runner.os }}-onnxruntime-${{ matrix.target }}-${{ hashFiles('frontend/src-tauri/build/onnxruntime.rs') }}
 
 
       - name: Build Tauri app
@@ -713,24 +729,24 @@ jobs:
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         with:
           projectPath: frontend
-          args: --target x86_64-pc-windows-msvc --features vulkan ${{ steps.build-profile.outputs.args }} ${{ steps.windows-portability.outputs.args }}
+          args: --target ${{ matrix.target }} ${{ matrix.arch == 'x64' && '--features vulkan' || '' }} ${{ steps.build-profile.outputs.args }} ${{ steps.windows-portability.outputs.args }}
 
       - name: Verify build artifacts
         shell: bash
         run: |
           echo "## Build Artifacts"
-          find target/x86_64-pc-windows-msvc/${{ steps.build-profile.outputs.profile }}/bundle -type f \( -name "*.msi" -o -name "*.exe" \) -exec ls -lh {} \;
+          find target/${{ matrix.target }}/${{ steps.build-profile.outputs.profile }}/bundle -type f \( -name "*.msi" -o -name "*.exe" \) -exec ls -lh {} \;
 
       - name: Upload artifacts
         if: ${{ github.event.inputs.upload-artifacts == 'true' }}
         uses: actions/upload-artifact@v4
         with:
-          name: meetily-windows-x64-${{ steps.build-profile.outputs.profile }}-${{ steps.get-version.outputs.version }}
+          name: meetily-windows-${{ matrix.arch }}-${{ steps.build-profile.outputs.profile }}-${{ steps.get-version.outputs.version }}
           path: |
-            target/x86_64-pc-windows-msvc/${{ steps.build-profile.outputs.profile }}/bundle/msi/*.msi
-            target/x86_64-pc-windows-msvc/${{ steps.build-profile.outputs.profile }}/bundle/msi/*.msi.sig
-            target/x86_64-pc-windows-msvc/${{ steps.build-profile.outputs.profile }}/bundle/nsis/*.exe
-            target/x86_64-pc-windows-msvc/${{ steps.build-profile.outputs.profile }}/bundle/nsis/*.exe.sig
+            target/${{ matrix.target }}/${{ steps.build-profile.outputs.profile }}/bundle/msi/*.msi
+            target/${{ matrix.target }}/${{ steps.build-profile.outputs.profile }}/bundle/msi/*.msi.sig
+            target/${{ matrix.target }}/${{ steps.build-profile.outputs.profile }}/bundle/nsis/*.exe
+            target/${{ matrix.target }}/${{ steps.build-profile.outputs.profile }}/bundle/nsis/*.exe.sig
           retention-days: 30
 
       - name: Generate build summary
@@ -742,23 +758,23 @@ jobs:
           echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| **Version** | ${{ steps.get-version.outputs.version }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Build Profile** | ${{ steps.build-profile.outputs.profile }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Target** | x86_64-pc-windows-msvc |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Target** | ${{ matrix.target }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Signed** | ${{ (github.event.inputs.sign-build == 'true') && '✅ Yes' || '❌ No' }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 📦 Build Artifacts" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| File Type | Count |" >> $GITHUB_STEP_SUMMARY
           echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| MSI Installers | $(find target/x86_64-pc-windows-msvc/${{ steps.build-profile.outputs.profile }}/bundle/msi -name "*.msi" 2>/dev/null | wc -l) |" >> $GITHUB_STEP_SUMMARY
-          echo "| MSI Signatures | $(find target/x86_64-pc-windows-msvc/${{ steps.build-profile.outputs.profile }}/bundle/msi -name "*.msi.sig" 2>/dev/null | wc -l) |" >> $GITHUB_STEP_SUMMARY
-          echo "| NSIS Installers | $(find target/x86_64-pc-windows-msvc/${{ steps.build-profile.outputs.profile }}/bundle/nsis -name "*.exe" 2>/dev/null | wc -l) |" >> $GITHUB_STEP_SUMMARY
-          echo "| NSIS Signatures | $(find target/x86_64-pc-windows-msvc/${{ steps.build-profile.outputs.profile }}/bundle/nsis -name "*.exe.sig" 2>/dev/null | wc -l) |" >> $GITHUB_STEP_SUMMARY
+          echo "| MSI Installers | $(find target/${{ matrix.target }}/${{ steps.build-profile.outputs.profile }}/bundle/msi -name "*.msi" 2>/dev/null | wc -l) |" >> $GITHUB_STEP_SUMMARY
+          echo "| MSI Signatures | $(find target/${{ matrix.target }}/${{ steps.build-profile.outputs.profile }}/bundle/msi -name "*.msi.sig" 2>/dev/null | wc -l) |" >> $GITHUB_STEP_SUMMARY
+          echo "| NSIS Installers | $(find target/${{ matrix.target }}/${{ steps.build-profile.outputs.profile }}/bundle/nsis -name "*.exe" 2>/dev/null | wc -l) |" >> $GITHUB_STEP_SUMMARY
+          echo "| NSIS Signatures | $(find target/${{ matrix.target }}/${{ steps.build-profile.outputs.profile }}/bundle/nsis -name "*.exe.sig" 2>/dev/null | wc -l) |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "<details>" >> $GITHUB_STEP_SUMMARY
           echo "<summary>📋 File List</summary>" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          find target/x86_64-pc-windows-msvc/${{ steps.build-profile.outputs.profile }}/bundle -type f \( -name "*.msi" -o -name "*.exe" -o -name "*.sig" \) 2>/dev/null >> $GITHUB_STEP_SUMMARY
+          find target/${{ matrix.target }}/${{ steps.build-profile.outputs.profile }}/bundle -type f \( -name "*.msi" -o -name "*.exe" -o -name "*.sig" \) 2>/dev/null >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "</details>" >> $GITHUB_STEP_SUMMARY
