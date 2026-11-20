@@ -328,36 +328,40 @@ export function useSummaryGeneration({
 
     const generationId = ++generationIdRef.current;
     activeProcessIdRef.current = null;
-    setSummaryStatus(isRegeneration ? 'regenerating' : 'processing');
-    setSummaryError(null);
+    const showGenerating = () => {
+      setSummaryStatus(isRegeneration ? 'regenerating' : 'processing');
+      setSummaryError(null);
+    };
+    if (!chatGPT) showGenerating();
+
+    const trackStart = async () => {
+      const startedAt = Date.now();
+      trackedAttemptRef.current = { generationId, startedAt, provider, model, finished: false };
+      await Analytics.trackSummaryGenerationStarted(
+        provider,
+        model,
+        transcriptText.length,
+        (startedAt - new Date(meeting.created_at).getTime()) / 60000,
+      );
+      if (customPrompt.trim()) {
+        await Analytics.trackCustomPromptUsed(customPrompt.trim().length);
+      }
+      if (!chatGPT || (
+        mountedRef.current && visibleMeetingIdRef.current === meeting.id && generationId === generationIdRef.current
+      )) {
+        toast.info(`${isRegeneration ? 'Regenerating' : 'Generating'} summary...`, {
+          description: `Using ${provider}/${model}`,
+          duration: 3000,
+        });
+      }
+    };
 
     try {
       if (!transcriptText.trim()) {
         await failGeneration(generationId, isRegeneration, 'No transcript text available. Please add some text first.', 'empty_result');
         return;
       }
-
-      const timeSinceRecording = (Date.now() - new Date(meeting.created_at).getTime()) / 60000;
-      trackedAttemptRef.current = {
-        generationId,
-        startedAt: Date.now(),
-        provider,
-        model,
-        finished: false,
-      };
-      await Analytics.trackSummaryGenerationStarted(
-        provider,
-        model,
-        transcriptText.length,
-        timeSinceRecording,
-      );
-      if (customPrompt.trim()) {
-        await Analytics.trackCustomPromptUsed(customPrompt.trim().length);
-      }
-      toast.info(`${isRegeneration ? 'Regenerating' : 'Generating'} summary...`, {
-        description: `Using ${provider}/${model}`,
-        duration: 3000,
-      });
+      if (!chatGPT) await trackStart();
 
       const summaryLanguage = await resolveSummaryLanguage(
         meeting.id,
@@ -380,19 +384,20 @@ export function useSummaryGeneration({
         summaryLanguage,
       });
       if (!mountedRef.current || visibleMeetingIdRef.current !== meeting.id) return;
-      if (!result) {
-        if (generationId === generationIdRef.current) {
-          setSummaryStatus(isRegeneration ? 'completed' : 'idle');
-          await finishGeneration(generationId, 'cancelled');
-        }
-        return;
-      }
+      if (!result) return; // The native consent dialog was declined. No job was started.
       const processId = result.process_id;
       if (generationId !== generationIdRef.current) {
         await invokeTauri('api_cancel_summary', { meetingId: meeting.id, processId }).catch(() => {});
         return;
       }
       activeProcessIdRef.current = processId;
+      if (chatGPT) {
+        showGenerating();
+        await trackStart();
+        if (!mountedRef.current || visibleMeetingIdRef.current !== meeting.id || generationId !== generationIdRef.current) {
+          return;
+        }
+      }
 
       startSummaryPolling(meeting.id, processId, result =>
         pollingResultRef.current(result, generationId, isRegeneration));

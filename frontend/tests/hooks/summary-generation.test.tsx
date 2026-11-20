@@ -18,9 +18,11 @@ mock.module('next/navigation', () => ({ usePathname: () => '/meeting-details', u
 mock.module('../../src/contexts/RecordingStateContext', () => ({ useRecordingState: () => ({ isRecording: false }) }));
 const notify = mock(() => {});
 mock.module('sonner', () => ({ toast: { info: notify, error: notify, success: notify, warning: notify } }));
+const trackStart = mock(async (..._args: Parameters<typeof originalAnalytics.default.trackSummaryGenerationStarted>) => {});
+const trackPrompt = mock(async (..._args: Parameters<typeof originalAnalytics.default.trackCustomPromptUsed>) => {});
 const trackCompletion = mock(async (..._args: Parameters<typeof originalAnalytics.default.trackSummaryGenerationCompleted>) => {});
 mock.module('../../src/lib/analytics', () => ({ default: {
-  trackBackendConnection() {}, trackSummaryGenerationStarted: async () => {},
+  trackBackendConnection() {}, trackSummaryGenerationStarted: trackStart, trackCustomPromptUsed: trackPrompt,
   trackSummaryGenerationCompleted: trackCompletion,
 } }));
 let chatGPTDefault = false;
@@ -84,7 +86,7 @@ beforeEach(() => {
   renderer = undefined as unknown as ReactTestRenderer;
   configuredModel = 'test';
   chatGPTDefault = false;
-  timers.clear(); notify.mockClear(); trackCompletion.mockClear(); invoke.mockClear();
+  timers.clear(); notify.mockClear(); trackStart.mockClear(); trackPrompt.mockClear(); trackCompletion.mockClear(); invoke.mockClear();
   getSummary = async () => response();
   startProcess = async () => ({ process_id: 'attempt-a' });
   globalThis.setInterval = ((callback: () => Promise<void>) => {
@@ -297,16 +299,28 @@ test('the saved ChatGPT provider waits for native consent and only starts once',
   let decline!: () => void;
   startProcess = () => new Promise(resolve => { decline = () => resolve(null); });
   let pending!: Promise<void>;
-  await act(async () => { pending = state.handleGenerateSummary(); });
+  await act(async () => { pending = state.handleGenerateSummary('Please keep it brief'); });
   await act(async () => state.handleGenerateSummary());
   expect(starts()).toHaveLength(1);
+  expect(state.summaryStatus).toBe('completed');
+  expect(trackStart).not.toHaveBeenCalled();
+  expect(notify).not.toHaveBeenCalled();
   await act(async () => { decline(); await pending; });
   expect(state.summaryStatus).toBe('completed');
   expect(text()).toContain('Existing notes');
+  expect(trackStart).not.toHaveBeenCalled();
+  expect(trackPrompt).not.toHaveBeenCalled();
+  expect(trackCompletion).not.toHaveBeenCalled();
+  expect(notify).not.toHaveBeenCalled();
 
   startProcess = async () => ({ process_id: 'attempt-a' });
   invoke.mockClear();
-  await act(async () => state.handleGenerateSummary());
+  await act(async () => state.handleGenerateSummary('Please keep it brief'));
+  expect(trackStart).toHaveBeenCalledTimes(1);
+  expect(trackPrompt).toHaveBeenCalledTimes(1);
+  expect(notify).toHaveBeenCalledWith('Regenerating summary...', {
+    description: 'Using chatgpt-plan/test-plan-model', duration: 3000,
+  });
   const cloud = invoke.mock.calls.find(([command]) => command === 'api_process_transcript')?.[1];
   expect(cloud).toMatchObject({
     model: 'chatgpt-plan', modelName: 'test-plan-model', chatgptPlanProfileId: 'oaiapp_test', meetingId: 'meeting-a',

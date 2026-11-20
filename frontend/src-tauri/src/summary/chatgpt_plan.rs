@@ -1,6 +1,11 @@
 //! Open-source Sign in with ChatGPT: native credentials and text-only inference.
 //! https://developers.openai.com/siwc/token-sharing-open-source
-use std::{path::Path, time::Duration};
+use std::{
+    fs,
+    io::ErrorKind,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use reqwest::Client;
@@ -101,42 +106,91 @@ struct ProfileStatus {
 }
 
 impl Connections {
-    async fn load(service: &str) -> Result<Self, String> {
-        let service = service.to_owned();
+    // Callers hold SESSIONS so a first-load migration cannot race a refresh or sign-out.
+    async fn load(dir: &Path) -> Result<Self, String> {
+        let service = keychain_service(dir)?;
+        let legacy_path = dir.join("chatgpt-plan.json");
         blocking_keychain(move || {
             #[cfg(target_os = "macos")]
-            match security_framework::passwords::get_generic_password(&service, "chatgpt-plan") {
-                Ok(bytes) => {
-                    return serde_json::from_slice(&bytes)
-                        .map_err(|_| "Could not read the ChatGPT connection.".into())
-                }
-                Err(error) if error.code() == -25300 => {} // errSecItemNotFound
-                Err(_) => return Err("Could not read the ChatGPT connection from Keychain.".into()),
+            {
+                let stored = match security_framework::passwords::get_generic_password(
+                    &service,
+                    "chatgpt-plan",
+                ) {
+                    Ok(bytes) => Some(bytes),
+                    Err(error) if error.code() == -25300 => None, // errSecItemNotFound
+                    Err(_) => {
+                        return Err("Could not read the ChatGPT connection from Keychain.".into())
+                    }
+                };
+                return Self::load_or_migrate(stored, &legacy_path, |bytes| {
+                    Self::save_to_keychain(&service, bytes)
+                });
             }
             #[cfg(not(target_os = "macos"))]
-            let _ = service;
-            Ok(Self {
-                host_id: format!("urn:uuid:{}", uuid::Uuid::new_v4()),
-                active: None,
-                summary_default: false,
-                profiles: vec![],
-            })
+            {
+                let _ = (service, legacy_path);
+                Err("ChatGPT plan summaries are available on macOS.".into())
+            }
         })
         .await
     }
 
-    async fn save(&self, service: &str) -> Result<(), String> {
-        let service = service.to_owned();
+    #[cfg(any(target_os = "macos", test))]
+    fn load_or_migrate(
+        stored: Option<Vec<u8>>,
+        legacy_path: &Path,
+        save: impl FnOnce(&[u8]) -> Result<(), String>,
+    ) -> Result<Self, String> {
+        let decode = |bytes: &[u8]| {
+            serde_json::from_slice::<Self>(bytes)
+                .map_err(|_| "Could not read the ChatGPT connection.".to_string())
+        };
+        let connection = if let Some(bytes) = stored {
+            // Keychain already owns the connection. Never import a stale file over it.
+            decode(&bytes)?
+        } else {
+            match fs::symlink_metadata(legacy_path) {
+                Ok(metadata) if metadata.is_file() => {}
+                Err(error) if error.kind() == ErrorKind::NotFound => {
+                    return Ok(Self {
+                        host_id: format!("urn:uuid:{}", uuid::Uuid::new_v4()),
+                        active: None,
+                        summary_default: false,
+                        profiles: vec![],
+                    });
+                }
+                _ => return Err("Could not read the previous ChatGPT connection.".into()),
+            }
+            let bytes = fs::read(legacy_path)
+                .map_err(|_| "Could not read the previous ChatGPT connection.")?;
+            let connection = decode(&bytes)?;
+            save(&bytes)?;
+            connection
+        };
+
+        // Also clean up a file left by an interruption after the successful save.
+        if let Err(error) = fs::remove_file(legacy_path) {
+            if error.kind() != ErrorKind::NotFound {
+                log::warn!("Could not remove the previous ChatGPT connection file.");
+            }
+        }
+        Ok(connection)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn save_to_keychain(service: &str, bytes: &[u8]) -> Result<(), String> {
+        security_framework::passwords::set_generic_password(service, "chatgpt-plan", bytes)
+            .map_err(|_| "Could not save the ChatGPT connection in Keychain.".into())
+    }
+
+    async fn save(&self, dir: &Path) -> Result<(), String> {
+        let service = keychain_service(dir)?;
         let bytes =
             serde_json::to_vec(self).map_err(|_| "Could not save the ChatGPT connection.")?;
         blocking_keychain(move || {
             #[cfg(target_os = "macos")]
-            return security_framework::passwords::set_generic_password(
-                &service,
-                "chatgpt-plan",
-                &bytes,
-            )
-            .map_err(|_| "Could not save the ChatGPT connection in Keychain.".into());
+            return Self::save_to_keychain(&service, &bytes);
             #[cfg(not(target_os = "macos"))]
             {
                 let _ = (service, bytes);
@@ -183,15 +237,13 @@ fn keychain_service(dir: &Path) -> Result<String, String> {
     Ok(format!("{identifier}.chatgpt-plan"))
 }
 
-fn app_service<R: Runtime>(app: &AppHandle<R>) -> Result<String, String> {
+fn app_data_dir<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     if !cfg!(target_os = "macos") {
         return Err("ChatGPT plan summaries are available on macOS.".into());
     }
-    let dir = app
-        .path()
+    app.path()
         .app_data_dir()
-        .map_err(|_| "Could not identify the Meetily app profile.")?;
-    keychain_service(&dir)
+        .map_err(|_| "Could not identify the Meetily app profile.".into())
 }
 
 fn http_client(timeout: Duration) -> Result<Client, String> {
@@ -351,7 +403,10 @@ pub async fn chatgpt_plan_status<R: Runtime>(
     if !cfg!(target_os = "macos") {
         return Ok(None);
     }
-    Ok(Some(Connections::load(&app_service(&app)?).await?.status()))
+    let _sessions = SESSIONS.lock().await;
+    Ok(Some(
+        Connections::load(&app_data_dir(&app)?).await?.status(),
+    ))
 }
 
 pub(super) async fn confirm_summary<R: Runtime>(
@@ -361,7 +416,10 @@ pub(super) async fn confirm_summary<R: Runtime>(
 ) -> Result<bool, String> {
     use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 
-    let data = Connections::load(&app_service(app)?).await?;
+    let data = {
+        let _sessions = SESSIONS.lock().await;
+        Connections::load(&app_data_dir(app)?).await?
+    };
     let profile = data
         .profiles
         .iter()
@@ -386,13 +444,13 @@ pub async fn chatgpt_plan_set_summary_default<R: Runtime>(
     enabled: bool,
 ) -> Result<ConnectionStatus, String> {
     let _sessions = SESSIONS.lock().await;
-    let service = app_service(&app)?;
-    let mut data = Connections::load(&service).await?;
+    let dir = app_data_dir(&app)?;
+    let mut data = Connections::load(&dir).await?;
     if enabled && data.status().active_model.is_none() {
         return Err(RECONNECT.into());
     }
     data.summary_default = enabled;
-    data.save(&service).await?;
+    data.save(&dir).await?;
     Ok(data.status())
 }
 
@@ -404,11 +462,11 @@ pub async fn chatgpt_plan_connect<R: Runtime>(
     let _sign_in = SIGN_IN
         .try_lock()
         .map_err(|_| "A ChatGPT sign-in is already in progress.")?;
-    let service = app_service(&app)?;
+    let dir = app_data_dir(&app)?;
     let prior = {
         let _sessions = SESSIONS.lock().await;
-        let data = Connections::load(&service).await?;
-        data.save(&service).await?; // Persist the installation identifier before opening the browser.
+        let data = Connections::load(&dir).await?;
+        data.save(&dir).await?; // Persist the installation identifier before opening the browser.
         data
     };
     let returning = profile_id
@@ -510,7 +568,7 @@ pub async fn chatgpt_plan_connect<R: Runtime>(
         .to_owned();
 
     let _sessions = SESSIONS.lock().await;
-    let mut data = Connections::load(&service).await?;
+    let mut data = Connections::load(&dir).await?;
     data.profiles.retain(|p| p.client_id != client_id);
     data.active = Some(client_id.clone());
     data.profiles.push(Profile {
@@ -520,7 +578,7 @@ pub async fn chatgpt_plan_connect<R: Runtime>(
         model,
         tokens: Some(tokens),
     });
-    data.save(&service).await?;
+    data.save(&dir).await?;
     Ok(data.status())
 }
 
@@ -530,8 +588,8 @@ pub async fn chatgpt_plan_disconnect<R: Runtime>(app: AppHandle<R>) -> Result<bo
         .try_lock()
         .map_err(|_| "Wait for the current ChatGPT sign-in to finish.")?;
     let _sessions = SESSIONS.lock().await;
-    let service = app_service(&app)?;
-    let mut data = Connections::load(&service).await?;
+    let dir = app_data_dir(&app)?;
+    let mut data = Connections::load(&dir).await?;
     let Some(active) = data.active.take() else {
         return Ok(true);
     };
@@ -542,7 +600,7 @@ pub async fn chatgpt_plan_disconnect<R: Runtime>(app: AppHandle<R>) -> Result<bo
         .ok_or(RECONNECT)?;
     let tokens = profile.tokens.take().ok_or(RECONNECT)?;
     // End local use even when OpenAI cannot confirm remote revocation.
-    data.save(&service).await?;
+    data.save(&dir).await?;
     let client = http_client(Duration::from_secs(5))?;
     let Ok(response) = client
         .get(format!("{ISSUER}/.well-known/openid-configuration"))
@@ -591,8 +649,7 @@ pub(super) async fn access_token(
         return Err("ChatGPT plan summaries are available on macOS.".into());
     }
     let _sessions = SESSIONS.lock().await;
-    let service = keychain_service(dir)?;
-    let mut data = Connections::load(&service).await?;
+    let mut data = Connections::load(dir).await?;
     if !data.summary_default {
         return Err("Choose ChatGPT plan as your summary provider in Settings.".into());
     }
@@ -623,7 +680,7 @@ pub(super) async fn access_token(
     .session(Some(tokens.id_token.clone()))?;
     let access = replacement.access_token.clone();
     profile.tokens = Some(replacement);
-    data.save(&service).await?;
+    data.save(dir).await?;
     Ok(access)
 }
 
@@ -806,6 +863,51 @@ mod tests {
         assert!(
             completed_summary(r#"{"type":"response.completed","response":{"output":[]}}"#).is_err()
         );
+    }
+
+    #[test]
+    fn legacy_connection_survives_failed_save_then_migrates_intact() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("chatgpt-plan.json");
+        let legacy = br#"{
+            "host_id":"existing-host", "active":"existing-profile", "summary_default":true,
+            "profiles":[{"client_id":"existing-profile","subject":"test","email":"test@example.invalid",
+            "model":"existing-model","tokens":{"access_token":"synthetic","refresh_token":"synthetic",
+            "id_token":"synthetic","expires_at":1234}}]
+        }"#;
+        fs::write(&path, legacy).unwrap();
+
+        assert!(Connections::load_or_migrate(None, &path, |_| Err("save denied".into())).is_err());
+        assert_eq!(fs::read(&path).unwrap(), legacy);
+
+        let connection = Connections::load_or_migrate(None, &path, |bytes| {
+            assert_eq!(bytes, legacy);
+            assert!(path.exists());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(connection.host_id, "existing-host");
+        assert_eq!(connection.active.as_deref(), Some("existing-profile"));
+        assert!(connection.summary_default);
+        assert_eq!(
+            connection.status().active_model.as_deref(),
+            Some("existing-model")
+        );
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn existing_keychain_item_is_authoritative_over_leftover_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("chatgpt-plan.json");
+        fs::write(&path, b"stale invalid data").unwrap();
+        let stored = br#"{"host_id":"keychain-host","active":null,"profiles":[]}"#.to_vec();
+        let connection = Connections::load_or_migrate(Some(stored), &path, |_| {
+            panic!("a stale file must not overwrite Keychain")
+        })
+        .unwrap();
+        assert_eq!(connection.host_id, "keychain-host");
+        assert!(!path.exists());
     }
 
     #[test]
