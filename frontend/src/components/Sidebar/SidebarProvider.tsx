@@ -40,6 +40,8 @@ interface SidebarContextType {
   setCurrentMeeting: (meeting: CurrentMeeting | null) => void;
   sidebarItems: SidebarItem[];
   isCollapsed: boolean;
+  doodlePath: string | null;
+  doodleDate: string | null;
   toggleCollapse: () => void;
   meetings: CurrentMeeting[];
   setMeetings: (meetings: CurrentMeeting[]) => void;
@@ -78,6 +80,8 @@ export const useSidebar = () => {
 export function SidebarProvider({ children }: { children: React.ReactNode }) {
   const [currentMeeting, setCurrentMeeting] = useState<CurrentMeeting | null>({ id: 'intro-call', title: '+ New Call' });
   const [isCollapsed, setIsCollapsed] = useState(true);
+  const [doodlePath, setDoodlePath] = useState<string | null>(null);
+  const [doodleDate, setDoodleDate] = useState<string | null>(null);
   const [meetings, setMeetings] = useState<CurrentMeeting[]>([]);
   const [sidebarItems, setSidebarItems] = useState<SidebarItem[]>([]);
   const [isMeetingActive, setIsMeetingActive] = useState(false);
@@ -92,6 +96,19 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 
   const pathname = usePathname();
   const router = useRouter();
+
+  useEffect(() => {
+    const sync = () => {
+      invoke<string | null>('doodle_sync').then(path => {
+        setDoodlePath(path);
+        setDoodleDate(new Date().toISOString().slice(0, 10));
+      }).catch(() => setDoodlePath(null));
+    };
+    const onVisibility = () => { if (document.visibilityState === 'visible') sync(); };
+    sync();
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, []);
 
   // Extract fetchMeetings as a reusable function
   const fetchMeetings = React.useCallback(async () => {
@@ -300,6 +317,8 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
       setCurrentMeeting,
       sidebarItems,
       isCollapsed,
+      doodlePath,
+      doodleDate,
       toggleCollapse,
       meetings,
       setMeetings,
