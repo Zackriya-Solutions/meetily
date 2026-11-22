@@ -27,9 +27,13 @@ Installing frontend dependencies does not prepare `llama-helper`. The desktop de
 From the repository root, build the helper and inspect the native host target:
 
 ```bash
-cargo build -p llama-helper
+CMAKE_DISABLE_FIND_PACKAGE_OpenSSL=TRUE cargo build -p llama-helper
 rustc -vV
 ```
+
+`CMAKE_DISABLE_FIND_PACKAGE_OpenSSL=TRUE` keeps llama.cpp's bundled cpp-httplib from compiling against a system OpenSSL such as Homebrew OpenSSL 4, which it does not support; the helper never uses HTTPS. On Windows PowerShell, set `$env:CMAKE_DISABLE_FIND_PACKAGE_OpenSSL = "TRUE"` before running plain `cargo build -p llama-helper` instead of prefixing the command.
+
+If the helper build still fails with the same OpenSSL error after a previously failed attempt, a stale CMake cache is reusing the old configuration. Clear it once per affected target directory with `cargo clean -p llama-cpp-sys-2`, then build again.
 
 Use the value printed after `host:` as `<host-triple>` below. If the helper build fails, stop: do not copy a binary or launch Tauri.
 
@@ -40,7 +44,7 @@ Create `frontend/src-tauri/binaries/`, then copy the built executable using the 
 | macOS/Linux | `target/debug/llama-helper` | `frontend/src-tauri/binaries/llama-helper-<host-triple>` |
 | Windows | `target/debug/llama-helper.exe` | `frontend/src-tauri/binaries/llama-helper-<host-triple>.exe` |
 
-For a production build, run `cargo build -p llama-helper --release` and copy the executable from `target/release/` to the same target-suffixed destination, only after the build succeeds.
+For a production build, run `CMAKE_DISABLE_FIND_PACKAGE_OpenSSL=TRUE cargo build -p llama-helper --release` and copy the executable from `target/release/` to the same target-suffixed destination, only after the build succeeds.
 
 These commands build the helper without an explicit GPU backend. Its optional acceleration features are `metal`, `cuda`, and `vulkan`, each requiring a compatible platform and toolchain. Do not forward Whisper's `coreml`, `hipblas`, or `openblas` flags to the helper.
 

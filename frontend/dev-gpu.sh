@@ -111,10 +111,9 @@ fi
 
 echo -e "   Building in $HELPER_DIR with features: ${HELPER_FEATURES:-none}"
 # llama.cpp's bundled cpp-httplib does not compile against OpenSSL 4 (const X509_NAME); the helper never uses HTTPS, so build it without OpenSSL.
-(cd "$HELPER_DIR" && CMAKE_DISABLE_FIND_PACKAGE_OpenSSL=TRUE cargo build $HELPER_FEATURES)
-
-if [ $? -ne 0 ]; then
+if ! (cd "$HELPER_DIR" && CMAKE_DISABLE_FIND_PACKAGE_OpenSSL=TRUE cargo build $HELPER_FEATURES); then
     echo -e "${RED}❌ Failed to build llama-helper${NC}"
+    echo -e "${YELLOW}   Hint: a stale CMake cache can keep the previous OpenSSL discovery; run 'cargo clean -p llama-cpp-sys-2' and retry${NC}"
     exit 1
 fi
 
