@@ -29,9 +29,9 @@ const TOKEN_URL: &str = "https://auth.openai.com/api/accounts/oauth/token";
 const SCOPE: &str = "chatgpt.tokens.use.direct";
 const RECONNECT: &str = "Reconnect ChatGPT in Summary Settings to use your plan.";
 static SIGN_IN: Mutex<()> = Mutex::const_new(());
-static SESSIONS: Mutex<()> = Mutex::const_new(());
+static SESSIONS: Mutex<ConnectionCache> = Mutex::const_new(ConnectionCache { cached: None });
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 struct Connections {
     host_id: String,
     active: Option<String>,
@@ -42,7 +42,7 @@ struct Connections {
     profiles: Vec<Profile>,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 struct Profile {
     client_id: String,
     subject: String,
@@ -88,7 +88,7 @@ fn summary_effort(model: &str) -> Option<&'static str> {
     }
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 struct Session {
     access_token: String,
     refresh_token: String,
@@ -144,6 +144,32 @@ struct ProfileStatus {
     id: String,
     email: String,
     active: bool,
+}
+
+// One cache per running app, under the same lock that serializes Keychain changes.
+struct ConnectionCache {
+    cached: Option<(PathBuf, Connections)>,
+}
+
+impl ConnectionCache {
+    async fn load(&mut self, dir: &Path) -> Result<Connections, String> {
+        if let Some((cached_dir, data)) = &self.cached {
+            if cached_dir == dir {
+                return Ok(data.clone());
+            }
+        }
+        let data = Connections::load(dir).await?;
+        self.cached = Some((dir.to_path_buf(), data.clone()));
+        Ok(data)
+    }
+
+    async fn save(&mut self, dir: &Path, data: &Connections) -> Result<(), String> {
+        // A failed or interrupted write must not leave the app using an outdated session.
+        self.cached = None;
+        data.save(dir).await?;
+        self.cached = Some((dir.to_path_buf(), data.clone()));
+        Ok(())
+    }
 }
 
 impl Connections {
@@ -523,9 +549,9 @@ pub async fn chatgpt_plan_status<R: Runtime>(
     if !cfg!(target_os = "macos") {
         return Ok(None);
     }
-    let _sessions = SESSIONS.lock().await;
+    let mut sessions = SESSIONS.lock().await;
     let dir = app_data_dir(&app)?;
-    let mut data = Connections::load(&dir).await?;
+    let mut data = sessions.load(&dir).await?;
     if refresh_models == Some(true) {
         let index = data
             .profiles
@@ -534,11 +560,11 @@ pub async fn chatgpt_plan_status<R: Runtime>(
             .ok_or(RECONNECT)?;
         let (token, renewed) = profile_token(&mut data.profiles[index]).await?;
         if renewed {
-            data.save(&dir).await?;
+            sessions.save(&dir, &data).await?;
         }
         let client = http_client(Duration::from_secs(20))?;
         data.profiles[index].update_models(fetch_models(&client, &token).await?);
-        data.save(&dir).await?;
+        sessions.save(&dir, &data).await?;
     }
     Ok(Some(data.status()))
 }
@@ -550,8 +576,8 @@ pub(super) async fn confirm_summary<R: Runtime>(
     automatic: bool,
 ) -> Result<bool, String> {
     let data = {
-        let _sessions = SESSIONS.lock().await;
-        Connections::load(&app_data_dir(app)?).await?
+        let mut sessions = SESSIONS.lock().await;
+        sessions.load(&app_data_dir(app)?).await?
     };
     let profile = data
         .profiles
@@ -601,9 +627,9 @@ pub async fn chatgpt_plan_set_summary_default<R: Runtime>(
     automatic: Option<bool>,
     model: Option<String>,
 ) -> Result<ConnectionStatus, String> {
-    let _sessions = SESSIONS.lock().await;
+    let mut sessions = SESSIONS.lock().await;
     let dir = app_data_dir(&app)?;
-    let mut data = Connections::load(&dir).await?;
+    let mut data = sessions.load(&dir).await?;
     let enabled = enabled.unwrap_or(data.summary_default);
     let automatic = enabled && automatic.unwrap_or(false);
     if enabled && (!data.summary_default || automatic) && data.status().active_model.is_none() {
@@ -649,7 +675,7 @@ pub async fn chatgpt_plan_set_summary_default<R: Runtime>(
         }
     }
     data.summary_default = enabled;
-    data.save(&dir).await?;
+    sessions.save(&dir, &data).await?;
     Ok(data.status())
 }
 
@@ -663,9 +689,9 @@ pub async fn chatgpt_plan_connect<R: Runtime>(
         .map_err(|_| "A ChatGPT sign-in is already in progress.")?;
     let dir = app_data_dir(&app)?;
     let prior = {
-        let _sessions = SESSIONS.lock().await;
-        let data = Connections::load(&dir).await?;
-        data.save(&dir).await?; // Persist the installation identifier before opening the browser.
+        let mut sessions = SESSIONS.lock().await;
+        let data = sessions.load(&dir).await?;
+        sessions.save(&dir, &data).await?; // Persist the installation identifier before opening the browser.
         data
     };
     let returning = profile_id
@@ -758,8 +784,8 @@ pub async fn chatgpt_plan_connect<R: Runtime>(
     }
     let models = fetch_models(&client, &tokens.access_token).await?;
 
-    let _sessions = SESSIONS.lock().await;
-    let mut data = Connections::load(&dir).await?;
+    let mut sessions = SESSIONS.lock().await;
+    let mut data = sessions.load(&dir).await?;
     let previous = data.profiles.iter().find(|p| p.client_id == client_id);
     let mut profile = Profile {
         client_id: client_id.clone(),
@@ -773,7 +799,7 @@ pub async fn chatgpt_plan_connect<R: Runtime>(
     data.profiles.retain(|p| p.client_id != client_id);
     data.active = Some(client_id);
     data.profiles.push(profile);
-    data.save(&dir).await?;
+    sessions.save(&dir, &data).await?;
     Ok(data.status())
 }
 
@@ -782,9 +808,9 @@ pub async fn chatgpt_plan_disconnect<R: Runtime>(app: AppHandle<R>) -> Result<bo
     let _sign_in = SIGN_IN
         .try_lock()
         .map_err(|_| "Wait for the current ChatGPT sign-in to finish.")?;
-    let _sessions = SESSIONS.lock().await;
+    let mut sessions = SESSIONS.lock().await;
     let dir = app_data_dir(&app)?;
-    let mut data = Connections::load(&dir).await?;
+    let mut data = sessions.load(&dir).await?;
     let Some(active) = data.active.take() else {
         return Ok(true);
     };
@@ -796,7 +822,7 @@ pub async fn chatgpt_plan_disconnect<R: Runtime>(app: AppHandle<R>) -> Result<bo
     let tokens = profile.tokens.take().ok_or(RECONNECT)?;
     data.auto_summary_profile = None;
     // End local use even when OpenAI cannot confirm remote revocation.
-    data.save(&dir).await?;
+    sessions.save(&dir, &data).await?;
     let client = http_client(Duration::from_secs(5))?;
     let Ok(response) = client
         .get(format!("{ISSUER}/.well-known/openid-configuration"))
@@ -844,8 +870,8 @@ pub(super) async fn access_token(
     if !cfg!(target_os = "macos") {
         return Err("ChatGPT plan summaries are available on macOS.".into());
     }
-    let _sessions = SESSIONS.lock().await;
-    let mut data = Connections::load(dir).await?;
+    let mut sessions = SESSIONS.lock().await;
+    let mut data = sessions.load(dir).await?;
     if !data.summary_default {
         return Err("Choose ChatGPT plan as your summary provider in Settings.".into());
     }
@@ -860,7 +886,7 @@ pub(super) async fn access_token(
         .ok_or(RECONNECT)?;
     let (access, renewed) = profile_token(profile).await?;
     if renewed {
-        data.save(dir).await?;
+        sessions.save(dir, &data).await?;
     }
     Ok(access)
 }
@@ -996,6 +1022,26 @@ pub(super) async fn summarize(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn connection_cache_reuses_only_its_profile_and_invalidates_failed_writes() {
+        let dir = Path::new("/preview");
+        let data: Connections = serde_json::from_value(json!({
+            "host_id": "preview-host",
+            "active": null,
+            "profiles": []
+        })).unwrap();
+        let mut sessions = ConnectionCache {
+            cached: Some((dir.to_path_buf(), data.clone())),
+        };
+
+        // An invalid Keychain path errors instead of using the other profile's data.
+        let invalid = Path::new("/");
+        assert!(sessions.load(invalid).await.is_err());
+        assert_eq!(sessions.load(dir).await.unwrap().host_id, "preview-host");
+        assert!(sessions.save(invalid, &data).await.is_err());
+        assert!(sessions.cached.is_none());
+    }
 
     #[test]
     fn id_token_audience_accepts_only_the_issued_client() {
