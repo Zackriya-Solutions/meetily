@@ -218,6 +218,7 @@ pub enum LLMProvider {
     Groq,
     Ollama,
     OpenRouter,
+    AtlasCloud,
     BuiltInAI,
     CustomOpenAI,
 }
@@ -231,6 +232,7 @@ impl LLMProvider {
             "groq" => Ok(Self::Groq),
             "ollama" => Ok(Self::Ollama),
             "openrouter" => Ok(Self::OpenRouter),
+            "atlascloud" | "atlas-cloud" | "atlas" => Ok(Self::AtlasCloud),
             "builtin-ai" | "local-llama" | "localllama" => Ok(Self::BuiltInAI),
             "custom-openai" => Ok(Self::CustomOpenAI),
             _ => Err(format!("Unsupported LLM provider: {}", s)),
@@ -309,6 +311,10 @@ pub(crate) async fn generate_summary(
         ),
         LLMProvider::OpenRouter => (
             "https://openrouter.ai/api/v1/chat/completions".to_string(),
+            header::HeaderMap::new(),
+        ),
+        LLMProvider::AtlasCloud => (
+            "https://api.atlascloud.ai/v1/chat/completions".to_string(),
             header::HeaderMap::new(),
         ),
         LLMProvider::Ollama => {
@@ -585,6 +591,7 @@ mod tests {
             LLMProvider::OpenAI,
             LLMProvider::Groq,
             LLMProvider::OpenRouter,
+            LLMProvider::AtlasCloud,
             LLMProvider::CustomOpenAI,
         ] {
             assert!(build_openai_compat_chat_body(&provider, "model", "sys", "user", None, None, None)
@@ -976,6 +983,19 @@ mod tests {
             })
         );
     }
+
+    #[test]
+    fn parses_atlas_cloud_aliases() {
+        assert_eq!(LLMProvider::from_str("atlascloud"), Ok(LLMProvider::AtlasCloud));
+        assert_eq!(LLMProvider::from_str("atlas-cloud"), Ok(LLMProvider::AtlasCloud));
+        assert_eq!(LLMProvider::from_str("atlas"), Ok(LLMProvider::AtlasCloud));
+        assert_eq!(LLMProvider::from_str("AtlasCloud"), Ok(LLMProvider::AtlasCloud));
+    }
+
+    #[test]
+    fn exposes_atlas_cloud_provider_name() {
+        assert_eq!(provider_name(&LLMProvider::AtlasCloud), "Atlas Cloud");
+    }
 }
 
 /// Helper function to get provider name for logging
@@ -987,6 +1007,7 @@ fn provider_name(provider: &LLMProvider) -> &str {
         LLMProvider::Ollama => "Ollama",
         LLMProvider::BuiltInAI => "Built-in AI",
         LLMProvider::OpenRouter => "OpenRouter",
+        LLMProvider::AtlasCloud => "Atlas Cloud",
         LLMProvider::CustomOpenAI => "Custom OpenAI",
     }
 }
