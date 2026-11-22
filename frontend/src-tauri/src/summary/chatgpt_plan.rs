@@ -390,46 +390,83 @@ async fn wait_for_callback(
 }
 
 #[derive(Deserialize)]
+#[serde(untagged)]
+enum Audience {
+    Client(String),
+    Clients(Vec<String>),
+}
+
+impl Audience {
+    fn is_for(&self, client_id: &str) -> bool {
+        match self {
+            Self::Client(client) => client == client_id,
+            Self::Clients(clients) => matches!(clients.as_slice(), [client] if client == client_id),
+        }
+    }
+}
+
+#[derive(Deserialize)]
 struct Identity {
     iss: String,
-    aud: String,
+    aud: Audience,
     sub: String,
     email: String,
     nonce: String,
     exp: i64,
 }
 
-fn verify_identity(token: &str, keys: &Value, client_id: &str, nonce: &str) -> Option<Identity> {
+fn verify_identity(
+    token: &str,
+    keys: &Value,
+    client_id: &str,
+    nonce: &str,
+) -> Result<Identity, &'static str> {
     let mut parts = token.split('.');
-    let (header, payload, sig) = (parts.next()?, parts.next()?, parts.next()?);
-    if parts.next().is_some() {
-        return None;
-    }
-    let json_header: Value = serde_json::from_slice(&URL_SAFE_NO_PAD.decode(header).ok()?).ok()?;
+    let (Some(header), Some(payload), Some(sig), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return Err("token format");
+    };
+    let header_bytes = URL_SAFE_NO_PAD.decode(header).map_err(|_| "header encoding")?;
+    let json_header: Value = serde_json::from_slice(&header_bytes).map_err(|_| "header format")?;
     if json_header["alg"] != "RS256" {
-        return None;
+        return Err("signing algorithm");
     }
-    let kid = json_header["kid"].as_str()?;
+    let kid = json_header["kid"].as_str().ok_or("key identifier")?;
     let key = keys["keys"]
-        .as_array()?
+        .as_array()
+        .ok_or("signing key list")?
         .iter()
-        .find(|k| k["kid"] == kid && k["kty"] == "RSA")?;
-    let n = URL_SAFE_NO_PAD.decode(key["n"].as_str()?).ok()?;
-    let e = URL_SAFE_NO_PAD.decode(key["e"].as_str()?).ok()?;
+        .find(|k| k["kid"] == kid && k["kty"] == "RSA")
+        .ok_or("signing key lookup")?;
+    let n = URL_SAFE_NO_PAD.decode(key["n"].as_str().ok_or("key modulus")?).map_err(|_| "key modulus")?;
+    let e = URL_SAFE_NO_PAD.decode(key["e"].as_str().ok_or("key exponent")?).map_err(|_| "key exponent")?;
+    let signed = URL_SAFE_NO_PAD.decode(sig).map_err(|_| "signature encoding")?;
     signature::RsaPublicKeyComponents { n, e }
         .verify(
             &signature::RSA_PKCS1_2048_8192_SHA256,
             format!("{header}.{payload}").as_bytes(),
-            &URL_SAFE_NO_PAD.decode(sig).ok()?,
+            &signed,
         )
-        .ok()?;
-    let claims: Identity = serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload).ok()?).ok()?;
-    (claims.iss == ISSUER
-        && claims.aud == client_id
-        && claims.nonce == nonce
-        && claims.exp > chrono::Utc::now().timestamp()
-        && !claims.sub.is_empty())
-    .then_some(claims)
+        .map_err(|_| "signature check")?;
+    let bytes = URL_SAFE_NO_PAD.decode(payload).map_err(|_| "claims encoding")?;
+    let claims: Identity = serde_json::from_slice(&bytes).map_err(|_| "claims format")?;
+    if claims.iss != ISSUER {
+        return Err("issuer check");
+    }
+    if !claims.aud.is_for(client_id) {
+        return Err("audience check");
+    }
+    if claims.nonce != nonce {
+        return Err("nonce check");
+    }
+    if claims.exp <= chrono::Utc::now().timestamp() {
+        return Err("expiration check");
+    }
+    if claims.sub.is_empty() {
+        return Err("subject check");
+    }
+    Ok(claims)
 }
 
 async fn exchange(client: &Client, form: &[(&str, &str)]) -> Result<TokenResponse, String> {
@@ -701,13 +738,24 @@ pub async fn chatgpt_plan_connect<R: Runtime>(
         .send()
         .await
         .and_then(reqwest::Response::error_for_status)
-        .map_err(|_| "Could not verify the ChatGPT account.")?
+        .map_err(|_| {
+            log::warn!("ChatGPT verification could not fetch the signing keys");
+            "Could not verify the ChatGPT account."
+        })?
         .json()
         .await
-        .map_err(|_| "Could not verify the ChatGPT account.")?;
+        .map_err(|_| {
+            log::warn!("ChatGPT verification could not parse the signing keys");
+            "Could not verify the ChatGPT account."
+        })?;
     let identity = verify_identity(&tokens.id_token, &keys, &client_id, &nonce)
-        .filter(|claims| returning.map_or(true, |p| p.subject == claims.sub))
-        .ok_or("Could not verify the ChatGPT account.")?;
+        .map_err(|stage| {
+            log::warn!("ChatGPT account verification failed at {stage}");
+            "Could not verify the ChatGPT account."
+        })?;
+    if returning.is_some_and(|profile| profile.subject != identity.sub) {
+        return Err("Could not verify the ChatGPT account.".into());
+    }
     let models = fetch_models(&client, &tokens.access_token).await?;
 
     let _sessions = SESSIONS.lock().await;
@@ -948,6 +996,23 @@ pub(super) async fn summarize(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn id_token_audience_accepts_only_the_issued_client() {
+        let client_id = "oaiapp_meetily";
+        for audience in [json!(client_id), json!([client_id])] {
+            let parsed: Audience = serde_json::from_value(audience).unwrap();
+            assert!(parsed.is_for(client_id));
+        }
+        for audience in [
+            json!("another_client"),
+            json!([]),
+            json!([client_id, "another_client"]),
+        ] {
+            let parsed: Audience = serde_json::from_value(audience).unwrap();
+            assert!(!parsed.is_for(client_id));
+        }
+    }
 
     #[test]
     fn callback_is_bound_to_state_and_registered_client() {
