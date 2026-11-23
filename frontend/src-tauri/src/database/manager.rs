@@ -33,6 +33,7 @@ impl DatabaseManager {
         let pool = SqlitePool::connect(tauri_db_path).await?;
 
         sqlx::migrate!("./migrations").run(&pool).await?;
+        ensure_speaker_label_column(&pool).await?;
 
         Ok(DatabaseManager { pool })
     }
@@ -205,4 +206,22 @@ impl DatabaseManager {
 
         Ok(())
     }
+}
+
+/// Adds `transcripts.speaker_label` (which voice on the other side spoke a
+/// line). Added here rather than as a migration: an applied migration that a
+/// build does not know makes that build refuse to open the database, and the
+/// upstream app and older fork builds share this file.
+async fn ensure_speaker_label_column(pool: &SqlitePool) -> Result<()> {
+    let exists: bool = sqlx::query_scalar(
+        "SELECT COUNT(*) > 0 FROM pragma_table_info('transcripts') WHERE name = 'speaker_label'",
+    )
+    .fetch_one(pool)
+    .await?;
+    if !exists {
+        sqlx::query("ALTER TABLE transcripts ADD COLUMN speaker_label TEXT")
+            .execute(pool)
+            .await?;
+    }
+    Ok(())
 }

@@ -93,6 +93,7 @@ impl MeetingsRepository {
                     audio_end_time: t.audio_end_time,
                     duration: t.duration,
                     speaker: t.speaker,
+                    speaker_label: t.speaker_label,
                 })
                 .collect::<Vec<_>>();
 

@@ -451,6 +451,15 @@ async fn run_retranscription<R: Runtime>(
     .fetch_all(&mut *tx)
     .await
     .map_err(|e| anyhow!("Failed to read existing speakers: {}", e))?;
+    let old_labels: Vec<(f64, f64, String)> = sqlx::query_as(
+        "SELECT audio_start_time, audio_end_time, COALESCE(speaker_label, '') FROM transcripts
+         WHERE meeting_id = ? AND speaker = 'system'
+           AND audio_start_time IS NOT NULL AND audio_end_time IS NOT NULL",
+    )
+    .bind(&meeting_id)
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(|e| anyhow!("Failed to read existing speaker labels: {}", e))?;
 
     sqlx::query("DELETE FROM transcripts WHERE meeting_id = ?")
         .bind(&meeting_id)
@@ -459,9 +468,22 @@ async fn run_retranscription<R: Runtime>(
         .map_err(|e| anyhow!("Failed to delete existing transcripts: {}", e))?;
 
     for segment in &segments {
+        let (speaker, speaker_label) = match (segment.audio_start_time, segment.audio_end_time) {
+            (Some(start), Some(end)) => {
+                let speaker = crate::audio::speaker_source::speaker_by_overlap(&old_speakers, start, end);
+                // Only lines of the other side carry a voice label.
+                let label = match speaker.as_deref() {
+                    Some("system") => crate::audio::speaker_source::speaker_by_overlap(&old_labels, start, end)
+                        .filter(|label| !label.is_empty()),
+                    _ => None,
+                };
+                (speaker, label)
+            }
+            _ => (None, None),
+        };
         sqlx::query(
-            "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration, speaker)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+            "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration, speaker, speaker_label)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
         .bind(&segment.id)
         .bind(&meeting_id)
@@ -470,12 +492,8 @@ async fn run_retranscription<R: Runtime>(
         .bind(segment.audio_start_time)
         .bind(segment.audio_end_time)
         .bind(segment.duration)
-        .bind(match (segment.audio_start_time, segment.audio_end_time) {
-            (Some(start), Some(end)) => {
-                crate::audio::speaker_source::speaker_by_overlap(&old_speakers, start, end)
-            }
-            _ => None,
-        })
+        .bind(speaker)
+        .bind(speaker_label)
         .execute(&mut *tx)
         .await
         .map_err(|e| anyhow!("Failed to insert transcript: {}", e))?;

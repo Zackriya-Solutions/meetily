@@ -25,6 +25,9 @@ pub struct TranscriptSegment {
     /// "mic" or "system"; absent in transcripts.json written by older versions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speaker: Option<String>,
+    /// Which voice on the other side ("Speaker 2"); None for the mic and old rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker_label: Option<String>,
 }
 
 /// Meeting metadata structure
@@ -131,6 +134,7 @@ impl RecordingSaver {
             confidence: 1.0,
             sequence_id: 0,
             speaker: None,
+            speaker_label: None,
         };
         self.add_transcript_segment(segment);
     }

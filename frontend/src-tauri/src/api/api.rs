@@ -140,6 +140,9 @@ pub struct MeetingTranscript {
     /// "mic" (the local user) or "system" (the other side); None for old rows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speaker: Option<String>,
+    /// Which voice on the other side ("Speaker 2"); None for the mic and old rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker_label: Option<String>,
 }
 
 /// Meeting metadata without transcripts (for pagination)
@@ -194,6 +197,9 @@ pub struct TranscriptSegment {
     /// "mic" (the local user) or "system" (the other side); None for old rows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speaker: Option<String>,
+    /// Which voice on the other side ("Speaker 2"); None for the mic and old rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker_label: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -908,6 +914,7 @@ pub async fn api_get_meeting_transcripts<R: Runtime>(
                     audio_end_time: t.audio_end_time,
                     duration: t.duration,
                     speaker: t.speaker,
+                    speaker_label: t.speaker_label,
                 })
                 .collect::<Vec<_>>();
 

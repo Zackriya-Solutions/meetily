@@ -10,3 +10,6 @@ pub mod clustering;
 pub mod embedding;
 pub mod fbank;
 pub mod models;
+pub mod session;
+
+pub use session::{DiarizationSession, LiveDiarization};

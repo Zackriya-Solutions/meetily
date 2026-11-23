@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useRef, useReducer, startTransition, useEffect, useState, memo } from "react";
+import { useCallback, useMemo, useRef, useReducer, startTransition, useEffect, useState, memo } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useAutoScroll } from "@/hooks/useAutoScroll";
 import { useTranscriptStreaming } from "@/hooks/useTranscriptStreaming";
@@ -77,6 +77,7 @@ const TranscriptSegment = memo(function TranscriptSegment({
     text,
     confidence,
     speaker,
+    speakerLabel,
     othersLabel,
     isStreaming,
     showConfidence,
@@ -86,13 +87,14 @@ const TranscriptSegment = memo(function TranscriptSegment({
     text: string;
     confidence?: number;
     speaker?: TranscriptSpeaker;
+    speakerLabel?: string;
     othersLabel?: string;
     isStreaming: boolean;
     showConfidence: boolean;
 }) {
     const displayText = cleanStopWords(text) || (text.trim() === '' ? '[Silence]' : text);
     const label = speaker ? SPEAKER_LABELS[speaker] : undefined;
-    const labelText = speaker === 'system' && othersLabel ? othersLabel : label?.text;
+    const labelText = speaker === 'system' ? speakerLabel ?? othersLabel ?? label?.text : label?.text;
     const content = (
         <p className="text-base text-gray-800 leading-relaxed">
             {label && <span className={`font-semibold mr-1 ${label.className}`}>{labelText}:</span>}
@@ -149,6 +151,13 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
     const scrollRef = useRef<HTMLDivElement>(null);
     // Ref for infinite scroll trigger element
     const loadMoreTriggerRef = useRef<HTMLDivElement>(null);
+
+    // "Speaker N" only tells voices apart; with a single voice the found or
+    // typed name for the other side reads better.
+    const multipleVoices = useMemo(
+        () => new Set(segments.map(s => s.speakerLabel).filter(Boolean)).size > 1,
+        [segments],
+    );
 
     // Force re-render without flushSync (avoids React warning)
     const [, rerender] = useReducer((x: number) => x + 1, 0);
@@ -315,6 +324,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                         text={getDisplayText(segment)}
                                         confidence={segment.confidence}
                                         speaker={segment.speaker}
+                                        speakerLabel={multipleVoices ? segment.speakerLabel : undefined}
                                         othersLabel={othersLabel}
                                         isStreaming={isStreaming}
                                         showConfidence={showConfidence}
@@ -373,6 +383,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                         text={getDisplayText(segment)}
                                         confidence={segment.confidence}
                                         speaker={segment.speaker}
+                                        speakerLabel={multipleVoices ? segment.speakerLabel : undefined}
                                         othersLabel={othersLabel}
                                         isStreaming={isStreaming}
                                         showConfidence={showConfidence}

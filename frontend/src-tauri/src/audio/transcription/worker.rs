@@ -7,6 +7,7 @@ use super::provider::TranscriptionError;
 use crate::audio::{AudioChunk, RecordingDeviceType};
 use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Runtime};
@@ -42,10 +43,39 @@ pub struct TranscriptUpdate {
     pub audio_start_time: f64, // Seconds from recording start (e.g., 125.3)
     pub audio_end_time: f64,   // Seconds from recording start (e.g., 128.6)
     pub duration: f64,          // Segment duration in seconds (e.g., 3.3)
+    /// Which voice on the other side spoke ("Speaker 2"); None for the
+    /// mic and before the diarization model is ready.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker_label: Option<String>,
 }
 
 // NOTE: get_transcript_history and get_recording_meeting_name functions
 // have been moved to recording_commands.rs where they have access to RECORDING_MANAGER
+
+/// The speaker model's sample rate; segments at any other rate are not split.
+const DIARIZATION_SAMPLE_RATE: u32 = 16_000;
+
+/// Cut a chunk at ascending sample offsets into pieces with their own start
+/// times. No offsets gives back the chunk itself.
+fn split_at_samples(chunk: AudioChunk, cuts: &[usize]) -> Vec<AudioChunk> {
+    if cuts.is_empty() {
+        return vec![chunk];
+    }
+    let bounds: Vec<usize> = std::iter::once(0)
+        .chain(cuts.iter().copied().filter(|&c| c > 0 && c < chunk.data.len()))
+        .chain(std::iter::once(chunk.data.len()))
+        .collect();
+    bounds
+        .windows(2)
+        .map(|w| AudioChunk {
+            data: chunk.data[w[0]..w[1]].to_vec(),
+            sample_rate: chunk.sample_rate,
+            timestamp: chunk.timestamp + w[0] as f64 / chunk.sample_rate as f64,
+            chunk_id: chunk.chunk_id,
+            device_type: chunk.device_type.clone(),
+        })
+        .collect()
+}
 
 /// Optimized parallel transcription task ensuring ZERO chunk loss
 pub fn start_transcription_task<R: Runtime>(
@@ -54,6 +84,9 @@ pub fn start_transcription_task<R: Runtime>(
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         info!("🚀 Starting optimized parallel transcription task - guaranteeing zero chunk loss");
+
+        // Started first so the speaker model loads while the speech model does.
+        let diarization = crate::diarization::LiveDiarization::start(&app);
 
         // Initialize transcription engine (Whisper or Parakeet based on config)
         let transcription_engine = match super::engine::get_or_init_transcription_engine(&app).await {
@@ -105,6 +138,7 @@ pub fn start_transcription_task<R: Runtime>(
             let chunks_completed_clone = chunks_completed.clone();
             let input_finished_clone = input_finished.clone();
             let chunks_queued_clone = chunks_queued.clone();
+            let diarization = diarization.clone();
 
             let worker_handle = tokio::spawn(async move {
                 info!("👷 Worker {} started", worker_id);
@@ -127,11 +161,18 @@ pub fn start_transcription_task<R: Runtime>(
                     warn!("⚠️ Worker {} pre-validation: {} model not loaded - chunks may be skipped", worker_id, engine_name);
                 }
 
+                // Pieces of a segment split at a voice change, run before
+                // the next chunk so their sequence ids stay in order.
+                let mut pending_pieces: VecDeque<AudioChunk> = VecDeque::new();
+
                 loop {
                     // Try to get a chunk to process
-                    let chunk = {
-                        let mut receiver = work_receiver_clone.lock().await;
-                        receiver.recv().await
+                    let (chunk, is_piece) = match pending_pieces.pop_front() {
+                        Some(piece) => (Some(piece), true),
+                        None => {
+                            let mut receiver = work_receiver_clone.lock().await;
+                            (receiver.recv().await, false)
+                        }
                     };
 
                     match chunk {
@@ -157,9 +198,38 @@ pub fn start_transcription_task<R: Runtime>(
                                 continue;
                             }
 
+                            // Several voices with no pause between them arrive as one
+                            // segment and would share one label. Split it where the
+                            // voice changes; each extra piece counts as a queued chunk.
+                            let (chunk, split_piece) = if !is_piece
+                                && matches!(chunk.device_type, RecordingDeviceType::System)
+                                && chunk.sample_rate == DIARIZATION_SAMPLE_RATE
+                            {
+                                let cuts = diarization.speaker_changes(chunk.data.clone()).await;
+                                let mut pieces = split_at_samples(chunk, &cuts).into_iter();
+                                let first = pieces.next().expect("split always returns a piece");
+                                let rest: Vec<AudioChunk> = pieces.collect();
+                                let was_split = !rest.is_empty();
+                                if was_split {
+                                    info!("Worker {}: split a system segment at {} voice changes", worker_id, rest.len());
+                                    chunks_queued_clone.fetch_add(rest.len() as u64, Ordering::SeqCst);
+                                    pending_pieces.extend(rest);
+                                }
+                                (first, was_split)
+                            } else {
+                                (chunk, is_piece)
+                            };
+
                             let chunk_timestamp = chunk.timestamp;
                             let chunk_device_type = chunk.device_type.clone();
                             let chunk_duration = chunk.data.len() as f64 / chunk.sample_rate as f64;
+                            // Kept for diarization, which runs only on segments that
+                            // turn out to be speech: a chime the VAD passed and the
+                            // speech model dropped must not become a speaker.
+                            let system_audio = match chunk_device_type {
+                                RecordingDeviceType::System => Some(chunk.data.clone()),
+                                RecordingDeviceType::Microphone => None,
+                            };
 
                             // Transcribe with provider-agnostic approach
                             match transcribe_chunk_with_provider(
@@ -204,6 +274,10 @@ pub fn start_transcription_task<R: Runtime>(
                                         let sequence_id = SEQUENCE_COUNTER.fetch_add(1, Ordering::SeqCst);
                                         let audio_start_time = chunk_timestamp; // Already in seconds from recording start
                                         let audio_end_time = chunk_timestamp + chunk_duration;
+                                        let speaker_label = match system_audio {
+                                            Some(samples) => diarization.label(samples, split_piece).await,
+                                            None => None,
+                                        };
 
                                         // Save structured transcript segment to recording manager (only final results)
                                         // Save ALL segments (partial and final) to ensure complete JSON
@@ -230,6 +304,7 @@ pub fn start_transcription_task<R: Runtime>(
                                             audio_start_time,
                                             audio_end_time,
                                             duration: chunk_duration,
+                                            speaker_label,
                                         };
 
                                         if let Err(e) = app_clone.emit("transcript-update", &update)
@@ -619,5 +694,19 @@ fn format_recording_time(seconds: f64) -> String {
         fn drops_empty_and_whitespace_only() {
             assert!(!should_emit_transcript(""));
             assert!(!should_emit_transcript("   "));
+        }
+
+        #[test]
+        fn splits_a_chunk_with_its_own_start_times() {
+            let chunk = AudioChunk {
+                data: vec![0.0; 48_000],
+                sample_rate: 16_000,
+                timestamp: 10.0,
+                chunk_id: 7,
+                device_type: RecordingDeviceType::System,
+            };
+            let pieces = split_at_samples(chunk, &[16_000, 40_000]);
+            let shape: Vec<(usize, f64)> = pieces.iter().map(|p| (p.data.len(), p.timestamp)).collect();
+            assert_eq!(shape, vec![(16_000, 10.0), (24_000, 11.0), (8_000, 12.5)]);
         }
     }
