@@ -126,6 +126,20 @@ jobs:
           fi
           echo "Bundle types: $BUNDLES"
 
+      - name: Configure unsigned build (disable updater artifacts)
+        id: linux-unsigned-config
+        shell: bash
+        if: ${{ github.event.inputs.sign-build != 'true' }}
+        run: |
+          # Unsigned build: disable updater artifacts so TAURI_SIGNING_PRIVATE_KEY is not required.
+          # Mirrors the Windows fix (build-windows.yml) which sets bundle.createUpdaterArtifacts=false
+          # for unsigned builds. Without this, Tauri still tries to create signed updater artifacts
+          # and fails with "failed to decode secret key: ... Missing comment in secret key".
+          CONFIG_PATH="$RUNNER_TEMP/tauri.linux-unsigned.conf.json"
+          printf '%s' '{"bundle":{"createUpdaterArtifacts":false}}' > "$CONFIG_PATH"
+          echo "Unsigned build: createUpdaterArtifacts disabled (no updater signing key required)"
+          echo "config_args=--config \"$CONFIG_PATH\"" >> "$GITHUB_OUTPUT"
+
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
@@ -238,7 +252,7 @@ jobs:
           BLAS_LIB_DIRS: /usr/lib/x86_64-linux-gnu/openblas
         with:
           projectPath: frontend
-          args: --target x86_64-unknown-linux-gnu --features openblas ${{ steps.build-profile.outputs.args }}
+          args: --target x86_64-unknown-linux-gnu --features openblas ${{ steps.build-profile.outputs.args }} ${{ steps.linux-unsigned-config.outputs.config_args }}
 
       - name: Verify build artifacts
         run: |
