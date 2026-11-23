@@ -148,6 +148,7 @@ set "CMAKE_DISABLE_FIND_PACKAGE_OpenSSL=TRUE"
 call cargo build %HELPER_FEATURES%
 if errorlevel 1 (
     echo ❌ Failed to build llama-helper
+    echo    Hint: a stale CMake cache can keep the previous OpenSSL discovery; run "cargo clean -p llama-cpp-sys-2" and retry
     popd
     exit /b 1
 )
