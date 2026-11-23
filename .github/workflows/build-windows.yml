@@ -702,7 +702,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: frontend/src-tauri/binaries/onnxruntime
-          key: ${{ runner.os }}-onnxruntime-x86_64-pc-windows-msvc-${{ hashFiles('frontend/src-tauri/build/onnxruntime.rs') }}
+          key: ${{ runner.os }}-onnxruntime-x86_64-pc-windows-msvc-sherpa1.13.8-ort1.28.2-${{ hashFiles('frontend/src-tauri/build/onnxruntime.rs', 'Cargo.lock') }}
 
 
       - name: Clear sherpa prebuilt cache (debug builds)
@@ -712,21 +712,13 @@ jobs:
           Write-Host "Removing stale sherpa-onnx prebuilt cache to force re-download (fixes LNK1181 in debug builds)"
           Remove-Item -Recurse -Force -ErrorAction SilentlyContinue target/sherpa-onnx-prebuilt
 
-      - name: Download sherpa-onnx prebuilt libs
-        shell: pwsh
-        run: |
-          $archive = "sherpa-onnx-v1.13.3-win-x64-shared-MT-Release-lib.tar.bz2"
-          $url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.3/$archive"
-          $dest = "target/sherpa-onnx-prebuilt"
-          New-Item -ItemType Directory -Path $dest -Force | Out-Null
-          $archivePath = Join-Path $dest $archive
-          if (-not (Test-Path $archivePath)) {
-            Invoke-WebRequest -Uri $url -OutFile $archivePath
-          }
-          tar -xjf $archivePath -C $dest
-          $libDir = Join-Path $dest "sherpa-onnx-v1.13.3-win-x64-shared-MT-Release-lib/lib"
-          $libDir = (Resolve-Path $libDir).Path
-          "SHERPA_ONNX_LIB_DIR=$libDir" | Out-File -FilePath $env:GITHUB_ENV -Append
+      # sherpa-onnx prebuilt libs are fetched by sherpa-onnx-sys's own build
+      # script, pinned to v1.13.8 via Cargo.toml/Cargo.lock: it downloads
+      # sherpa-onnx-v1.13.8-win-x64-shared-MT-Release-lib.tar.bz2 into
+      # target/sherpa-onnx-prebuilt and copies the runtime DLLs (including the
+      # ORT 1.28.2 onnxruntime.dll staged by build/onnxruntime.rs) to the cargo
+      # profile dir. Do NOT export SHERPA_ONNX_LIB_DIR here: an override pinned
+      # to an older release would link and stage the wrong onnxruntime.dll.
 
       - name: Verify migration files have LF line endings
         shell: pwsh

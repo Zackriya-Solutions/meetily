@@ -1,8 +1,20 @@
+//! Stages the ONNX Runtime DLL on Windows, fully offline.
+//!
+//! sherpa-onnx-sys's build script (`copy_windows_runtime_dlls`) already places
+//! its prebuilt `onnxruntime.dll` (ORT 1.28.2, DirectML-capable) into the cargo
+//! profile directory before this app's build script runs (dependency build
+//! scripts run first). We copy that exact DLL into `binaries/onnxruntime/` and
+//! verify it against pinned size/SHA-256 constants — no network access.
+//!
+//! Only `onnxruntime.dll` is staged. `onnxruntime_providers_shared.dll` is
+//! deliberately NOT staged: the 1.28.2 DLL does not import it, and CI
+//! (.github/verify-windows-dlls.ps1) enforces exactly one `onnxruntime*.dll`.
+
 use sha2::{Digest, Sha256};
 use std::{
     env,
     fs::{self, File},
-    io::{Read, Write},
+    io::Read,
     path::Path,
     process,
 };
@@ -10,42 +22,16 @@ use std::{
 #[cfg(windows)]
 use std::os::windows::fs::MetadataExt;
 
+#[allow(dead_code)]
 mod build_env {
     include!("../src/build_env.rs");
 }
 
 const WINDOWS_X64_TARGET: &str = "x86_64-pc-windows-msvc";
-const ARCHIVE_URL: &str = "https://github.com/microsoft/onnxruntime/releases/download/v1.24.4/onnxruntime-win-x64-1.24.4.zip";
-const ARCHIVE_SHA256: &str = "d2319fddfb6ea4db99ccc4b60c85c517bcd855721f5daa6a06d40d7cb2ee2357";
-const ARCHIVE_SIZE: u64 = 74_442_783;
-
-struct Artifact {
-    archive_path: &'static str,
-    output_name: &'static str,
-    size: u64,
-    sha256: &'static str,
-}
-
-const ARTIFACTS: [Artifact; 3] = [
-    Artifact {
-        archive_path: "onnxruntime-win-x64-1.24.4/lib/onnxruntime.dll",
-        output_name: "onnxruntime.dll",
-        size: 14_203_464,
-        sha256: "b95efb2113b603bbbf3f191061c5516a871ed546893c820e4f3b7b6c358dbf2a",
-    },
-    Artifact {
-        archive_path: "onnxruntime-win-x64-1.24.4/lib/onnxruntime_providers_shared.dll",
-        output_name: "onnxruntime_providers_shared.dll",
-        size: 22_088,
-        sha256: "f2540b89707b47895c2a732bfd04e34a695c580d22301ef44c0f01f09b001673",
-    },
-    Artifact {
-        archive_path: "onnxruntime-win-x64-1.24.4/LICENSE",
-        output_name: "onnxruntime-LICENSE.txt",
-        size: 1_094,
-        sha256: "c250d6278f0b47a6439fb7592b08b58a55eb9f535aa49a1db63211c3f982b674",
-    },
-];
+const DLL_NAME: &str = "onnxruntime.dll";
+/// Pinned from the sherpa-onnx v1.13.8 win-x64 shared prebuilt (ORT 1.28.2).
+const DLL_SIZE: u64 = 17_799_168;
+const DLL_SHA256: &str = "7f66f939a881baf4f46a2216496798edf4a1429878b646d12674aa62f27d8a25";
 
 pub fn ensure_onnxruntime_runtime() {
     if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
@@ -117,6 +103,16 @@ pub fn ensure_onnxruntime_runtime() {
         },
     }
 
+    // Resolve the source DLL via the same OUT_DIR-ancestor walk as
+    // build/sherpa.rs: OUT_DIR is target/<triple>/<profile>/build/<crate>/out
+    // (with --target) or target/<profile>/build/<crate>/out (native), so this
+    // covers both target/<profile>/onnxruntime.dll and
+    // target/x86_64-pc-windows-msvc/<profile>/onnxruntime.dll.
+    let out_dir = env::var("OUT_DIR").expect("OUT_DIR environment variable not set");
+    let profile = build_env::expect_profile(env::var("PROFILE"));
+    let profile_dir = build_env::resolve_profile_dir(Path::new(&out_dir), &profile);
+    let source = profile_dir.join(DLL_NAME);
+
     fs::create_dir_all(
         destination
             .parent()
@@ -124,18 +120,11 @@ pub fn ensure_onnxruntime_runtime() {
     )
     .expect("Failed to create ONNX Runtime binaries directory");
 
-    let temporary_archive = env::temp_dir().join(format!(
-        "meetily-onnxruntime-{}-{}.zip",
-        process::id(),
-        target
-    ));
     let temporary_destination =
         destination.with_file_name(format!(".onnxruntime-{}-{}", process::id(), target));
-    let _ = fs::remove_file(&temporary_archive);
     let _ = fs::remove_dir_all(&temporary_destination);
 
-    let result = stage_runtime(&temporary_archive, &temporary_destination);
-    let _ = fs::remove_file(&temporary_archive);
+    let result = stage_runtime(&source, &temporary_destination);
 
     if let Err(error) = result {
         let _ = fs::remove_dir_all(&temporary_destination);
@@ -159,97 +148,38 @@ pub fn ensure_onnxruntime_runtime() {
     );
 }
 
-fn stage_runtime(archive_path: &Path, destination: &Path) -> Result<(), String> {
-    download_archive(archive_path)?;
-    verify_file(archive_path, ARCHIVE_URL, ARCHIVE_SIZE, ARCHIVE_SHA256)?;
+/// Copies the single prebuilt `onnxruntime.dll` from the cargo profile dir
+/// into the temporary staging directory and verifies it before the atomic
+/// rename. Never copies `onnxruntime_providers_shared.dll` or any other file.
+fn stage_runtime(source: &Path, destination: &Path) -> Result<(), String> {
+    let source_metadata = fs::symlink_metadata(source).map_err(|error| {
+        format!(
+            "failed to inspect source {} (sherpa-onnx-sys must stage it before this build script runs): {error}",
+            source.display()
+        )
+    })?;
+    if is_link_or_reparse_point(&source_metadata) {
+        return Err(format!(
+            "source {} is a link or reparse point; refusing to follow it",
+            source.display()
+        ));
+    }
+    if !source_metadata.is_file() {
+        return Err(format!("source {} is not a regular file", source.display()));
+    }
 
     fs::create_dir_all(destination)
         .map_err(|error| format!("failed to create {}: {error}", destination.display()))?;
 
-    let archive_file = File::open(archive_path)
-        .map_err(|error| format!("failed to open {}: {error}", archive_path.display()))?;
-    let mut archive = zip::ZipArchive::new(archive_file)
-        .map_err(|error| format!("failed to read ONNX Runtime archive: {error}"))?;
-
-    for artifact in ARTIFACTS {
-        let mut source = archive.by_name(artifact.archive_path).map_err(|error| {
-            format!(
-                "missing {} in ONNX Runtime archive: {error}",
-                artifact.archive_path
-            )
-        })?;
-        let output = destination.join(artifact.output_name);
-        let mut file = File::create(&output)
-            .map_err(|error| format!("failed to create {}: {error}", output.display()))?;
-        std::io::copy(&mut source, &mut file)
-            .map_err(|error| format!("failed to extract {}: {error}", artifact.archive_path))?;
-        verify_file(
-            &output,
-            artifact.output_name,
-            artifact.size,
-            artifact.sha256,
-        )?;
-    }
-
-    Ok(())
-}
-
-fn download_archive(destination: &Path) -> Result<(), String> {
-    let attempts = build_env::DOWNLOAD_ATTEMPTS;
-    build_env::retry_with_backoff(
-        |attempt| {
-            println!(
-                "cargo:warning=Downloading ONNX Runtime from {ARCHIVE_URL} (attempt {attempt}/{attempts})"
-            );
-            download_archive_once(destination)
-        },
-        |seconds| std::thread::sleep(std::time::Duration::from_secs(seconds)),
-    )
-    .map_err(|error| format!("failed to download ONNX Runtime after {attempts} attempts: {error}"))
-}
-
-fn download_archive_once(destination: &Path) -> Result<(), String> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(600))
-        .build()
-        .map_err(|error| format!("failed to create download client: {error}"))?;
-    let mut response = client
-        .get(ARCHIVE_URL)
-        .send()
-        .map_err(|error| format!("failed to download ONNX Runtime: {error}"))?
-        .error_for_status()
-        .map_err(|error| format!("ONNX Runtime download failed: {error}"))?;
-    let mut file = File::create(destination)
-        .map_err(|error| format!("failed to create {}: {error}", destination.display()))?;
-    copy_exact(&mut response, &mut file, ARCHIVE_SIZE)
-}
-
-fn copy_exact<R: Read, W: Write>(
-    source: &mut R,
-    destination: &mut W,
-    expected_size: u64,
-) -> Result<(), String> {
-    let copied = std::io::copy(
-        &mut source.by_ref().take(expected_size),
-        destination,
-    )
-    .map_err(|error| format!("failed to copy ONNX Runtime download: {error}"))?;
-    if copied != expected_size {
-        return Err(format!(
-            "downloaded ONNX Runtime archive has size {copied}, expected {expected_size}"
-        ));
-    }
-
-    let mut probe = [0_u8; 1];
-    if source
-        .read(&mut probe)
-        .map_err(|error| format!("failed to copy ONNX Runtime download: {error}"))?
-        != 0
-    {
-        return Err(format!(
-            "downloaded ONNX Runtime archive exceeds expected size {expected_size}"
-        ));
-    }
+    let output = destination.join(DLL_NAME);
+    fs::copy(source, &output).map_err(|error| {
+        format!(
+            "failed to copy {} to {}: {error}",
+            source.display(),
+            output.display()
+        )
+    })?;
+    verify_file(&output, DLL_NAME, DLL_SIZE, DLL_SHA256)?;
 
     Ok(())
 }
@@ -302,11 +232,9 @@ fn verify_staged_runtime(destination: &Path) -> Result<(), String> {
             ));
         }
 
-        let name = entry.file_name();
-        if !ARTIFACTS
-            .iter()
-            .any(|artifact| name.as_os_str() == artifact.output_name)
-        {
+        // Exactly one staged file is allowed: onnxruntime.dll. Anything else
+        // (e.g. a stray onnxruntime_providers_shared.dll) invalidates the stage.
+        if entry.file_name().as_os_str() != DLL_NAME {
             return Err(format!(
                 "runtime stage contains undeclared entry {}",
                 entry.path().display()
@@ -314,15 +242,7 @@ fn verify_staged_runtime(destination: &Path) -> Result<(), String> {
         }
     }
 
-    for artifact in ARTIFACTS {
-        verify_file(
-            &destination.join(artifact.output_name),
-            artifact.output_name,
-            artifact.size,
-            artifact.sha256,
-        )?;
-    }
-    Ok(())
+    verify_file(&destination.join(DLL_NAME), DLL_NAME, DLL_SIZE, DLL_SHA256)
 }
 
 fn verify_file(

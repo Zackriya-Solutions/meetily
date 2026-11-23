@@ -3,9 +3,11 @@
 //! sherpa-onnx's prebuilt Windows STATIC libraries embed the /MT CRT, which
 //! collides with the /MD CRT used by the Rust app (and whisper), producing
 //! LNK2038/LNK2005/LNK1169 link errors. On Windows we therefore build against
-//! the `shared` feature and stage ONLY `sherpa-onnx-c-api.dll` next to the app.
+//! the `shared` feature and stage ONLY `sherpa-onnx-c-api.dll` here.
 //! It imports just `OrtGetApiBase@ordinal1` from onnxruntime, satisfied by the
-//! app's own sha-verified onnxruntime.dll — so no onnxruntime DLL is copied here.
+//! sherpa-onnx v1.13.8 prebuilt onnxruntime.dll (ORT 1.28.2), which
+//! build/onnxruntime.rs stages offline into `binaries/onnxruntime/` against a
+//! pinned size/SHA-256. This module itself copies no onnxruntime DLL.
 
 use std::path::{Path, PathBuf};
 
@@ -142,9 +144,10 @@ pub fn stage_sherpa_dlls() {
         }
     }
 
-    // Stage ONLY sherpa-onnx-c-api.dll. Never glob *.dll: sherpa's build dir
-    // also contains its own onnxruntime.dll / onnxruntime_providers_shared.dll,
-    // which must NOT be staged (the app ships a single verified onnxruntime.dll).
+    // Copy only sherpa-onnx-c-api.dll here; never glob *.dll. The matching
+    // onnxruntime.dll (sherpa-onnx v1.13.8 prebuilt, ORT 1.28.2) is staged
+    // offline by build/onnxruntime.rs into binaries/onnxruntime/ with a pinned
+    // size/SHA-256; onnxruntime_providers_shared.dll is not bundled.
     if let Err(err) = std::fs::copy(&src, &dst) {
         if dst.exists() {
             println!(

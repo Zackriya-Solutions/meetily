@@ -116,7 +116,6 @@ silero_rs = { git = "https://github.com/emotechlab/silero-rs", rev = "26a6460", 
 # returns ExecutionProviderDispatch directly (not a Result). Upstream crate version/date pinned as-is.
 ort = { version = "2.0.0-rc.10", default-features = false, features = [
     "ndarray",
-    "download-binaries",
 ] }  # ONNX Runtime for Parakeet & FunASR models
 thiserror = "2.0.16"                # Error handling for Parakeet
 
@@ -203,11 +202,11 @@ futures-channel = "0.3.31"
 # the /MT CRT which collides with the /MD Rust app (LNK2038/LNK2005/LNK1169).
 # Intentional /MD CRT conflict workaround (LNK2038/LNK2005/LNK1169). If changing this split,
 # verify CRT linkage against the prebuilt sherpa-onnx artifacts.
-sherpa-onnx = { version = "1.13", default-features = false, features = ["shared"] }
+sherpa-onnx = { version = "1.13.8", default-features = false, features = ["shared"] }
 
 # Non-Windows platforms keep the default (static) sherpa-onnx build
 [target.'cfg(not(target_os = "windows"))'.dependencies]
-sherpa-onnx = "1.13"
+sherpa-onnx = "=1.13.8"
 
 # Linux-specific dependencies
 # Default: CPU-only build (no BLAS)
