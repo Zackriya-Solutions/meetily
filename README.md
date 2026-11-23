@@ -113,7 +113,7 @@ Whether you're a defense consultant, enterprise executive, legal professional, o
 | **Windows (x64)** | [.exe installer](https://github.com/Zackriya-Solutions/meetily/releases/download/v0.5.0/meetily_0.5.0_x64-setup.exe) | Download and run the installer |
 | **macOS (Apple Silicon)** | [.dmg installer](https://github.com/Zackriya-Solutions/meetily/releases/download/v0.5.0/meetily_0.5.0_aarch64.dmg) | Open the installer, drag **Meetily** to Applications, then open it from Applications |
 
-> **Windows compatibility:** The packaged installer uses a Vulkan-enabled Whisper build. It requires an AVX2-capable x64 CPU; AVX-512 is not required. CUDA acceleration requires a source build configured with a compatible NVIDIA CUDA toolchain.
+> **Windows compatibility:** The packaged installer uses a Vulkan-enabled Whisper build. It requires an AVX2-capable x64 CPU; AVX-512 is not required. CUDA acceleration requires a source build configured with a compatible NVIDIA CUDA toolchain. Windows on ARM64 is CPU-only and currently [built from source](docs/BUILDING.md#windows-on-arm64).
 
 ### Linux (recommended): one-line install
 

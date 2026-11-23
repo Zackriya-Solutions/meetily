@@ -10,10 +10,10 @@ use std::{
 #[cfg(windows)]
 use std::os::windows::fs::MetadataExt;
 
-const WINDOWS_X64_TARGET: &str = "x86_64-pc-windows-msvc";
-const ARCHIVE_URL: &str = "https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-win-x64-1.22.0.zip";
-const ARCHIVE_SHA256: &str = "174c616efc0271194488642a72f1a514e01487da4dfe84c49296d66e40ebe0da";
-const ARCHIVE_SIZE: u64 = 72_368_545;
+// Official Microsoft.ML.OnnxRuntime NuGet package (a zip); it contains both the win-x64 and win-arm64 runtimes.
+const ARCHIVE_URL: &str = "https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/1.22.0/microsoft.ml.onnxruntime.1.22.0.nupkg";
+const ARCHIVE_SHA256: &str = "d571e63a2329baacb713f441e65ad75284de354db6e1ac435fe4bebbb417986a";
+const ARCHIVE_SIZE: u64 = 121_402_697;
 
 struct Artifact {
     archive_path: &'static str,
@@ -22,21 +22,42 @@ struct Artifact {
     sha256: &'static str,
 }
 
-const ARTIFACTS: [Artifact; 3] = [
+const X64_ARTIFACTS: [Artifact; 3] = [
     Artifact {
-        archive_path: "onnxruntime-win-x64-1.22.0/lib/onnxruntime.dll",
+        archive_path: "runtimes/win-x64/native/onnxruntime.dll",
         output_name: "onnxruntime.dll",
         size: 12_418_080,
         sha256: "579b636403983254346a5c1d80bd28f1519cd1e284cd204f8d4ff41f8d711559",
     },
     Artifact {
-        archive_path: "onnxruntime-win-x64-1.22.0/lib/onnxruntime_providers_shared.dll",
+        archive_path: "runtimes/win-x64/native/onnxruntime_providers_shared.dll",
         output_name: "onnxruntime_providers_shared.dll",
         size: 22_064,
         sha256: "ba00ea1ef846c9b909c7854bc56c51051a20f9773b3e1153dda118d4b85d0b93",
     },
     Artifact {
-        archive_path: "onnxruntime-win-x64-1.22.0/LICENSE",
+        archive_path: "LICENSE",
+        output_name: "onnxruntime-LICENSE.txt",
+        size: 1_094,
+        sha256: "c250d6278f0b47a6439fb7592b08b58a55eb9f535aa49a1db63211c3f982b674",
+    },
+];
+
+const ARM64_ARTIFACTS: [Artifact; 3] = [
+    Artifact {
+        archive_path: "runtimes/win-arm64/native/onnxruntime.dll",
+        output_name: "onnxruntime.dll",
+        size: 12_679_728,
+        sha256: "79281671a386ed1baab9dbdbb09fe55f99577011472e9526cf9d0b468bb6bcc7",
+    },
+    Artifact {
+        archive_path: "runtimes/win-arm64/native/onnxruntime_providers_shared.dll",
+        output_name: "onnxruntime_providers_shared.dll",
+        size: 21_048,
+        sha256: "e80bf226d099fc040f4f18b5d65aa1ae33bcb3f5821f9570b866c4a64e410c83",
+    },
+    Artifact {
+        archive_path: "LICENSE",
         output_name: "onnxruntime-LICENSE.txt",
         size: 1_094,
         sha256: "c250d6278f0b47a6439fb7592b08b58a55eb9f535aa49a1db63211c3f982b674",
@@ -50,9 +71,11 @@ pub fn ensure_onnxruntime_runtime() {
     println!("cargo:rerun-if-changed=binaries/onnxruntime");
 
     let target = env::var("TARGET").expect("TARGET environment variable not set");
-    if target != WINDOWS_X64_TARGET {
-        panic!("ONNX Runtime is bundled only for {WINDOWS_X64_TARGET}; got {target}");
-    }
+    let artifacts = match target.as_str() {
+        "x86_64-pc-windows-msvc" => &X64_ARTIFACTS,
+        "aarch64-pc-windows-msvc" => &ARM64_ARTIFACTS,
+        _ => panic!("ONNX Runtime is not bundled for {target}"),
+    };
 
     let manifest_dir =
         env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR environment variable not set");
@@ -60,7 +83,7 @@ pub fn ensure_onnxruntime_runtime() {
         .join("binaries")
         .join("onnxruntime");
 
-    match verify_staged_runtime(&destination) {
+    match verify_staged_runtime(artifacts, &destination) {
         Ok(()) => {
             println!(
                 "cargo:warning=Using verified bundled ONNX Runtime from {}",
@@ -130,7 +153,7 @@ pub fn ensure_onnxruntime_runtime() {
     let _ = fs::remove_file(&temporary_archive);
     let _ = fs::remove_dir_all(&temporary_destination);
 
-    let result = stage_runtime(&temporary_archive, &temporary_destination);
+    let result = stage_runtime(artifacts, &temporary_archive, &temporary_destination);
     let _ = fs::remove_file(&temporary_archive);
 
     if let Err(error) = result {
@@ -146,7 +169,7 @@ pub fn ensure_onnxruntime_runtime() {
         );
     });
 
-    verify_staged_runtime(&destination).unwrap_or_else(|error| {
+    verify_staged_runtime(artifacts, &destination).unwrap_or_else(|error| {
         panic!("Bundled ONNX Runtime verification failed after staging: {error}")
     });
     println!(
@@ -155,7 +178,7 @@ pub fn ensure_onnxruntime_runtime() {
     );
 }
 
-fn stage_runtime(archive_path: &Path, destination: &Path) -> Result<(), String> {
+fn stage_runtime(artifacts: &[Artifact], archive_path: &Path, destination: &Path) -> Result<(), String> {
     download_archive(archive_path)?;
     verify_file(archive_path, ARCHIVE_URL, ARCHIVE_SIZE, ARCHIVE_SHA256)?;
 
@@ -167,7 +190,7 @@ fn stage_runtime(archive_path: &Path, destination: &Path) -> Result<(), String> 
     let mut archive = zip::ZipArchive::new(archive_file)
         .map_err(|error| format!("failed to read ONNX Runtime archive: {error}"))?;
 
-    for artifact in ARTIFACTS {
+    for artifact in artifacts {
         let mut source = archive.by_name(artifact.archive_path).map_err(|error| {
             format!(
                 "missing {} in ONNX Runtime archive: {error}",
@@ -250,7 +273,7 @@ fn is_link_or_reparse_point(metadata: &fs::Metadata) -> bool {
     false
 }
 
-fn verify_staged_runtime(destination: &Path) -> Result<(), String> {
+fn verify_staged_runtime(artifacts: &[Artifact], destination: &Path) -> Result<(), String> {
     let metadata = fs::symlink_metadata(destination)
         .map_err(|error| format!("failed to inspect runtime stage: {error}"))?;
     if is_link_or_reparse_point(&metadata) {
@@ -285,7 +308,7 @@ fn verify_staged_runtime(destination: &Path) -> Result<(), String> {
         }
 
         let name = entry.file_name();
-        if !ARTIFACTS
+        if !artifacts
             .iter()
             .any(|artifact| name.as_os_str() == artifact.output_name)
         {
@@ -296,7 +319,7 @@ fn verify_staged_runtime(destination: &Path) -> Result<(), String> {
         }
     }
 
-    for artifact in ARTIFACTS {
+    for artifact in artifacts {
         verify_file(
             &destination.join(artifact.output_name),
             artifact.output_name,

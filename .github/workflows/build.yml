@@ -115,10 +115,13 @@ jobs:
         env:
           PORTABLE_BUILD_ARGS: ${{ inputs.build-args }}
           PORTABLE_BUILD_PROFILE: ${{ steps.build-profile.outputs.profile }}
+          PORTABLE_TARGET: ${{ inputs.target }}
         run: |
           $cmakeHook = (Join-Path $env:GITHUB_WORKSPACE ".github/force-portable-ggml.cmake").Replace('\', '/')
           "CMAKE_PROJECT_INCLUDE=$cmakeHook" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "RUSTFLAGS=-C target-cpu=x86-64-v2" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          if ($env:PORTABLE_TARGET -ne 'aarch64-pc-windows-msvc') {
+            "RUSTFLAGS=-C target-cpu=x86-64-v2" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          }
 
           $buildDirectory = "target/$env:PORTABLE_BUILD_PROFILE"
           if ($env:PORTABLE_BUILD_ARGS -match '(?:^|\s)--target(?:=|\s+)([A-Za-z0-9_-]+)') {
@@ -134,6 +137,11 @@ jobs:
             }
           } | ConvertTo-Json -Depth 4 | Set-Content -Path $configPath -Encoding utf8
           "args=--config `"$configPath`"" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Configure Windows ARM64 toolchain
+        if: runner.os == 'Windows' && inputs.target == 'aarch64-pc-windows-msvc'
+        shell: pwsh
+        run: ./frontend/scripts/windows-arm64-env.ps1 -GitHubEnv
 
       - name: Configure portable Linux native build
         id: linux-portability
@@ -180,14 +188,14 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev libopenblas-dev libx11-dev libxtst-dev libxrandr-dev
 
       - name: Install Vulkan SDK (Windows)
-        if: contains(inputs.platform, 'windows')
+        if: contains(inputs.platform, 'windows') && inputs.target != 'aarch64-pc-windows-msvc'
         uses: humbletim/install-vulkan-sdk@v1.2
         with:
           version: 1.4.309.0
           cache: true
 
       - name: Verify and Configure Vulkan SDK (Windows)
-        if: contains(inputs.platform, 'windows')
+        if: contains(inputs.platform, 'windows') && inputs.target != 'aarch64-pc-windows-msvc'
         shell: pwsh
         run: |
           Write-Host "=== Vulkan SDK Configuration ==="
@@ -234,7 +242,7 @@ jobs:
           Write-Host "=== Vulkan SDK Configuration Complete ==="
 
       - name: Copy Vulkan runtime for bundling (Windows)
-        if: contains(inputs.platform, 'windows')
+        if: contains(inputs.platform, 'windows') && inputs.target != 'aarch64-pc-windows-msvc'
         shell: pwsh
         run: |
           # Create runtime directory
@@ -534,7 +542,7 @@ jobs:
           FEATURES=""
 
           # Windows: Use Vulkan for GPU acceleration
-          if [[ "${{ inputs.platform }}" == *"windows"* ]]; then
+          if [[ "${{ inputs.platform }}" == *"windows"* && "${{ inputs.target }}" != "aarch64-pc-windows-msvc" ]]; then
             FEATURES="--features vulkan"
             echo "Windows build with Vulkan GPU acceleration"
           fi
@@ -573,7 +581,7 @@ jobs:
 
           # Copy binary to binaries directory
           New-Item -ItemType Directory -Force -Path "frontend/src-tauri/binaries" | Out-Null
-          Copy-Item "target/release/llama-helper.exe" -Destination "frontend/src-tauri/binaries/llama-helper-x86_64-pc-windows-msvc.exe"
+          Copy-Item "target/release/llama-helper.exe" -Destination "frontend/src-tauri/binaries/llama-helper-${{ inputs.target || 'x86_64-pc-windows-msvc' }}.exe"
 
           Write-Host "Copied llama-helper to frontend/src-tauri/binaries/"
           Get-ChildItem "frontend/src-tauri/binaries/"

@@ -126,6 +126,7 @@ fn get_ffmpeg_url_for_target(target: &str) -> Result<String, String> {
     // Platform-specific URLs
     let url = if target.contains("windows") {
         // Windows
+        // TODO: Add a native Windows ARM64 FFmpeg build for aarch64-pc-windows-msvc; it currently bundles this x64 build, which runs under emulation.
         "https://github.com/Zackriya-Solutions/ffmpeg-binaries/releases/download/0.0.1/ffmpeg-8.0.1-essentials_build.zip"
     } else if target.contains("apple") {
         if target.contains("aarch64") {

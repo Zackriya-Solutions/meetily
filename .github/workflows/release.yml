@@ -76,6 +76,9 @@ jobs:
           - platform: "windows-latest"
             args: ""
             target: "x86_64-pc-windows-msvc"
+          - platform: "windows-11-arm"
+            args: ""
+            target: "aarch64-pc-windows-msvc"
 
     uses: ./.github/workflows/build.yml
     with:
@@ -122,7 +125,7 @@ jobs:
           from pathlib import Path
 
           root = Path('release-assets')
-          for pattern, signed in [('*aarch64.dmg', False), ('*aarch64.app.tar.gz', True), ('*64_en-US.msi', True), ('*-setup.exe', True), ('*.deb', True), ('*.AppImage', True)]:
+          for pattern, signed in [('*aarch64.dmg', False), ('*aarch64.app.tar.gz', True), ('*_x64_en-US.msi', True), ('*_x64-setup.exe', True), ('*_arm64_en-US.msi', True), ('*_arm64-setup.exe', True), ('*.deb', True), ('*.AppImage', True)]:
               matches = list(root.glob(pattern))
               if len(matches) != 1:
                   raise SystemExit(f'Expected exactly one {pattern}, found {len(matches)}')
@@ -137,9 +140,12 @@ jobs:
           for target, pattern in [
               ('darwin-aarch64', '*aarch64.app.tar.gz'),
               ('darwin-aarch64-app', '*aarch64.app.tar.gz'),
-              ('windows-x86_64-nsis', '*-setup.exe'),
-              ('windows-x86_64-msi', '*64_en-US.msi'),
-              ('windows-x86_64', '*-setup.exe'),
+              ('windows-x86_64-nsis', '*_x64-setup.exe'),
+              ('windows-x86_64-msi', '*_x64_en-US.msi'),
+              ('windows-x86_64', '*_x64-setup.exe'),
+              ('windows-aarch64-nsis', '*_arm64-setup.exe'),
+              ('windows-aarch64-msi', '*_arm64_en-US.msi'),
+              ('windows-aarch64', '*_arm64-setup.exe'),
               ('linux-x86_64-deb', '*.deb'),
               ('linux-x86_64-appimage', '*.AppImage'),
           ]:
