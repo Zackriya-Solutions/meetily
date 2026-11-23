@@ -344,6 +344,7 @@ impl SummaryService {
         custom_prompt: String,
         template_id: String,
         summary_language: Option<String>,
+        chatgpt_plan_profile_id: Option<String>,
     ) {
         let start_time = Instant::now();
         info!(
@@ -361,7 +362,7 @@ impl SummaryService {
         };
 
         // Validate and setup api_key, Flexible for Ollama, BuiltInAI, and CustomOpenAI
-        let api_key = if provider == LLMProvider::Ollama || provider == LLMProvider::BuiltInAI || provider == LLMProvider::CustomOpenAI {
+        let api_key = if matches!(provider, LLMProvider::Ollama | LLMProvider::BuiltInAI | LLMProvider::CustomOpenAI | LLMProvider::ChatGptPlan) {
             // These providers don't require API keys from the standard database column
             String::new()
         } else {
@@ -427,7 +428,11 @@ impl SummaryService {
             };
 
         // For CustomOpenAI, use its API key (if any) instead of the empty string
-        let final_api_key = if provider == LLMProvider::CustomOpenAI {
+        let final_api_key = if provider == LLMProvider::ChatGptPlan {
+            // Pass the approved registration ID through the provider pipeline. The OAuth
+            // credential is read and renewed inside the native ChatGPT client.
+            chatgpt_plan_profile_id.unwrap_or_default()
+        } else if provider == LLMProvider::CustomOpenAI {
             custom_openai_api_key.unwrap_or_default()
         } else {
             api_key

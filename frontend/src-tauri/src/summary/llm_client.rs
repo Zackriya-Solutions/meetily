@@ -213,6 +213,7 @@ pub(crate) fn ollama_rejects_reasoning_effort(status: reqwest::StatusCode, body:
 /// LLM Provider enumeration for multi-provider support
 #[derive(Debug, Clone, PartialEq)]
 pub enum LLMProvider {
+    ChatGptPlan,
     OpenAI,
     Claude,
     Groq,
@@ -226,6 +227,7 @@ impl LLMProvider {
     /// Parse provider from string (case-insensitive)
     pub fn from_str(s: &str) -> Result<Self, String> {
         match s.to_lowercase().as_str() {
+            "chatgpt-plan" => Ok(Self::ChatGptPlan),
             "openai" => Ok(Self::OpenAI),
             "claude" => Ok(Self::Claude),
             "groq" => Ok(Self::Groq),
@@ -276,6 +278,17 @@ pub(crate) async fn generate_summary(
         if token.is_cancelled() {
             return Err("Summary generation was cancelled".to_string());
         }
+    }
+
+    if provider == &LLMProvider::ChatGptPlan {
+        let dir = app_data_dir.ok_or("Could not open the ChatGPT connection.")?;
+        // Refresh rotation must finish atomically even when the summary is stopped.
+        let token = super::chatgpt_plan::access_token(dir, model_name, api_key).await?;
+        let content = await_or_cancel(
+            super::chatgpt_plan::summarize(&token, model_name, system_prompt, user_prompt),
+            cancellation_token,
+        ).await??;
+        return Ok(LlmCompletion { content, reasoning_stripped: false });
     }
 
     // Handle BuiltInAI provider separately (uses local sidecar, no HTTP API)
@@ -344,6 +357,7 @@ pub(crate) async fn generate_summary(
             );
             ("https://api.anthropic.com/v1/messages".to_string(), header_map)
         }
+        LLMProvider::ChatGptPlan => unreachable!("ChatGPT plan uses the Responses API"),
         LLMProvider::BuiltInAI => {
             // This case is handled earlier with early returns
             unreachable!("BuiltInAI is handled before this match statement")
@@ -981,6 +995,7 @@ mod tests {
 /// Helper function to get provider name for logging
 fn provider_name(provider: &LLMProvider) -> &str {
     match provider {
+        LLMProvider::ChatGptPlan => "ChatGPT plan",
         LLMProvider::OpenAI => "OpenAI",
         LLMProvider::Claude => "Claude",
         LLMProvider::Groq => "Groq",

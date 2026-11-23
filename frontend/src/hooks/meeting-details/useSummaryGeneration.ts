@@ -1,3 +1,4 @@
+import type { ChatGPTPlanStatus } from '@/components/MeetingDetails/ChatGPTPlanSettings';
 import { useState, useCallback, useRef, useEffect } from 'react';
 import {
   CancelSummaryResponse,
@@ -105,10 +106,11 @@ export function useSummaryGeneration({
   visibleMeetingIdRef.current = meeting.id;
   const generationIdRef = useRef(0);
   const activeProcessIdRef = useRef<string | null>(null);
+  const chatGPTStartPending = useRef(false);
   const trackedAttemptRef = useRef<{
     generationId: number;
     startedAt: number;
-    provider: ModelConfig['provider'];
+    provider: ModelConfig['provider'] | 'chatgpt-plan';
     model: ModelConfig['model'];
     finished: boolean;
   } | null>(null);
@@ -309,12 +311,16 @@ export function useSummaryGeneration({
     transcriptTexts,
     customPrompt = '',
     isRegeneration = false,
+    chatGPT,
   }: {
     transcriptText: string;
     transcriptTexts?: string[];
     customPrompt?: string;
     isRegeneration?: boolean;
+    chatGPT?: { model: string; profileId: string; automatic: boolean };
   }) => {
+    const provider = chatGPT ? 'chatgpt-plan' : modelConfig.provider;
+    const model = chatGPT?.model ?? modelConfig.model;
     const previousAttempt = trackedAttemptRef.current;
     if (previousAttempt && !previousAttempt.finished) {
       await finishGeneration(previousAttempt.generationId, 'cancelled');
@@ -322,36 +328,40 @@ export function useSummaryGeneration({
 
     const generationId = ++generationIdRef.current;
     activeProcessIdRef.current = null;
-    setSummaryStatus(isRegeneration ? 'regenerating' : 'processing');
-    setSummaryError(null);
+    const showGenerating = () => {
+      setSummaryStatus(isRegeneration ? 'regenerating' : 'processing');
+      setSummaryError(null);
+    };
+    if (!chatGPT) showGenerating();
+
+    const trackStart = async () => {
+      const startedAt = Date.now();
+      trackedAttemptRef.current = { generationId, startedAt, provider, model, finished: false };
+      await Analytics.trackSummaryGenerationStarted(
+        provider,
+        model,
+        transcriptText.length,
+        (startedAt - new Date(meeting.created_at).getTime()) / 60000,
+      );
+      if (customPrompt.trim()) {
+        await Analytics.trackCustomPromptUsed(customPrompt.trim().length);
+      }
+      if (!chatGPT || (
+        mountedRef.current && visibleMeetingIdRef.current === meeting.id && generationId === generationIdRef.current
+      )) {
+        toast.info(`${isRegeneration ? 'Regenerating' : 'Generating'} summary...`, {
+          description: `Using ${provider}/${model}`,
+          duration: 3000,
+        });
+      }
+    };
 
     try {
       if (!transcriptText.trim()) {
         await failGeneration(generationId, isRegeneration, 'No transcript text available. Please add some text first.', 'empty_result');
         return;
       }
-
-      const timeSinceRecording = (Date.now() - new Date(meeting.created_at).getTime()) / 60000;
-      trackedAttemptRef.current = {
-        generationId,
-        startedAt: Date.now(),
-        provider: modelConfig.provider,
-        model: modelConfig.model,
-        finished: false,
-      };
-      await Analytics.trackSummaryGenerationStarted(
-        modelConfig.provider,
-        modelConfig.model,
-        transcriptText.length,
-        timeSinceRecording,
-      );
-      if (customPrompt.trim()) {
-        await Analytics.trackCustomPromptUsed(customPrompt.trim().length);
-      }
-      toast.info(`${isRegeneration ? 'Regenerating' : 'Generating'} summary...`, {
-        description: `Using ${modelConfig.provider}/${modelConfig.model}`,
-        duration: 3000,
-      });
+      if (!chatGPT) await trackStart();
 
       const summaryLanguage = await resolveSummaryLanguage(
         meeting.id,
@@ -361,10 +371,12 @@ export function useSummaryGeneration({
         return;
       }
 
-      const result = await invokeTauri<ProcessTranscriptResponse>('api_process_transcript', {
+      const result = await invokeTauri<ProcessTranscriptResponse | null>('api_process_transcript', {
         text: transcriptText,
-        model: modelConfig.provider,
-        modelName: modelConfig.model,
+        model: provider,
+        chatgptPlanProfileId: chatGPT?.profileId,
+        chatgptPlanAutomatic: chatGPT?.automatic,
+        modelName: model,
         meetingId: meeting.id,
         chunkSize: 40000,
         overlap: 1000,
@@ -372,18 +384,26 @@ export function useSummaryGeneration({
         templateId: selectedTemplate,
         summaryLanguage,
       });
-      const processId = result.process_id;
       if (!mountedRef.current || visibleMeetingIdRef.current !== meeting.id) return;
+      if (!result) return; // The native consent dialog was declined. No job was started.
+      const processId = result.process_id;
       if (generationId !== generationIdRef.current) {
         await invokeTauri('api_cancel_summary', { meetingId: meeting.id, processId }).catch(() => {});
         return;
       }
       activeProcessIdRef.current = processId;
+      if (chatGPT) {
+        showGenerating();
+        await trackStart();
+        if (!mountedRef.current || visibleMeetingIdRef.current !== meeting.id || generationId !== generationIdRef.current) {
+          return;
+        }
+      }
 
       startSummaryPolling(meeting.id, processId, result =>
         pollingResultRef.current(result, generationId, isRegeneration));
     } catch (error) {
-      await failGeneration(generationId, isRegeneration, error instanceof Error ? error.message : 'Summary generation failed.');
+      await failGeneration(generationId, isRegeneration, error instanceof Error ? error.message : typeof error === 'string' ? error : 'Summary generation failed.');
     }
   }, [
     failGeneration,
@@ -456,9 +476,43 @@ export function useSummaryGeneration({
     toast.error(message);
   }, []);
 
-  const handleGenerateSummary = useCallback(async (customPrompt: string = '') => {
+  const generateSummary = useCallback(async (customPrompt: string, {
+    regenerate = false,
+    automatic = false,
+  }: { regenerate?: boolean; automatic?: boolean } = {}) => {
     if (isModelConfigLoading) {
       toast.info('Loading model configuration, please wait...');
+      return;
+    }
+    let chatGPT: { model: string; profileId: string; automatic: boolean } | undefined;
+    try {
+      const status = await invokeTauri<ChatGPTPlanStatus | null>('chatgpt_plan_status', { summaryOnly: true });
+      const ollamaUrl = modelConfig.ollamaEndpoint || 'http://localhost:11434';
+      const localProvider = modelConfig.provider === 'builtin-ai' ||
+        (modelConfig.provider === 'ollama' && URL.canParse(ollamaUrl) &&
+          ['localhost', '127.0.0.1', '[::1]'].includes(new URL(ollamaUrl).hostname));
+      if (status?.keychain_locked &&
+          (status.summary_default || (!status.summary_default_known && !localProvider))) {
+        showPreflightError('Unlock the ChatGPT connection in Summary Settings, or save another summary provider.');
+        if (!automatic) onOpenModelSettings?.();
+        return;
+      }
+      if (status?.summary_default) {
+        if (!mountedRef.current || visibleMeetingIdRef.current !== meeting.id) return;
+        if (automatic && !status.auto_summary_allowed) {
+          toast.info('Save ChatGPT plan settings to allow Auto Summary.');
+          return;
+        }
+        const account = status.profiles.find(profile => profile.active);
+        if (!status.active_model || !account) {
+          toast.info('Connect your ChatGPT plan in Summary Settings first.');
+          onOpenModelSettings?.();
+          return;
+        }
+        chatGPT = { model: status.active_model, profileId: account.id, automatic };
+      }
+    } catch (error) {
+      toast.error(String(error));
       return;
     }
     const allTranscripts = await fetchAllTranscripts(meeting.id);
@@ -468,7 +522,7 @@ export function useSummaryGeneration({
     }
 
     try {
-      if (modelConfig.provider === 'ollama') {
+      if (!regenerate && !chatGPT && modelConfig.provider === 'ollama') {
         const models = await invokeTauri<unknown[]>('get_ollama_models', {
           endpoint: modelConfig.ollamaEndpoint || null,
         });
@@ -477,7 +531,7 @@ export function useSummaryGeneration({
           return;
         }
       }
-      if (modelConfig.provider === 'builtin-ai') {
+      if (!regenerate && !chatGPT && modelConfig.provider === 'builtin-ai') {
         if (!modelConfig.model) {
           showPreflightError('No built-in AI model selected. Please select a model in settings.');
           onOpenModelSettings?.();
@@ -499,14 +553,24 @@ export function useSummaryGeneration({
       return;
     }
 
-    await processSummary({
-      ...buildSummaryTranscriptPayload(allTranscripts),
-      customPrompt,
-    });
+    if (!mountedRef.current || visibleMeetingIdRef.current !== meeting.id) return;
+    if (chatGPT && chatGPTStartPending.current) return;
+    if (chatGPT) chatGPTStartPending.current = true;
+    try {
+      await processSummary({
+        ...buildSummaryTranscriptPayload(allTranscripts),
+        customPrompt,
+        chatGPT,
+        isRegeneration: regenerate || (!!chatGPT && !!parseSummaryContent(restored?.data)),
+      });
+    } finally {
+      if (chatGPT) chatGPTStartPending.current = false;
+    }
   }, [
     buildSummaryTranscriptPayload,
     fetchAllTranscripts,
     isModelConfigLoading,
+    restored?.data,
     meeting.id,
     modelConfig,
     onOpenModelSettings,
@@ -514,21 +578,14 @@ export function useSummaryGeneration({
     showPreflightError,
   ]);
 
-  // Public API: Regenerate summary from the current saved transcript
-  const handleRegenerateSummary = useCallback(async () => {
-    const allTranscripts = await fetchAllTranscripts(meeting.id);
+  const handleGenerateSummary = useCallback((customPrompt = '') =>
+    generateSummary(customPrompt), [generateSummary]);
 
-    if (!allTranscripts.length) {
-      console.error('No transcripts available for regeneration');
-      toast.error('No transcripts available for summary regeneration');
-      return;
-    }
+  const handleAutoGenerateSummary = useCallback(() =>
+    generateSummary('', { automatic: true }), [generateSummary]);
 
-    await processSummary({
-      ...buildSummaryTranscriptPayload(allTranscripts),
-      isRegeneration: true
-    });
-  }, [meeting.id, fetchAllTranscripts, buildSummaryTranscriptPayload, processSummary]);
+  const handleRegenerateSummary = useCallback(() =>
+    generateSummary('', { regenerate: true }), [generateSummary]);
 
   // Public API: Stop ongoing summary generation
   const handleStopGeneration = useCallback(async () => {
@@ -588,6 +645,7 @@ export function useSummaryGeneration({
     summaryStatus,
     summaryError,
     handleGenerateSummary,
+    handleAutoGenerateSummary,
     handleRegenerateSummary,
     handleStopGeneration,
     getSummaryStatusMessage,

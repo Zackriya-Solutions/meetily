@@ -143,15 +143,14 @@ export function SummaryGeneratorButtonGroup({
         </DialogTrigger>
         <DialogContent
           aria-describedby={undefined}
+          className="max-h-[calc(100dvh-2rem)] overflow-y-auto"
         >
           <VisuallyHidden>
             <DialogTitle>Model Settings</DialogTitle>
           </VisuallyHidden>
           <ModelSettingsModal
-            onSave={async (config) => {
-              await onSaveModelConfig(config);
-              setSettingsDialogOpen(false);
-            }}
+            onSave={onSaveModelConfig}
+            onSettingsSaved={() => setSettingsDialogOpen(false)}
             modelConfig={modelConfig}
             setModelConfig={setModelConfig}
             skipInitialFetch={true}
