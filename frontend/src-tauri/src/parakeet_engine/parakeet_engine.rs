@@ -117,6 +117,8 @@ const PARAKEET_V2_ARTIFACTS: &[ArtifactSpec] = &[
     ArtifactSpec { filename: "vocab.txt", exact_bytes: 9_384 },
 ];
 
+const PARAKEET_MLX_MODEL_NAME: &str = "parakeet-tdt-0.6b-v3-mlx";
+
 const PARAKEET_MODEL_SPECS: &[ModelSpec] = &[
     ModelSpec {
         name: "parakeet-tdt-0.6b-v3-int8",
@@ -135,6 +137,19 @@ const PARAKEET_MODEL_SPECS: &[ModelSpec] = &[
         description: "Previous version with int8 quantization, good balance of speed and accuracy",
         source_base_url: "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v2-onnx/resolve/0bbb45a3365852604aef28b538a8f066f4ccaa85",
         artifacts: PARAKEET_V2_ARTIFACTS,
+    },
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    ModelSpec {
+        name: PARAKEET_MLX_MODEL_NAME,
+        size_mb: 2509,
+        quantization: QuantizationType::FP32,
+        speed: "Apple Silicon GPU",
+        description: "Download the model files. Transcription support is pending.",
+        source_base_url: "https://huggingface.co/mlx-community/parakeet-tdt-0.6b-v3/resolve/ed2b7e8c15f9aaa0b5772e2efb986255eaef7e15",
+        artifacts: &[
+            ArtifactSpec { filename: "config.json", exact_bytes: 244_093 },
+            ArtifactSpec { filename: "model.safetensors", exact_bytes: 2_508_288_736 },
+        ],
     },
 ];
 
@@ -330,6 +345,12 @@ impl ParakeetEngine {
 
     /// Discover available Parakeet models.
     pub async fn discover_models(&self) -> Result<Vec<ModelInfo>> {
+        let mut models = self.discover_downloadable_models().await?;
+        models.retain(|model| model.name != PARAKEET_MLX_MODEL_NAME);
+        Ok(models)
+    }
+
+    pub(super) async fn discover_downloadable_models(&self) -> Result<Vec<ModelInfo>> {
         self.discover_models_from_specs(PARAKEET_MODEL_SPECS).await
     }
 
@@ -430,6 +451,9 @@ impl ParakeetEngine {
 
     /// Load a Parakeet model
     pub async fn load_model(&self, model_name: &str) -> Result<()> {
+        if model_name == PARAKEET_MLX_MODEL_NAME {
+            return Err(anyhow!("Parakeet MLX transcription is not yet supported"));
+        }
         let model_info = {
             let models = self.available_models.read().await;
             models
@@ -1372,6 +1396,31 @@ mod tests {
             .expect("test model remains registered")
             .status
             .clone()
+    }
+
+    #[tokio::test]
+    async fn mlx_files_are_downloadable_only_on_apple_silicon_macos() {
+        let (_temp_dir, engine, _) = test_engine().await;
+        let spec = find_model_spec(PARAKEET_MLX_MODEL_NAME);
+        assert_eq!(spec.is_some(), cfg!(all(target_os = "macos", target_arch = "aarch64")));
+
+        if let Some(spec) = spec {
+            let path = engine.models_dir.join(spec.name);
+            fs::create_dir_all(&path).await.unwrap();
+            for artifact in spec.artifacts {
+                let file = fs::File::create(path.join(artifact.filename)).await.unwrap();
+                file.set_len(artifact.exact_bytes).await.unwrap();
+            }
+
+            let models = engine.discover_downloadable_models().await.unwrap();
+            assert!(models.iter().any(|model| {
+                model.name == spec.name && matches!(model.status, ModelStatus::Available)
+            }));
+        }
+
+        let models = engine.discover_models().await.unwrap();
+        assert!(models.iter().all(|model| model.name != PARAKEET_MLX_MODEL_NAME));
+        assert!(engine.load_model(PARAKEET_MLX_MODEL_NAME).await.is_err());
     }
 
     #[tokio::test]

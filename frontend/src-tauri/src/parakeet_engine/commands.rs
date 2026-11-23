@@ -52,17 +52,21 @@ pub async fn parakeet_init() -> Result<(), String> {
 }
 
 #[command]
-pub async fn parakeet_get_available_models() -> Result<Vec<ModelInfo>, String> {
+pub async fn parakeet_get_available_models(
+    include_download_only: Option<bool>,
+) -> Result<Vec<ModelInfo>, String> {
     let engine = {
         let guard = PARAKEET_ENGINE.lock().unwrap();
         guard.as_ref().cloned()
     };
 
     if let Some(engine) = engine {
-        engine
-            .discover_models()
-            .await
-            .map_err(|e| format!("Failed to discover Parakeet models: {}", e))
+        let models = if include_download_only.unwrap_or(false) {
+            engine.discover_downloadable_models().await
+        } else {
+            engine.discover_models().await
+        };
+        models.map_err(|e| format!("Failed to discover Parakeet models: {}", e))
     } else {
         Err("Parakeet engine not initialized".to_string())
     }

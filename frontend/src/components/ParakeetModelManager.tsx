@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import {
   ModelStatus,
   ParakeetAPI,
+  PARAKEET_MLX_MODEL,
   ParakeetDownloadProgressEvent,
   ParakeetModelInfo,
   formatFileSize,
@@ -62,7 +63,7 @@ export function ParakeetModelManager({
       try {
         setLoading(true);
         await ParakeetAPI.init();
-        const modelList = await ParakeetAPI.getAvailableModels();
+        const modelList = await ParakeetAPI.getAvailableModels(true);
         setModels(modelList.map(model => ({
           ...model,
           status: latestStatusByModelRef.current.get(model.name) ?? model.status
@@ -169,13 +170,14 @@ export function ParakeetModelManager({
             // Clean up throttle data
             progressThrottleRef.current.delete(modelName);
 
-            toast.success(`${displayInfo?.icon || '✓'} ${displayName} ready!`, {
-              description: 'Model downloaded and ready to use',
+            const downloadOnly = modelName === PARAKEET_MLX_MODEL;
+            toast.success(`${displayInfo?.icon || '✓'} ${displayName} downloaded`, {
+              description: downloadOnly ? 'Model files saved' : 'Model downloaded and ready to use',
               duration: 4000
             });
 
             // Auto-select after download using stable refs
-            if (onModelSelectRef.current) {
+            if (!downloadOnly && onModelSelectRef.current) {
               onModelSelectRef.current(modelName);
               if (autoSaveRef.current) {
                 saveModelSelection(modelName);
@@ -355,7 +357,7 @@ export function ParakeetModelManager({
       await ParakeetAPI.deleteCorruptedModel(modelName);
 
       // Refresh models list
-      const modelList = await ParakeetAPI.getAvailableModels();
+      const modelList = await ParakeetAPI.getAvailableModels(true);
       setModels(modelList);
 
       toast.success(`${displayName} deleted`, {
@@ -493,6 +495,8 @@ function ModelCard({
   const tagline = displayInfo?.tagline || model.description || '';
 
   const isAvailable = model.status === 'Available';
+  const downloadOnly = model.name === PARAKEET_MLX_MODEL;
+  const canSelect = isAvailable && !downloadOnly;
   const isMissing = model.status === 'Missing';
   const isError = typeof model.status === 'object' && 'Error' in model.status;
   const isCorrupted = typeof model.status === 'object' && 'Corrupted' in model.status;
@@ -510,17 +514,17 @@ function ModelCard({
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
       className={`
-        relative rounded-lg border-2 transition-all cursor-pointer
+        relative rounded-lg border-2 transition-all
         ${isSelected && isAvailable
           ? 'border-blue-500 bg-blue-50'
           : isAvailable
             ? 'border-gray-200 hover:border-gray-300 bg-white'
             : 'border-gray-200 bg-gray-50'
         }
-        ${isAvailable ? '' : 'cursor-default'}
+        ${canSelect ? 'cursor-pointer' : 'cursor-default'}
       `}
       onClick={() => {
-        if (isAvailable) onSelect();
+        if (canSelect) onSelect();
       }}
     >
       {/* Recommended Badge */}
@@ -537,7 +541,7 @@ function ModelCard({
             <div className="flex items-center gap-2 mb-1">
               <span className="text-2xl">{icon}</span>
               <h3 className="font-semibold text-gray-900">{displayName}</h3>
-              {isSelected && isAvailable && (
+              {isSelected && canSelect && (
                 <motion.span
                   initial={{ scale: 0 }}
                   animate={{ scale: 1 }}
@@ -558,7 +562,7 @@ function ModelCard({
               <>
                 <div className="flex items-center gap-1.5 text-green-600">
                   <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                  <span className="text-xs font-medium">Ready</span>
+                  <span className="text-xs font-medium">{downloadOnly ? 'Downloaded' : 'Ready'}</span>
                 </div>
                 <AnimatePresence>
                   {isHovered && (
