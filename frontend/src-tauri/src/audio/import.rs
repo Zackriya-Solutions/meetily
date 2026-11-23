@@ -812,10 +812,11 @@ async fn get_or_init_parakeet<R: Runtime>(
                 Some(model) => model.to_string(),
                 None => get_configured_model(app, "parakeet").await?,
             };
+            let target_model = crate::parakeet_engine::live_model_name(&target_model);
 
             let current_model = e.get_current_model().await;
             let needs_load = match &current_model {
-                Some(loaded) => loaded != &target_model,
+                Some(loaded) => loaded != target_model,
                 None => true,
             };
 
@@ -829,7 +830,7 @@ async fn get_or_init_parakeet<R: Runtime>(
                     warn!("Model discovery error (continuing): {}", e);
                 }
 
-                e.load_model(&target_model)
+                e.load_model(target_model)
                     .await
                     .map_err(|e| anyhow!("Failed to load model '{}': {}", target_model, e))?;
             }

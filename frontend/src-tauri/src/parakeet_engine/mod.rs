@@ -24,3 +24,4 @@ pub mod commands;
 pub use parakeet_engine::{ParakeetEngine, ParakeetEngineError, QuantizationType, ModelInfo, ModelStatus, DownloadProgress};
 pub use model::{ParakeetModel, ParakeetError, TimestampedResult};
 pub use commands::*;
+pub(crate) use parakeet_engine::{live_model_name, PARAKEET_MLX_MODEL_NAME};

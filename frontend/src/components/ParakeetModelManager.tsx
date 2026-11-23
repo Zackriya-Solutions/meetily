@@ -3,6 +3,7 @@ import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'sonner';
+import { DEFAULT_PARAKEET_MODEL } from '@/constants/modelDefaults';
 import {
   ModelStatus,
   ParakeetAPI,
@@ -38,6 +39,7 @@ export function ParakeetModelManager({
   // Refs for stable callbacks
   const onModelSelectRef = useRef(onModelSelect);
   const autoSaveRef = useRef(autoSave);
+  const savingSelectionRef = useRef(false);
 
   useEffect(() => {
     onModelSelectRef.current = onModelSelect;
@@ -170,14 +172,14 @@ export function ParakeetModelManager({
             // Clean up throttle data
             progressThrottleRef.current.delete(modelName);
 
-            const downloadOnly = modelName === PARAKEET_MLX_MODEL;
+            const isMlx = modelName === PARAKEET_MLX_MODEL;
             toast.success(`${displayInfo?.icon || '✓'} ${displayName} downloaded`, {
-              description: downloadOnly ? 'Model files saved' : 'Model downloaded and ready to use',
+              description: isMlx ? 'Select to use MLX for the final transcript' : 'Model downloaded and ready to use',
               duration: 4000
             });
 
             // Auto-select after download using stable refs
-            if (!downloadOnly && onModelSelectRef.current) {
+            if (!isMlx && onModelSelectRef.current) {
               onModelSelectRef.current(modelName);
               if (autoSaveRef.current) {
                 saveModelSelection(modelName);
@@ -264,8 +266,11 @@ export function ParakeetModelManager({
         model: modelName,
         apiKey: null
       });
+      return true;
     } catch (error) {
       console.error('Failed to save model selection:', error);
+      toast.error('Could not save the transcription model');
+      return false;
     }
   };
 
@@ -334,19 +339,15 @@ export function ParakeetModelManager({
   };
 
   const selectModel = async (modelName: string) => {
-    if (onModelSelect) {
-      onModelSelect(modelName);
+    if (modelName === selectedModel || savingSelectionRef.current) return;
+    savingSelectionRef.current = true;
+    try {
+      if (autoSave && !await saveModelSelection(modelName)) return;
+      onModelSelect?.(modelName);
+      toast.success(`Switched to ${getModelDisplayName(modelName)}`, { duration: 3000 });
+    } finally {
+      savingSelectionRef.current = false;
     }
-
-    if (autoSave) {
-      await saveModelSelection(modelName);
-    }
-
-    const displayInfo = getModelDisplayInfo(modelName);
-    const displayName = displayInfo?.friendlyName || modelName;
-    toast.success(`Switched to ${displayName}`, {
-      duration: 3000
-    });
   };
 
   const deleteModel = async (modelName: string) => {
@@ -367,7 +368,12 @@ export function ParakeetModelManager({
 
       // If deleted model was selected, clear selection
       if (selectedModel === modelName && onModelSelect) {
-        onModelSelect('');
+        if (modelName === PARAKEET_MLX_MODEL &&
+            modelList.some(model => model.name === DEFAULT_PARAKEET_MODEL && model.status === 'Available')) {
+          await selectModel(DEFAULT_PARAKEET_MODEL);
+        } else {
+          onModelSelect('');
+        }
       }
     } catch (err) {
       console.error('Failed to delete model:', err);
@@ -399,10 +405,10 @@ export function ParakeetModelManager({
   }
 
   const recommendedModel = models.find(m =>
-    m.name === 'parakeet-tdt-0.6b-v3-int8'
+    m.name === DEFAULT_PARAKEET_MODEL
   );
   const otherModels = models.filter(m =>
-    m.name !== 'parakeet-tdt-0.6b-v3-int8'
+    m.name !== DEFAULT_PARAKEET_MODEL
   );
 
   return (
@@ -435,6 +441,7 @@ export function ParakeetModelManager({
               model={model}
               isSelected={selectedModel === model.name}
               isRecommended={false}
+              requiresLightning={model.name === PARAKEET_MLX_MODEL && recommendedModel?.status !== 'Available'}
               onSelect={() => {
                 if (model.status === 'Available') {
                   selectModel(model.name);
@@ -457,7 +464,9 @@ export function ParakeetModelManager({
           animate={{ opacity: 1, y: 0 }}
           className="text-xs text-gray-500 text-center pt-2"
         >
-          Using {getModelDisplayName(selectedModel)} for transcription
+          {selectedModel === PARAKEET_MLX_MODEL
+            ? 'Live captions: Lightning · Final transcript: Lightning (MLX)'
+            : `Using ${getModelDisplayName(selectedModel)} for transcription`}
         </motion.div>
       )}
     </div>
@@ -469,6 +478,7 @@ interface ModelCardProps {
   model: ParakeetModelInfo;
   isSelected: boolean;
   isRecommended: boolean;
+  requiresLightning?: boolean;
   onSelect: () => void;
   onDownload: () => void;
   onCancel: () => void;
@@ -481,6 +491,7 @@ function ModelCard({
   model,
   isSelected,
   isRecommended,
+  requiresLightning = false,
   onSelect,
   onDownload,
   onCancel,
@@ -495,8 +506,7 @@ function ModelCard({
   const tagline = displayInfo?.tagline || model.description || '';
 
   const isAvailable = model.status === 'Available';
-  const downloadOnly = model.name === PARAKEET_MLX_MODEL;
-  const canSelect = isAvailable && !downloadOnly;
+  const canSelect = isAvailable && !requiresLightning && !isCancelling;
   const isMissing = model.status === 'Missing';
   const isError = typeof model.status === 'object' && 'Error' in model.status;
   const isCorrupted = typeof model.status === 'object' && 'Corrupted' in model.status;
@@ -540,7 +550,21 @@ function ModelCard({
             {/* Model Name */}
             <div className="flex items-center gap-2 mb-1">
               <span className="text-2xl">{icon}</span>
-              <h3 className="font-semibold text-gray-900">{displayName}</h3>
+              <h3 className="font-semibold text-gray-900">
+                {canSelect ? (
+                  <button
+                    type="button"
+                    aria-pressed={isSelected}
+                    className="rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
+                    onClick={event => {
+                      event.stopPropagation();
+                      onSelect();
+                    }}
+                  >
+                    {displayName}
+                  </button>
+                ) : displayName}
+              </h3>
               {isSelected && canSelect && (
                 <motion.span
                   initial={{ scale: 0 }}
@@ -553,7 +577,9 @@ function ModelCard({
             </div>
 
             {/* Tagline */}
-            <p className="text-sm text-gray-600 ml-9">{tagline}</p>
+            <p className="text-sm text-gray-600 ml-9">
+              {requiresLightning && isAvailable ? 'Download Lightning to enable live captions and select MLX.' : tagline}
+            </p>
           </div>
 
           {/* Status/Action */}
@@ -562,7 +588,7 @@ function ModelCard({
               <>
                 <div className="flex items-center gap-1.5 text-green-600">
                   <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                  <span className="text-xs font-medium">{downloadOnly ? 'Downloaded' : 'Ready'}</span>
+                  <span className="text-xs font-medium">{requiresLightning ? 'Downloaded' : 'Ready'}</span>
                 </div>
                 <AnimatePresence>
                   {isHovered && (

@@ -117,7 +117,15 @@ const PARAKEET_V2_ARTIFACTS: &[ArtifactSpec] = &[
     ArtifactSpec { filename: "vocab.txt", exact_bytes: 9_384 },
 ];
 
-const PARAKEET_MLX_MODEL_NAME: &str = "parakeet-tdt-0.6b-v3-mlx";
+pub(crate) const PARAKEET_MLX_MODEL_NAME: &str = "parakeet-tdt-0.6b-v3-mlx";
+
+pub(crate) fn live_model_name(selection: &str) -> &str {
+    if selection == PARAKEET_MLX_MODEL_NAME {
+        crate::config::DEFAULT_PARAKEET_MODEL
+    } else {
+        selection
+    }
+}
 
 const PARAKEET_MODEL_SPECS: &[ModelSpec] = &[
     ModelSpec {
@@ -135,7 +143,7 @@ const PARAKEET_MODEL_SPECS: &[ModelSpec] = &[
         size_mb: 2509,
         quantization: QuantizationType::FP32,
         speed: "Apple Silicon GPU",
-        description: "Download the model files. Transcription support is pending.",
+        description: "Apple Silicon GPU model for the final transcript after recording.",
         source_base_url: "https://huggingface.co/mlx-community/parakeet-tdt-0.6b-v3/resolve/ed2b7e8c15f9aaa0b5772e2efb986255eaef7e15",
         artifacts: &[
             ArtifactSpec { filename: "config.json", exact_bytes: 244_093 },
@@ -451,9 +459,7 @@ impl ParakeetEngine {
 
     /// Load a Parakeet model
     pub async fn load_model(&self, model_name: &str) -> Result<()> {
-        if model_name == PARAKEET_MLX_MODEL_NAME {
-            return Err(anyhow!("Parakeet MLX transcription is not yet supported"));
-        }
+        let model_name = live_model_name(model_name);
         let model_info = {
             let models = self.available_models.read().await;
             models
@@ -577,6 +583,30 @@ impl ParakeetEngine {
 
 
         Ok(result.text)
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) async fn transcribe_saved_recording(
+        &self,
+        path: std::path::PathBuf,
+    ) -> Result<Vec<(String, f64, f64)>> {
+        let current = self.current_model.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut guard = current.try_write()
+                .map_err(|_| anyhow!("Parakeet is busy"))?;
+            let model = guard.as_mut().ok_or_else(|| anyhow!("Parakeet is not loaded"))?;
+            crate::audio::final_transcription::transcribe_saved_audio(&path, |samples| {
+                model.transcribe_samples(samples).map_err(Into::into)
+            })
+        }).await?
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    pub(crate) fn downloaded_mlx_model(&self) -> Option<PathBuf> {
+        let spec = find_model_spec(PARAKEET_MLX_MODEL_NAME)?;
+        let path = self.models_dir.join(spec.name);
+        Self::validate_model_directory(&path, spec.artifacts).ok()?;
+        Some(path)
     }
 
     /// Get the models directory path
@@ -1423,6 +1453,11 @@ mod tests {
 
         let models = engine.discover_models().await.unwrap();
         assert!(models.iter().all(|model| model.name != PARAKEET_MLX_MODEL_NAME));
+        assert_eq!(
+            live_model_name(PARAKEET_MLX_MODEL_NAME),
+            crate::config::DEFAULT_PARAKEET_MODEL,
+        );
+        assert_eq!(live_model_name("parakeet-tdt-0.6b-v2-int8"), "parakeet-tdt-0.6b-v2-int8");
         assert!(engine.load_model(PARAKEET_MLX_MODEL_NAME).await.is_err());
     }
 

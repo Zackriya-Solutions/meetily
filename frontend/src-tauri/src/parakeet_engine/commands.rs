@@ -1,5 +1,5 @@
 use crate::parakeet_engine::parakeet_engine::{is_download_cancelled, CancelDownloadOutcome};
-use crate::parakeet_engine::{DownloadProgress, ModelInfo, ParakeetEngine};
+use crate::parakeet_engine::{live_model_name, DownloadProgress, ModelInfo, ParakeetEngine};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::{command, AppHandle, Emitter, Manager, Runtime};
@@ -52,7 +52,8 @@ pub async fn parakeet_init() -> Result<(), String> {
 }
 
 #[command]
-pub async fn parakeet_get_available_models(
+pub async fn parakeet_get_available_models<R: Runtime>(
+    app: AppHandle<R>,
     include_download_only: Option<bool>,
 ) -> Result<Vec<ModelInfo>, String> {
     let engine = {
@@ -61,7 +62,15 @@ pub async fn parakeet_get_available_models(
     };
 
     if let Some(engine) = engine {
-        let models = if include_download_only.unwrap_or(false) {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        let include_download_only = include_download_only.unwrap_or(false)
+            && crate::audio::mlx_final_transcription::helper_path(&app).is_some();
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        let include_download_only = {
+            let _ = (app, include_download_only);
+            false
+        };
+        let models = if include_download_only {
             engine.discover_downloadable_models().await
         } else {
             engine.discover_models().await
@@ -240,15 +249,6 @@ pub async fn parakeet_validate_model_ready_with_config<R: tauri::Runtime>(
     };
 
     if let Some(engine) = engine {
-        // Check if a model is currently loaded
-        if engine.is_model_loaded().await {
-            if let Some(current_model) = engine.get_current_model().await {
-                log::info!("Parakeet model already loaded: {}", current_model);
-                return Ok(current_model);
-            }
-        }
-
-        // No model loaded - try to load user's configured model from transcript config
         let model_to_load = match crate::api::api::api_get_transcript_config(
             app.clone(),
             app.state(),
@@ -264,7 +264,7 @@ pub async fn parakeet_validate_model_ready_with_config<R: tauri::Runtime>(
                 );
                 if config.provider == "parakeet" && !config.model.is_empty() {
                     log::info!("Using user's configured Parakeet model: {}", config.model);
-                    Some(config.model)
+                    Some(live_model_name(&config.model).to_owned())
                 } else {
                     log::info!(
                         "API config uses non-Parakeet provider ({}) or empty model, will auto-select",
@@ -285,6 +285,12 @@ pub async fn parakeet_validate_model_ready_with_config<R: tauri::Runtime>(
                 None
             }
         };
+
+        if let Some(current_model) = engine.get_current_model().await {
+            if model_to_load.as_ref().is_none_or(|requested| requested == &current_model) {
+                return Ok(current_model);
+            }
+        }
 
         // Check available models
         let models = engine

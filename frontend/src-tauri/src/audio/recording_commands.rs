@@ -858,6 +858,63 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
     Ok(())
 }
 
+async fn save_stopped_recording<R: Runtime>(
+    app: &AppHandle<R>,
+    manager: Option<&mut RecordingManager>,
+) -> (Option<std::path::PathBuf>, Option<String>, Option<String>) {
+    let Some(manager) = manager else {
+        return (None, None, None);
+    };
+    let folder = manager.get_meeting_folder();
+    let name = manager.get_meeting_name();
+    let audio = match tokio::time::timeout(
+        tokio::time::Duration::from_secs(300),
+        manager.save_recording_only(app),
+    ).await {
+        Ok(Ok(path)) => path,
+        Ok(Err(_)) | Err(_) => {
+            warn!("Could not finalize the audio file; keeping the live transcript");
+            None
+        }
+    };
+    (folder, name, audio)
+}
+
+#[cfg(target_os = "macos")]
+async fn transcribe_final_recording<R: Runtime>(
+    app: &AppHandle<R>,
+    engine: &crate::parakeet_engine::ParakeetEngine,
+    selected_model: &str,
+    audio: std::path::PathBuf,
+) -> Result<Vec<(String, f64, f64)>> {
+    #[cfg(target_arch = "aarch64")]
+    {
+        const LIGHTNING: &str = crate::config::DEFAULT_PARAKEET_MODEL;
+        let mlx = if selected_model == crate::parakeet_engine::PARAKEET_MLX_MODEL_NAME
+            && engine.get_current_model().await.as_deref() == Some(LIGHTNING)
+        {
+            super::mlx_final_transcription::helper_path(app).zip(engine.downloaded_mlx_model())
+        } else {
+            None
+        };
+        if let Some((helper, model)) = mlx {
+            // Release the live model before MLX loads its weights.
+            engine.unload_model().await;
+            match super::mlx_final_transcription::transcribe(audio.clone(), helper, model).await {
+                Ok(transcript) if !transcript.is_empty() => {
+                    info!("Final transcript prepared with Parakeet MLX");
+                    return Ok(transcript);
+                }
+                _ => warn!("Parakeet MLX final transcription unavailable; trying CPU Parakeet"),
+            }
+            engine.load_model(LIGHTNING).await?;
+        }
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    let _ = (app, selected_model);
+    engine.transcribe_saved_recording(audio).await
+}
+
 /// Stop recording with optimized graceful shutdown ensuring NO transcript chunks are lost
 pub async fn stop_recording<R: Runtime>(
     app: AppHandle<R>,
@@ -919,7 +976,7 @@ async fn stop_recording_for_session<R: Runtime>(
         (Ok(()), None)
     };
 
-    let (stop_result, manager_for_cleanup) = stop_result;
+    let (stop_result, mut manager_for_cleanup) = stop_result;
 
     match stop_result {
         Ok(_) => {
@@ -1011,6 +1068,68 @@ async fn stop_recording_for_session<R: Runtime>(
         info!("ℹ️ No transcription task found to wait for");
     }
 
+    // Determine which provider was used and unload the appropriate model (with timeout)
+    let config = match tokio::time::timeout(
+        tokio::time::Duration::from_secs(30), // 30 seconds max for DB operation
+        crate::api::api::api_get_transcript_config(
+            app.clone(),
+            app.clone().state(),
+            None,
+        )
+    )
+    .await
+    {
+        Ok(Ok(config)) => config,
+        Ok(Err(e)) => {
+            warn!("⚠️ Failed to get transcript config: {:?}", e);
+            None
+        }
+        Err(_) => {
+            warn!("⏱️ Transcript config timeout (30s), continuing shutdown");
+            None
+        }
+    };
+
+    let live_segment_count = manager_for_cleanup.as_ref()
+        .map_or(0, |manager| manager.get_transcript_segments().len() as u64);
+    let provider = config.as_ref().map(|config| config.provider.as_str());
+    let use_mlx = cfg!(all(target_os = "macos", target_arch = "aarch64"))
+        && config.as_ref().is_some_and(|config| {
+            config.provider == "parakeet"
+                && config.model == crate::parakeet_engine::PARAKEET_MLX_MODEL_NAME
+        });
+    let saved_for_final_pass = if use_mlx {
+        Some(save_stopped_recording(&app, manager_for_cleanup.as_mut()).await)
+    } else {
+        None
+    };
+
+    #[allow(unused_mut)]
+    let mut final_transcript: Option<Vec<crate::api::TranscriptSegment>> = None;
+    #[cfg(target_os = "macos")]
+    if let Some((Some(folder), _, Some(audio))) = &saved_for_final_pass {
+        let engine = crate::parakeet_engine::commands::PARAKEET_ENGINE.lock().unwrap().clone();
+        if let Some(engine) = engine {
+            let _ = app.emit("recording-shutdown-progress", serde_json::json!({
+                "stage": "final_transcription",
+                "message": "Preparing the final transcript from saved audio…",
+                "progress": 65
+            }));
+            let selected_model = config.as_ref().map_or("", |config| config.model.as_str());
+            match transcribe_final_recording(&app, &engine, selected_model, audio.into()).await {
+                Ok(results) if !results.is_empty() => {
+                    let segments = super::common::create_transcript_segments(&results);
+                    match super::common::write_transcripts_json(folder, &segments) {
+                        Ok(()) => final_transcript = Some(segments),
+                        Err(_) => warn!("Could not save the final transcript; keeping the live transcript"),
+                    }
+                }
+                Ok(_) => info!("Final transcription was empty; keeping the live transcript"),
+                Err(_) => warn!("Could not prepare the final transcript; keeping the live transcript"),
+            }
+        }
+    }
+
     // Step 3: Now safely unload Whisper model after ALL chunks are processed
     let _ = app.emit(
         "recording-shutdown-progress",
@@ -1023,30 +1142,7 @@ async fn stop_recording_for_session<R: Runtime>(
 
     info!("🧠 All transcript chunks processed. Now safely unloading transcription model...");
 
-    // Determine which provider was used and unload the appropriate model (with timeout)
-    let config = match tokio::time::timeout(
-        tokio::time::Duration::from_secs(30), // 30 seconds max for DB operation
-        crate::api::api::api_get_transcript_config(
-            app.clone(),
-            app.clone().state(),
-            None,
-        )
-    )
-    .await
-    {
-        Ok(Ok(Some(config))) => Some(config.provider),
-        Ok(Ok(None)) => None,
-        Ok(Err(e)) => {
-            warn!("⚠️ Failed to get transcript config: {:?}", e);
-            None
-        }
-        Err(_) => {
-            warn!("⏱️ Transcript config timeout (30s), continuing shutdown");
-            None
-        }
-    };
-
-    match config.as_deref() {
+    match provider {
         Some("parakeet") => {
             info!("🦜 Unloading Parakeet model...");
             let engine_clone = {
@@ -1110,7 +1206,7 @@ async fn stop_recording_for_session<R: Runtime>(
             manager.get_recording_duration(),
             manager.get_active_recording_duration().unwrap_or(0.0),
             manager.get_total_pause_duration(),
-            manager.get_transcript_segments().len() as u64,
+            live_segment_count,
             state.has_fatal_error(),
             state.get_microphone_device().map(|d| d.name.clone()),
             state.get_system_device().map(|d| d.name.clone()),
@@ -1213,35 +1309,9 @@ async fn stop_recording_for_session<R: Runtime>(
         }),
     );
 
-    // Perform final cleanup with the manager if available
-    let (meeting_folder, meeting_name) = if let Some(mut manager) = manager_for_cleanup {
-        info!("🧹 Performing final cleanup and saving recording data");
-
-        // Extract meeting info BEFORE async operations
-        let meeting_folder = manager.get_meeting_folder();
-        let meeting_name = manager.get_meeting_name();
-
-        match tokio::time::timeout(
-            tokio::time::Duration::from_secs(300), // 5 minutes max for file I/O
-            manager.save_recording_only(&app)
-        ).await {
-            Ok(Ok(_)) => {
-                info!("Recording data saved successfully during cleanup");
-            }
-            Ok(Err(_)) => {
-                warn!("Recording cleanup failed; transcripts preserved");
-                // Don't fail shutdown - transcripts are already preserved
-            }
-            Err(_) => {
-                warn!("⏱️ File I/O timeout (5 minutes) reached during save, continuing shutdown");
-                // Don't fail shutdown - transcripts are already preserved
-            }
-        }
-
-        (meeting_folder, meeting_name)
-    } else {
-        info!("ℹ️ No recording manager available for cleanup");
-        (None, None)
+    let (meeting_folder, meeting_name, _) = match saved_for_final_pass {
+        Some(saved) => saved,
+        None => save_stopped_recording(&app, manager_for_cleanup.as_mut()).await,
     };
 
     // Set recording flag to false
@@ -1285,7 +1355,8 @@ async fn stop_recording_for_session<R: Runtime>(
         serde_json::json!({
             "message": "Recording stopped - frontend will save after all transcripts received",
             "folder_path": folder_path_str,
-            "meeting_name": meeting_name_str
+            "meeting_name": meeting_name_str,
+            "final_transcript": final_transcript
         }),
     )
     .map_err(|e| e.to_string())?;

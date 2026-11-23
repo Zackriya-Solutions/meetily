@@ -64,7 +64,7 @@ export const MODEL_DISPLAY_CONFIG: Record<string, ModelDisplayInfo> = {
   [PARAKEET_MLX_MODEL]: {
     friendlyName: 'Lightning (MLX)',
     icon: '⚡',
-    tagline: 'Parakeet v3 for Apple Silicon · Download only for now',
+    tagline: 'MLX final transcript after Stop · Live captions use Lightning',
     tier: 'fastest'
   },
   'parakeet-tdt-0.6b-v2-int8': {

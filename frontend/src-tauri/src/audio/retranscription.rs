@@ -640,11 +640,12 @@ async fn get_or_init_parakeet<R: Runtime>(
                 Some(model) => model.to_string(),
                 None => get_configured_parakeet_model(app).await?,
             };
+            let target_model = crate::parakeet_engine::live_model_name(&target_model);
 
             // Check if the correct model is already loaded
             let current_model = e.get_current_model().await;
             let needs_load = match &current_model {
-                Some(loaded) => loaded != &target_model,
+                Some(loaded) => loaded != target_model,
                 None => true,
             };
 
@@ -660,7 +661,7 @@ async fn get_or_init_parakeet<R: Runtime>(
                     warn!("Error during Parakeet model discovery (continuing anyway): {}", discover_err);
                 }
 
-                match e.load_model(&target_model).await {
+                match e.load_model(target_model).await {
                     Ok(_) => {
                         info!("Parakeet model '{}' loaded successfully", target_model);
                         Ok(e)
