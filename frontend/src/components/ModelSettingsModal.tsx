@@ -715,7 +715,7 @@ export function ModelSettingsModal({
     }
 
     await onSave(updatedConfig);
-    if (chatGPTStatus?.summary_default) {
+    if (chatGPTStatus?.summary_default || chatGPTStatus?.keychain_locked) {
       setChatGPTStatus(await invoke<ChatGPTPlanStatus>('chatgpt_plan_set_summary_default', { enabled: false }));
     }
     onSettingsSaved?.();

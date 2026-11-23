@@ -486,7 +486,17 @@ export function useSummaryGeneration({
     }
     let chatGPT: { model: string; profileId: string; automatic: boolean } | undefined;
     try {
-      const status = await invokeTauri<ChatGPTPlanStatus | null>('chatgpt_plan_status');
+      const status = await invokeTauri<ChatGPTPlanStatus | null>('chatgpt_plan_status', { summaryOnly: true });
+      const ollamaUrl = modelConfig.ollamaEndpoint || 'http://localhost:11434';
+      const localProvider = modelConfig.provider === 'builtin-ai' ||
+        (modelConfig.provider === 'ollama' && URL.canParse(ollamaUrl) &&
+          ['localhost', '127.0.0.1', '[::1]'].includes(new URL(ollamaUrl).hostname));
+      if (status?.keychain_locked &&
+          (status.summary_default || (!status.summary_default_known && !localProvider))) {
+        showPreflightError('Unlock the ChatGPT connection in Summary Settings, or save another summary provider.');
+        if (!automatic) onOpenModelSettings?.();
+        return;
+      }
       if (status?.summary_default) {
         if (!mountedRef.current || visibleMeetingIdRef.current !== meeting.id) return;
         if (automatic && !status.auto_summary_allowed) {

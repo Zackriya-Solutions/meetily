@@ -29,7 +29,7 @@ export function SummaryModelSettings({ refetchTrigger }: SummaryModelSettingsPro
   const saveAutoSummary = async (enabled: boolean) => {
     setSavingAutoSummary(true);
     try {
-      const chatGPT = await invoke<ChatGPTPlanStatus | null>('chatgpt_plan_status');
+      const chatGPT = await invoke<ChatGPTPlanStatus | null>('chatgpt_plan_status', { summaryOnly: true });
       if (chatGPT?.summary_default) {
         await invoke('chatgpt_plan_set_summary_default', { automatic: enabled });
       }

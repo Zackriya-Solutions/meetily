@@ -83,7 +83,7 @@ function MeetingDetailsContent() {
     }
 
     try {
-      const chatGPT = await invoke<ChatGPTPlanStatus | null>('chatgpt_plan_status');
+      const chatGPT = await invoke<ChatGPTPlanStatus | null>('chatgpt_plan_status', { summaryOnly: true });
       if (chatGPT?.summary_default) {
         setShouldAutoGenerate(true);
         setHasCheckedAutoGen(true);

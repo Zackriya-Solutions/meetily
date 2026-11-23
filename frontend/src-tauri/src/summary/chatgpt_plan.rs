@@ -28,6 +28,7 @@ const RESOURCE: &str = "https://api.openai.com/v1";
 const TOKEN_URL: &str = "https://auth.openai.com/api/accounts/oauth/token";
 const SCOPE: &str = "chatgpt.tokens.use.direct";
 const RECONNECT: &str = "Reconnect ChatGPT in Summary Settings to use your plan.";
+const UNLOCK_CONNECTION: &str = "Unlock the ChatGPT connection in Summary Settings.";
 static SIGN_IN: Mutex<()> = Mutex::const_new(());
 static SESSIONS: Mutex<ConnectionCache> = Mutex::const_new(ConnectionCache { cached: None });
 
@@ -133,6 +134,8 @@ impl TokenResponse {
 #[derive(Serialize)]
 pub struct ConnectionStatus {
     summary_default: bool,
+    keychain_locked: bool,
+    summary_default_known: bool,
     pub auto_summary_allowed: bool,
     pub active_model: Option<String>,
     models: Vec<PlanModel>,
@@ -146,6 +149,44 @@ struct ProfileStatus {
     active: bool,
 }
 
+impl ConnectionStatus {
+    fn without_session(summary_default: Option<bool>, keychain_locked: bool) -> Self {
+        Self {
+            summary_default: summary_default.unwrap_or(false),
+            keychain_locked,
+            summary_default_known: summary_default.is_some(),
+            auto_summary_allowed: false,
+            active_model: None,
+            models: vec![],
+            profiles: vec![],
+        }
+    }
+}
+
+fn saved_summary_default(dir: &Path) -> Option<bool> {
+    match fs::read_to_string(dir.join("chatgpt-plan-summary-provider")).ok()?.as_str() {
+        "chatgpt" => Some(true),
+        "configured" => Some(false),
+        _ => None,
+    }
+}
+
+// This records routing only. Connection credentials and consent stay in Keychain.
+fn save_summary_default(dir: &Path, enabled: bool) -> Result<(), String> {
+    use std::io::Write;
+
+    if saved_summary_default(dir) == Some(enabled) {
+        return Ok(());
+    }
+    let save = || -> std::io::Result<()> {
+        let mut file = tempfile::NamedTempFile::new_in(dir)?;
+        file.write_all(if enabled { b"chatgpt" } else { b"configured" })?;
+        file.persist(dir.join("chatgpt-plan-summary-provider"))?;
+        Ok(())
+    };
+    save().map_err(|_| "Could not save the summary provider preference.".into())
+}
+
 // One cache per running app, under the same lock that serializes Keychain changes.
 struct ConnectionCache {
     cached: Option<(PathBuf, Connections)>,
@@ -153,12 +194,20 @@ struct ConnectionCache {
 
 impl ConnectionCache {
     async fn load(&mut self, dir: &Path) -> Result<Connections, String> {
+        self.load_with_keychain_ui(dir, false).await
+    }
+
+    async fn load_with_keychain_ui(
+        &mut self,
+        dir: &Path,
+        allow_keychain_ui: bool,
+    ) -> Result<Connections, String> {
         if let Some((cached_dir, data)) = &self.cached {
             if cached_dir == dir {
                 return Ok(data.clone());
             }
         }
-        let data = Connections::load(dir).await?;
+        let data = Connections::load(dir, allow_keychain_ui).await?;
         self.cached = Some((dir.to_path_buf(), data.clone()));
         Ok(data)
     }
@@ -174,10 +223,11 @@ impl ConnectionCache {
 
 impl Connections {
     // Callers hold SESSIONS so a first-load migration cannot race a refresh or sign-out.
-    async fn load(dir: &Path) -> Result<Self, String> {
+    async fn load(dir: &Path, allow_keychain_ui: bool) -> Result<Self, String> {
         let service = keychain_service(dir)?;
+        let dir = dir.to_path_buf();
         let legacy_path = dir.join("chatgpt-plan.json");
-        blocking_keychain(move || {
+        blocking_keychain(allow_keychain_ui, move || {
             #[cfg(target_os = "macos")]
             {
                 let stored = match security_framework::passwords::get_generic_password(
@@ -186,17 +236,29 @@ impl Connections {
                 ) {
                     Ok(bytes) => Some(bytes),
                     Err(error) if error.code() == -25300 => None, // errSecItemNotFound
+                    Err(error) if matches!(error.code(), -25308 | -25293 | -128) => {
+                        // Interaction not allowed, access denied, or an explicitly opened dialog cancelled.
+                        return Err(UNLOCK_CONNECTION.into());
+                    }
                     Err(_) => {
                         return Err("Could not read the ChatGPT connection from Keychain.".into())
                     }
                 };
-                return Self::load_or_migrate(stored, &legacy_path, |bytes| {
+                let mut data = Self::load_or_migrate(stored, &legacy_path, |bytes| {
                     Self::save_to_keychain(&service, bytes)
-                });
+                })?;
+                if saved_summary_default(&dir) == Some(false) {
+                    data.summary_default = false;
+                    data.auto_summary_profile = None;
+                }
+                if save_summary_default(&dir, data.summary_default).is_err() {
+                    log::warn!("Could not record the ChatGPT summary provider preference.");
+                }
+                return Ok(data);
             }
             #[cfg(not(target_os = "macos"))]
             {
-                let _ = (service, legacy_path);
+                let _ = (service, dir, legacy_path);
                 Err("ChatGPT plan summaries are available on macOS.".into())
             }
         })
@@ -256,12 +318,17 @@ impl Connections {
         let service = keychain_service(dir)?;
         let bytes =
             serde_json::to_vec(self).map_err(|_| "Could not save the ChatGPT connection.")?;
-        blocking_keychain(move || {
+        let dir = dir.to_path_buf();
+        let summary_default = self.summary_default;
+        blocking_keychain(false, move || {
             #[cfg(target_os = "macos")]
-            return Self::save_to_keychain(&service, &bytes);
+            {
+                Self::save_to_keychain(&service, &bytes)?;
+                return save_summary_default(&dir, summary_default);
+            }
             #[cfg(not(target_os = "macos"))]
             {
-                let _ = (service, bytes);
+                let _ = (service, bytes, dir, summary_default);
                 Err("ChatGPT plan summaries are available on macOS.".into())
             }
         })
@@ -285,6 +352,8 @@ impl Connections {
             .find(|p| self.active.as_ref() == Some(&p.client_id) && p.tokens.is_some());
         ConnectionStatus {
             summary_default: self.summary_default,
+            keychain_locked: false,
+            summary_default_known: true,
             auto_summary_allowed: self
                 .active
                 .as_deref()
@@ -305,11 +374,24 @@ impl Connections {
 }
 
 async fn blocking_keychain<T: Send + 'static>(
+    allow_keychain_ui: bool,
     operation: impl FnOnce() -> Result<T, String> + Send + 'static,
 ) -> Result<T, String> {
-    tokio::task::spawn_blocking(operation)
-        .await
-        .map_err(|_| "Could not access the ChatGPT connection.".to_string())?
+    tokio::task::spawn_blocking(move || {
+        #[cfg(target_os = "macos")]
+        let _interaction_guard = if allow_keychain_ui {
+            None
+        } else {
+            use security_framework::os::macos::keychain::SecKeychain;
+            Some(SecKeychain::disable_user_interaction()
+                .map_err(|_| "Could not access the ChatGPT connection without prompting.")?)
+        };
+        #[cfg(not(target_os = "macos"))]
+        let _ = allow_keychain_ui;
+        operation()
+    })
+    .await
+    .map_err(|_| "Could not access the ChatGPT connection.".to_string())?
 }
 
 fn keychain_service(dir: &Path) -> Result<String, String> {
@@ -545,13 +627,25 @@ async fn fetch_models(client: &Client, token: &str) -> Result<Vec<PlanModel>, St
 pub async fn chatgpt_plan_status<R: Runtime>(
     app: AppHandle<R>,
     refresh_models: Option<bool>,
+    summary_only: Option<bool>,
+    unlock: Option<bool>,
 ) -> Result<Option<ConnectionStatus>, String> {
     if !cfg!(target_os = "macos") {
         return Ok(None);
     }
     let mut sessions = SESSIONS.lock().await;
     let dir = app_data_dir(&app)?;
-    let mut data = sessions.load(&dir).await?;
+    let saved_default = saved_summary_default(&dir);
+    if summary_only == Some(true) && saved_default == Some(false) {
+        return Ok(Some(ConnectionStatus::without_session(saved_default, false)));
+    }
+    let mut data = match sessions.load_with_keychain_ui(&dir, unlock == Some(true)).await {
+        Ok(data) => data,
+        Err(error) if error == UNLOCK_CONNECTION && unlock != Some(true) => {
+            return Ok(Some(ConnectionStatus::without_session(saved_default, true)));
+        }
+        Err(error) => return Err(error),
+    };
     if refresh_models == Some(true) {
         let index = data
             .profiles
@@ -629,7 +723,14 @@ pub async fn chatgpt_plan_set_summary_default<R: Runtime>(
 ) -> Result<ConnectionStatus, String> {
     let mut sessions = SESSIONS.lock().await;
     let dir = app_data_dir(&app)?;
-    let mut data = sessions.load(&dir).await?;
+    let mut data = match sessions.load(&dir).await {
+        Ok(data) => data,
+        Err(error) if error == UNLOCK_CONNECTION && enabled == Some(false) => {
+            save_summary_default(&dir, false)?;
+            return Ok(ConnectionStatus::without_session(Some(false), true));
+        }
+        Err(error) => return Err(error),
+    };
     let enabled = enabled.unwrap_or(data.summary_default);
     let automatic = enabled && automatic.unwrap_or(false);
     if enabled && (!data.summary_default || automatic) && data.status().active_model.is_none() {
@@ -1041,6 +1142,25 @@ mod tests {
         assert_eq!(sessions.load(dir).await.unwrap().host_id, "preview-host");
         assert!(sessions.save(invalid, &data).await.is_err());
         assert!(sessions.cached.is_none());
+    }
+
+    #[test]
+    fn locked_connection_preserves_known_routing_without_authenticating() {
+        let dir = tempfile::tempdir().unwrap();
+        let unknown = ConnectionStatus::without_session(saved_summary_default(dir.path()), true);
+        assert!(unknown.keychain_locked);
+        assert!(!unknown.summary_default_known);
+
+        for enabled in [true, false] {
+            save_summary_default(dir.path(), enabled).unwrap();
+            let status = ConnectionStatus::without_session(saved_summary_default(dir.path()), true);
+            assert!(status.keychain_locked);
+            assert!(status.summary_default_known);
+            assert_eq!(status.summary_default, enabled);
+            assert!(!status.auto_summary_allowed);
+            assert!(status.active_model.is_none());
+            assert!(status.profiles.is_empty());
+        }
     }
 
     #[test]

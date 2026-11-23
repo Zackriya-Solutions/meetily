@@ -7,6 +7,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 
 export type ChatGPTPlanStatus = {
   summary_default: boolean;
+  keychain_locked: boolean;
+  summary_default_known: boolean;
   auto_summary_allowed: boolean;
   active_model: string | null;
   models: { slug: string; display_name: string }[];
@@ -40,6 +42,19 @@ export function ChatGPTPlanSettings({ status, onStatusChange, onModelChange }: {
     if (needsModelList) void refreshModels();
   }, [needsModelList, refreshModels]);
 
+  async function unlockConnection() {
+    setBusy(true);
+    setMessage('');
+    try {
+      const next = await invoke<ChatGPTPlanStatus>('chatgpt_plan_status', { unlock: true });
+      onStatusChange(next);
+    } catch (error) {
+      setMessage(String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function connect(profileId: string | null) {
     setBusy(true);
     setMessage('Finish signing in in your browser.');
@@ -72,6 +87,14 @@ export function ChatGPTPlanSettings({ status, onStatusChange, onModelChange }: {
       <p className="text-sm text-muted-foreground">
         Use an eligible ChatGPT plan for summaries. Meetily asks before sending a transcript for a manual summary. Turn on Auto Summary to send transcripts to OpenAI after recording.
       </p>
+      {status.keychain_locked && (
+        <div className="space-y-2">
+          <p className="text-sm text-muted-foreground">macOS requires permission to read the saved ChatGPT connection.</p>
+          <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void unlockConnection()}>
+            Unlock ChatGPT connection
+          </Button>
+        </div>
+      )}
       {status.active_model && (
         <div className="space-y-1">
           {status.models.length > 0 && (
@@ -104,10 +127,12 @@ export function ChatGPTPlanSettings({ status, onStatusChange, onModelChange }: {
         </div>
       ))}
       <div className="flex flex-wrap items-center gap-2">
-        <Button type="button" size="sm" variant="outline" disabled={busy}
-          data-oai-siwc-button onClick={() => void connect(null)}>
-          {status.profiles.length ? 'Add ChatGPT account' : 'Continue with ChatGPT'}
-        </Button>
+        {!status.keychain_locked && (
+          <Button type="button" size="sm" variant="outline" disabled={busy}
+            data-oai-siwc-button onClick={() => void connect(null)}>
+            {status.profiles.length ? 'Add ChatGPT account' : 'Continue with ChatGPT'}
+          </Button>
+        )}
         <Button type="button" variant="link" size="sm" className="px-0"
           onClick={() => void invoke('open_external_url', { url: usageUrl }).catch(error => setMessage(String(error)))}>
           Manage usage

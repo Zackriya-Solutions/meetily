@@ -27,6 +27,8 @@ mock.module('../../src/lib/analytics', () => ({ default: {
 } }));
 let chatGPTDefault = false;
 let chatGPTAutoAllowed = false;
+let keychainLocked = false;
+let summaryDefaultKnown = true;
 let startProcess: () => Promise<{ process_id: string } | null>;
 let getSummary: (meetingId: string) => Promise<SummaryProcessResponse>;
 const invoke = mock(async (command: string, args?: Record<string, unknown>): Promise<unknown> => {
@@ -36,6 +38,8 @@ const invoke = mock(async (command: string, args?: Record<string, unknown>): Pro
   if (command === 'api_get_meeting_transcripts') return { transcripts: [{ text: 'Meeting transcript', timestamp: '00:00' }], total_count: 1 };
   if (command === 'chatgpt_plan_status') return {
     summary_default: chatGPTDefault,
+    keychain_locked: keychainLocked,
+    summary_default_known: summaryDefaultKnown,
     auto_summary_allowed: chatGPTAutoAllowed,
     active_model: 'test-plan-model',
     profiles: [{ id: 'oaiapp_test', email: 'test@example.com', active: true }],
@@ -59,6 +63,7 @@ const response = (overrides: Partial<SummaryProcessResponse> = {}): SummaryProce
   data: null, error: null, meetingName: 'Meeting A', ...overrides,
 });
 let configuredModel = 'test';
+let ollamaEndpoint: string | undefined;
 let state: ReturnType<typeof useSummaryGeneration>;
 function Status({ initialSummary, meetingId = 'meeting-a' }: {
   initialSummary: SummaryProcessResponse; meetingId?: string;
@@ -67,7 +72,7 @@ function Status({ initialSummary, meetingId = 'meeting-a' }: {
   const [title, updateMeetingTitle] = useState('Original title');
   state = useSummaryGeneration({
     meeting: { id: meetingId, created_at: '2026-09-01T00:00:00Z' },
-    transcripts: [], modelConfig: { provider: 'ollama', model: configuredModel, whisperModel: 'base' },
+    transcripts: [], modelConfig: { provider: 'ollama', model: configuredModel, whisperModel: 'base', ollamaEndpoint },
     isModelConfigLoading: false, selectedTemplate: 'daily_standup',
     setAiSummary, updateMeetingTitle, initialSummary,
   });
@@ -89,6 +94,9 @@ beforeEach(() => {
   configuredModel = 'test';
   chatGPTDefault = false;
   chatGPTAutoAllowed = false;
+  keychainLocked = false;
+  summaryDefaultKnown = true;
+  ollamaEndpoint = undefined;
   timers.clear(); notify.mockClear(); trackStart.mockClear(); trackPrompt.mockClear(); trackCompletion.mockClear(); invoke.mockClear();
   getSummary = async () => response();
   startProcess = async () => ({ process_id: 'attempt-a' });
@@ -354,4 +362,27 @@ test('Auto Summary uses the ChatGPT plan once automatic uploads are allowed', as
   expect(request).toMatchObject({
     model: 'chatgpt-plan', chatgptPlanProfileId: 'oaiapp_test', chatgptPlanAutomatic: true, meetingId: 'meeting-a',
   });
+});
+
+test('a locked ChatGPT connection does not block an on-device summary', async () => {
+  keychainLocked = true;
+  summaryDefaultKnown = false;
+  await show(response({ status: 'idle', start: null }));
+
+  await act(async () => state.handleGenerateSummary());
+  expect(invoke.mock.calls).toContainEqual(['chatgpt_plan_status', { summaryOnly: true }]);
+  expect(invoke.mock.calls.find(([command]) => command === 'api_process_transcript')?.[1])
+    .toMatchObject({ model: 'ollama' });
+});
+
+test.each([true, false])('an unresolved ChatGPT choice does not start a remote summary (known = %s)', async (known) => {
+  keychainLocked = true;
+  summaryDefaultKnown = known;
+  chatGPTDefault = known;
+  if (!known) ollamaEndpoint = 'https://ollama.example.invalid';
+  await show(response({ status: 'idle', start: null }));
+
+  await act(async () => state.handleGenerateSummary());
+  expect(state.summaryError).toContain('Unlock the ChatGPT connection');
+  expect(invoke.mock.calls.some(([command]) => command === 'api_process_transcript')).toBe(false);
 });
