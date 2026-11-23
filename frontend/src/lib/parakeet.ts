@@ -54,17 +54,17 @@ export interface ModelDisplayInfo {
 export const PARAKEET_MLX_MODEL = 'parakeet-tdt-0.6b-v3-mlx';
 
 export const MODEL_DISPLAY_CONFIG: Record<string, ModelDisplayInfo> = {
-  [PARAKEET_MLX_MODEL]: {
-    friendlyName: 'Parakeet v3 MLX',
-    icon: '📦',
-    tagline: 'Apple Silicon only · Download files for future transcription support',
-    tier: 'fastest'
-  },
   'parakeet-tdt-0.6b-v3-int8': {
     friendlyName: 'Lightning',
     icon: '⚡',
     tagline: 'Real time • Best for speed, great accuracy',
     recommended: true,
+    tier: 'fastest'
+  },
+  [PARAKEET_MLX_MODEL]: {
+    friendlyName: 'Lightning (MLX)',
+    icon: '⚡',
+    tagline: 'Parakeet v3 for Apple Silicon · Download only for now',
     tier: 'fastest'
   },
   'parakeet-tdt-0.6b-v2-int8': {

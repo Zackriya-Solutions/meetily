@@ -129,15 +129,6 @@ const PARAKEET_MODEL_SPECS: &[ModelSpec] = &[
         source_base_url: "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/8f23f0c03c8761650bdb5b40aaf3e40d2c15f1ce",
         artifacts: PARAKEET_V3_ARTIFACTS,
     },
-    ModelSpec {
-        name: "parakeet-tdt-0.6b-v2-int8",
-        size_mb: 661,
-        quantization: QuantizationType::Int8,
-        speed: "Fast (v2)",
-        description: "Previous version with int8 quantization, good balance of speed and accuracy",
-        source_base_url: "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v2-onnx/resolve/0bbb45a3365852604aef28b538a8f066f4ccaa85",
-        artifacts: PARAKEET_V2_ARTIFACTS,
-    },
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     ModelSpec {
         name: PARAKEET_MLX_MODEL_NAME,
@@ -150,6 +141,15 @@ const PARAKEET_MODEL_SPECS: &[ModelSpec] = &[
             ArtifactSpec { filename: "config.json", exact_bytes: 244_093 },
             ArtifactSpec { filename: "model.safetensors", exact_bytes: 2_508_288_736 },
         ],
+    },
+    ModelSpec {
+        name: "parakeet-tdt-0.6b-v2-int8",
+        size_mb: 661,
+        quantization: QuantizationType::Int8,
+        speed: "Fast (v2)",
+        description: "Previous version with int8 quantization, good balance of speed and accuracy",
+        source_base_url: "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v2-onnx/resolve/0bbb45a3365852604aef28b538a8f066f4ccaa85",
+        artifacts: PARAKEET_V2_ARTIFACTS,
     },
 ];
 
@@ -1413,9 +1413,12 @@ mod tests {
             }
 
             let models = engine.discover_downloadable_models().await.unwrap();
-            assert!(models.iter().any(|model| {
-                model.name == spec.name && matches!(model.status, ModelStatus::Available)
-            }));
+            let names: Vec<_> = models.iter().map(|model| model.name.as_str()).collect();
+            assert_eq!(
+                names,
+                ["parakeet-tdt-0.6b-v3-int8", spec.name, "parakeet-tdt-0.6b-v2-int8"]
+            );
+            assert!(matches!(models[1].status, ModelStatus::Available));
         }
 
         let models = engine.discover_models().await.unwrap();
