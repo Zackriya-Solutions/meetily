@@ -1059,6 +1059,36 @@ pub async fn api_save_transcript<R: Runtime>(
     }
 }
 
+/// Path of the meeting's recorded audio, or None when nothing was saved
+/// (auto-save off, or the folder was moved). Recordings live in the user's
+/// chosen folder, outside the asset protocol's static scope, so the file is
+/// allowed for this session before the player loads it.
+#[tauri::command]
+pub async fn get_meeting_audio_path<R: Runtime>(
+    app: AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+    meeting_id: String,
+) -> Result<Option<String>, String> {
+    use tauri::Manager;
+
+    let folder_path: Option<Option<String>> =
+        sqlx::query_scalar("SELECT folder_path FROM meetings WHERE id = ?")
+            .bind(&meeting_id)
+            .fetch_optional(state.db_manager.pool())
+            .await
+            .map_err(|e| format!("Database error: {}", e))?;
+    let Some(folder) = folder_path.flatten() else {
+        return Ok(None);
+    };
+    let Ok(audio) = crate::audio::retranscription::find_audio_file(std::path::Path::new(&folder)) else {
+        return Ok(None);
+    };
+    app.asset_protocol_scope()
+        .allow_file(&audio)
+        .map_err(|e| format!("Failed to allow audio file: {}", e))?;
+    Ok(Some(audio.to_string_lossy().into_owned()))
+}
+
 /// Opens the meeting's recording folder in the system file explorer
 #[tauri::command]
 pub async fn open_meeting_folder<R: Runtime>(

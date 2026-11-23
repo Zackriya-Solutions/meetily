@@ -5,6 +5,7 @@ import { TranscriptView } from '@/components/TranscriptView';
 import { VirtualizedTranscriptView } from '@/components/VirtualizedTranscriptView';
 import { TranscriptButtonGroup } from './TranscriptButtonGroup';
 import { OtherSpeakerName } from './OtherSpeakerName';
+import { MeetingAudioPlayer } from './MeetingAudioPlayer';
 import { useMemo } from 'react';
 
 interface TranscriptPanelProps {
@@ -87,6 +88,7 @@ export function TranscriptPanel({
           meetingFolderPath={meetingFolderPath}
           onRefetchTranscripts={onRefetchTranscripts}
         />
+        {meetingId && !isRecording && <MeetingAudioPlayer meetingId={meetingId} />}
         {onSaveOtherSpeakerNames && convertedSegments.some(s => s.speaker === 'system') && (
           <OtherSpeakerName names={otherSpeakerNames ?? []} onSave={onSaveOtherSpeakerNames} />
         )}
