@@ -88,8 +88,9 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pnpm-store-
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust 1.99.1
+        # Pinned: Rust 1.100's cargo moved build-script OUT_DIR one level deeper; tauri-build 2.6.1 and ort-sys 2.0.0-rc.10 assume the old depth. Unpin after upgrading to tauri-build >= 2.7 and ort >= 2.0.0-rc.14.
+        uses: dtolnay/rust-toolchain@1.99.1
         with:
           targets: ${{ matrix.target }}
 
@@ -376,7 +377,8 @@ jobs:
           fi
 
           # Build llama-helper from workspace root
-          cargo build --release -p llama-helper $LLAMA_FEATURES
+          # llama.cpp's bundled cpp-httplib does not compile against OpenSSL 4 (const X509_NAME); the helper never uses HTTPS, so build it without OpenSSL.
+          CMAKE_DISABLE_FIND_PACKAGE_OpenSSL=TRUE cargo build --release -p llama-helper $LLAMA_FEATURES
 
           # Determine binary extension
           EXT=""
