@@ -6,5 +6,7 @@
 //
 // Ported from upstream Meetily PR #511 (Krtin Shet).
 
+pub mod clustering;
 pub mod embedding;
 pub mod fbank;
+pub mod models;
