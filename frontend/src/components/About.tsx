@@ -39,9 +39,10 @@ export function About() {
             } else {
                 toast.success('You are running the latest version');
             }
-        } catch (error: any) {
+        } catch (error: unknown) {
             console.error('Failed to check for updates:', error);
-            toast.error('Failed to check for updates: ' + (error.message || 'Unknown error'));
+            // Tauri plugin errors arrive as plain strings, not Error objects.
+            toast.error('Failed to check for updates: ' + (error instanceof Error ? error.message : String(error)));
         } finally {
             setIsChecking(false);
         }

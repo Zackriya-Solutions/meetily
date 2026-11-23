@@ -3,13 +3,14 @@
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
 import { useUpdateCheck } from '@/hooks/useUpdateCheck';
 import { UpdateInfo } from '@/services/updateService';
+import { toast } from 'sonner';
 import { UpdateDialog } from './UpdateDialog';
 import { setUpdateDialogCallback, showUpdateNotification } from './UpdateNotification';
 
 interface UpdateCheckContextType {
   updateInfo: UpdateInfo | null;
   isChecking: boolean;
-  checkForUpdates: (force?: boolean) => Promise<void>;
+  checkForUpdates: (force?: boolean) => Promise<UpdateInfo | null>;
   showUpdateDialog: () => void;
 }
 
@@ -41,9 +42,17 @@ export function UpdateCheckProvider({ children }: { children: React.ReactNode })
 
   // Listen for tray menu events
   useEffect(() => {
-    const handleTrayCheck = () => {
-      checkForUpdates(true); // Force check from tray
-      setShowDialog(true);
+    // The dialog renders nothing without an update, so a tray click that
+    // finds none needs its own answer.
+    const handleTrayCheck = async () => {
+      const info = await checkForUpdates(true);
+      if (info?.available) {
+        setShowDialog(true);
+      } else if (info) {
+        toast.success('You are running the latest version');
+      } else {
+        toast.error('Could not check for updates');
+      }
     };
 
     window.addEventListener('check-updates-from-tray', handleTrayCheck);
