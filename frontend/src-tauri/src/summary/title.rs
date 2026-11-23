@@ -12,7 +12,7 @@ use serde::Serialize;
 use sqlx::SqlitePool;
 use std::path::PathBuf;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
-use tracing::{info, warn};
+use log::{info, warn};
 
 // Roughly 20 English words, or two or three sentences of Japanese.
 const MIN_CHARS: usize = 80;

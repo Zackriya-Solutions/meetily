@@ -12,7 +12,7 @@ use crate::summary::title::{ask_llm, visible_reply};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
-use tracing::{info, warn};
+use log::{info, warn};
 
 // Greetings and introductions sit at the start of a call, thanks at the end.
 const HEAD_CHARS: usize = 4500;

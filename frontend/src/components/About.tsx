@@ -11,7 +11,7 @@ import { toast } from 'sonner';
 
 
 export function About() {
-    const [currentVersion, setCurrentVersion] = useState<string>('0.4.2');
+    const [currentVersion, setCurrentVersion] = useState<string>('0.5.0');
     const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
     const [isChecking, setIsChecking] = useState(false);
     const [showUpdateDialog, setShowUpdateDialog] = useState(false);
@@ -39,10 +39,9 @@ export function About() {
             } else {
                 toast.success('You are running the latest version');
             }
-        } catch (error: unknown) {
+        } catch (error: any) {
             console.error('Failed to check for updates:', error);
-            // Tauri plugin errors arrive as plain strings, not Error objects.
-            toast.error('Failed to check for updates: ' + (error instanceof Error ? error.message : String(error)));
+            toast.error('Failed to check for updates: ' + (error.message || 'Unknown error'));
         } finally {
             setIsChecking(false);
         }

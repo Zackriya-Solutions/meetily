@@ -32,8 +32,6 @@ pub mod simple_level_monitor;
 pub mod buffer_pool;
 pub mod post_processor;
 pub mod hardware_detector;
-pub mod async_logger;
-pub mod batch_processor;
 pub mod system_detector;
 pub mod system_audio_commands;
 pub mod device_monitor;  // NEW: Device disconnect/reconnect monitoring
@@ -55,7 +53,7 @@ pub mod retranscription;
 pub mod import;
 
 pub use devices::{
-    default_input_device, default_output_device, get_device_and_config, list_audio_devices,
+    default_input_device, default_output_device, device_from_id, get_device_and_config, list_audio_devices,
     parse_audio_device, trigger_audio_permission,
     AudioDevice, AudioTranscriptionEngine, DeviceControl, DeviceType,
     LAST_AUDIO_CAPTURE,
