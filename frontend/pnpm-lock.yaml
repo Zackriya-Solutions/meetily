@@ -111,6 +111,9 @@ dependencies:
   '@tauri-apps/plugin-store':
     specifier: ^2.4.0
     version: 2.4.3
+  '@tauri-apps/plugin-updater':
+    specifier: ^2.3.0
+    version: 2.10.1
   '@tiptap/pm':
     specifier: ^2.10.4
     version: 2.27.2
@@ -3258,6 +3261,12 @@ packages:
 
   /@tauri-apps/plugin-store@2.4.3:
     resolution: {integrity: sha512-9LWPj9yMphRi9czEtUv87XHbl1b6xgd9EXpPrUnq6nG7+nbtoF84d4Kwz9xhAv/Hf30sr58pq7EOlyI936y8qw==}
+    dependencies:
+      '@tauri-apps/api': 2.11.1
+    dev: false
+
+  /@tauri-apps/plugin-updater@2.10.1:
+    resolution: {integrity: sha512-NFYMg+tWOZPJdzE/PpFj2qfqwAWwNS3kXrb1tm1gnBJ9mYzZ4WDRrwy8udzWoAnfGCHLuePNLY1WVCNHnh3eRA==}
     dependencies:
       '@tauri-apps/api': 2.11.1
     dev: false
