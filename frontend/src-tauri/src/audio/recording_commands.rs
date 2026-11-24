@@ -1228,7 +1228,10 @@ async fn stop_recording_for_session<R: Runtime>(
         // Extract meeting info BEFORE async operations
         let meeting_folder = manager.get_meeting_folder();
         let meeting_name = manager.get_meeting_name();
-        let (kept, folds) = crate::diarization::voiceprints::fold_single_segment_voices(std::mem::take(&mut voiceprints));
+        let (kept, folds) = crate::diarization::voiceprints::fold_single_line_voices(
+            std::mem::take(&mut voiceprints),
+            &manager.speaker_line_counts(),
+        );
         voiceprints = kept;
         manager.apply_speaker_folds(&folds);
 
@@ -1256,7 +1259,7 @@ async fn stop_recording_for_session<R: Runtime>(
             }
             if !folds.is_empty() {
                 match crate::diarization::voiceprints::write_folds(folder, &folds) {
-                    Ok(()) => info!("Folded {} one-segment voices into the others", folds.len()),
+                    Ok(()) => info!("Folded {} one-line voices into the others", folds.len()),
                     Err(e) => warn!("Failed to save speaker folds: {}", e),
                 }
             }
