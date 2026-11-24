@@ -12,7 +12,7 @@ use crate::summary::title::{ask_llm, visible_reply};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
-use tracing::{info, warn};
+use log::{info, warn};
 
 // Greetings and introductions sit at the start of a call, thanks at the end.
 const HEAD_CHARS: usize = 4500;
@@ -316,13 +316,13 @@ pub async fn identify_other_speakers<R: Runtime>(app: AppHandle<R>, pool: Sqlite
         }
     };
     let Some(proposals) = parse_reply(&raw) else {
-        warn!("Speaker names for {meeting_id}: unusable model output {raw:?}");
+        warn!("Speaker names for {meeting_id}: unusable model output ({} chars)", raw.chars().count());
         return;
     };
     // An empty result is stored too: after a retranscription it replaces a
     // name the earlier, worse transcript produced (unless Dor set one).
     let names = accept_names(&lines, &proposals);
-    info!("Speaker names for {meeting_id}: proposed {proposals:?}, kept {names:?}");
+    info!("Speaker names for {meeting_id}: proposed {}, kept {}", proposals.len(), names.len());
 
     match store_found_names(&pool, &meeting_id, &names).await {
         Ok(true) => {
