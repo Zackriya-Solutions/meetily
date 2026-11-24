@@ -39,6 +39,7 @@ export const LANGUAGE_OPTIONS: LanguageOption[] = [
   { code: 'no', label: 'Norwegian' },
   { code: 'ro', label: 'Romanian' },
   { code: 'uk', label: 'Ukrainian' },
+  { code: 'ur', label: 'Urdu' },
 ];
 
 export const AUTO_VALUE = '__auto__' as const;

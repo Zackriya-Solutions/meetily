@@ -197,6 +197,7 @@ pub(crate) fn language_name_from_code(code: &str) -> Option<&'static str> {
         "no" => Some("Norwegian"),
         "ro" => Some("Romanian"),
         "uk" => Some("Ukrainian"),
+        "ur" => Some("Urdu"),
         _ => None,
     }
 }
