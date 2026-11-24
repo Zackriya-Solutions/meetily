@@ -705,11 +705,10 @@ jobs:
           key: ${{ runner.os }}-onnxruntime-x86_64-pc-windows-msvc-sherpa1.13.8-ort1.28.2-${{ hashFiles('frontend/src-tauri/build/onnxruntime.rs', 'Cargo.lock') }}
 
 
-      - name: Clear sherpa prebuilt cache (debug builds)
-        if: ${{ github.event.inputs.build-type == 'debug' }}
+      - name: Clear sherpa prebuilt cache
         shell: pwsh
         run: |
-          Write-Host "Removing stale sherpa-onnx prebuilt cache to force re-download (fixes LNK1181 in debug builds)"
+          Write-Host "Removing stale sherpa-onnx prebuilt cache to force re-download (fixes LNK1181 in debug builds and missing sherpa-onnx-c-api.dll in release builds)"
           Remove-Item -Recurse -Force -ErrorAction SilentlyContinue target/sherpa-onnx-prebuilt
 
       # sherpa-onnx prebuilt libs are fetched by sherpa-onnx-sys's own build
