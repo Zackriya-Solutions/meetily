@@ -1,0 +1,3 @@
+# sqlx embeds migration checksums at compile time; CRLF checkouts on Windows
+# would produce different checksums than databases created on LF platforms.
+*.sql text eol=lf
