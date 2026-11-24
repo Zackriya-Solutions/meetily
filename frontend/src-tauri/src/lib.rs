@@ -960,6 +960,12 @@ pub fn run() {
                 tauri::RunEvent::Reopen { .. } => {
                     tray::focus_main_window(_app_handle);
                 }
+                tauri::RunEvent::ExitRequested { .. } => {
+                    // Mark quit so the main window's CloseRequested handler
+                    // (which normally prevents close to hide to the tray) lets
+                    // the exit-time window close through.
+                    tray::QUIT_REQUESTED.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
                 tauri::RunEvent::Exit => {
                     log::info!("Application exiting, cleaning up resources...");
                     tauri::async_runtime::block_on(async {
