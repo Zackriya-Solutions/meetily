@@ -1040,30 +1040,7 @@ pub async fn open_meeting_folder<R: Runtime>(
                     return Err(format!("Recording folder not found: {}", folder_path));
                 }
 
-                // Open folder based on OS
-                #[cfg(target_os = "macos")]
-                {
-                    std::process::Command::new("open")
-                        .arg(&folder_path)
-                        .spawn()
-                        .map_err(|e| format!("Failed to open folder: {}", e))?;
-                }
-
-                #[cfg(target_os = "windows")]
-                {
-                    std::process::Command::new("explorer")
-                        .arg(&folder_path)
-                        .spawn()
-                        .map_err(|e| format!("Failed to open folder: {}", e))?;
-                }
-
-                #[cfg(target_os = "linux")]
-                {
-                    std::process::Command::new("xdg-open")
-                        .arg(&folder_path)
-                        .spawn()
-                        .map_err(|e| format!("Failed to open folder: {}", e))?;
-                }
+                crate::utils::open_in_file_manager(&folder_path)?;
 
                 log_info!("Meeting folder opened; meeting_id={}", meeting_id);
                 Ok(())
