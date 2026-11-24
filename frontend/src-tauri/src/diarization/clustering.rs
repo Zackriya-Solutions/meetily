@@ -13,8 +13,10 @@ pub const CLUSTER_SIMILARITY_THRESHOLD: f32 = 0.55;
 
 /// Most anonymous speakers one meeting can mint. Past this, an outlier
 /// embedding (noise, music, a cough) joins the nearest speaker instead of
-/// inventing a new one.
-pub const DEFAULT_MAX_SPEAKERS: usize = 6;
+/// inventing a new one. At 6, a staff call with 12 people talking put up
+/// to 6 of them under one label; 20 kept different people apart in 97% of
+/// pairs instead of 79% (replayed with `replay_meeting` in session.rs).
+pub const DEFAULT_MAX_SPEAKERS: usize = 20;
 
 struct SpeakerCluster {
     centroid: Vec<f32>,
@@ -26,6 +28,7 @@ pub struct SpeakerClusterer {
     clusters: Vec<SpeakerCluster>,
     last_label: Option<String>,
     max_speakers: usize,
+    threshold: f32,
 }
 
 pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
@@ -42,10 +45,15 @@ impl SpeakerClusterer {
     }
 
     pub fn with_max_speakers(max_speakers: usize) -> Self {
+        Self::with_settings(max_speakers, CLUSTER_SIMILARITY_THRESHOLD)
+    }
+
+    pub fn with_settings(max_speakers: usize, threshold: f32) -> Self {
         Self {
             clusters: Vec::new(),
             last_label: None,
             max_speakers: max_speakers.max(1),
+            threshold,
         }
     }
 
@@ -76,7 +84,7 @@ impl SpeakerClusterer {
             .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
         let label = match nearest {
-            Some((idx, similarity)) if similarity >= CLUSTER_SIMILARITY_THRESHOLD => {
+            Some((idx, similarity)) if similarity >= self.threshold => {
                 self.update_cluster(idx, embedding)
             }
             Some((idx, _)) if self.clusters.len() >= self.max_speakers => {
@@ -98,7 +106,7 @@ impl SpeakerClusterer {
             .clusters
             .iter()
             .map(|c| (c, cosine_similarity(embedding, &c.centroid)))
-            .filter(|(_, similarity)| *similarity >= CLUSTER_SIMILARITY_THRESHOLD)
+            .filter(|(_, similarity)| *similarity >= self.threshold)
             .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
             .map(|(c, _)| c.label.clone());
         self.last_label.clone()

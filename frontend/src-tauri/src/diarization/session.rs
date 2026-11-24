@@ -316,6 +316,34 @@ impl LiveDiarization {
 mod tests {
     use super::*;
 
+    /// Replays a recorded meeting through the labeling, for tuning against
+    /// an answer key: `cargo test --lib replay_meeting -- --ignored`.
+    /// OMN_REPLAY_PCM: 16 kHz mono f32le; OMN_REPLAY_SEGMENTS: JSON
+    /// [[start_s, end_s], ...] in the order the app labeled them;
+    /// OMN_REPLAY_OUT: where the labels go; OMN_EMBED_MODEL: the CAM++ file;
+    /// OMN_MAX_SPEAKERS and OMN_THRESHOLD override the clustering settings.
+    #[test]
+    #[ignore]
+    fn replay_meeting() {
+        let var = |k: &str| std::env::var(k).unwrap_or_else(|_| panic!("{} not set", k));
+        let bytes = std::fs::read(var("OMN_REPLAY_PCM")).unwrap();
+        let pcm: Vec<f32> = bytes.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
+        let segments: Vec<(f64, f64)> = serde_json::from_str(&std::fs::read_to_string(var("OMN_REPLAY_SEGMENTS")).unwrap()).unwrap();
+        let max = std::env::var("OMN_MAX_SPEAKERS").ok().and_then(|v| v.parse().ok()).unwrap_or(super::super::clustering::DEFAULT_MAX_SPEAKERS);
+        let threshold = std::env::var("OMN_THRESHOLD").ok().and_then(|v| v.parse().ok()).unwrap_or(CLUSTER_SIMILARITY_THRESHOLD);
+        let mut session = DiarizationSession::new(Path::new(&var("OMN_EMBED_MODEL")), Vec::new()).unwrap();
+        session.clusterer = SpeakerClusterer::with_settings(max, threshold);
+        let labels: Vec<Option<String>> = segments
+            .iter()
+            .map(|&(start, end)| {
+                let a = ((start * 16_000.0) as usize).min(pcm.len());
+                let b = ((end * 16_000.0) as usize).min(pcm.len());
+                session.label_segment(&pcm[a..b])
+            })
+            .collect();
+        std::fs::write(var("OMN_REPLAY_OUT"), serde_json::to_string(&labels).unwrap()).unwrap();
+    }
+
     #[test]
     fn cuts_in_the_gap_between_words() {
         let mut samples = vec![0.5f32; 12_000];
