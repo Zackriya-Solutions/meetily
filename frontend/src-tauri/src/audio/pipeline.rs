@@ -429,6 +429,14 @@ impl AudioCapture {
         }
     }
 
+    /// Upstream's Linux capture passes its own sample clock. This mixer
+    /// aligns both sources on the recording clock instead, so the timestamp
+    /// is not used.
+    #[cfg(target_os = "linux")]
+    pub(super) fn process_audio_data_at(&self, data: &[f32], _timestamp: f64) {
+        self.process_audio_data(data);
+    }
+
     /// Process audio data directly from callback
     pub fn process_audio_data(&self, data: &[f32]) {
         // Check if still recording

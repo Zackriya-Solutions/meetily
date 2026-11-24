@@ -75,9 +75,6 @@ jobs:
           - platform: "macos-latest" # for Apple Silicon only (M1 and above)
             args: "--target aarch64-apple-darwin"
             target: "aarch64-apple-darwin"
-          - platform: "ubuntu-22.04"
-            args: "--bundles deb,appimage"
-            target: "x86_64-unknown-linux-gnu"
           - platform: "windows-latest"
             args: ""
             target: "x86_64-pc-windows-msvc"
@@ -127,7 +124,7 @@ jobs:
           from pathlib import Path
 
           root = Path('release-assets')
-          for pattern, signed in [('*aarch64.dmg', False), ('*aarch64.app.tar.gz', True), ('*64_en-US.msi', True), ('*-setup.exe', True), ('*.deb', True), ('*.AppImage', True)]:
+          for pattern, signed in [('*aarch64.dmg', False), ('*aarch64.app.tar.gz', True), ('*64_en-US.msi', True), ('*-setup.exe', True)]:
               matches = list(root.glob(pattern))
               if len(matches) != 1:
                   raise SystemExit(f'Expected exactly one {pattern}, found {len(matches)}')
@@ -145,8 +142,6 @@ jobs:
               ('windows-x86_64-nsis', '*-setup.exe'),
               ('windows-x86_64-msi', '*64_en-US.msi'),
               ('windows-x86_64', '*-setup.exe'),
-              ('linux-x86_64-deb', '*.deb'),
-              ('linux-x86_64-appimage', '*.AppImage'),
           ]:
               asset = next(root.glob(pattern))
               platforms[target] = {
@@ -216,7 +211,6 @@ jobs:
           echo "Uploaded assets (via tauri-action):"
           echo "  - macOS: DMG installer + app.tar.gz (for updater) + .sig"
           echo "  - Windows: MSI + NSIS installers (SIGNED via signCommand) + .sig files"
-          echo "  - Linux: DEB and AppImage packages + .sig files"
           echo "  - Updater manifest: latest.json (generated after validation)"
           echo ""
           echo "Next steps:"
@@ -238,7 +232,6 @@ jobs:
           echo "|----------|--------|" >> $GITHUB_STEP_SUMMARY
           echo "| **macOS** | DMG installer, app.tar.gz (updater), .sig |" >> $GITHUB_STEP_SUMMARY
           echo "| **Windows** | MSI installer (SIGNED), NSIS installer (SIGNED), .sig files |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Linux** | DEB, AppImage and signatures |" >> $GITHUB_STEP_SUMMARY
           echo "| **Updater** | latest.json manifest (generated after validation) |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Next Steps" >> $GITHUB_STEP_SUMMARY

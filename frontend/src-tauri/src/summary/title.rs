@@ -273,13 +273,13 @@ pub async fn generate_meeting_title<R: Runtime>(
         }
     };
     let Some(title) = clean_title(&raw) else {
-        warn!("Auto title for {meeting_id}: unusable model output {raw:?}");
+        warn!("Auto title for {meeting_id}: unusable model output ({} chars)", raw.chars().count());
         return;
     };
 
     match apply_title_if_default(&pool, &meeting_id, &title, replaceable.as_deref()).await {
         Ok(true) => {
-            info!("Auto title for {meeting_id}: {title}");
+            info!("Auto title saved for {meeting_id}");
             let _ = app.emit(
                 "meeting-title-generated",
                 MeetingTitleGenerated { meeting_id, title },
