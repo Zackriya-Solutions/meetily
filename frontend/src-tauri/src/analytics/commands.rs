@@ -8,10 +8,18 @@ static ANALYTICS_CLIENT: std::sync::Mutex<Option<Arc<AnalyticsClient>>> = std::s
 
 #[command]
 pub async fn init_analytics() -> Result<(), String> {
+    // Our own PostHog project, set at build time. A build without a key
+    // (local dev, forks) sends nothing; the upstream key is gone so events
+    // never reach Zackriya's project.
+    // CI defines both even when the secret or variable is missing, as "".
+    let api_key = option_env!("OMN_POSTHOG_KEY").unwrap_or_default();
+    let host = option_env!("OMN_POSTHOG_HOST")
+        .filter(|host| !host.is_empty())
+        .unwrap_or("https://us.i.posthog.com");
     let config = AnalyticsConfig {
-        api_key: "phc_ohznXPkRSJYWmrfez9mYxtXv5U5Nekq3iiUts87dJfcr".to_string(),
-        host: Some("https://us.i.posthog.com".to_string()),
-        enabled: true,
+        api_key: api_key.to_string(),
+        host: Some(host.to_string()),
+        enabled: !api_key.is_empty(),
     };
     
     let client = Arc::new(AnalyticsClient::new(config).await);

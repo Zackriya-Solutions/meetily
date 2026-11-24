@@ -85,7 +85,19 @@ pub struct AnalyticsClient {
 impl AnalyticsClient {
     pub async fn new(config: AnalyticsConfig) -> Self {
         let client = if config.enabled && !config.api_key.is_empty() {
-            Some(Arc::new(posthog_rs::client(config.api_key.as_str()).await))
+            let mut options = posthog_rs::ClientOptionsBuilder::default();
+            options.api_key(config.api_key.clone());
+            if let Some(host) = &config.host {
+                // posthog-rs takes the full capture URL, not the host.
+                options.api_endpoint(format!("{}/i/v0/e/", host.trim_end_matches('/')));
+            }
+            match options.build() {
+                Ok(options) => Some(Arc::new(posthog_rs::client(options).await)),
+                Err(e) => {
+                    log::warn!("Analytics disabled: invalid PostHog options: {}", e);
+                    None
+                }
+            }
         } else {
             None
         };
@@ -525,9 +537,14 @@ mod tests {
         let endpoint = format!("http://{}", listener.local_addr().unwrap());
         let capture_server = tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.unwrap();
-            let mut request = [0; 4096];
-            let bytes_read = stream.read(&mut request).await.unwrap();
-            assert!(String::from_utf8_lossy(&request[..bytes_read]).contains("session_ended"));
+            // The headers and the body can arrive in separate reads.
+            let mut request = Vec::new();
+            let mut buffer = [0; 4096];
+            while !String::from_utf8_lossy(&request).contains("session_ended") {
+                let bytes_read = stream.read(&mut buffer).await.unwrap();
+                assert!(bytes_read > 0, "request ended without a session_ended event");
+                request.extend_from_slice(&buffer[..bytes_read]);
+            }
             stream
                 .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
                 .await

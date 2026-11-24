@@ -417,6 +417,8 @@ jobs:
           # Tauri updater signing (ALWAYS enabled for .sig files)
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          OMN_POSTHOG_KEY: ${{ secrets.OMN_POSTHOG_KEY }}
+          OMN_POSTHOG_HOST: ${{ vars.OMN_POSTHOG_HOST }}
           # License validation RSA public key (embedded at build time)
           MEETILY_RSA_PUBLIC_KEY: ${{ secrets.MEETILY_RSA_PUBLIC_KEY }}
           # Supabase configuration (for online license verification)
@@ -435,6 +437,8 @@ jobs:
           # Tauri updater signing (ALWAYS enabled for .sig files)
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          OMN_POSTHOG_KEY: ${{ secrets.OMN_POSTHOG_KEY }}
+          OMN_POSTHOG_HOST: ${{ vars.OMN_POSTHOG_HOST }}
           # License validation RSA public key (embedded at build time)
           MEETILY_RSA_PUBLIC_KEY: ${{ secrets.MEETILY_RSA_PUBLIC_KEY }}
           # Supabase configuration (for online license verification)
