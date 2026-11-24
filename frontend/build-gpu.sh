@@ -149,10 +149,14 @@ if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "win32" ]]; then
     SIDECAR_BINARY="llama-helper-$TARGET_TRIPLE.exe"
 fi
 
-# The binary is in the workspace target directory, which is one level up from frontend
-# if we are in frontend dir.
+# The binary lands in the workspace target directory (one level up from frontend),
+# or in CARGO_TARGET_DIR when the caller overrides cargo's output location.
 WORKSPACE_ROOT="$FRONTEND_DIR/.."
-SRC_PATH="$WORKSPACE_ROOT/target/release/$BASE_BINARY"
+if [ -n "$CARGO_TARGET_DIR" ]; then
+    SRC_PATH="$CARGO_TARGET_DIR/release/$BASE_BINARY"
+else
+    SRC_PATH="$WORKSPACE_ROOT/target/release/$BASE_BINARY"
+fi
 DEST_PATH="$BINARIES_DIR/$SIDECAR_BINARY"
 
 if [ ! -f "$SRC_PATH" ]; then
