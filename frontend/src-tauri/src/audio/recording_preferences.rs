@@ -446,29 +446,7 @@ pub async fn open_recordings_folder<R: Runtime>(app: AppHandle<R>) -> Result<(),
 
     let folder_path = preferences.save_folder.to_string_lossy().to_string();
 
-    #[cfg(target_os = "windows")]
-    {
-        std::process::Command::new("explorer")
-            .arg(&folder_path)
-            .spawn()
-            .map_err(|e| format!("Failed to open folder: {}", e))?;
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open")
-            .arg(&folder_path)
-            .spawn()
-            .map_err(|e| format!("Failed to open folder: {}", e))?;
-    }
-
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    {
-        std::process::Command::new("xdg-open")
-            .arg(&folder_path)
-            .spawn()
-            .map_err(|e| format!("Failed to open folder: {}", e))?;
-    }
+    crate::utils::open_in_file_manager(&folder_path)?;
 
     info!("Opened recordings folder: {}", folder_path);
     Ok(())

@@ -125,10 +125,37 @@ pub async fn open_system_settings(preference_pane: String) -> Result<(), String>
     let url = format!("x-apple.systempreferences:com.apple.preference.security?{}", preference_pane);
 
     // Use the 'open' command on macOS to open the URL
-    Command::new("open")
-        .arg(&url)
-        .spawn()
+    let mut command = Command::new("open");
+    command.arg(&url);
+    spawn_and_reap(&mut command)
         .map_err(|e| format!("Failed to open system settings: {}", e))?;
 
     Ok(())
 } 
+/// Spawn a child process and reap it on a background thread.
+///
+/// `std::process::Child` is not reaped on drop, so fire-and-forget
+/// `spawn()` calls leave a `<defunct>` zombie per invocation on
+/// macOS/Linux. Waiting on a thread collects the exit status as soon as
+/// the (usually short-lived) child exits.
+pub fn spawn_and_reap(command: &mut std::process::Command) -> std::io::Result<()> {
+    let mut child = command.spawn()?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+const FILE_MANAGER_PROGRAM: &str = "explorer";
+#[cfg(target_os = "macos")]
+const FILE_MANAGER_PROGRAM: &str = "open";
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+const FILE_MANAGER_PROGRAM: &str = "xdg-open";
+
+/// Open `path` in the OS file manager, reaping the launcher process.
+pub fn open_in_file_manager(path: &str) -> Result<(), String> {
+    let mut command = std::process::Command::new(FILE_MANAGER_PROGRAM);
+    command.arg(path);
+    spawn_and_reap(&mut command).map_err(|e| format!("Failed to open folder: {}", e))
+}

@@ -342,7 +342,6 @@ fn convert_to_wav_with_ffmpeg(
 
     debug!("FFmpeg conversion command: {:?}", command);
 
-    #[allow(clippy::zombie_processes)]
     let child = command
         .spawn()
         .map_err(|e| anyhow!("Failed to spawn ffmpeg process: {}", e))?;

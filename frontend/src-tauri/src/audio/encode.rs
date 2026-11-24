@@ -70,12 +70,17 @@ pub fn encode_single_audio(
 
     debug!("FFmpeg command: {:?}", command);
 
-    #[allow(clippy::zombie_processes)]
     let mut ffmpeg = command.spawn().expect("Failed to spawn FFmpeg process");
     debug!("FFmpeg process spawned");
     let mut stdin = ffmpeg.stdin.take().expect("Failed to open stdin");
 
-    stdin.write_all(data)?;
+    if let Err(e) = stdin.write_all(data) {
+        // Returning early here without wait() would leave a zombie child.
+        drop(stdin);
+        let _ = ffmpeg.kill();
+        let _ = ffmpeg.wait();
+        return Err(e.into());
+    }
 
     debug!("Dropping stdin");
     drop(stdin);
