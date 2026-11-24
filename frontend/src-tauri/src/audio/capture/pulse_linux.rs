@@ -168,7 +168,7 @@ impl PulseCapture {
         if self.should_stop.load(Ordering::Acquire) { return Ok(()); }
         // Declaration order ensures stream/context are dropped before mainloop.
         let mut mainloop = Mainloop::new().ok_or_else(|| anyhow!("Cannot create audio mainloop"))?;
-        let mut context = Context::new(&mainloop, "Meetily").ok_or_else(|| anyhow!("Cannot create audio context"))?;
+        let mut context = Context::new(&mainloop, "Open Meeting Notes").ok_or_else(|| anyhow!("Cannot create audio context"))?;
         context.connect(None, ContextFlags::NOAUTOSPAWN, None)
             .map_err(|e| anyhow!("{} ({})", SERVER_UNAVAILABLE, e))?;
         let deadline = Instant::now() + Duration::from_secs(5);

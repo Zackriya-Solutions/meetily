@@ -24,7 +24,7 @@ pub fn create_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 
     TrayIconBuilder::with_id("main-tray")
         .menu(&menu)
-        .tooltip("Meetily")
+        .tooltip("Open Meeting Notes")
         .icon(app.default_window_icon().unwrap().clone())
         .on_menu_event(|app, event| handle_menu_event(app, event.id.as_ref()))
         .build(app)?;

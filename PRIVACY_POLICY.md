@@ -1,10 +1,10 @@
-# Meetily Privacy Policy
+# Open Meeting Notes Privacy Policy
 
-*Last updated: [Current Date]*
+*Last updated: 2026-11-24*
 
 ## Our Privacy-First Commitment
 
-Meetily is built on the principle that your meeting data should remain private and under your control. This privacy policy explains how we handle data in our open-source meeting assistant.
+Open Meeting Notes is built on the principle that your meeting data should remain private and under your control. This privacy policy explains how we handle data in our open-source meeting assistant.
 
 ## Data Processing Philosophy
 
@@ -14,7 +14,7 @@ Meetily is built on the principle that your meeting data should remain private a
 - **Meeting content**: Remains on your infrastructure
 - **AI summaries**: Generated locally or through your chosen LLM provider
 
-Official builds may fetch seasonal assets from meetily.ai.
+Open Meeting Notes builds do not fetch seasonal assets or anything else from Meetily or Zackriya servers.
 
 ### Your Data Ownership
 - You own all meeting data, transcripts, and recordings
@@ -25,7 +25,7 @@ Official builds may fetch seasonal assets from meetily.ai.
 ## Usage Analytics
 
 ### What We Collect
-Usage analytics is optional and off by default. When you choose to enable it, Meetily collects minimal, anonymized usage data:
+Usage analytics is optional and off by default. When you choose to enable it, Open Meeting Notes collects minimal, anonymized usage data:
 
 **Application Usage:**
 - Feature usage patterns (which tools you use most)
@@ -62,7 +62,7 @@ When enabled, analytics helps us with:
 - **Data retention**: 12 months maximum, then automatically deleted
 - **Encryption**: All data encrypted in transit using industry-standard protocols
 - **Location**: Data processed in accordance with PostHog's privacy policy
-- **Access Control**: Strictly limited to core development team members
+- **Access Control**: The PostHog project belongs to the Open Meeting Notes maintainer; builds made without a project key send no analytics at all
 
 ## Third-Party Services
 
@@ -114,9 +114,7 @@ We will notify users of any material changes to this privacy policy through:
 ## Contact Us
 
 For privacy-related questions or concerns:
-- **GitHub Issues**: [Create an issue](https://github.com/Zackriya-Solutions/meeting-minutes/issues)
-- **Email**: [Contact form](https://www.zackriya.com/service-interest-form/)
-- **Community**: [Discord](https://discord.gg/crRymMQBFH)
+- **GitHub Issues**: [Create an issue](https://github.com/MashdorDev/open-meeting-notes/issues)
 
 ## Open Source Commitment
 
@@ -128,4 +126,4 @@ As an open-source project under MIT license, you can:
 
 ---
 
-*This privacy policy applies to Meetily v0.0.5 and later versions. For enterprise deployments, additional privacy controls may be available.*
+*This privacy policy applies to Open Meeting Notes 0.5.0 and later. Open Meeting Notes is based on Meetily by Zackriya Solutions (MIT license).*

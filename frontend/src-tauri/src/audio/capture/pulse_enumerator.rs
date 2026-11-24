@@ -256,7 +256,7 @@ fn connect() -> Result<(Mainloop, Context)> {
 
     let proplist =
         Proplist::new().ok_or_else(|| anyhow!("Failed to create PulseAudio proplist"))?;
-    let mut context = Context::new_with_proplist(&mainloop, "Meetily", &proplist)
+    let mut context = Context::new_with_proplist(&mainloop, "Open Meeting Notes", &proplist)
         .ok_or_else(|| anyhow!("Failed to create PulseAudio context"))?;
 
     context

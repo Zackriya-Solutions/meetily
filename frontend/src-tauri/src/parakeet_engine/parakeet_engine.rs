@@ -855,7 +855,7 @@ impl ParakeetEngine {
             .map_err(|error| anyhow!("Failed to create model directory: {}", error))?;
 
         let client = reqwest::Client::builder()
-            .user_agent(concat!("Meetily/", env!("CARGO_PKG_VERSION")))
+            .user_agent(concat!("OpenMeetingNotes/", env!("CARGO_PKG_VERSION")))
             .tcp_nodelay(true)
             .pool_max_idle_per_host(1)
             .timeout(Duration::from_secs(3600))
@@ -1301,10 +1301,10 @@ mod tests {
                 let request = read_request(&mut socket).await;
                 assert!(
                     request.to_ascii_lowercase().contains(&format!(
-                        "user-agent: meetily/{}",
+                        "user-agent: openmeetingnotes/{}",
                         env!("CARGO_PKG_VERSION")
                     )),
-                    "download request is missing the Meetily user agent: {request}"
+                    "download request is missing the Open Meeting Notes user agent: {request}"
                 );
                 assert!(
                     request.starts_with(&format!("GET /{} HTTP/", expected.filename)),

@@ -145,6 +145,10 @@
     height: 100%;
   }
 
+  h1, h2, h3 {
+    @apply font-heading;
+  }
+
   /* Make the window draggable */
   .titlebar {
     -webkit-app-region: drag;

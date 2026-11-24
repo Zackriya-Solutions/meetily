@@ -593,10 +593,10 @@ pub fn run() {
             match split_startup_logger(_app.handle(), app_data_dir, verbose) {
                 Ok(((level, logger), persistent)) => {
                     if tauri_plugin_log::attach_logger(level, logger).is_err() || !persistent {
-                        eprintln!("Meetily logging is unavailable or degraded.");
+                        eprintln!("Open Meeting Notes logging is unavailable or degraded.");
                     }
                 }
-                Err(_) => eprintln!("Meetily logging is unavailable or degraded."),
+                Err(_) => eprintln!("Open Meeting Notes logging is unavailable or degraded."),
             }
 
             log::info!("Starting application...");

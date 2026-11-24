@@ -46,7 +46,7 @@ export function SetupOverviewStep() {
   return (
     <OnboardingContainer
       title="Setup Overview"
-      description="Meetily requires that you download the Transcription & Summarization AI models for the software to work."
+      description="Open Meeting Notes requires that you download the Transcription & Summarization AI models for the software to work."
       step={2}
       totalSteps={isMac ? 4 : 3}
     >
@@ -98,7 +98,7 @@ export function SetupOverviewStep() {
           </Button>
           <div className="text-center">
             <a
-              href="https://github.com/Zackriya-Solutions/meeting-minutes"
+              href="https://github.com/MashdorDev/open-meeting-notes"
               target="_blank"
               rel="noopener noreferrer"
               className="text-xs text-gray-600 hover:underline"

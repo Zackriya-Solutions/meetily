@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 240 240">
+  <title>Open Meeting Notes</title>
+  <rect width="240" height="240" rx="56" fill="#111827"/>
+  <path d="M40 66 a20 20 0 0 1 20 -20 h72 a20 20 0 0 1 20 20 v44 a20 20 0 0 1 -20 20 h-52 l-22 20 v-20 h-6 a12 12 0 0 1 -12 -12 z" fill="#FBBF24"/>
+  <rect x="62" y="74" width="10" height="28" rx="5" fill="#111827"/>
+  <rect x="78" y="64" width="10" height="48" rx="5" fill="#111827"/>
+  <rect x="94" y="70" width="10" height="36" rx="5" fill="#111827"/>
+  <rect x="110" y="78" width="10" height="20" rx="5" fill="#111827"/>
+  <path d="M200 120 a20 20 0 0 0 -20 -20 h-72 a20 20 0 0 0 -20 20 v44 a20 20 0 0 0 20 20 h52 l22 20 v-20 h6 a12 12 0 0 0 12 -12 z" fill="#FFFFFF"/>
+  <rect x="108" y="122" width="64" height="10" rx="5" fill="#111827"/>
+  <rect x="108" y="140" width="48" height="10" rx="5" fill="#111827"/>
+  <rect x="108" y="158" width="56" height="10" rx="5" fill="#9CA3AF"/>
+</svg>

@@ -1,7 +1,7 @@
 'use client'
 
 import './globals.css'
-import { Source_Sans_3 } from 'next/font/google'
+import { Bricolage_Grotesque, Figtree } from 'next/font/google'
 import Sidebar from '@/components/Sidebar'
 import { SidebarProvider } from '@/components/Sidebar/SidebarProvider'
 import MainContent from '@/components/MainContent'
@@ -27,10 +27,17 @@ import { ImportDialogProvider } from '@/contexts/ImportDialogContext'
 import { isAudioExtension, getAudioFormatsDisplayList } from '@/constants/audioFormats'
 
 
-const sourceSans3 = Source_Sans_3({
+// Both SIL Open Font License. next/font bundles them at build time, so the
+// app makes no font requests at runtime.
+const figtree = Figtree({
   subsets: ['latin'],
   weight: ['400', '500', '600', '700'],
-  variable: '--font-source-sans-3',
+  variable: '--font-figtree',
+})
+const bricolage = Bricolage_Grotesque({
+  subsets: ['latin'],
+  weight: ['600', '700'],
+  variable: '--font-bricolage',
 })
 
 // Module-level component — stable reference across RootLayout re-renders.
@@ -232,7 +239,7 @@ export default function RootLayout({
 
   return (
     <html lang="en">
-      <body className={`${sourceSans3.variable} font-sans antialiased`}>
+      <body className={`${figtree.variable} ${bricolage.variable} font-sans antialiased`}>
         <AnalyticsProvider>
           <RecordingStateProvider>
             <TranscriptProvider>

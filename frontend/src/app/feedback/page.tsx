@@ -5,36 +5,13 @@ import { useRouter } from 'next/navigation';
 import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
 
-const cards = [
+type FeedbackLink = { label: string; url: string; icon?: string };
+
+const cards: { title: string; description: string; links: FeedbackLink[] }[] = [
   {
     title: 'Report a bug or suggest a feature',
-    description: 'Report a bug or suggest a feature on GitHub. Your feedback helps shape Meetily.',
-    links: [{ label: 'Open GitHub issues', url: 'https://github.com/Zackriya-Solutions/meetily/issues/new/choose' }],
-  },
-  {
-    title: 'Join us on Discord',
-    description: 'Ask questions, get help, and share ideas with people using and building Meetily.',
-    links: [{ label: 'Join the server', url: 'https://discord.gg/crRymMQBFH' }],
-  },
-  {
-    title: 'Find us on socials',
-    description: 'Follow Meetily for product updates and conversations with the community.',
-    links: [
-      { label: 'X', url: 'https://x.com/meetilyai/', icon: 'x' },
-      { label: 'Reddit', url: 'https://www.reddit.com/r/meetily/', icon: 'reddit' },
-      { label: 'LinkedIn', url: 'https://www.linkedin.com/company/106363062/', icon: 'linkedin' },
-      { label: 'YouTube', url: 'https://www.youtube.com/@meetily', icon: 'youtube' },
-    ],
-  },
-  {
-    title: 'Evaluating Meetily for your team?',
-    description: 'Explore deployment and support options for using Meetily across your organization.',
-    links: [{ label: 'Explore team options', url: 'https://meetily.ai/enterprise?utm_source=open-source' }],
-  },
-  {
-    title: 'Need more from Meetily?',
-    description: 'Get speaker identification, automatic meeting detection, and API, CLI, and MCP access with Meetily PRO.',
-    links: [{ label: 'Explore PRO', url: 'https://meetily.ai/pro?utm_source=open-source' }],
+    description: 'Open an issue on GitHub with what happened and what you expected.',
+    links: [{ label: 'Open GitHub issues', url: 'https://github.com/MashdorDev/open-meeting-notes/issues/new' }],
   },
 ];
 
@@ -76,9 +53,9 @@ export default function FeedbackPage() {
                     onClick={() => void openExternalLink(link.url)}
                     aria-label={`${link.label}`}
                     title={`${link.label}`}
-                    className={`inline-flex min-h-11 items-center justify-center gap-1 rounded text-sm font-semibold text-gray-700 transition-colors hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 ${'icon' in link ? 'min-w-11' : ''}`}
+                    className={`inline-flex min-h-11 items-center justify-center gap-1 rounded text-sm font-semibold text-gray-700 transition-colors hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 ${link.icon ? 'min-w-11' : ''}`}
                   >
-                    {'icon' in link ? (
+                    {link.icon ? (
                       <svg aria-hidden="true" focusable="false" className="h-5 w-5">
                         <use href={`/social-icons.svg#${link.icon}`} />
                       </svg>
