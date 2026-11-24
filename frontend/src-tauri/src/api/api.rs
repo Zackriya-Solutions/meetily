@@ -1198,7 +1198,7 @@ pub async fn get_speaker_accuracy(
     let mut guesses: HashMap<String, HashMap<String, String>> = HashMap::new();
     for (meeting_id, ..) in &rows {
         if !guesses.contains_key(meeting_id) {
-            let found = meeting_speaker_guesses(state.db_manager.pool(), meeting_id).await;
+            let found = meeting_speaker_guesses(state.db_manager.pool(), meeting_id, true).await;
             guesses.insert(meeting_id.clone(), found);
         }
     }
@@ -1214,17 +1214,16 @@ pub async fn get_speaker_accuracy(
 
 /// The names the app guessed for a meeting's voices, by label, from the
 /// voiceprints saved with it. Empty when it has none or they can't be read.
-async fn meeting_speaker_guesses(pool: &sqlx::SqlitePool, meeting_id: &str) -> HashMap<String, String> {
-    let folder: Option<String> = sqlx::query_scalar("SELECT folder_path FROM meetings WHERE id = ?")
-        .bind(meeting_id)
-        .fetch_optional(pool)
-        .await
-        .ok()
-        .flatten()
-        .flatten();
-    let Some(folder) = folder else { return HashMap::new() };
-    match crate::diarization::voiceprints::read_voiceprints(std::path::Path::new(&folder)) {
-        Ok(voices) => voices.into_iter().filter_map(|v| Some((v.label, v.name?))).collect(),
+/// With `with_dismissed`, guesses Dor rejected are included too (for the
+/// accuracy score, which counts them as wrong).
+async fn meeting_speaker_guesses(pool: &sqlx::SqlitePool, meeting_id: &str, with_dismissed: bool) -> HashMap<String, String> {
+    let Some(folder) = meeting_folder(pool, meeting_id).await else { return HashMap::new() };
+    match crate::diarization::voiceprints::read_voiceprints(&folder) {
+        Ok(voices) => voices
+            .into_iter()
+            .filter(|v| with_dismissed || !v.dismissed)
+            .filter_map(|v| Some((v.label, v.name?)))
+            .collect(),
         Err(e) => {
             log_warn!("Speaker guesses not read: {}", e);
             HashMap::new()
@@ -1246,7 +1245,101 @@ pub async fn get_meeting_speaker_guesses(
     state: tauri::State<'_, AppState>,
     meeting_id: String,
 ) -> Result<HashMap<String, String>, String> {
-    Ok(meeting_speaker_guesses(state.db_manager.pool(), &meeting_id).await)
+    let pool = state.db_manager.pool();
+    let mut guesses = meeting_speaker_guesses(pool, &meeting_id, false).await;
+    // A voice already named (on any line, loaded or not) needs no guess.
+    let named: Vec<String> = sqlx::query_scalar(
+        "SELECT DISTINCT speaker_label FROM transcripts
+         WHERE meeting_id = ? AND speaker_label IS NOT NULL AND speaker_name IS NOT NULL
+           AND COALESCE(speaker_name_pinned, 0) = 0",
+    )
+    .bind(&meeting_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Database error: {}", e))?;
+    for label in named {
+        guesses.remove(&label);
+    }
+    Ok(guesses)
+}
+
+async fn meeting_folder(pool: &sqlx::SqlitePool, meeting_id: &str) -> Option<std::path::PathBuf> {
+    sqlx::query_scalar::<_, Option<String>>("SELECT folder_path FROM meetings WHERE id = ?")
+        .bind(meeting_id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+        .flatten()
+        .map(std::path::PathBuf::from)
+}
+
+/// Marks the name guessed for a voice as wrong, so it is no longer shown.
+#[tauri::command]
+pub async fn dismiss_speaker_guess(
+    state: tauri::State<'_, AppState>,
+    meeting_id: String,
+    speaker_label: String,
+) -> Result<(), String> {
+    use crate::diarization::voiceprints::{read_voiceprints, write_voiceprints};
+    let folder = meeting_folder(state.db_manager.pool(), &meeting_id)
+        .await
+        .ok_or("This meeting has no recording folder")?;
+    let mut voices = read_voiceprints(&folder).map_err(|e| format!("Voices not read: {}", e))?;
+    let voice = voices
+        .iter_mut()
+        .find(|v| v.label == speaker_label)
+        .ok_or_else(|| format!("No voice {} in this meeting", speaker_label))?;
+    voice.dismissed = true;
+    write_voiceprints(&folder, &voices).map_err(|e| format!("Voices not saved: {}", e))
+}
+
+/// Gives the guessed name to the lines of each listed voice (the ones Dor
+/// saw offered) that no unpinned line has named yet. Pinned lines keep
+/// their own names. Returns the changed line ids by name.
+#[tauri::command]
+pub async fn confirm_speaker_guesses(
+    state: tauri::State<'_, AppState>,
+    meeting_id: String,
+    speaker_labels: Vec<String>,
+) -> Result<HashMap<String, Vec<String>>, String> {
+    confirm_guesses(state.db_manager.pool(), &meeting_id, &speaker_labels).await
+}
+
+async fn confirm_guesses(
+    pool: &sqlx::SqlitePool,
+    meeting_id: &str,
+    labels: &[String],
+) -> Result<HashMap<String, Vec<String>>, String> {
+    let meeting_id = meeting_id.to_string();
+    let mut changed: HashMap<String, Vec<String>> = HashMap::new();
+    let guesses = meeting_speaker_guesses(pool, &meeting_id, false).await;
+    for (label, name) in guesses.into_iter().filter(|(l, _)| labels.contains(l)) {
+        let ids: Vec<String> = sqlx::query_scalar(
+            "UPDATE transcripts SET speaker_name = ?
+             WHERE meeting_id = ? AND speaker_label = ? AND COALESCE(speaker_name_pinned, 0) = 0
+               AND NOT EXISTS (SELECT 1 FROM transcripts t
+                               WHERE t.meeting_id = ? AND t.speaker_label = ? AND t.speaker_name IS NOT NULL
+                                 AND COALESCE(t.speaker_name_pinned, 0) = 0)
+             RETURNING id",
+        )
+        .bind(&name)
+        .bind(&meeting_id)
+        .bind(&label)
+        .bind(&meeting_id)
+        .bind(&label)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| format!("Database error: {}", e))?;
+        if ids.is_empty() {
+            continue;
+        }
+        if let Err(e) = sync_voice_sample(pool, &meeting_id, &label).await {
+            log_warn!("Speaker named, but its voice was not kept: {}", e);
+        }
+        changed.entry(name).or_default().extend(ids);
+    }
+    Ok(changed)
 }
 
 /// Path of the meeting's recorded audio, or None when nothing was saved
@@ -1712,6 +1805,77 @@ mod tests {
     use crate::diarization::voiceprints::{write_voiceprints, Voiceprint};
 
     #[tokio::test]
+    async fn confirming_names_only_voices_nobody_named_and_skips_dismissed_guesses() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        crate::database::manager::ensure_voice_samples_table(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE meetings (id TEXT PRIMARY KEY, folder_path TEXT)").execute(&pool).await.unwrap();
+        sqlx::query(
+            "CREATE TABLE transcripts (id TEXT PRIMARY KEY, meeting_id TEXT, speaker_label TEXT,
+             speaker_name TEXT, speaker_name_pinned INTEGER)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        // Speaker 1 is unnamed, Speaker 2 is already named, Speaker 3's guess
+        // was dismissed, Speaker 4 has only one line named on its own, and
+        // Speaker 5 was not offered to Dor.
+        sqlx::query(
+            "INSERT INTO transcripts VALUES ('a', 'm1', 'Speaker 1', NULL, NULL), ('b', 'm1', 'Speaker 1', NULL, NULL),
+             ('c', 'm1', 'Speaker 2', 'Bob', NULL), ('d', 'm1', 'Speaker 2', NULL, NULL), ('e', 'm1', 'Speaker 3', NULL, NULL),
+             ('f', 'm1', 'Speaker 4', 'Pat', 1), ('g', 'm1', 'Speaker 4', NULL, NULL), ('h', 'm1', 'Speaker 5', NULL, NULL)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        let voice = |label: &str, name: &str, dismissed| Voiceprint {
+            label: label.into(), segments: 5, embedding: vec![0.6, 0.8], name: Some(name.into()), dismissed,
+        };
+        write_voiceprints(
+            folder.path(),
+            &[
+                voice("Speaker 1", "Alex", false),
+                voice("Speaker 2", "Dana", false),
+                voice("Speaker 3", "Sam", true),
+                voice("Speaker 4", "Kim", false),
+                voice("Speaker 5", "Lee", false),
+            ],
+        )
+        .unwrap();
+        sqlx::query("INSERT INTO meetings VALUES ('m1', ?)")
+            .bind(folder.path().to_string_lossy().to_string())
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let offered: Vec<String> = ["Speaker 1", "Speaker 2", "Speaker 3", "Speaker 4"].map(String::from).to_vec();
+        let mut changed = confirm_guesses(&pool, "m1", &offered).await.unwrap();
+        changed.values_mut().for_each(|ids| ids.sort());
+        assert_eq!(
+            changed,
+            HashMap::from([
+                ("Alex".to_string(), vec!["a".to_string(), "b".to_string()]),
+                ("Kim".to_string(), vec!["g".to_string()]),
+            ])
+        );
+        let names: Vec<(String, Option<String>)> =
+            sqlx::query_as("SELECT id, speaker_name FROM transcripts ORDER BY id").fetch_all(&pool).await.unwrap();
+        assert_eq!(names[3], ("d".to_string(), None));
+        assert_eq!(names[4], ("e".to_string(), None));
+        assert_eq!(names[5], ("f".to_string(), Some("Pat".to_string())));
+        assert_eq!(names[7], ("h".to_string(), None));
+        let kept: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM voice_samples ORDER BY name").fetch_all(&pool).await.unwrap();
+        assert_eq!(kept, vec!["Alex".to_string(), "Kim".to_string()]);
+        assert_eq!(meeting_speaker_guesses(&pool, "m1", true).await.len(), 5);
+        assert_eq!(meeting_speaker_guesses(&pool, "m1", false).await.len(), 4);
+    }
+
+    #[tokio::test]
     async fn a_voice_is_kept_only_while_its_lines_carry_one_name() {
         let pool = sqlx::sqlite::SqlitePoolOptions::new()
             .max_connections(1)
@@ -1737,7 +1901,7 @@ mod tests {
         let folder = tempfile::tempdir().unwrap();
         write_voiceprints(
             folder.path(),
-            &[Voiceprint { label: "Speaker 2".into(), segments: 7, embedding: vec![0.6, 0.8], name: None }],
+            &[Voiceprint { label: "Speaker 2".into(), segments: 7, embedding: vec![0.6, 0.8], name: None, dismissed: false }],
         )
         .unwrap();
         sqlx::query("INSERT INTO meetings VALUES ('m1', ?), ('m2', NULL)")

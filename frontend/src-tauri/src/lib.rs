@@ -864,6 +864,8 @@ pub fn run() {
             api::name_meeting_speaker,
             api::set_transcript_speaker_name,
             api::get_meeting_speaker_guesses,
+            api::dismiss_speaker_guess,
+            api::confirm_speaker_guesses,
             api::get_live_speaker_guesses,
             api::get_speaker_accuracy,
             api::test_backend_connection,

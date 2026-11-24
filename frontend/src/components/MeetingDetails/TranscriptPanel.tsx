@@ -10,6 +10,8 @@ import { SpeakerNameEditor } from './SpeakerNameEditor';
 import { SpeakerAccuracy } from './SpeakerAccuracy';
 import { useEffect, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { toast } from 'sonner';
+import { Button } from '@/components/ui/button';
 
 interface TranscriptPanelProps {
   transcripts: Transcript[];
@@ -66,18 +68,19 @@ export function TranscriptPanel({
   onSpeakerNamesChanged,
 }: TranscriptPanelProps) {
   const [speakerToName, setSpeakerToName] = useState<TranscriptSegmentData | null>(null);
-  const [namesSaved, setNamesSaved] = useState(0);
   // Names recognized from earlier meetings, by voice label.
   const [speakerGuesses, setSpeakerGuesses] = useState<Record<string, string>>({});
+  const [namesSaved, setNamesSaved] = useState(0);
+  useEffect(() => setSpeakerGuesses({}), [meetingId]);
+  // Refetched after each save: the backend drops voices that now have a name.
   useEffect(() => {
-    setSpeakerGuesses({});
     if (!meetingId) return;
     let current = true;
     invoke<Record<string, string>>('get_meeting_speaker_guesses', { meetingId })
       .then(guesses => { if (current) setSpeakerGuesses(guesses); })
       .catch(error => console.error('Failed to load speaker guesses:', error));
     return () => { current = false; };
-  }, [meetingId]);
+  }, [meetingId, namesSaved]);
   // Convert transcripts to segments if pagination is not used but we want virtualization
   const convertedSegments = useMemo(() => {
     if (usePagination && segments) {
@@ -96,6 +99,32 @@ export function TranscriptPanel({
     }));
   }, [transcripts, usePagination, segments]);
 
+  // Guesses for unnamed voices on the loaded pages, so Dor can check them
+  // before confirming; confirm touches only these.
+  const pendingGuesses = useMemo(() => {
+    const heard = new Set(convertedSegments.map(s => s.speakerLabel));
+    return Object.entries(speakerGuesses).filter(([label]) => heard.has(label));
+  }, [convertedSegments, speakerGuesses]);
+  const [confirming, setConfirming] = useState(false);
+  const confirmGuesses = async () => {
+    if (!meetingId) return;
+    setConfirming(true);
+    try {
+      const changed = await invoke<Record<string, string[]>>('confirm_speaker_guesses', {
+        meetingId,
+        speakerLabels: pendingGuesses.map(([label]) => label),
+      });
+      if (onSpeakerNamesChanged) Object.entries(changed).forEach(([name, ids]) => onSpeakerNamesChanged(ids, name));
+      else await onRefetchTranscripts?.();
+      setNamesSaved(n => n + 1);
+    } catch (error) {
+      console.error('Failed to confirm speaker names:', error);
+      toast.error(`Could not save the names: ${String(error)}`);
+    } finally {
+      setConfirming(false);
+    }
+  };
+
   return (
     <div className="flex h-full min-w-0 w-full bg-white flex-col relative @container">
       {/* Title area */}
@@ -111,6 +140,16 @@ export function TranscriptPanel({
         {meetingId && !isRecording && <MeetingAudioPlayer meetingId={meetingId} />}
         {onSaveOtherSpeakerNames && convertedSegments.some(s => s.speaker === 'system') && (
           <OtherSpeakerName names={otherSpeakerNames ?? []} onSave={onSaveOtherSpeakerNames} />
+        )}
+        {meetingId && !isRecording && pendingGuesses.length > 0 && (
+          <div className="mt-2 flex items-center justify-between gap-2 rounded-md bg-blue-50 px-3 py-2 text-sm text-blue-900">
+            <span>
+              {`Recognized from earlier meetings: ${pendingGuesses.map(([label, name]) => `${name} (${label})`).join(', ')}.`}
+            </span>
+            <Button size="sm" disabled={confirming} onClick={() => void confirmGuesses()}>
+              {pendingGuesses.length === 1 ? 'Confirm name' : 'Confirm names'}
+            </Button>
+          </div>
         )}
         {meetingId && !isRecording && <SpeakerAccuracy meetingId={meetingId} refreshKey={namesSaved} />}
       </div>
@@ -150,6 +189,7 @@ export function TranscriptPanel({
             else await onRefetchTranscripts?.();
             setNamesSaved(n => n + 1);
           }}
+          onGuessDismissed={label => setSpeakerGuesses(({ [label]: _, ...rest }) => rest)}
         />
       )}
 

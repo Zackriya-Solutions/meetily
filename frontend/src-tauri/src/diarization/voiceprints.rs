@@ -25,6 +25,10 @@ pub struct Voiceprint {
     /// The person this voice sounds like, when it matched a profile.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Dor said the guessed name is wrong: it is no longer shown, but the
+    /// accuracy score still counts it as a wrong guess.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub dismissed: bool,
 }
 
 /// One person's voice: the segment-weighted mean of their samples,
@@ -133,13 +137,13 @@ mod tests {
     fn round_trips_through_the_meeting_folder() {
         let folder = tempfile::tempdir().unwrap();
         assert!(read_voiceprints(folder.path()).unwrap().is_empty());
-        let prints = vec![Voiceprint { label: "Speaker 1".into(), segments: 4, embedding: vec![0.6, 0.8], name: Some("Alex".into()) }];
+        let prints = vec![Voiceprint { label: "Speaker 1".into(), segments: 4, embedding: vec![0.6, 0.8], name: Some("Alex".into()), dismissed: true }];
         write_voiceprints(folder.path(), &prints).unwrap();
         assert_eq!(read_voiceprints(folder.path()).unwrap(), prints);
     }
 
     fn voice(label: &str, segments: usize, embedding: Vec<f32>) -> Voiceprint {
-        Voiceprint { label: label.into(), segments, embedding, name: None }
+        Voiceprint { label: label.into(), segments, embedding, name: None, dismissed: false }
     }
 
     fn profile(name: &str, embedding: Vec<f32>) -> VoiceProfile {

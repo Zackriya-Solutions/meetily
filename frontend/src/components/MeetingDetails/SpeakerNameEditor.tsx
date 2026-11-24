@@ -18,6 +18,8 @@ interface SpeakerNameEditorProps {
   onClose: () => void;
   /** The ids of the lines whose name changed, and the new name. */
   onSaved: (transcriptIds: string[], name: string | null) => Promise<void> | void;
+  /** The guess for this voice was marked wrong. */
+  onGuessDismissed: (speakerLabel: string) => void;
 }
 
 /**
@@ -25,7 +27,7 @@ interface SpeakerNameEditorProps {
  * meeting, or for this line alone when the voice was mixed up. The names are
  * kept next to the automatic labels, so the speaker accuracy can be measured.
  */
-export function SpeakerNameEditor({ meetingId, segment, guess, suggestions, onClose, onSaved }: SpeakerNameEditorProps) {
+export function SpeakerNameEditor({ meetingId, segment, guess, suggestions, onClose, onSaved, onGuessDismissed }: SpeakerNameEditorProps) {
   const [name, setName] = useState('');
   const [saving, setSaving] = useState(false);
 
@@ -49,6 +51,21 @@ export function SpeakerNameEditor({ meetingId, segment, guess, suggestions, onCl
     } catch (error) {
       console.error('Failed to save speaker name:', error);
       toast.error(`Could not save the name: ${String(error)}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const dismissGuess = async () => {
+    if (!segment?.speakerLabel) return;
+    setSaving(true);
+    try {
+      await invoke('dismiss_speaker_guess', { meetingId, speakerLabel: segment.speakerLabel });
+      onGuessDismissed(segment.speakerLabel);
+      onClose();
+    } catch (error) {
+      console.error('Failed to dismiss speaker guess:', error);
+      toast.error(`Could not remove the name: ${String(error)}`);
     } finally {
       setSaving(false);
     }
@@ -104,6 +121,10 @@ export function SpeakerNameEditor({ meetingId, segment, guess, suggestions, onCl
           {segment?.speakerName ? (
             <Button variant="ghost" disabled={saving} onClick={() => void save('line', null)}>
               Clear this line
+            </Button>
+          ) : guess && label ? (
+            <Button variant="ghost" disabled={saving} onClick={() => void dismissGuess()}>
+              {`Not ${guess}`}
             </Button>
           ) : <span />}
           <div className="flex flex-col gap-2 sm:flex-row">
