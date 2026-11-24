@@ -1010,7 +1010,7 @@ pub async fn api_save_transcript<R: Runtime>(
     );
 
     // Convert serde_json::Value to TranscriptSegment
-    let transcripts_to_save: Vec<TranscriptSegment> = transcripts
+    let mut transcripts_to_save: Vec<TranscriptSegment> = transcripts
         .into_iter()
         .map(serde_json::from_value)
         .collect::<Result<Vec<_>, _>>()
@@ -1018,6 +1018,15 @@ pub async fn api_save_transcript<R: Runtime>(
             log_error!("Failed to parse transcript segments: {}", e);
             format!("Invalid transcript data format: {}. Please check the data structure.", e)
         })?;
+    // The live lines still carry the voices folded away at stop.
+    if let Some(folder) = &folder_path {
+        let folds = crate::diarization::voiceprints::read_folds(std::path::Path::new(folder));
+        for segment in &mut transcripts_to_save {
+            if let Some(target) = segment.speaker_label.as_ref().and_then(|l| folds.get(l)) {
+                segment.speaker_label = target.clone();
+            }
+        }
+    }
 
 
     let pool = state.db_manager.pool();

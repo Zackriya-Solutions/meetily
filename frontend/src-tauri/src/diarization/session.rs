@@ -342,6 +342,17 @@ mod tests {
             })
             .collect();
         std::fs::write(var("OMN_REPLAY_OUT"), serde_json::to_string(&labels).unwrap()).unwrap();
+        if let Ok(path) = std::env::var("OMN_REPLAY_EMBEDDINGS") {
+            let embeddings: Vec<Option<Vec<f32>>> = segments
+                .iter()
+                .map(|&(start, end)| {
+                    let a = ((start * 16_000.0) as usize).min(pcm.len());
+                    let b = ((end * 16_000.0) as usize).min(pcm.len());
+                    (b - a >= MIN_SAMPLES_FOR_EMBEDDING).then(|| session.extractor.compute(&pcm[a..b]).ok()).flatten()
+                })
+                .collect();
+            std::fs::write(path, serde_json::to_string(&embeddings).unwrap()).unwrap();
+        }
     }
 
     #[test]

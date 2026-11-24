@@ -122,6 +122,18 @@ impl RecordingSaver {
         }
     }
 
+    /// Gives the lines of each folded voice the label it was folded into
+    /// (none when it matched no one), before transcripts.json is written.
+    pub fn apply_speaker_folds(&self, folds: &std::collections::HashMap<String, Option<String>>) {
+        if let Ok(mut segments) = self.transcript_segments.lock() {
+            for segment in segments.iter_mut() {
+                if let Some(target) = segment.speaker_label.as_ref().and_then(|l| folds.get(l)) {
+                    segment.speaker_label = target.clone();
+                }
+            }
+        }
+    }
+
     /// Legacy method for backward compatibility - converts text to basic segment
     pub fn add_transcript_chunk(&self, text: String) {
         let segment = TranscriptSegment {

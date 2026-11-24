@@ -404,6 +404,10 @@ impl RecordingManager {
         Ok(())
     }
 
+    pub fn apply_speaker_folds(&self, folds: &std::collections::HashMap<String, Option<String>>) {
+        self.recording_saver.apply_speaker_folds(folds);
+    }
+
     /// Save recording after transcription is complete
     pub async fn save_recording_only<R: tauri::Runtime>(&mut self, app: &tauri::AppHandle<R>) -> Result<()> {
         debug!("Saving recording with transcript chunks");

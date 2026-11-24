@@ -14,6 +14,9 @@ use std::collections::HashMap;
 use std::path::Path;
 
 pub const VOICEPRINTS_FILE: &str = "speakers.json";
+/// Where each voice folded away at stop went, so the database save gives
+/// its lines the same label as transcripts.json.
+pub const FOLDS_FILE: &str = "speaker-folds.json";
 
 /// One speaker's cluster centroid (L2-normalized) and how many segments
 /// built it.
@@ -110,6 +113,51 @@ pub async fn load_voice_profiles(pool: &sqlx::SqlitePool) -> Result<Vec<VoicePro
         .collect())
 }
 
+/// A voice built from fewer segments than this is folded at stop.
+const MIN_SEGMENTS_TO_KEEP: usize = 2;
+/// How close a folded voice must be to a kept one to take its label;
+/// further than that, its lines get no label.
+const FOLD_SIMILARITY: f32 = 0.4;
+
+/// Folds the voices heard in a single segment into the closest voice
+/// heard more often. In a call with 3 people, 17 of 20 voices were such
+/// phantoms; of 9 checked against the call's own transcript, 7 sat closest
+/// to the right person, 1 to the wrong one and 1 to no one. Returns the
+/// voices kept and, for each folded label, the label its lines now carry.
+/// With no voice to fold into, nothing changes.
+pub fn fold_single_segment_voices(voices: Vec<Voiceprint>) -> (Vec<Voiceprint>, HashMap<String, Option<String>>) {
+    let (kept, folded): (Vec<_>, Vec<_>) = voices.into_iter().partition(|v| v.segments >= MIN_SEGMENTS_TO_KEEP);
+    if kept.is_empty() {
+        return (folded, HashMap::new());
+    }
+    let folds = folded
+        .into_iter()
+        .map(|voice| {
+            let target = kept
+                .iter()
+                .map(|k| (cosine_similarity(&voice.embedding, &k.embedding), k))
+                .max_by(|a, b| a.0.total_cmp(&b.0))
+                .filter(|(similarity, _)| *similarity >= FOLD_SIMILARITY)
+                .map(|(_, k)| k.label.clone());
+            (voice.label, target)
+        })
+        .collect();
+    (kept, folds)
+}
+
+/// Saves the folds of one meeting (see `fold_single_segment_voices`).
+pub fn write_folds(folder: &Path, folds: &HashMap<String, Option<String>>) -> std::io::Result<()> {
+    std::fs::write(folder.join(FOLDS_FILE), serde_json::to_vec(folds)?)
+}
+
+/// The folds saved with a meeting; empty when it has none.
+pub fn read_folds(folder: &Path) -> HashMap<String, Option<String>> {
+    std::fs::read(folder.join(FOLDS_FILE))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
 /// Writes the voiceprints of one meeting. Through a temp file, so a crash
 /// mid-write leaves the old file or none, never half of one.
 pub fn write_voiceprints(folder: &Path, voiceprints: &[Voiceprint]) -> std::io::Result<()> {
@@ -144,6 +192,33 @@ mod tests {
 
     fn voice(label: &str, segments: usize, embedding: Vec<f32>) -> Voiceprint {
         Voiceprint { label: label.into(), segments, embedding, name: None, dismissed: false }
+    }
+
+    #[test]
+    fn folds_one_segment_voices_into_the_closest_voice_or_none() {
+        let voices = vec![
+            voice("Speaker 1", 40, vec![1.0, 0.0]),
+            voice("Speaker 2", 1, vec![0.9, 0.44]),
+            voice("Speaker 3", 25, vec![0.0, 1.0]),
+            voice("Speaker 4", 1, vec![-0.6, -0.8]),
+        ];
+        let (kept, folds) = fold_single_segment_voices(voices);
+        assert_eq!(kept.iter().map(|v| v.label.as_str()).collect::<Vec<_>>(), ["Speaker 1", "Speaker 3"]);
+        assert_eq!(
+            folds,
+            HashMap::from([("Speaker 2".to_string(), Some("Speaker 1".to_string())), ("Speaker 4".to_string(), None)])
+        );
+        let folder = tempfile::tempdir().unwrap();
+        assert!(read_folds(folder.path()).is_empty());
+        write_folds(folder.path(), &folds).unwrap();
+        assert_eq!(read_folds(folder.path()), folds);
+    }
+
+    #[test]
+    fn keeps_every_voice_when_none_was_heard_twice() {
+        let voices = vec![voice("Speaker 1", 1, vec![1.0, 0.0]), voice("Speaker 2", 1, vec![0.0, 1.0])];
+        let (kept, folds) = fold_single_segment_voices(voices.clone());
+        assert_eq!((kept, folds.is_empty()), (voices, true));
     }
 
     fn profile(name: &str, embedding: Vec<f32>) -> VoiceProfile {
