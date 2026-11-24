@@ -94,6 +94,7 @@ impl MeetingsRepository {
                     duration: t.duration,
                     speaker: t.speaker,
                     speaker_label: t.speaker_label,
+                    speaker_name: t.speaker_name,
                 })
                 .collect::<Vec<_>>();
 

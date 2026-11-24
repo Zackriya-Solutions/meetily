@@ -27,6 +27,8 @@ export interface Transcript {
   speaker?: TranscriptSpeaker;
   /** Which voice on the other side ("Speaker 2"); absent for the mic. */
   speaker_label?: string;
+  /** The name Dor gave this line or its voice. */
+  speaker_name?: string;
 }
 
 export interface TranscriptUpdate {
@@ -155,4 +157,5 @@ export interface TranscriptSegmentData {
   confidence?: number;
   speaker?: TranscriptSpeaker;
   speakerLabel?: string;
+  speakerName?: string;
 }

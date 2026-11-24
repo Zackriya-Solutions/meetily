@@ -25,6 +25,8 @@ interface UsePaginatedTranscriptsReturn {
     loadMore: () => Promise<void>;
     reset: () => void;
     refetch: () => Promise<void>;
+    /** Applies saved speaker names to the loaded lines without reloading. */
+    applySpeakerNames: (transcriptIds: string[], name: string | null) => void;
 }
 
 /**
@@ -39,6 +41,7 @@ function convertTranscriptsToSegments(transcripts: Transcript[]): TranscriptSegm
         confidence: t.confidence,
         speaker: t.speaker,
         speakerLabel: t.speaker_label,
+        speakerName: t.speaker_name,
     }));
 }
 
@@ -202,6 +205,13 @@ export function usePaginatedTranscripts({
         };
     }, [meetingId, reset, refetch]);
 
+    const applySpeakerNames = useCallback((transcriptIds: string[], name: string | null) => {
+        const changed = new Set(transcriptIds);
+        setTranscripts(prev => prev.map(t =>
+            changed.has(t.id) ? { ...t, speaker_name: name ?? undefined } : t
+        ));
+    }, []);
+
     // Convert to segments (memoized)
     const segments = useMemo(() =>
         convertTranscriptsToSegments(transcripts),
@@ -221,5 +231,6 @@ export function usePaginatedTranscripts({
         loadMore,
         reset,
         refetch,
+        applySpeakerNames,
     };
 }

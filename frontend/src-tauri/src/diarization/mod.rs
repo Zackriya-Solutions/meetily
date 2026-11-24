@@ -6,6 +6,7 @@
 //
 // Ported from upstream PR #511 (Krtin Shet).
 
+pub mod accuracy;
 pub mod clustering;
 pub mod embedding;
 pub mod fbank;

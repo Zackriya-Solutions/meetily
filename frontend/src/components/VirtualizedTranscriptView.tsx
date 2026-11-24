@@ -30,6 +30,8 @@ export interface VirtualizedTranscriptViewProps {
     enableStreaming?: boolean;
     /** Label for system-audio lines when the other side's name is known */
     othersLabel?: string;
+    /** Opens the speaker editor for a line; without it labels are plain text */
+    onEditSpeaker?: (segment: TranscriptSegmentData) => void;
     /** Show confidence indicators */
     showConfidence?: boolean;
     /** Completely disable auto-scroll behavior (for meeting details page) */
@@ -78,9 +80,11 @@ const TranscriptSegment = memo(function TranscriptSegment({
     confidence,
     speaker,
     speakerLabel,
+    speakerName,
     othersLabel,
     isStreaming,
     showConfidence,
+    onEditSpeaker,
 }: {
     id: string;
     timestamp: number;
@@ -88,16 +92,30 @@ const TranscriptSegment = memo(function TranscriptSegment({
     confidence?: number;
     speaker?: TranscriptSpeaker;
     speakerLabel?: string;
+    speakerName?: string;
     othersLabel?: string;
     isStreaming: boolean;
     showConfidence: boolean;
+    onEditSpeaker?: () => void;
 }) {
     const displayText = cleanStopWords(text) || (text.trim() === '' ? '[Silence]' : text);
     const label = speaker ? SPEAKER_LABELS[speaker] : undefined;
-    const labelText = speaker === 'system' ? speakerLabel ?? othersLabel ?? label?.text : label?.text;
+    // A name given by hand beats the automatic voice label.
+    const labelText = speaker === 'system' ? speakerName ?? speakerLabel ?? othersLabel ?? label?.text : label?.text;
     const content = (
         <p className="text-base text-gray-800 leading-relaxed">
-            {label && <span className={`font-semibold mr-1 ${label.className}`}>{labelText}:</span>}
+            {label && (speaker === 'system' && onEditSpeaker ? (
+                <button
+                    type="button"
+                    onClick={onEditSpeaker}
+                    title="Name this speaker"
+                    className={`font-semibold mr-1 rounded hover:underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${label.className}`}
+                >
+                    {labelText}:
+                </button>
+            ) : (
+                <span className={`font-semibold mr-1 ${label.className}`}>{labelText}:</span>
+            ))}
             {displayText}
         </p>
     );
@@ -139,6 +157,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
     isStopping = false,
     enableStreaming = false,
     othersLabel,
+    onEditSpeaker,
     showConfidence = true,
     disableAutoScroll = false,
     hasMore = false,
@@ -325,7 +344,9 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                         confidence={segment.confidence}
                                         speaker={segment.speaker}
                                         speakerLabel={multipleVoices ? segment.speakerLabel : undefined}
+                                        speakerName={segment.speakerName}
                                         othersLabel={othersLabel}
+                                        onEditSpeaker={onEditSpeaker ? () => onEditSpeaker(segment) : undefined}
                                         isStreaming={isStreaming}
                                         showConfidence={showConfidence}
                                     />
@@ -384,7 +405,9 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                         confidence={segment.confidence}
                                         speaker={segment.speaker}
                                         speakerLabel={multipleVoices ? segment.speakerLabel : undefined}
+                                        speakerName={segment.speakerName}
                                         othersLabel={othersLabel}
+                                        onEditSpeaker={onEditSpeaker ? () => onEditSpeaker(segment) : undefined}
                                         isStreaming={isStreaming}
                                         showConfidence={showConfidence}
                                     />

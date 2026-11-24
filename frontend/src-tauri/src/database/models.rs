@@ -38,6 +38,9 @@ pub struct Transcript {
     pub speaker: Option<String>,
     #[sqlx(default)]
     pub speaker_label: Option<String>,
+    /// The name Dor gave this line or its voice; None until named.
+    #[sqlx(default)]
+    pub speaker_name: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]

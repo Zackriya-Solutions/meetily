@@ -33,7 +33,9 @@ impl DatabaseManager {
         let pool = SqlitePool::connect(tauri_db_path).await?;
 
         sqlx::migrate!("./migrations").run(&pool).await?;
-        ensure_speaker_label_column(&pool).await?;
+        ensure_transcripts_column(&pool, "speaker_label", "TEXT").await?;
+        ensure_transcripts_column(&pool, "speaker_name", "TEXT").await?;
+        ensure_transcripts_column(&pool, "speaker_name_pinned", "INTEGER").await?;
 
         Ok(DatabaseManager { pool })
     }
@@ -208,18 +210,22 @@ impl DatabaseManager {
     }
 }
 
-/// Adds `transcripts.speaker_label` (which voice on the other side spoke a
-/// line). Added here rather than as a migration: an applied migration that a
-/// build does not know makes that build refuse to open the database, and the
-/// upstream app and older fork builds share this file.
-async fn ensure_speaker_label_column(pool: &SqlitePool) -> Result<()> {
+/// Adds a nullable column to `transcripts`: `speaker_label` (which voice on
+/// the other side spoke a line), `speaker_name` (the name Dor gave that line
+/// or voice, kept apart from the automatic label so the two can be compared)
+/// and `speaker_name_pinned` (1 when the name was given to that line alone,
+/// so naming the whole voice leaves it). Added here rather than as
+/// migrations: an applied migration that a build does not know makes that
+/// build refuse to open the database. Only ever called with literals.
+async fn ensure_transcripts_column(pool: &SqlitePool, column: &str, sql_type: &str) -> Result<()> {
     let exists: bool = sqlx::query_scalar(
-        "SELECT COUNT(*) > 0 FROM pragma_table_info('transcripts') WHERE name = 'speaker_label'",
+        "SELECT COUNT(*) > 0 FROM pragma_table_info('transcripts') WHERE name = ?",
     )
+    .bind(column)
     .fetch_one(pool)
     .await?;
     if !exists {
-        sqlx::query("ALTER TABLE transcripts ADD COLUMN speaker_label TEXT")
+        sqlx::query(&format!("ALTER TABLE transcripts ADD COLUMN {} {}", column, sql_type))
             .execute(pool)
             .await?;
     }

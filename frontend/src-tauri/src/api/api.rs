@@ -144,6 +144,9 @@ pub struct MeetingTranscript {
     /// Which voice on the other side ("Speaker 2"); None for the mic and old rows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speaker_label: Option<String>,
+    /// The name Dor gave this line or its voice; None until named.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker_name: Option<String>,
 }
 
 /// Meeting metadata without transcripts (for pagination)
@@ -941,6 +944,7 @@ pub async fn api_get_meeting_transcripts<R: Runtime>(
                     duration: t.duration,
                     speaker: t.speaker,
                     speaker_label: t.speaker_label,
+                    speaker_name: t.speaker_name,
                 })
                 .collect::<Vec<_>>();
 
@@ -1062,6 +1066,77 @@ pub async fn api_save_transcript<R: Runtime>(
             Err(format!("Failed to save transcript: {}", e))
         }
     }
+}
+
+/// Trims a typed speaker name; blank clears it.
+fn clean_speaker_name(name: Option<String>) -> Option<String> {
+    name.map(|n| n.trim().to_string()).filter(|n| !n.is_empty())
+}
+
+/// Names every line one automatic speaker label carries in a meeting
+/// ("Speaker 2" is Alex), except lines named one at a time, which keep their
+/// own name. A blank name clears them. Returns the ids changed.
+#[tauri::command]
+pub async fn name_meeting_speaker(
+    state: tauri::State<'_, AppState>,
+    meeting_id: String,
+    speaker_label: String,
+    name: Option<String>,
+) -> Result<Vec<String>, String> {
+    sqlx::query_scalar(
+        "UPDATE transcripts SET speaker_name = ?
+         WHERE meeting_id = ? AND speaker_label = ? AND COALESCE(speaker_name_pinned, 0) = 0
+         RETURNING id",
+    )
+    .bind(clean_speaker_name(name))
+    .bind(&meeting_id)
+    .bind(&speaker_label)
+    .fetch_all(state.db_manager.pool())
+    .await
+    .map_err(|e| format!("Database error: {}", e))
+}
+
+/// Names one transcript line on its own, so naming its whole voice later
+/// leaves it. A blank name clears it and lets it follow its voice again.
+#[tauri::command]
+pub async fn set_transcript_speaker_name(
+    state: tauri::State<'_, AppState>,
+    transcript_id: String,
+    name: Option<String>,
+) -> Result<(), String> {
+    let name = clean_speaker_name(name);
+    let result = sqlx::query("UPDATE transcripts SET speaker_name = ?, speaker_name_pinned = ? WHERE id = ?")
+        .bind(&name)
+        .bind(name.is_some() as i64)
+        .bind(&transcript_id)
+        .execute(state.db_manager.pool())
+        .await
+        .map_err(|e| format!("Database error: {}", e))?;
+    if result.rows_affected() == 0 {
+        return Err(format!("Transcript line {} not found", transcript_id));
+    }
+    Ok(())
+}
+
+/// How often the automatic labels agree with the names given, over every
+/// meeting with named lines (see diarization::accuracy).
+#[tauri::command]
+pub async fn get_speaker_accuracy(
+    state: tauri::State<'_, AppState>,
+) -> Result<crate::diarization::accuracy::SpeakerAccuracy, String> {
+    let rows: Vec<(String, Option<String>, Option<String>, Option<f64>)> = sqlx::query_as(
+        "SELECT meeting_id, speaker_label, speaker_name, duration FROM transcripts WHERE speaker_name IS NOT NULL",
+    )
+    .fetch_all(state.db_manager.pool())
+    .await
+    .map_err(|e| format!("Database error: {}", e))?;
+    let lines: Vec<_> = rows
+        .into_iter()
+        .map(|(meeting_id, speaker_label, speaker_name, duration)| {
+            crate::diarization::accuracy::ScoredLine { meeting_id, speaker_label, speaker_name, duration }
+        })
+        .collect();
+    Ok(crate::diarization::accuracy::speaker_accuracy(&lines))
 }
 
 /// Path of the meeting's recorded audio, or None when nothing was saved

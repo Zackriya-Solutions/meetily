@@ -6,7 +6,9 @@ import { VirtualizedTranscriptView } from '@/components/VirtualizedTranscriptVie
 import { TranscriptButtonGroup } from './TranscriptButtonGroup';
 import { OtherSpeakerName } from './OtherSpeakerName';
 import { MeetingAudioPlayer } from './MeetingAudioPlayer';
-import { useMemo } from 'react';
+import { SpeakerNameEditor } from './SpeakerNameEditor';
+import { SpeakerAccuracy } from './SpeakerAccuracy';
+import { useMemo, useState } from 'react';
 
 interface TranscriptPanelProps {
   transcripts: Transcript[];
@@ -35,6 +37,8 @@ interface TranscriptPanelProps {
   meetingId?: string;
   meetingFolderPath?: string | null;
   onRefetchTranscripts?: () => Promise<void>;
+  /** Applies saved names in place; without it the panel refetches. */
+  onSpeakerNamesChanged?: (transcriptIds: string[], name: string | null) => void;
 }
 
 export function TranscriptPanel({
@@ -58,7 +62,10 @@ export function TranscriptPanel({
   meetingId,
   meetingFolderPath,
   onRefetchTranscripts,
+  onSpeakerNamesChanged,
 }: TranscriptPanelProps) {
+  const [speakerToName, setSpeakerToName] = useState<TranscriptSegmentData | null>(null);
+  const [namesSaved, setNamesSaved] = useState(0);
   // Convert transcripts to segments if pagination is not used but we want virtualization
   const convertedSegments = useMemo(() => {
     if (usePagination && segments) {
@@ -73,6 +80,7 @@ export function TranscriptPanel({
       confidence: t.confidence,
       speaker: t.speaker,
       speakerLabel: t.speaker_label,
+      speakerName: t.speaker_name,
     }));
   }, [transcripts, usePagination, segments]);
 
@@ -92,6 +100,7 @@ export function TranscriptPanel({
         {onSaveOtherSpeakerNames && convertedSegments.some(s => s.speaker === 'system') && (
           <OtherSpeakerName names={otherSpeakerNames ?? []} onSave={onSaveOtherSpeakerNames} />
         )}
+        {meetingId && !isRecording && <SpeakerAccuracy meetingId={meetingId} refreshKey={namesSaved} />}
       </div>
 
       {/* Transcript content - use virtualized view for better performance */}
@@ -105,6 +114,7 @@ export function TranscriptPanel({
           enableStreaming={false}
           showConfidence={true}
           othersLabel={othersLabel}
+          onEditSpeaker={meetingId && !isRecording ? setSpeakerToName : undefined}
           disableAutoScroll={disableAutoScroll}
           hasMore={hasMore}
           isLoadingMore={isLoadingMore}
@@ -113,6 +123,21 @@ export function TranscriptPanel({
           onLoadMore={onLoadMore}
         />
       </div>
+
+      {meetingId && (
+        <SpeakerNameEditor
+          meetingId={meetingId}
+          segment={speakerToName}
+          suggestions={otherSpeakerNames ?? []}
+          onClose={() => setSpeakerToName(null)}
+          onSaved={async (transcriptIds, name) => {
+            // In place, so a long meeting keeps its loaded pages and scroll.
+            if (onSpeakerNamesChanged) onSpeakerNamesChanged(transcriptIds, name);
+            else await onRefetchTranscripts?.();
+            setNamesSaved(n => n + 1);
+          }}
+        />
+      )}
 
       {/* Custom prompt input at bottom of transcript section */}
       {!isRecording && convertedSegments.length > 0 && (
