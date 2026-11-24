@@ -32,6 +32,10 @@ pub struct Voiceprint {
     /// accuracy score still counts it as a wrong guess.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub dismissed: bool,
+    /// Transcript lines given this label, short ones included (`segments`
+    /// counts only the lines long enough to move the average).
+    #[serde(default)]
+    pub lines: usize,
 }
 
 /// One person's voice: the segment-weighted mean of their samples,
@@ -119,21 +123,14 @@ const MIN_LINES_TO_KEEP: usize = 2;
 /// further than that, its lines get no label.
 const FOLD_SIMILARITY: f32 = 0.4;
 
-/// Folds the voices on a single line into the closest voice on more lines,
-/// counted from the transcript (`segments` counts only the lines that moved
-/// a voice's average, not the short ones matched or carried to it). In a
-/// call with 3 people, 17 of 20 voices were such
+/// Folds the voices on a single line into the closest voice on more lines.
+/// In a call with 3 people, 17 of 20 voices were such
 /// phantoms; of 9 checked against the call's own transcript, 7 sat closest
 /// to the right person, 1 to the wrong one and 1 to no one. Returns the
 /// voices kept and, for each folded label, the label its lines now carry.
 /// With no voice to fold into, nothing changes.
-pub fn fold_single_line_voices(
-    voices: Vec<Voiceprint>,
-    lines_by_label: &HashMap<String, usize>,
-) -> (Vec<Voiceprint>, HashMap<String, Option<String>>) {
-    let (kept, folded): (Vec<_>, Vec<_>) = voices
-        .into_iter()
-        .partition(|v| lines_by_label.get(&v.label).copied().unwrap_or(0) >= MIN_LINES_TO_KEEP);
+pub fn fold_single_line_voices(voices: Vec<Voiceprint>) -> (Vec<Voiceprint>, HashMap<String, Option<String>>) {
+    let (kept, folded): (Vec<_>, Vec<_>) = voices.into_iter().partition(|v| v.lines >= MIN_LINES_TO_KEEP);
     if kept.is_empty() {
         return (folded, HashMap::new());
     }
@@ -192,30 +189,27 @@ mod tests {
     fn round_trips_through_the_meeting_folder() {
         let folder = tempfile::tempdir().unwrap();
         assert!(read_voiceprints(folder.path()).unwrap().is_empty());
-        let prints = vec![Voiceprint { label: "Speaker 1".into(), segments: 4, embedding: vec![0.6, 0.8], name: Some("Alex".into()), dismissed: true }];
+        let prints = vec![Voiceprint { label: "Speaker 1".into(), segments: 4, embedding: vec![0.6, 0.8], name: Some("Alex".into()), dismissed: true, lines: 6 }];
         write_voiceprints(folder.path(), &prints).unwrap();
         assert_eq!(read_voiceprints(folder.path()).unwrap(), prints);
     }
 
     fn voice(label: &str, segments: usize, embedding: Vec<f32>) -> Voiceprint {
-        Voiceprint { label: label.into(), segments, embedding, name: None, dismissed: false }
+        Voiceprint { label: label.into(), segments, embedding, name: None, dismissed: false, lines: segments }
     }
 
     #[test]
     fn folds_one_line_voices_into_the_closest_voice_or_none() {
+        // Speaker 5 had one long line, then only short ones matched to it.
+        let speaker_5 = Voiceprint { lines: 9, ..voice("Speaker 5", 1, vec![-0.71, 0.7]) };
         let voices = vec![
             voice("Speaker 1", 40, vec![1.0, 0.0]),
             voice("Speaker 2", 1, vec![0.9, 0.44]),
             voice("Speaker 3", 25, vec![0.0, 1.0]),
             voice("Speaker 4", 1, vec![-0.6, -0.8]),
-            // One long line, then only short ones matched to this voice.
-            voice("Speaker 5", 1, vec![-0.71, 0.7]),
+            speaker_5,
         ];
-        let lines = HashMap::from(
-            [("Speaker 1", 52), ("Speaker 2", 1), ("Speaker 3", 30), ("Speaker 4", 1), ("Speaker 5", 9)]
-                .map(|(l, n)| (l.to_string(), n)),
-        );
-        let (kept, folds) = fold_single_line_voices(voices, &lines);
+        let (kept, folds) = fold_single_line_voices(voices);
         assert_eq!(kept.iter().map(|v| v.label.as_str()).collect::<Vec<_>>(), ["Speaker 1", "Speaker 3", "Speaker 5"]);
         assert_eq!(
             folds,
@@ -230,8 +224,7 @@ mod tests {
     #[test]
     fn keeps_every_voice_when_none_has_two_lines() {
         let voices = vec![voice("Speaker 1", 1, vec![1.0, 0.0]), voice("Speaker 2", 1, vec![0.0, 1.0])];
-        let lines = HashMap::from([("Speaker 1".to_string(), 1)]);
-        let (kept, folds) = fold_single_line_voices(voices.clone(), &lines);
+        let (kept, folds) = fold_single_line_voices(voices.clone());
         assert_eq!((kept, folds.is_empty()), (voices, true));
     }
 

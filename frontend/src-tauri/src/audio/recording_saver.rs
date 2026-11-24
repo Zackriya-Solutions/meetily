@@ -122,17 +122,6 @@ impl RecordingSaver {
         }
     }
 
-    /// How many lines carry each speaker label.
-    pub fn speaker_line_counts(&self) -> std::collections::HashMap<String, usize> {
-        let mut counts = std::collections::HashMap::new();
-        if let Ok(segments) = self.transcript_segments.lock() {
-            for label in segments.iter().filter_map(|s| s.speaker_label.clone()) {
-                *counts.entry(label).or_insert(0) += 1;
-            }
-        }
-        counts
-    }
-
     /// Gives the lines of each folded voice the label it was folded into
     /// (none when it matched no one) and rewrites transcripts.json, which
     /// the final save skips when audio saving is off.

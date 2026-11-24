@@ -35,6 +35,9 @@ pub struct DiarizationSession {
     clusterer: SpeakerClusterer,
     /// The people already named in earlier meetings, loaded at start.
     profiles: Vec<VoiceProfile>,
+    /// Lines given each label, including those after Stop while the queue
+    /// drains, which the recording saver no longer receives.
+    lines: HashMap<String, usize>,
 }
 
 impl DiarizationSession {
@@ -43,6 +46,7 @@ impl DiarizationSession {
             extractor: EmbeddingExtractor::new(embedding_model_path)?,
             clusterer: SpeakerClusterer::new(),
             profiles,
+            lines: HashMap::new(),
         })
     }
 
@@ -53,6 +57,14 @@ impl DiarizationSession {
     /// Short pieces cut at a voice change follow the same rule: allowing
     /// them to start a speaker minted a phantom from a 2 s piece in testing.
     pub fn label_segment(&mut self, samples_16k: &[f32]) -> Option<String> {
+        let label = self.label_without_counting(samples_16k);
+        if let Some(label) = &label {
+            *self.lines.entry(label.clone()).or_insert(0) += 1;
+        }
+        label
+    }
+
+    fn label_without_counting(&mut self, samples_16k: &[f32]) -> Option<String> {
         if samples_16k.len() < MIN_SAMPLES_FOR_EMBEDDING {
             return self.clusterer.last_label();
         }
@@ -76,6 +88,7 @@ impl DiarizationSession {
         let names = guess_names(&voices, &self.profiles);
         for (voice, name) in voices.iter_mut().zip(names) {
             voice.name = name;
+            voice.lines = self.lines.get(&voice.label).copied().unwrap_or(0);
         }
         voices
     }

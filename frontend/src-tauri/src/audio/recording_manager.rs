@@ -404,10 +404,6 @@ impl RecordingManager {
         Ok(())
     }
 
-    pub fn speaker_line_counts(&self) -> std::collections::HashMap<String, usize> {
-        self.recording_saver.speaker_line_counts()
-    }
-
     pub fn apply_speaker_folds(&self, folds: &std::collections::HashMap<String, Option<String>>) {
         self.recording_saver.apply_speaker_folds(folds);
     }

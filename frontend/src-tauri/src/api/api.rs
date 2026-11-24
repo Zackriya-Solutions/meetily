@@ -1842,7 +1842,7 @@ mod tests {
         .unwrap();
         let folder = tempfile::tempdir().unwrap();
         let voice = |label: &str, name: &str, dismissed| Voiceprint {
-            label: label.into(), segments: 5, embedding: vec![0.6, 0.8], name: Some(name.into()), dismissed,
+            label: label.into(), segments: 5, embedding: vec![0.6, 0.8], name: Some(name.into()), dismissed, lines: 5,
         };
         write_voiceprints(
             folder.path(),
@@ -1910,7 +1910,7 @@ mod tests {
         let folder = tempfile::tempdir().unwrap();
         write_voiceprints(
             folder.path(),
-            &[Voiceprint { label: "Speaker 2".into(), segments: 7, embedding: vec![0.6, 0.8], name: None, dismissed: false }],
+            &[Voiceprint { label: "Speaker 2".into(), segments: 7, embedding: vec![0.6, 0.8], name: None, dismissed: false, lines: 7 }],
         )
         .unwrap();
         sqlx::query("INSERT INTO meetings VALUES ('m1', ?), ('m2', NULL)")

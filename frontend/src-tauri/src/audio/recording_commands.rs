@@ -1228,10 +1228,7 @@ async fn stop_recording_for_session<R: Runtime>(
         // Extract meeting info BEFORE async operations
         let meeting_folder = manager.get_meeting_folder();
         let meeting_name = manager.get_meeting_name();
-        let (kept, folds) = crate::diarization::voiceprints::fold_single_line_voices(
-            std::mem::take(&mut voiceprints),
-            &manager.speaker_line_counts(),
-        );
+        let (kept, folds) = crate::diarization::voiceprints::fold_single_line_voices(std::mem::take(&mut voiceprints));
         voiceprints = kept;
         manager.apply_speaker_folds(&folds);
 
