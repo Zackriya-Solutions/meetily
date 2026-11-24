@@ -1,14 +1,13 @@
-# Agent Guide for Meetily
+# Agent Guide for Open Meeting Notes
 
 These instructions apply to AI coding agents working in this repository.
 
 ## Project Overview
 
-- Meetily is a desktop application for recording meetings, transcribing audio, and generating summaries.
+- Open Meeting Notes is a desktop application for recording meetings, transcribing audio, and generating summaries.
 - The supported app lives in `frontend/`: Next.js/React provides the UI, and the Rust/Tauri core handles native behavior, audio, persistence, transcription, and summary orchestration.
 - Local transcription uses Whisper or Parakeet. Summaries use the configured local or cloud provider; do not assume every provider runs locally.
 - Frontend code invokes Tauri commands; Rust emits events that update frontend state. Preserve existing command contracts, event payloads, and state ownership.
-- `backend/` is an unsupported legacy archive, not a runtime dependency or a place to add new application behavior. Its FastAPI/CORS behavior is not a supported production API.
 
 See [architecture and audio pipeline](docs/architecture.md), including [frontend/native communication](docs/architecture.md#frontend-and-native-communication) and [model management](docs/architecture.md#transcription-and-model-management).
 

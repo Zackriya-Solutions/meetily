@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { FileText, Sparkles } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-const STORAGE_KEY = 'meetily.meetingDetails.transcriptPaneRatio';
+const STORAGE_KEY = 'omn.meetingDetails.transcriptPaneRatio';
 const DEFAULT_RATIO = 0.3;
 const MIN_RATIO = 0.3;
 const MAX_RATIO = 0.5;

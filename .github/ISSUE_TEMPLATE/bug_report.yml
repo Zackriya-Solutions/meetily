@@ -1,12 +1,12 @@
 name: Bug report
-description: Report a problem with the Meetily desktop app.
+description: Report a problem with the Open Meeting Notes desktop app.
 title: "[BUG] "
 labels: [bug]
 body:
   - type: markdown
     attributes:
       value: |
-        Search [issues](https://github.com/Zackriya-Solutions/meetily/issues?q=is%3Aissue) and [PRs](https://github.com/Zackriya-Solutions/meetily/pulls?q=is%3Apr) first. If an existing report covers the problem, add useful reproduction details there instead.
+        Search [issues](https://github.com/MashdorDev/open-meeting-notes/issues?q=is%3Aissue) and [PRs](https://github.com/MashdorDev/open-meeting-notes/pulls?q=is%3Apr) first. If an existing report covers the problem, add useful reproduction details there instead.
         Use synthetic examples or redact sensitive information. Do not attach private meeting recordings, transcripts, credentials, or unredacted logs.
   - type: checkboxes
     id: duplicate-search
@@ -18,7 +18,7 @@ body:
   - type: input
     id: version
     attributes:
-      label: Meetily version
+      label: Open Meeting Notes version
       description: App version or source commit. If the app cannot open, use the downloaded release tag, or write unknown.
     validations:
       required: true

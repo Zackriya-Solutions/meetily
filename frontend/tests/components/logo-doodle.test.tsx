@@ -65,7 +65,7 @@ test('collapsed logo shows the local doodle and falls back on image failure', as
   await act(async () => { renderer = create(<Logo isCollapsed doodlePath="/tmp/doodle.png" doodleDate="2026-11-09" />); });
   const image = renderer!.root.findByType('img');
   expect(image.props.src).toMatch(/^asset:\/\/localhost\/tmp\/doodle\.png\?d=\d{4}-\d{2}-\d{2}$/);
-  expect(image.props.alt).toBe('Meetily');
+  expect(image.props.alt).toBe('Open Meeting Notes');
   await act(async () => image.props.onError());
   expect(renderer!.root.findByType('img').props.src).toBe('/logo-collapsed.png');
 });
@@ -79,9 +79,12 @@ test('a new doodle path retries after an image failure', async () => {
 
 test('expanded logo keeps its text even when a doodle is available', async () => {
   await act(async () => { renderer = create(<Logo isCollapsed={false} doodlePath="/tmp/doodle.png" doodleDate="2026-11-09" />); });
-  expect(renderer!.root.findAllByType('img')).toHaveLength(0);
-  expect(renderer!.root.findByType('button').props['aria-label']).toBe('About Meetily');
-  expect(renderer!.root.findByType('button').findByType('span').children).toEqual(['Meetily']);
+  // The expanded wordmark shows the app's own mark, never the doodle.
+  const images = renderer!.root.findAllByType('img');
+  expect(images).toHaveLength(1);
+  expect(images[0].props.src).toBe('/logo-collapsed.png');
+  expect(renderer!.root.findByType('button').props['aria-label']).toBe('About Open Meeting Notes');
+  expect(renderer!.root.findByType('button').findByType('span').children).toEqual(['Open Meeting Notes']);
 });
 
 for (const failedYesterday of [false, true]) {

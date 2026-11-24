@@ -99,7 +99,7 @@ fn acquire_startup_logger<T, E>(
     acquire(StartupLogDestination::Stream).map(|logger| (logger, false))
 }
 
-fn meetily_log_builder(
+fn app_log_builder(
     targets: Vec<tauri_plugin_log::Target>,
     verbose: bool,
 ) -> tauri_plugin_log::Builder {
@@ -184,7 +184,7 @@ fn split_startup_logger<R: Runtime>(
                 }
             }
         };
-        let (_, level, logger) = meetily_log_builder(targets, verbose).split(app)?;
+        let (_, level, logger) = app_log_builder(targets, verbose).split(app)?;
         Ok((level, logger))
     })
 }
@@ -586,7 +586,7 @@ pub fn run() {
         .manage(summary::summary_engine::ModelManagerState(Arc::new(tokio::sync::Mutex::new(None))))
         .setup(|_app| {
             let verbose = cfg!(debug_assertions)
-                || std::env::var("MEETILY_DEBUG_LOG")
+                || std::env::var("OMN_DEBUG_LOG")
                     .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
                     .unwrap_or(false);
             let app_data_dir = _app.path().app_data_dir().ok();

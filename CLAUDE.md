@@ -4,11 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Meetily** is a privacy-first AI meeting assistant that captures, transcribes, and summarizes meetings entirely on local infrastructure. The supported application is the Tauri desktop app with a Rust core.
+**Open Meeting Notes** is a privacy-first AI meeting assistant that captures, transcribes, and summarizes meetings entirely on local infrastructure. The supported application is the Tauri desktop app with a Rust core.
 
 1. **Frontend**: Tauri-based desktop application (Rust + Next.js + TypeScript)
 2. **Rust Backend**: Tauri commands, audio capture, transcription, storage, and summarization orchestration
-3. **Legacy Backend Archive**: the old Python/FastAPI, Docker, and standalone whisper-server backend under `backend/` is archived and unsupported
 
 ### Key Technology Stack
 - **Desktop App**: Tauri 2.x (Rust) + Next.js 14 + React 18
@@ -45,14 +44,6 @@ pnpm run tauri:dev:cuda     # NVIDIA CUDA
 pnpm run tauri:dev:vulkan   # AMD/Intel Vulkan
 pnpm run tauri:dev:cpu      # CPU-only (no GPU)
 ```
-
-### Legacy Backend Archive
-
-**Location**: `/backend`
-
-The Python/FastAPI backend, Docker setup, and standalone whisper-server scripts are archived for historical reference and migration context only. Do not use them for current development, new installs, production deployments, or issue triage for the supported app.
-
-The archived FastAPI service had unauthenticated, development-oriented CORS behavior. Treat that behavior as obsolete legacy context, not as a supported production API.
 
 ### Service Endpoints
 - **Frontend Dev**: http://localhost:3118
@@ -96,7 +87,7 @@ Raw Audio (Mic + System)
 
 **Key Insight**: The pipeline performs **professional audio mixing** (RMS-based ducking, clipping prevention) for recording, while simultaneously applying **Voice Activity Detection (VAD)** to send only speech segments to Whisper for transcription.
 
-**Mic conditioning before the mix**: capture applies only the high-pass filter (and optional RNNoise) to the mic. For each aligned (mic, system) window, the pipeline then runs echo cancellation (`echo_cancellation.rs`: DTLN-aec, system audio as the reference, only when both sources record; `MEETILY_AEC=off` disables it), and after that the EBU R128 mic loudness normalization. Keep this order: a canceller must see the mic before any time-varying gain or limiting. The canceller delays both tracks by 750 ms: the mic waits 700 ms before the model, so the echo-lag estimator (which runs on the incoming audio) locks onto a delay change before the model reaches that audio. The flush releases that tail once.
+**Mic conditioning before the mix**: capture applies only the high-pass filter (and optional RNNoise) to the mic. For each aligned (mic, system) window, the pipeline then runs echo cancellation (`echo_cancellation.rs`: DTLN-aec, system audio as the reference, only when both sources record; `OMN_AEC=off` disables it), and after that the EBU R128 mic loudness normalization. Keep this order: a canceller must see the mic before any time-varying gain or limiting. The canceller delays both tracks by 750 ms: the mic waits 700 ms before the model, so the echo-lag estimator (which runs on the incoming audio) locks onto a delay change before the model reaches that audio. The flush releases that tail once.
 
 ### Audio Device Modularization (Recently Completed)
 
@@ -178,8 +169,8 @@ await listen<TranscriptUpdate>('transcript-update', (event) => {
 
 **Model Storage Locations**:
 - **Development**: `frontend/models/`
-- **Production (macOS)**: `~/Library/Application Support/Meetily/models/`
-- **Production (Windows)**: `%APPDATA%\Meetily\models\`
+- **Production (macOS)**: `~/Library/Application Support/Open Meeting Notes/models/`
+- **Production (Windows)**: `%APPDATA%\Open Meeting Notes\models\`
 
 **Model Loading** (frontend/src-tauri/src/whisper_engine/whisper_engine.rs):
 ```rust
@@ -295,9 +286,7 @@ RUST_LOG=app_lib::audio=debug ./clean_run.sh
 
 ### Tauri Backend Development
 
-Current app behavior should be implemented in the Rust/Tauri core, not in the archived Python backend. Add new frontend-facing behavior through Tauri commands/events and existing Rust services under `frontend/src-tauri/src`.
-
-Do not add new endpoints to `backend/app/main.py`; that FastAPI code is legacy archive material only.
+Current app behavior is implemented in the Rust/Tauri core. Add new frontend-facing behavior through Tauri commands/events and existing Rust services under `frontend/src-tauri/src`.
 
 ## Testing and Debugging
 
@@ -377,13 +366,11 @@ $env:RUST_LOG="debug"; ./clean_run_windows.bat
 
 3. **Whisper Model Loading**: Models are loaded once and cached. Changing models requires app restart or manual unload/reload.
 
-4. **No Separate Backend Dependency**: Meeting persistence, transcription, and LLM features are handled by the Tauri app. Do not reintroduce the archived FastAPI backend as a supported requirement.
+4. **No Separate Backend Dependency**: Meeting persistence, transcription, and LLM features are handled by the Tauri app. The old Python/FastAPI backend was removed; do not reintroduce one.
 
-5. **Legacy FastAPI Security Context**: The archived FastAPI/CORS behavior is unsupported legacy code and must not be treated as a supported production API.
+5. **File Paths**: Use Tauri's path APIs (`downloadDir`, etc.) for cross-platform compatibility. Never hardcode paths.
 
-6. **File Paths**: Use Tauri's path APIs (`downloadDir`, etc.) for cross-platform compatibility. Never hardcode paths.
-
-7. **Audio Permissions**: Request permissions early. macOS requires both microphone AND screen recording for system audio.
+6. **Audio Permissions**: Request permissions early. macOS requires both microphone AND screen recording for system audio.
 
 ## Repository-Specific Conventions
 

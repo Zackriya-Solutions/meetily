@@ -1,6 +1,6 @@
 # CI/CD Hardware Acceleration Guide
 
-This document explains the hardware acceleration and CPU-portability configuration used by Meetily CI/CD workflows.
+This document explains the hardware acceleration and CPU-portability configuration used by Open Meeting Notes CI/CD workflows.
 
 ## Overview
 

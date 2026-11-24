@@ -178,11 +178,11 @@ pub struct LiveDiarization {
 }
 
 impl LiveDiarization {
-    /// Starts loading the model. `MEETILY_DIARIZATION=off` turns it off.
+    /// Starts loading the model. `OMN_DIARIZATION=off` turns it off.
     pub fn start<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Self {
         let live = Self::default();
-        if std::env::var("MEETILY_DIARIZATION").as_deref() == Ok("off") {
-            log::info!("Speaker diarization off: MEETILY_DIARIZATION=off");
+        if std::env::var("OMN_DIARIZATION").as_deref() == Ok("off") {
+            log::info!("Speaker diarization off: OMN_DIARIZATION=off");
             return live;
         }
         let app = app.clone();

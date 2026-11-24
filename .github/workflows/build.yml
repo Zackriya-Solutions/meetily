@@ -19,7 +19,7 @@ on:
       asset-prefix:
         required: false
         type: string
-        default: "meetily"
+        default: "open-meeting-notes"
       asset-name-pattern:
         required: false
         type: string
@@ -658,9 +658,7 @@ jobs:
           # Our own PostHog project; unset means the build sends no analytics
           OMN_POSTHOG_KEY: ${{ secrets.OMN_POSTHOG_KEY }}
           OMN_POSTHOG_HOST: ${{ vars.OMN_POSTHOG_HOST }}
-          # License validation RSA public key (embedded at build time)
-          MEETILY_RSA_PUBLIC_KEY: ${{ secrets.MEETILY_RSA_PUBLIC_KEY }}
-          MEETILY_DOODLE_URL: ${{ vars.MEETILY_DOODLE_URL }}
+          OMN_DOODLE_URL: ${{ vars.OMN_DOODLE_URL }}
           # Supabase configuration (for online license verification)
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}

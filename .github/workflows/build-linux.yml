@@ -68,7 +68,7 @@ jobs:
       target: x86_64-unknown-linux-gnu
       build-args: "--bundles deb,appimage"
       sign-binaries: true
-      asset-prefix: meetily-linux-release-test
+      asset-prefix: open-meeting-notes-linux-release-test
       upload-artifacts: true
     secrets: inherit
 
@@ -228,9 +228,7 @@ jobs:
           # Tauri updater signing (ALWAYS enabled for .sig files)
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # License validation RSA public key (embedded at build time)
-          MEETILY_RSA_PUBLIC_KEY: ${{ secrets.MEETILY_RSA_PUBLIC_KEY }}
-          MEETILY_DOODLE_URL: ${{ vars.MEETILY_DOODLE_URL }}
+          OMN_DOODLE_URL: ${{ vars.OMN_DOODLE_URL }}
           # Supabase configuration (for online license verification)
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
@@ -334,7 +332,7 @@ jobs:
         if: ${{ github.event.inputs.upload-artifacts == 'true' }}
         uses: actions/upload-artifact@v4
         with:
-          name: meetily-linux-${{ github.event.inputs.ubuntu-version || 'ubuntu-22.04' }}-x64-${{ steps.build-profile.outputs.profile }}-${{ steps.get-version.outputs.version }}
+          name: open-meeting-notes-linux-${{ github.event.inputs.ubuntu-version || 'ubuntu-22.04' }}-x64-${{ steps.build-profile.outputs.profile }}-${{ steps.get-version.outputs.version }}
           path: |
             target/x86_64-unknown-linux-gnu/${{ steps.build-profile.outputs.profile }}/bundle/deb/*.deb
             target/x86_64-unknown-linux-gnu/${{ steps.build-profile.outputs.profile }}/bundle/appimage/*.AppImage

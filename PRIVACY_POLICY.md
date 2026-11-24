@@ -14,7 +14,7 @@ Open Meeting Notes is built on the principle that your meeting data should remai
 - **Meeting content**: Remains on your infrastructure
 - **AI summaries**: Generated locally or through your chosen LLM provider
 
-Open Meeting Notes builds do not fetch seasonal assets or anything else from Meetily or Zackriya servers.
+Open Meeting Notes does not fetch seasonal assets or anything else from third-party servers unless you configure a provider.
 
 ### Your Data Ownership
 - You own all meeting data, transcripts, and recordings
@@ -126,4 +126,4 @@ As an open-source project under MIT license, you can:
 
 ---
 
-*This privacy policy applies to Open Meeting Notes 0.5.0 and later. Open Meeting Notes is based on Meetily by Zackriya Solutions (MIT license).*
+*This privacy policy applies to Open Meeting Notes 0.5.0 and later.*

@@ -1,12 +1,12 @@
 name: Documentation
-description: Report incorrect or missing Meetily documentation.
+description: Report incorrect or missing Open Meeting Notes documentation.
 title: "[DOCS] "
 labels: [documentation]
 body:
   - type: markdown
     attributes:
       value: |
-        Search [issues](https://github.com/Zackriya-Solutions/meetily/issues?q=is%3Aissue) and [PRs](https://github.com/Zackriya-Solutions/meetily/pulls?q=is%3Apr) first. Add useful details to an existing report if it already covers the problem.
+        Search [issues](https://github.com/MashdorDev/open-meeting-notes/issues?q=is%3Aissue) and [PRs](https://github.com/MashdorDev/open-meeting-notes/pulls?q=is%3Apr) first. Add useful details to an existing report if it already covers the problem.
         Straightforward documentation corrections can also go directly to a PR; an issue is not required just to submit a fix.
   - type: checkboxes
     id: duplicate-search

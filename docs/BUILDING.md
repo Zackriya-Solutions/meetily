@@ -1,4 +1,4 @@
-# Building Meetily from Source
+# Building Open Meeting Notes from Source
 
 This guide explains source builds on each supported platform. Start with the build notes below, then use the platform instructions that match your machine.
 
@@ -14,7 +14,7 @@ pnpm install --frozen-lockfile
 
 Frozen installation keeps the lockfile and installed dependency set aligned. When intentionally changing dependencies, update and commit `pnpm-lock.yaml`.
 
-- **Linux:** Meetily is built from source; choose acceleration for the environment where you build.
+- **Linux:** Open Meeting Notes is built from source; choose acceleration for the environment where you build.
 - **Windows packages:** Distribution builds use Vulkan-enabled Whisper and require an AVX2-capable x64 CPU. AVX-512 is not required.
 - **CUDA:** NVIDIA CUDA support requires a compatible source build and CUDA toolchain; the standard Windows installer does not select it automatically.
 
@@ -62,17 +62,17 @@ The feature-specific commands require a compatible platform and toolchain. The m
 
 Development builds already log `app_lib` at Debug level, normally to both the terminal and `logs-dev/` below the app data directory. No environment variable is needed for `pnpm run tauri:dev`.
 
-Release builds normally log `app_lib` at Info level under `logs/`. To enable Debug logging, launch the installed executable with `MEETILY_DEBUG_LOG=1` on macOS/Linux. In Windows PowerShell, set `$env:MEETILY_DEBUG_LOG="1"` before launching the installed executable. This does not restore Trace messages compiled out of release builds.
+Release builds normally log `app_lib` at Info level under `logs/`. To enable Debug logging, launch the installed executable with `OMN_DEBUG_LOG=1` on macOS/Linux. In Windows PowerShell, set `$env:OMN_DEBUG_LOG="1"` before launching the installed executable. This does not restore Trace messages compiled out of release builds.
 
 | Platform | App data directory |
 | --- | --- |
-| Linux | `${XDG_DATA_HOME:-$HOME/.local/share}/com.meetily.ai` |
-| macOS | `~/Library/Application Support/com.meetily.ai` |
-| Windows | `%APPDATA%\com.meetily.ai` |
+| Linux | `${XDG_DATA_HOME:-$HOME/.local/share}/com.dorzairi.openmeetingnotes` |
+| macOS | `~/Library/Application Support/com.dorzairi.openmeetingnotes` |
+| Windows | `%APPDATA%\com.dorzairi.openmeetingnotes` |
 
 Append `logs-dev/` for development builds or `logs/` for release builds. If the persistent log path is unavailable or unwritable, logging may fall back to a stream, so log files are not guaranteed.
 
-`RUST_LOG` does not control Meetily's configured application logger; build tools or dependencies may handle it separately.
+`RUST_LOG` does not control Open Meeting Notes's configured application logger; build tools or dependencies may handle it separately.
 
 Inspect the terminal's Rust logs and the desktop app's developer tools when diagnosing frontend/native interaction. For audio problems, inspect the pipeline and transcription-worker summaries for dropped samples, speech-segment statistics, queue depth, and failures. Use synthetic audio and redact sensitive data before sharing diagnostics.
 
@@ -84,7 +84,7 @@ The `clean_run.sh` and Windows wrapper scripts are alternative launch paths, but
 
 ## 🐧 Building on Linux
 
-This guide helps you build Meetily on Linux with **automatic GPU acceleration**. The build system detects your hardware and configures the best performance automatically.
+This guide helps you build Open Meeting Notes on Linux with **automatic GPU acceleration**. The build system detects your hardware and configures the best performance automatically.
 
 ---
 
@@ -304,7 +304,7 @@ TAURI_GPU_FEATURE=openblas ./build-gpu.sh
 After successful build:
 
 ```
-src-tauri/target/release/bundle/appimage/Meetily_<version>_amd64.AppImage
+src-tauri/target/release/bundle/appimage/Open Meeting Notes_<version>_amd64.AppImage
 ```
 
 ---

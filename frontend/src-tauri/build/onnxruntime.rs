@@ -125,7 +125,7 @@ pub fn ensure_onnxruntime_runtime() {
     .expect("Failed to create ONNX Runtime binaries directory");
 
     let temporary_archive = env::temp_dir().join(format!(
-        "meetily-onnxruntime-{}-{}.zip",
+        "open-meeting-notes-onnxruntime-{}-{}.zip",
         process::id(),
         target
     ));

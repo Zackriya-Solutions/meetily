@@ -237,7 +237,7 @@ async fn load_lines(pool: &SqlitePool, meeting_id: &str) -> Result<Vec<Line>, sq
 
 /// Names live in their own table, created on first use instead of by a
 /// migration: sqlx refuses to open a database that has a migration it does
-/// not know, which would lock out an upstream Meetily build on the same data.
+/// not know, which would lock out an upstream build on the same data.
 async fn ensure_table(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS meeting_other_speakers (

@@ -1,5 +1,5 @@
 //! Seasonal sidebar icon (official builds only).
-//! When MEETILY_DOODLE_URL is set at compile time, the app requests a seasonal icon over HTTPS.
+//! When OMN_DOODLE_URL is set at compile time, the app requests a seasonal icon over HTTPS.
 //! Forks and local builds without the variable make no request.
 
 use chrono::NaiveDate;
@@ -11,7 +11,7 @@ use std::time::Duration;
 use tauri::Manager;
 use tokio::fs;
 
-const DOODLE_URL: Option<&str> = option_env!("MEETILY_DOODLE_URL");
+const DOODLE_URL: Option<&str> = option_env!("OMN_DOODLE_URL");
 const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
 const MAX_BYTES: usize = 256 * 1024;
 const MAX_PIXELS: u32 = 512;

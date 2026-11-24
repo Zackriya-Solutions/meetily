@@ -15,7 +15,7 @@ use super::speaker_source::{Attribution, SpeakerEnergyTimeline};
 /// How long a silence must last before the VAD closes a speech segment, and
 /// therefore how long the audio clips handed to the ASR engine are.
 ///
-/// Live-path policy: 500ms (matches the established Meetily Pro live policy).
+/// Live-path policy: 500ms (the live policy upstream ships).
 /// The batch paths (`import.rs` / `retranscription.rs`) use 2000ms instead —
 /// they have no latency requirement, so they optimize purely for ASR request
 /// length. The live path cannot: with continuous audio (e.g. a podcast played
@@ -825,8 +825,8 @@ impl AudioPipeline {
         // voice as it is, and the output route can change mid-call.
         let echo_canceller = if !mic_and_system {
             None
-        } else if std::env::var("MEETILY_AEC").as_deref() == Ok("off") {
-            info!("🔇 Mic echo cancellation off: MEETILY_AEC=off");
+        } else if std::env::var("OMN_AEC").as_deref() == Ok("off") {
+            info!("🔇 Mic echo cancellation off: OMN_AEC=off");
             None
         } else {
             super::echo_cancellation::MicEchoCanceller::new(sample_rate)

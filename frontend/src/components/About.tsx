@@ -109,10 +109,7 @@ export function About() {
                     className="text-sm font-medium text-blue-700 hover:text-blue-800 underline-offset-2 hover:underline"
                 >
                     Source code on GitHub
-                </button>
-                <p className="text-xs text-gray-500">
-                    Based on Meetily by Zackriya Solutions (MIT license).
-                </p>
+                </button>
             </div>
             <AnalyticsConsentSwitch />
 

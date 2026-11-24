@@ -1,8 +1,8 @@
 {
     "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-    "productName": "meetily",
+    "productName": "Open Meeting Notes",
     "version": "0.5.0",
-    "identifier": "com.meetily.ai",
+    "identifier": "com.dorzairi.openmeetingnotes",
     "build": {
         "frontendDist": "../out",
         "devUrl": "http://localhost:3118",
@@ -83,10 +83,10 @@
     "bundle": {
         "active": true,
         "shortDescription": "Privacy-first AI meeting note taker",
-        "longDescription": "Meetily Community Edition is a free, open-source AI meeting assistant. Record meetings, transcribe audio locally and create AI summaries using local models or a provider you choose. Your recordings and transcripts stay on your device.",
+        "longDescription": "Open Meeting Notes records your meetings, transcribes them on your own machine with each speaker labelled, keeps the recording for playback, and writes summaries with a local model or the provider you choose.",
         "category": "Productivity",
-        "publisher": "Meetily",
-        "homepage": "https://meetily.ai",
+        "publisher": "Open Meeting Notes",
+        "homepage": "https://github.com/MashdorDev/open-meeting-notes",
         "targets": [
             "deb",
             "appimage",
@@ -133,8 +133,9 @@
         "updater": {
             "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDZCQjk3MjlEOEREODY4OEUKUldTT2FOaU5uWEs1YTU3N1hMTzFRd2EvRjdUZVgwWUw5N0NSNEZTNS80V1h5SE53S2h5c0hiMHAK",
             "endpoints": [
-                "https://github.com/MashdorDev/open-meeting-notes/releases/latest/download/latest.json"
+                "https://github.com/MashdorDev/open-meeting-notes/releases/latest/download/update.json"
             ]
         }
-    }
+    },
+    "mainBinaryName": "open-meeting-notes"
 }

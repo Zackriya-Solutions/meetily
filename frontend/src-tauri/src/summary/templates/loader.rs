@@ -19,12 +19,12 @@ pub fn set_bundled_templates_dir(path: PathBuf) {
 /// Get the user's custom templates directory path
 ///
 /// Returns the platform-specific application data directory for custom templates:
-/// - macOS: ~/Library/Application Support/Meetily/templates/
-/// - Windows: %APPDATA%\Meetily\templates\
-/// - Linux: ~/.config/Meetily/templates/
+/// - macOS: ~/Library/Application Support/Open Meeting Notes/templates/
+/// - Windows: %APPDATA%\Open Meeting Notes\templates\
+/// - Linux: ~/.config/Open Meeting Notes/templates/
 fn get_custom_templates_dir() -> Option<PathBuf> {
     let mut path = dirs::data_dir()?;
-    path.push("Meetily");
+    path.push("Open Meeting Notes");
     path.push("templates");
     Some(path)
 }

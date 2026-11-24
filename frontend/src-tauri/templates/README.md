@@ -47,9 +47,9 @@ Each template JSON file follows this schema:
 
 Users can add custom templates to the application data directory:
 
-- **macOS**: `~/Library/Application Support/Meetily/templates/`
-- **Windows**: `%APPDATA%\Meetily\templates\`
-- **Linux**: `~/.config/Meetily/templates/`
+- **macOS**: `~/Library/Application Support/Open Meeting Notes/templates/`
+- **Windows**: `%APPDATA%\Open Meeting Notes\templates\`
+- **Linux**: `~/.config/Open Meeting Notes/templates/`
 
 Custom templates override built-in templates with the same filename.
 

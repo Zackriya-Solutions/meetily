@@ -1,5 +1,5 @@
 @echo off
-REM Meetily GPU-Accelerated Development Script for Windows
+REM Open Meeting Notes GPU-Accelerated Development Script for Windows
 REM Automatically detects and runs in development mode with optimal GPU features
 REM Based on build-gpu.bat but for development (debug build, tauri dev)
 
@@ -23,7 +23,7 @@ if "%~1" == "help" (
 
 echo.
 echo ========================================
-echo   Meetily GPU-Accelerated Development
+echo   Open Meeting Notes GPU-Accelerated Development
 echo ========================================
 echo.
 
@@ -79,7 +79,7 @@ set "RUST_ENV_LIB=%LIB%"
 set "RUST_ENV_INCLUDE=%INCLUDE%"
 
 echo.
-echo 📦 Starting Meetily in development mode...
+echo 📦 Starting Open Meeting Notes in development mode...
 echo.
 
 REM Find package.json location
@@ -215,7 +215,7 @@ exit /b 0
 :_print_help
 echo.
 echo ========================================
-echo   Meetily GPU Development Script - Help
+echo   Open Meeting Notes GPU Development Script - Help
 echo ========================================
 echo.
 echo USAGE:
@@ -229,7 +229,7 @@ echo   /?        Show this help message
 echo.
 echo DESCRIPTION:
 echo   This script automatically detects your GPU and runs
-echo   Meetily in development mode with optimal hardware acceleration:
+echo   Open Meeting Notes in development mode with optimal hardware acceleration:
 echo.
 echo   - NVIDIA GPU    : Builds with CUDA acceleration
 echo   - AMD/Intel GPU : Builds with Vulkan acceleration

@@ -1,6 +1,6 @@
 ## 🐧 Building on Linux
 
-This guide helps you build Meetily on Linux with **automatic GPU acceleration**. The build system detects your hardware and configures the best performance automatically.
+This guide helps you build Open Meeting Notes on Linux with **automatic GPU acceleration**. The build system detects your hardware and configures the best performance automatically.
 
 ---
 
@@ -214,7 +214,7 @@ TAURI_GPU_FEATURE=openblas ./build-gpu.sh
 After successful build:
 
 ```
-src-tauri/target/release/bundle/appimage/Meetily_<version>_amd64.AppImage
+src-tauri/target/release/bundle/appimage/Open Meeting Notes_<version>_amd64.AppImage
 ```
 
 ---
@@ -239,7 +239,7 @@ runtime dependencies. These client libraries do not install or select an audio
 server.
 
 On Linux, the **Microphone** and **System Audio** pickers are populated directly
-from PulseAudio/PipeWire introspection. The labels you see in Meetily are the
+from PulseAudio/PipeWire introspection. The labels you see in Open Meeting Notes are the
 same ones shown by the desktop's native audio settings (KDE, GNOME, etc.).
 
 - **Microphone** lists real input sources (`alsa_input.*`) with their human-readable
@@ -251,11 +251,11 @@ The available entries depend on the **active card profile**, exactly as in the
 system settings: a USB headset set to output-only profile will not show up as a
 microphone.
 
-If no PulseAudio/`pipewire-pulse` server is reachable, Meetily falls back to a
+If no PulseAudio/`pipewire-pulse` server is reachable, Open Meeting Notes falls back to a
 small whitelist of ALSA microphone endpoints (`default`, `pipewire`, `pulse`).
 This fallback does not provide system-audio capture.
 
-If a PulseAudio source or sink list callback fails, Meetily rejects the entire
+If a PulseAudio source or sink list callback fails, Open Meeting Notes rejects the entire
 inventory rather than using an empty or partial list as evidence of device loss
 or a reason to select ALSA fallback. The device monitor retains its previous
 snapshot until a successful poll.

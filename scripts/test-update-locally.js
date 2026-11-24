@@ -2,13 +2,13 @@
 /**
  * Local Update Testing Server
  *
- * Simple HTTP server to serve latest.json for local OTA update testing.
+ * Simple HTTP server to serve update.json for local OTA update testing.
  * Use this to test the update flow before publishing to GitHub Releases.
  *
  * Usage:
- *   1. Generate latest.json with the manifest generator script
+ *   1. Generate update.json with the manifest generator script
  *   2. Run: node scripts/test-update-locally.js
- *   3. Update tauri.conf.json endpoint to: http://localhost:8080/latest.json
+ *   3. Update tauri.conf.json endpoint to: http://localhost:8080/update.json
  *   4. Build and run an older version of the app to test updates
  *
  * Press Ctrl+C to stop the server
@@ -19,36 +19,36 @@ const fs = require('fs');
 const path = require('path');
 
 const PORT = 8080;
-const LATEST_JSON_PATH = path.join(__dirname, '..', 'latest.json');
+const LATEST_JSON_PATH = path.join(__dirname, '..', 'update.json');
 
 console.log('=========================================');
-console.log('  Meetily Update Testing Server');
+console.log('  Open Meeting Notes Update Testing Server');
 console.log('=========================================\n');
 
-// Check if latest.json exists
+// Check if update.json exists
 if (!fs.existsSync(LATEST_JSON_PATH)) {
-  console.error(`❌ Error: latest.json not found at ${LATEST_JSON_PATH}`);
+  console.error(`❌ Error: update.json not found at ${LATEST_JSON_PATH}`);
   console.error('\nPlease generate it first:');
   console.error('  node scripts/generate-update-manifest-github.js <version>');
   console.error('\nExample:');
   console.error('  node scripts/generate-update-manifest-github.js 0.1.2 \\');
   console.error('    frontend/src-tauri/target/release/bundle/updater \\');
-  console.error('    latest.json \\');
+  console.error('    update.json \\');
   console.error('    "Bug fixes and improvements"');
   process.exit(1);
 }
 
-// Read and validate latest.json
+// Read and validate update.json
 let latestJson;
 try {
   const content = fs.readFileSync(LATEST_JSON_PATH, 'utf8');
   latestJson = JSON.parse(content);
-  console.log('✓ latest.json loaded successfully');
+  console.log('✓ update.json loaded successfully');
   console.log(`  Version: ${latestJson.version}`);
   console.log(`  Platforms: ${Object.keys(latestJson.platforms).join(', ')}`);
   console.log('');
 } catch (error) {
-  console.error(`❌ Error reading latest.json: ${error.message}`);
+  console.error(`❌ Error reading update.json: ${error.message}`);
   process.exit(1);
 }
 
@@ -56,8 +56,8 @@ try {
 const server = http.createServer((req, res) => {
   const timestamp = new Date().toISOString();
 
-  if (req.url === '/latest.json' || req.url === '/') {
-    // Serve latest.json with proper CORS headers
+  if (req.url === '/update.json' || req.url === '/') {
+    // Serve update.json with proper CORS headers
     const content = fs.readFileSync(LATEST_JSON_PATH, 'utf8');
     res.writeHead(200, {
       'Content-Type': 'application/json',
@@ -67,7 +67,7 @@ const server = http.createServer((req, res) => {
       'Cache-Control': 'no-cache, no-store, must-revalidate',
     });
     res.end(content);
-    console.log(`[${timestamp}] ✓ Served latest.json (${content.length} bytes)`);
+    console.log(`[${timestamp}] ✓ Served update.json (${content.length} bytes)`);
   } else {
     // 404 for other routes
     res.writeHead(404, { 'Content-Type': 'text/plain' });
@@ -86,7 +86,7 @@ server.listen(PORT, () => {
 
   console.log('1. Update tauri.conf.json endpoint:');
   console.log('   Change the endpoint in frontend/src-tauri/tauri.conf.json to:');
-  console.log(`   "endpoints": ["http://localhost:${PORT}/latest.json"]\n`);
+  console.log(`   "endpoints": ["http://localhost:${PORT}/update.json"]\n`);
 
   console.log('2. Build an older version:');
   console.log('   - Update version in tauri.conf.json to something older (e.g., 0.1.0)');
@@ -105,7 +105,7 @@ server.listen(PORT, () => {
 
   console.log('⚠️  IMPORTANT: Restore production endpoint after testing!');
   console.log('   Change back to:');
-  console.log('   "endpoints": ["https://github.com/Zackriya-Solutions/meeting-minutes/releases/latest/download/latest.json"]\n');
+  console.log('   "endpoints": ["https://github.com/MashdorDev/open-meeting-notes/releases/latest/download/update.json"]\n');
 
   console.log('=========================================');
   console.log('Press Ctrl+C to stop the server');

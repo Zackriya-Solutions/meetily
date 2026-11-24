@@ -55,7 +55,7 @@ jobs:
               repo: context.repo.repo,
               tag_name: `v${{ steps.get-version.outputs.version }}`,
               target_commitish: context.sha,
-              name: `Meetily v${{ steps.get-version.outputs.version }}`,
+              name: `Open Meeting Notes v${{ steps.get-version.outputs.version }}`,
               draft: true,
               prerelease: false,
               generate_release_notes: true
@@ -86,7 +86,7 @@ jobs:
       target: ${{ matrix.target }}
       build-args: ${{ matrix.args }}
       sign-binaries: ${{ inputs.sign-binaries }}
-      asset-prefix: "meetily"
+      asset-prefix: "open-meeting-notes"
       upload-artifacts: false  # tauri-action uploads directly to release
       release-id: ${{ needs.create-release.outputs.release-id }}
     secrets: inherit
@@ -149,11 +149,11 @@ jobs:
                   'signature': Path(str(asset) + '.sig').read_text().strip(),
               }
           manifest = {'version': os.environ['VERSION'], 'notes': '', 'pub_date': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'), 'platforms': platforms}
-          (root / 'latest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+          (root / 'update.json').write_text(json.dumps(manifest, indent=2) + '\n')
           PYCODE
           upload_url=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" --jq '.upload_url | split("{")[0]')
           gh api --method POST "$upload_url" --header "Content-Type: application/json" \
-            --raw-field "name=latest.json" --input release-assets/latest.json
+            --raw-field "name=update.json" --input release-assets/update.json
 
   # STEP 3: Show release summary
   release-summary:
@@ -162,7 +162,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Get release assets and latest.json
+      - name: Get release assets and update.json
         id: release-info
         run: |
           VERSION="${{ needs.create-release.outputs.version }}"
@@ -178,13 +178,13 @@ jobs:
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          # Download and show latest.json
-          echo "### latest.json content" >> $GITHUB_STEP_SUMMARY
-          LATEST_JSON_ID=$(gh api --paginate "repos/${{ github.repository }}/releases/$RELEASE_ID/assets" --jq '.[] | select(.name == "latest.json") | .id')
-          gh api "repos/${{ github.repository }}/releases/assets/$LATEST_JSON_ID" --header "Accept: application/octet-stream" > latest.json
-          if [ -f latest.json ]; then
+          # Download and show update.json
+          echo "### update.json content" >> $GITHUB_STEP_SUMMARY
+          LATEST_JSON_ID=$(gh api --paginate "repos/${{ github.repository }}/releases/$RELEASE_ID/assets" --jq '.[] | select(.name == "update.json") | .id')
+          gh api "repos/${{ github.repository }}/releases/assets/$LATEST_JSON_ID" --header "Accept: application/octet-stream" > update.json
+          if [ -f update.json ]; then
             echo "\`\`\`json" >> $GITHUB_STEP_SUMMARY
-            cat latest.json >> $GITHUB_STEP_SUMMARY
+            cat update.json >> $GITHUB_STEP_SUMMARY
             echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           fi
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -196,7 +196,6 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Download all as ZIP:** https://github.com/${{ github.repository }}/archive/refs/tags/v${VERSION}.zip" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Manual S3 upload:** Download latest.json from release and upload to \`s3://meetily-updates/latest.json\`" >> $GITHUB_STEP_SUMMARY
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -211,7 +210,7 @@ jobs:
           echo "Uploaded assets (via tauri-action):"
           echo "  - macOS: DMG installer + app.tar.gz (for updater) + .sig"
           echo "  - Windows: MSI + NSIS installers (SIGNED via signCommand) + .sig files"
-          echo "  - Updater manifest: latest.json (generated after validation)"
+          echo "  - Updater manifest: update.json (generated after validation)"
           echo ""
           echo "Next steps:"
           echo "  1. Review the draft release"
@@ -232,7 +231,7 @@ jobs:
           echo "|----------|--------|" >> $GITHUB_STEP_SUMMARY
           echo "| **macOS** | DMG installer, app.tar.gz (updater), .sig |" >> $GITHUB_STEP_SUMMARY
           echo "| **Windows** | MSI installer (SIGNED), NSIS installer (SIGNED), .sig files |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Updater** | latest.json manifest (generated after validation) |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Updater** | update.json manifest (generated after validation) |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY

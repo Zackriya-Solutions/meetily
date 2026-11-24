@@ -1,10 +1,10 @@
 [package]
-name = "meetily"
+name = "open-meeting-notes"
 version = "0.5.0"
 description = "A Tauri App for meeting minutes"
 authors = ["Sujith S"]
 license = "MIT"
-repository = "https://github.com/Zackriya-Solutions/meeting-minutes"
+repository = "https://github.com/MashdorDev/open-meeting-notes"
 edition = "2021"
 rust-version = "1.77"
 

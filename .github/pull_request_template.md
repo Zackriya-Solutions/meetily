@@ -30,5 +30,5 @@ Explain what differs if a related PR exists. Do not create an issue just to fill
 ## Before review
 
 - [ ] I reviewed and understand the submitted changes.
-- [ ] This PR follows the [contribution guide](https://github.com/Zackriya-Solutions/meetily/blob/main/CONTRIBUTING.md) and targets `devtest`.
+- [ ] This PR follows the [contribution guide](https://github.com/MashdorDev/open-meeting-notes/blob/main/CONTRIBUTING.md) and targets `devtest`.
 - [ ] Related documentation is updated, or I explained why none is needed.

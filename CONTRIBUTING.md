@@ -1,11 +1,11 @@
-# Contributing to Meetily
+# Contributing to Open Meeting Notes
 
-Thank you for contributing to Meetily! Current application work belongs in `frontend/` and its Rust/Tauri core; `backend/` is an unsupported legacy archive.
+Thank you for contributing to Open Meeting Notes! Current application work belongs in `frontend/` and its Rust/Tauri core. The old Python backend has been removed.
 
 ## Before You Start
 
 > [!IMPORTANT]
-> Before starting contribution work, and again before proposing publication, search [open and closed issues](https://github.com/Zackriya-Solutions/meetily/issues?q=is%3Aissue) and [open and closed PRs](https://github.com/Zackriya-Solutions/meetily/pulls?q=is%3Apr). Search the underlying problem, related components, and alternative wording, not just the proposed title.
+> Before starting contribution work, and again before proposing publication, search [open and closed issues](https://github.com/MashdorDev/open-meeting-notes/issues?q=is%3Aissue) and [open and closed PRs](https://github.com/MashdorDev/open-meeting-notes/pulls?q=is%3Apr). Search the underlying problem, related components, and alternative wording, not just the proposed title.
 >
 > Use an existing issue when it covers the problem; an issue without an implementation is still an opportunity to contribute. If a PR already implements the same change, coordinate with its author before starting a competing contribution. Discuss a materially different approach before proceeding separately.
 
@@ -37,14 +37,14 @@ Thank you for contributing to Meetily! Current application work belongs in `fron
 2. Clone your fork:
 
    ```bash
-   git clone https://github.com/YOUR_USERNAME/meetily.git
-   cd meetily
+   git clone https://github.com/YOUR_USERNAME/open-meeting-notes.git
+   cd open-meeting-notes
    ```
 
 3. Add the original repository as upstream:
 
    ```bash
-   git remote add upstream https://github.com/Zackriya-Solutions/meetily.git
+   git remote add upstream https://github.com/MashdorDev/open-meeting-notes.git
    ```
 
 4. Create a new branch from `devtest`:
@@ -66,7 +66,7 @@ Thank you for contributing to Meetily! Current application work belongs in `fron
 
 ### Issue Creation
 
-Use the [issue forms](https://github.com/Zackriya-Solutions/meetily/issues/new/choose) for bug reports, feature requests, and documentation issues. Search existing issues and PRs first. If a report already exists, add useful reproduction details there rather than opening another report.
+Use the [issue forms](https://github.com/MashdorDev/open-meeting-notes/issues/new/choose) for bug reports, feature requests, and documentation issues. Search existing issues and PRs first. If a report already exists, add useful reproduction details there rather than opening another report.
 
 For bugs, provide the app version, OS and architecture, installation method, reproduction steps, and expected versus actual behavior. Include relevant settings, redacted logs, or screenshots where useful. Build-tool versions are only needed when relevant to a source-build problem.
 
@@ -138,7 +138,7 @@ Types:
 
 ## Getting Help
 
-- Ask usage and setup questions in the [Meetily community chat](https://discord.gg/crRymMQBFH).
+- Ask usage and setup questions in the [Open Meeting Notes community chat](https://discord.gg/crRymMQBFH).
 - Use the [development resources](#development-resources) below for development questions.
 - Use issues for actionable bug reports, feature requests, and documentation problems.
 
