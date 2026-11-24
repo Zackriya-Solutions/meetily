@@ -36,6 +36,7 @@ impl DatabaseManager {
         ensure_transcripts_column(&pool, "speaker_label", "TEXT").await?;
         ensure_transcripts_column(&pool, "speaker_name", "TEXT").await?;
         ensure_transcripts_column(&pool, "speaker_name_pinned", "INTEGER").await?;
+        ensure_voice_samples_table(&pool).await?;
 
         Ok(DatabaseManager { pool })
     }
@@ -229,5 +230,24 @@ async fn ensure_transcripts_column(pool: &SqlitePool, column: &str, sql_type: &s
             .execute(pool)
             .await?;
     }
+    Ok(())
+}
+
+/// The voice behind each named speaker, one row per meeting and label: what
+/// voice profiles are built from. Created here, not as a migration, for the
+/// reason given at ensure_transcripts_column.
+pub(crate) async fn ensure_voice_samples_table(pool: &SqlitePool) -> Result<()> {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS voice_samples (
+            meeting_id TEXT NOT NULL,
+            speaker_label TEXT NOT NULL,
+            name TEXT NOT NULL,
+            segments INTEGER NOT NULL,
+            embedding TEXT NOT NULL,
+            PRIMARY KEY (meeting_id, speaker_label)
+        )",
+    )
+    .execute(pool)
+    .await?;
     Ok(())
 }

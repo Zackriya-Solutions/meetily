@@ -1083,17 +1083,73 @@ pub async fn name_meeting_speaker(
     speaker_label: String,
     name: Option<String>,
 ) -> Result<Vec<String>, String> {
-    sqlx::query_scalar(
+    let name = clean_speaker_name(name);
+    let pool = state.db_manager.pool();
+    let changed = sqlx::query_scalar(
         "UPDATE transcripts SET speaker_name = ?
          WHERE meeting_id = ? AND speaker_label = ? AND COALESCE(speaker_name_pinned, 0) = 0
          RETURNING id",
     )
-    .bind(clean_speaker_name(name))
+    .bind(&name)
     .bind(&meeting_id)
     .bind(&speaker_label)
-    .fetch_all(state.db_manager.pool())
+    .fetch_all(pool)
     .await
-    .map_err(|e| format!("Database error: {}", e))
+    .map_err(|e| format!("Database error: {}", e))?;
+    // The names are saved either way: a missing or unreadable voiceprint
+    // only means this meeting adds nothing to the person's profile.
+    if let Err(e) = sync_voice_sample(pool, &meeting_id, &speaker_label).await {
+        log_warn!("Speaker named, but its voice was not kept: {}", e);
+    }
+    Ok(changed)
+}
+
+/// Keeps a speaker's voice as a sample of the person it is named after, from
+/// the voiceprints saved with the meeting. The name comes from the lines
+/// themselves: lines named one at a time are left out, and the sample is kept
+/// only while the rest carry exactly one name. So clearing or renaming the
+/// lines, from either command, corrects or drops the sample, and a voice
+/// whose lines were split between people (all pinned) adds to no one.
+async fn sync_voice_sample(pool: &sqlx::SqlitePool, meeting_id: &str, speaker_label: &str) -> Result<(), String> {
+    sqlx::query("DELETE FROM voice_samples WHERE meeting_id = ? AND speaker_label = ?")
+        .bind(meeting_id)
+        .bind(speaker_label)
+        .execute(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    let names: Vec<String> = sqlx::query_scalar(
+        "SELECT DISTINCT speaker_name FROM transcripts
+         WHERE meeting_id = ? AND speaker_label = ? AND speaker_name IS NOT NULL
+           AND COALESCE(speaker_name_pinned, 0) = 0",
+    )
+    .bind(meeting_id)
+    .bind(speaker_label)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    let [name] = names.as_slice() else { return Ok(()) };
+    let folder: Option<String> = sqlx::query_scalar("SELECT folder_path FROM meetings WHERE id = ?")
+        .bind(meeting_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| e.to_string())?
+        .flatten();
+    let Some(folder) = folder else { return Ok(()) };
+    let voiceprint = crate::diarization::voiceprints::read_voiceprints(std::path::Path::new(&folder))
+        .map_err(|e| format!("reading voiceprints: {}", e))?
+        .into_iter()
+        .find(|v| v.label == speaker_label);
+    let Some(voiceprint) = voiceprint else { return Ok(()) };
+    sqlx::query("INSERT INTO voice_samples (meeting_id, speaker_label, name, segments, embedding) VALUES (?, ?, ?, ?, ?)")
+        .bind(meeting_id)
+        .bind(speaker_label)
+        .bind(name)
+        .bind(voiceprint.segments as i64)
+        .bind(serde_json::to_string(&voiceprint.embedding).map_err(|e| e.to_string())?)
+        .execute(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 /// Names one transcript line on its own, so naming its whole voice later
@@ -1105,15 +1161,24 @@ pub async fn set_transcript_speaker_name(
     name: Option<String>,
 ) -> Result<(), String> {
     let name = clean_speaker_name(name);
-    let result = sqlx::query("UPDATE transcripts SET speaker_name = ?, speaker_name_pinned = ? WHERE id = ?")
-        .bind(&name)
-        .bind(name.is_some() as i64)
-        .bind(&transcript_id)
-        .execute(state.db_manager.pool())
-        .await
-        .map_err(|e| format!("Database error: {}", e))?;
-    if result.rows_affected() == 0 {
+    let pool = state.db_manager.pool();
+    let line: Option<(String, Option<String>)> = sqlx::query_as(
+        "UPDATE transcripts SET speaker_name = ?, speaker_name_pinned = ? WHERE id = ?
+         RETURNING meeting_id, speaker_label",
+    )
+    .bind(&name)
+    .bind(name.is_some() as i64)
+    .bind(&transcript_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("Database error: {}", e))?;
+    let Some((meeting_id, speaker_label)) = line else {
         return Err(format!("Transcript line {} not found", transcript_id));
+    };
+    if let Some(label) = speaker_label {
+        if let Err(e) = sync_voice_sample(pool, &meeting_id, &label).await {
+            log_warn!("Speaker line named, but its voice sample was not updated: {}", e);
+        }
     }
     Ok(())
 }
@@ -1593,5 +1658,81 @@ mod external_url_tests {
         ] {
             assert!(parse_external_url(raw).is_err(), "accepted {raw:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diarization::voiceprints::{write_voiceprints, Voiceprint};
+
+    #[tokio::test]
+    async fn a_voice_is_kept_only_while_its_lines_carry_one_name() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        crate::database::manager::ensure_voice_samples_table(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE meetings (id TEXT PRIMARY KEY, folder_path TEXT)").execute(&pool).await.unwrap();
+        sqlx::query(
+            "CREATE TABLE transcripts (id TEXT PRIMARY KEY, meeting_id TEXT, speaker_label TEXT,
+             speaker_name TEXT, speaker_name_pinned INTEGER)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO transcripts VALUES ('a', 'm1', 'Speaker 2', NULL, NULL), ('b', 'm1', 'Speaker 2', NULL, NULL),
+             ('c', 'm1', 'Speaker 9', 'Nobody', NULL), ('d', 'm2', 'Speaker 1', 'Sam', NULL)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        write_voiceprints(
+            folder.path(),
+            &[Voiceprint { label: "Speaker 2".into(), segments: 7, embedding: vec![0.6, 0.8] }],
+        )
+        .unwrap();
+        sqlx::query("INSERT INTO meetings VALUES ('m1', ?), ('m2', NULL)")
+            .bind(folder.path().to_string_lossy().to_string())
+            .execute(&pool)
+            .await
+            .unwrap();
+        let samples = || async {
+            sqlx::query_as::<_, (String, String, i64, String)>(
+                "SELECT meeting_id, name, segments, embedding FROM voice_samples ORDER BY meeting_id",
+            )
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+        };
+
+        let name_lines = |sql: &'static str| {
+            let pool = pool.clone();
+            async move { sqlx::query(sql).execute(&pool).await.unwrap() }
+        };
+        name_lines("UPDATE transcripts SET speaker_name = 'Alexa' WHERE id IN ('a', 'b')").await;
+        sync_voice_sample(&pool, "m1", "Speaker 2").await.unwrap();
+        sync_voice_sample(&pool, "m1", "Speaker 9").await.unwrap();
+        sync_voice_sample(&pool, "m2", "Speaker 1").await.unwrap();
+        assert_eq!(samples().await, vec![("m1".into(), "Alexa".into(), 7, "[0.6,0.8]".into())]);
+
+        // One line pinned to someone else leaves the rest speaking for the voice.
+        name_lines("UPDATE transcripts SET speaker_name = 'Sam', speaker_name_pinned = 1 WHERE id = 'b'").await;
+        sync_voice_sample(&pool, "m1", "Speaker 2").await.unwrap();
+        assert_eq!(samples().await.len(), 1);
+
+        // Every line pinned or cleared: the voice speaks for no one.
+        name_lines("UPDATE transcripts SET speaker_name = NULL WHERE id = 'a'").await;
+        sync_voice_sample(&pool, "m1", "Speaker 2").await.unwrap();
+        assert!(samples().await.is_empty());
+
+        // Two names on the voice's own lines: no sample either.
+        name_lines("UPDATE transcripts SET speaker_name = 'Alexa', speaker_name_pinned = 0 WHERE id = 'a'").await;
+        name_lines("UPDATE transcripts SET speaker_name = 'Dana', speaker_name_pinned = 0 WHERE id = 'b'").await;
+        sync_voice_sample(&pool, "m1", "Speaker 2").await.unwrap();
+        assert!(samples().await.is_empty());
     }
 }

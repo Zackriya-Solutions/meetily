@@ -76,7 +76,7 @@ export function SpeakerNameEditor({ meetingId, segment, suggestions, onClose, on
             value={name}
             onChange={e => setName(e.target.value)}
             onKeyDown={e => {
-              if (e.key === 'Enter' && trimmed) void save(label ? 'speaker' : 'line', trimmed);
+              if (e.key === 'Enter' && trimmed && !saving) void save(label ? 'speaker' : 'line', trimmed);
             }}
             placeholder="e.g. Alex"
             className="rounded-md border border-gray-300 px-3 py-2 text-base font-normal focus:outline-none focus:ring-2 focus:ring-blue-500"
