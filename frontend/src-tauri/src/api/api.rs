@@ -1195,13 +1195,58 @@ pub async fn get_speaker_accuracy(
     .fetch_all(state.db_manager.pool())
     .await
     .map_err(|e| format!("Database error: {}", e))?;
+    let mut guesses: HashMap<String, HashMap<String, String>> = HashMap::new();
+    for (meeting_id, ..) in &rows {
+        if !guesses.contains_key(meeting_id) {
+            let found = meeting_speaker_guesses(state.db_manager.pool(), meeting_id).await;
+            guesses.insert(meeting_id.clone(), found);
+        }
+    }
     let lines: Vec<_> = rows
         .into_iter()
         .map(|(meeting_id, speaker_label, speaker_name, duration)| {
-            crate::diarization::accuracy::ScoredLine { meeting_id, speaker_label, speaker_name, duration }
+            let speaker_guess = speaker_label.as_ref().and_then(|l| guesses[&meeting_id].get(l).cloned());
+            crate::diarization::accuracy::ScoredLine { meeting_id, speaker_label, speaker_name, duration, speaker_guess }
         })
         .collect();
     Ok(crate::diarization::accuracy::speaker_accuracy(&lines))
+}
+
+/// The names the app guessed for a meeting's voices, by label, from the
+/// voiceprints saved with it. Empty when it has none or they can't be read.
+async fn meeting_speaker_guesses(pool: &sqlx::SqlitePool, meeting_id: &str) -> HashMap<String, String> {
+    let folder: Option<String> = sqlx::query_scalar("SELECT folder_path FROM meetings WHERE id = ?")
+        .bind(meeting_id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+        .flatten();
+    let Some(folder) = folder else { return HashMap::new() };
+    match crate::diarization::voiceprints::read_voiceprints(std::path::Path::new(&folder)) {
+        Ok(voices) => voices.into_iter().filter_map(|v| Some((v.label, v.name?))).collect(),
+        Err(e) => {
+            log_warn!("Speaker guesses not read: {}", e);
+            HashMap::new()
+        }
+    }
+}
+
+/// The guessed names of the recording in progress, by label, for a page
+/// reloaded mid-call.
+#[tauri::command]
+pub async fn get_live_speaker_guesses() -> Result<HashMap<String, String>, String> {
+    Ok(crate::diarization::session::current_guesses())
+}
+
+/// The names the app guessed for a meeting's voices, by label, shown where
+/// Dor has not named a line himself.
+#[tauri::command]
+pub async fn get_meeting_speaker_guesses(
+    state: tauri::State<'_, AppState>,
+    meeting_id: String,
+) -> Result<HashMap<String, String>, String> {
+    Ok(meeting_speaker_guesses(state.db_manager.pool(), &meeting_id).await)
 }
 
 /// Path of the meeting's recorded audio, or None when nothing was saved
@@ -1692,7 +1737,7 @@ mod tests {
         let folder = tempfile::tempdir().unwrap();
         write_voiceprints(
             folder.path(),
-            &[Voiceprint { label: "Speaker 2".into(), segments: 7, embedding: vec![0.6, 0.8] }],
+            &[Voiceprint { label: "Speaker 2".into(), segments: 7, embedding: vec![0.6, 0.8], name: None }],
         )
         .unwrap();
         sqlx::query("INSERT INTO meetings VALUES ('m1', ?), ('m2', NULL)")

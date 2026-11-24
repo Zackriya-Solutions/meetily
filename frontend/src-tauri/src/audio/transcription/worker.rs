@@ -267,6 +267,8 @@ pub fn start_transcription_task<R: Runtime>(
                 // Pieces of a segment split at a voice change, run before
                 // the next chunk so their sequence ids stay in order.
                 let mut pending_pieces: VecDeque<AudioChunk> = VecDeque::new();
+                // Guessed names already sent to the live transcript.
+                let mut sent_guesses = std::collections::HashMap::new();
 
                 loop {
                     let (chunk, is_piece) = match pending_pieces.pop_front() {
@@ -359,6 +361,13 @@ pub fn start_transcription_task<R: Runtime>(
                                         Some(samples) => diarization.label(samples).await,
                                         None => None,
                                     };
+                                    if speaker_label.is_some() {
+                                        let guesses = diarization.guesses();
+                                        if guesses != sent_guesses {
+                                            let _ = app_clone.emit("speaker-guesses", &guesses);
+                                            sent_guesses = guesses;
+                                        }
+                                    }
                                     let update = TranscriptUpdate {
                                         text: transcript,
                                         timestamp: format_current_timestamp(),
@@ -492,7 +501,7 @@ pub fn start_transcription_task<R: Runtime>(
             "Transcription worker task completed queued={} completed={}",
             final_queued, final_completed
         );
-        diarization.voiceprints()
+        diarization.finish()
     })
 }
 

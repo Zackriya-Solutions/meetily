@@ -1,6 +1,8 @@
 'use client';
 
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback, ReactNode, MutableRefObject } from 'react';
+import { listen } from '@tauri-apps/api/event';
+import { invoke } from '@tauri-apps/api/core';
 import { Transcript, TranscriptUpdate, toTranscriptSpeaker } from '@/types';
 import { toast } from 'sonner';
 import { useRecordingState } from './RecordingStateContext';
@@ -18,6 +20,8 @@ interface TranscriptContextType {
   meetingTitle: string;
   setMeetingTitle: (title: string) => void;
   clearTranscripts: () => void;
+  /** Names recognized from earlier meetings for this recording, by voice label. */
+  speakerGuesses: Record<string, string>;
   currentMeetingId: string | null;
   markMeetingAsSaved: () => Promise<void>;
 }
@@ -28,6 +32,16 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
   const [transcripts, setTranscripts] = useState<Transcript[]>([]);
   const [meetingTitle, setMeetingTitle] = useState('+ New Call');
   const [currentMeetingId, setCurrentMeetingId] = useState<string | null>(null);
+  // Kept here with the transcripts, not in the page, so leaving the page
+  // mid-call does not lose them: the backend sends the whole map only when
+  // a guess appears or changes.
+  const [speakerGuesses, setSpeakerGuesses] = useState<Record<string, string>>({});
+  useEffect(() => {
+    const unlisten = listen<Record<string, string>>('speaker-guesses', event => setSpeakerGuesses(event.payload));
+    return () => {
+      unlisten.then(stop => stop());
+    };
+  }, []);
 
   // Recording state context - provides backend-synced state
   const recordingState = useRecordingState();
@@ -391,6 +405,10 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
 
           setTranscripts(formattedTranscripts);
           console.log('[Reload Sync] ✅ Transcript history synced successfully');
+          // A speaker-guesses event that lands while this is in flight is
+          // newer than the snapshot, so it wins.
+          const snapshot = await invoke<Record<string, string>>('get_live_speaker_guesses');
+          setSpeakerGuesses(prev => ({ ...snapshot, ...prev }));
 
           // Fetch meeting name from backend
           const meetingName = await recordingService.getRecordingMeetingName();
@@ -489,6 +507,8 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
   // Clear transcripts (used when starting new recording)
   const clearTranscripts = useCallback(() => {
     setTranscripts([]);
+    // Labels restart at Speaker 1 each recording.
+    setSpeakerGuesses({});
     // Don't clear currentMeetingId here - it will be set by recording-started event
   }, []);
 
@@ -525,6 +545,7 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
     meetingTitle,
     setMeetingTitle,
     clearTranscripts,
+    speakerGuesses,
     currentMeetingId,
     markMeetingAsSaved,
   };

@@ -7,6 +7,10 @@
 // person split across two labels is a mistake, not two right answers. Lines
 // shorter than MIN_SCORED_SECONDS are left out: one-word replies are
 // deliberately left unlabelled and would only add noise.
+//
+// A voice the app named from a profile makes a claim of its own: its lines
+// are right only when the name given is that name, and that person cannot
+// also be credited to an anonymous label in the same meeting.
 
 use serde::Serialize;
 use std::collections::HashMap;
@@ -19,6 +23,8 @@ pub struct ScoredLine {
     pub speaker_label: Option<String>,
     pub speaker_name: Option<String>,
     pub duration: Option<f64>,
+    /// The name the app guessed for this line's voice, if any.
+    pub speaker_guess: Option<String>,
 }
 
 #[derive(Debug, Default, Serialize, PartialEq)]
@@ -29,6 +35,9 @@ pub struct AccuracyCounts {
     pub correct: usize,
     /// Of those, lines the app left without a label.
     pub unlabelled: usize,
+    /// Of those, lines whose voice the app named from a profile (right or
+    /// wrong).
+    pub guessed: usize,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -38,19 +47,26 @@ pub struct SpeakerAccuracy {
 }
 
 pub fn speaker_accuracy(lines: &[ScoredLine]) -> SpeakerAccuracy {
-    let scored: Vec<(&str, Option<&str>, &str)> = lines
+    let scored: Vec<(&str, Option<&str>, &str, Option<&str>)> = lines
         .iter()
         .filter(|l| l.duration.unwrap_or(0.0) >= MIN_SCORED_SECONDS)
         .filter_map(|l| {
             let name = l.speaker_name.as_deref()?.trim();
-            (!name.is_empty()).then(|| (l.meeting_id.as_str(), l.speaker_label.as_deref(), name))
+            let guess = l.speaker_guess.as_deref().map(str::trim).filter(|g| !g.is_empty());
+            (!name.is_empty()).then(|| (l.meeting_id.as_str(), l.speaker_label.as_deref(), name, guess))
         })
         .collect();
+    let same_person = |a: &str, b: &str| a.to_lowercase() == b.to_lowercase();
+    // People already named by a guess, per meeting.
+    let claimed: Vec<(&str, &str)> = scored
+        .iter()
+        .filter_map(|&(meeting, label, _, guess)| Some((meeting, guess.filter(|_| label.is_some())?)))
+        .collect();
 
-    // The name each (meeting, label) mostly carries.
+    // The name each anonymous (meeting, label) mostly carries.
     let mut votes: HashMap<(&str, &str), HashMap<&str, usize>> = HashMap::new();
-    for &(meeting, label, name) in &scored {
-        if let Some(label) = label {
+    for &(meeting, label, name, guess) in &scored {
+        if let (Some(label), None) = (label, guess) {
             *votes.entry((meeting, label)).or_default().entry(name).or_default() += 1;
         }
     }
@@ -74,18 +90,25 @@ pub fn speaker_accuracy(lines: &[ScoredLine]) -> SpeakerAccuracy {
     let majority: HashMap<(&str, &str), &str> = top
         .into_iter()
         .filter(|&(key, name, _)| owner[&(key.0, name)].0 == key)
+        .filter(|&(key, name, _)| !claimed.iter().any(|&(m, g)| m == key.0 && same_person(g, name)))
         .map(|(key, name, _)| (key, name))
         .collect();
 
     let mut result = SpeakerAccuracy::default();
-    for (meeting, label, name) in scored {
+    for (meeting, label, name, guess) in scored {
         let counts = result.meetings.entry(meeting.to_string()).or_default();
         for c in [&mut result.overall, counts] {
             c.scored += 1;
-            match label {
-                None => c.unlabelled += 1,
-                Some(label) if majority.get(&(meeting, label)) == Some(&name) => c.correct += 1,
-                Some(_) => {}
+            match (label, guess) {
+                (None, _) => c.unlabelled += 1,
+                (Some(_), Some(guess)) => {
+                    c.guessed += 1;
+                    if same_person(guess, name) {
+                        c.correct += 1;
+                    }
+                }
+                (Some(label), None) if majority.get(&(meeting, label)) == Some(&name) => c.correct += 1,
+                (Some(_), None) => {}
             }
         }
     }
@@ -102,7 +125,27 @@ mod tests {
             speaker_label: label.map(Into::into),
             speaker_name: name.map(Into::into),
             duration: Some(duration),
+            speaker_guess: None,
         }
+    }
+
+    fn guessed(meeting: &str, label: &str, name: &str, guess: &str) -> ScoredLine {
+        ScoredLine { speaker_guess: Some(guess.into()), ..line(meeting, Some(label), Some(name), 3.0) }
+    }
+
+    #[test]
+    fn a_guess_is_right_only_when_it_is_the_name_given() {
+        let lines = vec![
+            guessed("m1", "Speaker 1", "Alex", "alex"),
+            guessed("m1", "Speaker 1", "Bea", "Alex"),
+            guessed("m1", "Speaker 2", "Bea", "Alex"),
+            // Alex is already claimed by a guess, so this voice cannot be
+            // credited with Alex as well.
+            line("m1", Some("Speaker 3"), Some("Alex"), 3.0),
+            line("m1", Some("Speaker 4"), Some("Dana"), 3.0),
+        ];
+        let acc = speaker_accuracy(&lines);
+        assert_eq!(acc.overall, AccuracyCounts { scored: 5, correct: 2, unlabelled: 0, guessed: 3 });
     }
 
     #[test]
@@ -114,7 +157,7 @@ mod tests {
             line("m1", Some("Speaker 2"), Some("Bea"), 3.0),
         ];
         let acc = speaker_accuracy(&lines);
-        assert_eq!(acc.overall, AccuracyCounts { scored: 4, correct: 3, unlabelled: 0 });
+        assert_eq!(acc.overall, AccuracyCounts { scored: 4, correct: 3, unlabelled: 0, guessed: 0 });
     }
 
     #[test]
@@ -126,7 +169,7 @@ mod tests {
             line("m1", Some("Speaker 1"), Some("  "), 3.0),
         ];
         let acc = speaker_accuracy(&lines);
-        assert_eq!(acc.overall, AccuracyCounts { scored: 1, correct: 0, unlabelled: 1 });
+        assert_eq!(acc.overall, AccuracyCounts { scored: 1, correct: 0, unlabelled: 1, guessed: 0 });
     }
 
     #[test]
@@ -138,7 +181,7 @@ mod tests {
             line("m1", Some("Speaker 2"), Some("Alex"), 3.0),
         ];
         let acc = speaker_accuracy(&lines);
-        assert_eq!(acc.overall, AccuracyCounts { scored: 4, correct: 3, unlabelled: 0 });
+        assert_eq!(acc.overall, AccuracyCounts { scored: 4, correct: 3, unlabelled: 0, guessed: 0 });
     }
 
     #[test]
@@ -149,6 +192,6 @@ mod tests {
         ];
         let acc = speaker_accuracy(&lines);
         assert_eq!(acc.overall.correct, 2);
-        assert_eq!(acc.meetings["m2"], AccuracyCounts { scored: 1, correct: 1, unlabelled: 0 });
+        assert_eq!(acc.meetings["m2"], AccuracyCounts { scored: 1, correct: 1, unlabelled: 0, guessed: 0 });
     }
 }

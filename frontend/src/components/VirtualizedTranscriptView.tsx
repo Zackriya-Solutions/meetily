@@ -30,6 +30,8 @@ export interface VirtualizedTranscriptViewProps {
     enableStreaming?: boolean;
     /** Label for system-audio lines when the other side's name is known */
     othersLabel?: string;
+    /** Names recognized from earlier meetings, by voice label. */
+    speakerGuesses?: Record<string, string>;
     /** Opens the speaker editor for a line; without it labels are plain text */
     onEditSpeaker?: (segment: TranscriptSegmentData) => void;
     /** Show confidence indicators */
@@ -81,6 +83,7 @@ const TranscriptSegment = memo(function TranscriptSegment({
     speaker,
     speakerLabel,
     speakerName,
+    speakerGuess,
     othersLabel,
     isStreaming,
     showConfidence,
@@ -93,6 +96,7 @@ const TranscriptSegment = memo(function TranscriptSegment({
     speaker?: TranscriptSpeaker;
     speakerLabel?: string;
     speakerName?: string;
+    speakerGuess?: string;
     othersLabel?: string;
     isStreaming: boolean;
     showConfidence: boolean;
@@ -100,21 +104,28 @@ const TranscriptSegment = memo(function TranscriptSegment({
 }) {
     const displayText = cleanStopWords(text) || (text.trim() === '' ? '[Silence]' : text);
     const label = speaker ? SPEAKER_LABELS[speaker] : undefined;
-    // A name given by hand beats the automatic voice label.
-    const labelText = speaker === 'system' ? speakerName ?? speakerLabel ?? othersLabel ?? label?.text : label?.text;
+    // A name given by hand beats a name recognized from earlier meetings,
+    // which beats the bare voice label.
+    const labelText = speaker === 'system' ? speakerName ?? speakerGuess ?? speakerLabel ?? othersLabel ?? label?.text : label?.text;
+    const isGuess = speaker === 'system' && !speakerName && !!speakerGuess;
     const content = (
         <p className="text-base text-gray-800 leading-relaxed">
             {label && (speaker === 'system' && onEditSpeaker ? (
                 <button
                     type="button"
                     onClick={onEditSpeaker}
-                    title="Name this speaker"
+                    title={isGuess ? 'Recognized from earlier meetings. Click to confirm or correct' : 'Name this speaker'}
                     className={`font-semibold mr-1 rounded hover:underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${label.className}`}
                 >
                     {labelText}:
                 </button>
             ) : (
-                <span className={`font-semibold mr-1 ${label.className}`}>{labelText}:</span>
+                <span
+                    className={`font-semibold mr-1 ${label.className}`}
+                    title={isGuess ? 'Recognized from earlier meetings' : undefined}
+                >
+                    {labelText}:
+                </span>
             ))}
             {displayText}
         </p>
@@ -157,6 +168,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
     isStopping = false,
     enableStreaming = false,
     othersLabel,
+    speakerGuesses,
     onEditSpeaker,
     showConfidence = true,
     disableAutoScroll = false,
@@ -345,6 +357,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                         speaker={segment.speaker}
                                         speakerLabel={multipleVoices ? segment.speakerLabel : undefined}
                                         speakerName={segment.speakerName}
+                                        speakerGuess={segment.speakerLabel ? speakerGuesses?.[segment.speakerLabel] : undefined}
                                         othersLabel={othersLabel}
                                         onEditSpeaker={onEditSpeaker ? () => onEditSpeaker(segment) : undefined}
                                         isStreaming={isStreaming}
@@ -406,6 +419,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                         speaker={segment.speaker}
                                         speakerLabel={multipleVoices ? segment.speakerLabel : undefined}
                                         speakerName={segment.speakerName}
+                                        speakerGuess={segment.speakerLabel ? speakerGuesses?.[segment.speakerLabel] : undefined}
                                         othersLabel={othersLabel}
                                         onEditSpeaker={onEditSpeaker ? () => onEditSpeaker(segment) : undefined}
                                         isStreaming={isStreaming}

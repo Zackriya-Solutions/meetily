@@ -8,7 +8,8 @@ import { OtherSpeakerName } from './OtherSpeakerName';
 import { MeetingAudioPlayer } from './MeetingAudioPlayer';
 import { SpeakerNameEditor } from './SpeakerNameEditor';
 import { SpeakerAccuracy } from './SpeakerAccuracy';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 
 interface TranscriptPanelProps {
   transcripts: Transcript[];
@@ -66,6 +67,17 @@ export function TranscriptPanel({
 }: TranscriptPanelProps) {
   const [speakerToName, setSpeakerToName] = useState<TranscriptSegmentData | null>(null);
   const [namesSaved, setNamesSaved] = useState(0);
+  // Names recognized from earlier meetings, by voice label.
+  const [speakerGuesses, setSpeakerGuesses] = useState<Record<string, string>>({});
+  useEffect(() => {
+    setSpeakerGuesses({});
+    if (!meetingId) return;
+    let current = true;
+    invoke<Record<string, string>>('get_meeting_speaker_guesses', { meetingId })
+      .then(guesses => { if (current) setSpeakerGuesses(guesses); })
+      .catch(error => console.error('Failed to load speaker guesses:', error));
+    return () => { current = false; };
+  }, [meetingId]);
   // Convert transcripts to segments if pagination is not used but we want virtualization
   const convertedSegments = useMemo(() => {
     if (usePagination && segments) {
@@ -114,6 +126,7 @@ export function TranscriptPanel({
           enableStreaming={false}
           showConfidence={true}
           othersLabel={othersLabel}
+          speakerGuesses={speakerGuesses}
           onEditSpeaker={meetingId && !isRecording ? setSpeakerToName : undefined}
           disableAutoScroll={disableAutoScroll}
           hasMore={hasMore}
@@ -128,6 +141,7 @@ export function TranscriptPanel({
         <SpeakerNameEditor
           meetingId={meetingId}
           segment={speakerToName}
+          guess={speakerToName?.speakerLabel ? speakerGuesses[speakerToName.speakerLabel] : undefined}
           suggestions={otherSpeakerNames ?? []}
           onClose={() => setSpeakerToName(null)}
           onSaved={async (transcriptIds, name) => {

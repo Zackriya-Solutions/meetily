@@ -7,6 +7,8 @@ interface AccuracyCounts {
   scored: number;
   correct: number;
   unlabelled: number;
+  /** Lines whose voice was named from an earlier meeting. */
+  guessed: number;
 }
 
 interface SpeakerAccuracyResult {
@@ -50,6 +52,7 @@ export function SpeakerAccuracy({ meetingId, refreshKey }: SpeakerAccuracyProps)
       )}
       {percent(result.overall)} of {result.overall.scored} across all meetings
       {result.overall.unlabelled > 0 && ` (${result.overall.unlabelled} had no label)`}.
+      {result.overall.guessed > 0 && ` ${result.overall.guessed} were named automatically from earlier meetings.`}
     </p>
   );
 }

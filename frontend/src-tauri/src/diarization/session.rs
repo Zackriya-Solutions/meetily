@@ -5,7 +5,8 @@
 
 use super::clustering::{change_windows, cosine_similarity, SpeakerClusterer, CLUSTER_SIMILARITY_THRESHOLD};
 use super::embedding::{EmbeddingError, EmbeddingExtractor};
-use super::voiceprints::Voiceprint;
+use super::voiceprints::{guess_names, VoiceProfile, Voiceprint};
+use std::collections::HashMap;
 use std::path::Path;
 
 /// Shortest segment whose embedding is trusted: below about a second the
@@ -32,13 +33,16 @@ const MIN_SAMPLES_FOR_CHANGES: usize = CHANGE_WINDOW_SAMPLES + 3 * CHANGE_HOP_SA
 pub struct DiarizationSession {
     extractor: EmbeddingExtractor,
     clusterer: SpeakerClusterer,
+    /// The people already named in earlier meetings, loaded at start.
+    profiles: Vec<VoiceProfile>,
 }
 
 impl DiarizationSession {
-    pub fn new(embedding_model_path: &Path) -> Result<Self, EmbeddingError> {
+    pub fn new(embedding_model_path: &Path, profiles: Vec<VoiceProfile>) -> Result<Self, EmbeddingError> {
         Ok(Self {
             extractor: EmbeddingExtractor::new(embedding_model_path)?,
             clusterer: SpeakerClusterer::new(),
+            profiles,
         })
     }
 
@@ -64,8 +68,16 @@ impl DiarizationSession {
         }
     }
 
+    /// Each voice heard, with the person it sounds like when one matches.
+    /// Recomputed on every call: a voice's average settles as it speaks, so
+    /// its guess can appear (or change) later in the meeting.
     pub fn voiceprints(&self) -> Vec<Voiceprint> {
-        self.clusterer.voiceprints()
+        let mut voices = self.clusterer.voiceprints();
+        let names = guess_names(&voices, &self.profiles);
+        for (voice, name) in voices.iter_mut().zip(names) {
+            voice.name = name;
+        }
+        voices
     }
 
     /// Sample offsets inside a 16kHz segment where a different voice takes
@@ -174,6 +186,20 @@ fn quietest_frame_center(samples: &[f32], start: usize, len: usize) -> usize {
         .map_or(start + len / 2, |s| s + QUIET_FRAME_SAMPLES / 2)
 }
 
+/// The current recording's diarization, so a page reloaded mid-call can ask
+/// for the guessed names it missed (they are sent only when they change).
+static CURRENT: std::sync::Mutex<Option<LiveDiarization>> = std::sync::Mutex::new(None);
+
+/// The guessed names of the current recording's voices, by label.
+pub fn current_guesses() -> HashMap<String, String> {
+    CURRENT
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .as_ref()
+        .map(|live| live.guesses())
+        .unwrap_or_default()
+}
+
 /// The diarization session of one recording, shared with the transcription
 /// worker. The model downloads and loads in the background; segments that
 /// arrive before it is ready get no label.
@@ -186,6 +212,7 @@ impl LiveDiarization {
     /// Starts loading the model. `OMN_DIARIZATION=off` turns it off.
     pub fn start<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Self {
         let live = Self::default();
+        *CURRENT.lock().unwrap_or_else(|p| p.into_inner()) = Some(live.clone());
         if std::env::var("OMN_DIARIZATION").as_deref() == Ok("off") {
             log::info!("Speaker diarization off: OMN_DIARIZATION=off");
             return live;
@@ -200,7 +227,18 @@ impl LiveDiarization {
                     return;
                 }
             };
-            match tokio::task::spawn_blocking(move || DiarizationSession::new(&path)).await {
+            use tauri::Manager;
+            let profiles = match app.try_state::<crate::state::AppState>() {
+                Some(state) => super::voiceprints::load_voice_profiles(state.db_manager.pool())
+                    .await
+                    .unwrap_or_else(|e| {
+                        log::warn!("Voice profiles not loaded, no speaker will be named: {}", e);
+                        Vec::new()
+                    }),
+                None => Vec::new(),
+            };
+            log::info!("Loaded {} voice profiles", profiles.len());
+            match tokio::task::spawn_blocking(move || DiarizationSession::new(&path, profiles)).await {
                 Ok(Ok(session)) => {
                     *slot.lock().unwrap_or_else(|p| p.into_inner()) = Some(session);
                     log::info!("Speaker diarization ready");
@@ -235,6 +273,26 @@ impl LiveDiarization {
             .as_ref()
             .map(|session| session.voiceprints())
             .unwrap_or_default()
+    }
+
+    /// Each voice heard, then lets the recording's session go: the speaker
+    /// model and the voices stay out of memory until the next recording,
+    /// unless that one has already started.
+    pub fn finish(&self) -> Vec<Voiceprint> {
+        let voices = self.voiceprints();
+        let mut current = CURRENT.lock().unwrap_or_else(|p| p.into_inner());
+        if current.as_ref().is_some_and(|c| std::sync::Arc::ptr_eq(&c.session, &self.session)) {
+            *current = None;
+        }
+        voices
+    }
+
+    /// The guessed name of each voice that has one, by label.
+    pub fn guesses(&self) -> HashMap<String, String> {
+        self.voiceprints()
+            .into_iter()
+            .filter_map(|v| Some((v.label, v.name?)))
+            .collect()
     }
 
     /// Where the voice changes inside a 16kHz segment (see

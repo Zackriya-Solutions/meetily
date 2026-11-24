@@ -11,6 +11,8 @@ interface SpeakerNameEditorProps {
   meetingId: string;
   /** The line whose speaker is being named; null closes the dialog. */
   segment: TranscriptSegmentData | null;
+  /** The name recognized for this voice, offered so confirming it is one Enter. */
+  guess?: string;
   /** Names already found in this meeting, offered as one-click picks. */
   suggestions: string[];
   onClose: () => void;
@@ -23,13 +25,13 @@ interface SpeakerNameEditorProps {
  * meeting, or for this line alone when the voice was mixed up. The names are
  * kept next to the automatic labels, so the speaker accuracy can be measured.
  */
-export function SpeakerNameEditor({ meetingId, segment, suggestions, onClose, onSaved }: SpeakerNameEditorProps) {
+export function SpeakerNameEditor({ meetingId, segment, guess, suggestions, onClose, onSaved }: SpeakerNameEditorProps) {
   const [name, setName] = useState('');
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    setName(segment?.speakerName ?? '');
-  }, [segment]);
+    setName(segment?.speakerName ?? guess ?? '');
+  }, [segment, guess]);
 
   const save = async (scope: 'speaker' | 'line', value: string | null) => {
     if (!segment) return;
