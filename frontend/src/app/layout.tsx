@@ -1,7 +1,7 @@
 'use client'
 
 import './globals.css'
-import { Bricolage_Grotesque, Figtree } from 'next/font/google'
+import localFont from 'next/font/local'
 import Sidebar from '@/components/Sidebar'
 import { SidebarProvider } from '@/components/Sidebar/SidebarProvider'
 import MainContent from '@/components/MainContent'
@@ -27,16 +27,17 @@ import { ImportDialogProvider } from '@/contexts/ImportDialogContext'
 import { isAudioExtension, getAudioFormatsDisplayList } from '@/constants/audioFormats'
 
 
-// Both SIL Open Font License. next/font bundles them at build time, so the
-// app makes no font requests at runtime.
-const figtree = Figtree({
-  subsets: ['latin'],
-  weight: ['400', '500', '600', '700'],
+// Both SIL Open Font License, from versioned @fontsource packages. Loading
+// the files locally keeps the build off Google Fonts: a CI build failed
+// there when Google's CSS came back in a shape next/font could not parse.
+const figtree = localFont({
+  src: '../../node_modules/@fontsource-variable/figtree/files/figtree-latin-wght-normal.woff2',
+  weight: '300 900',
   variable: '--font-figtree',
 })
-const bricolage = Bricolage_Grotesque({
-  subsets: ['latin'],
-  weight: ['600', '700'],
+const bricolage = localFont({
+  src: '../../node_modules/@fontsource-variable/bricolage-grotesque/files/bricolage-grotesque-latin-wght-normal.woff2',
+  weight: '200 800',
   variable: '--font-bricolage',
 })
 
