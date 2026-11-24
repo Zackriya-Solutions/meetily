@@ -1,10 +1,21 @@
 use crate::audio::recording_commands::StopOutcome;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{
     Emitter,
     menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem},
     tray::TrayIconBuilder,
     AppHandle, Manager, Runtime,
 };
+
+/// Set when a quit was requested from the tray menu. The main window's
+/// `CloseRequested` handler normally prevents the close and hides to the
+/// tray, which also swallows the window close triggered by `AppHandle::exit`,
+/// leaving the process running. Checked by the handler in `lib.rs`.
+pub static QUIT_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+pub fn is_quit_requested() -> bool {
+    QUIT_REQUESTED.load(Ordering::SeqCst)
+}
 
 #[derive(Debug, Clone)]
 pub enum RecordingState {
@@ -49,7 +60,10 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, item_id: &str) {
             }
         }
         "check_updates" => check_updates_handler(app),
-        "quit" => app.exit(0),
+        "quit" => {
+            QUIT_REQUESTED.store(true, Ordering::SeqCst);
+            app.exit(0)
+        }
         _ => {}
     }
 }

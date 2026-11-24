@@ -719,7 +719,7 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                if window.label() == "main" {
+                if window.label() == "main" && !tray::is_quit_requested() {
                     api.prevent_close();
                     if let Err(e) = window.hide() {
                         log::error!("Failed to hide main window on close request: {}", e);
@@ -959,6 +959,12 @@ pub fn run() {
                 #[cfg(target_os = "macos")]
                 tauri::RunEvent::Reopen { .. } => {
                     tray::focus_main_window(_app_handle);
+                }
+                tauri::RunEvent::ExitRequested { .. } => {
+                    // Mark quit so the main window's CloseRequested handler
+                    // (which normally prevents close to hide to the tray) lets
+                    // the exit-time window close through.
+                    tray::QUIT_REQUESTED.store(true, std::sync::atomic::Ordering::SeqCst);
                 }
                 tauri::RunEvent::Exit => {
                     log::info!("Application exiting, cleaning up resources...");
