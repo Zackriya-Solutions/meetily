@@ -292,7 +292,7 @@ pub fn start_transcription_task<R: Runtime>(
                     // Several voices with no pause between them arrive as one
                     // segment and would share one label. Split it where the
                     // voice changes; each extra piece counts as a queued chunk.
-                    let (chunk, split_piece) = if !is_piece
+                    let chunk = if !is_piece
                         && matches!(chunk.device_type, RecordingDeviceType::System)
                         && chunk.sample_rate == DIARIZATION_SAMPLE_RATE
                     {
@@ -300,15 +300,14 @@ pub fn start_transcription_task<R: Runtime>(
                         let mut pieces = split_at_samples(chunk, &cuts).into_iter();
                         let first = pieces.next().expect("split always returns a piece");
                         let rest: Vec<AudioChunk> = pieces.collect();
-                        let was_split = !rest.is_empty();
-                        if was_split {
+                        if !rest.is_empty() {
                             info!("Worker {}: split a system segment at {} voice changes", worker_id, rest.len());
                             chunks_queued_clone.fetch_add(rest.len() as u64, Ordering::SeqCst);
                             pending_pieces.extend(rest);
                         }
-                        (first, was_split)
+                        first
                     } else {
-                        (chunk, is_piece)
+                        chunk
                     };
 
                     let chunk_timestamp = chunk.timestamp;
@@ -357,7 +356,7 @@ pub fn start_transcription_task<R: Runtime>(
                                     let sequence_id =
                                         SEQUENCE_COUNTER.fetch_add(1, Ordering::SeqCst);
                                     let speaker_label = match system_audio {
-                                        Some(samples) => diarization.label(samples, split_piece).await,
+                                        Some(samples) => diarization.label(samples).await,
                                         None => None,
                                     };
                                     let update = TranscriptUpdate {

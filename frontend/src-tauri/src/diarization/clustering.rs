@@ -81,17 +81,18 @@ impl SpeakerClusterer {
     }
 
     /// The label of a speaker already heard whose voice this embedding
-    /// matches, without creating a speaker or moving any centroid.
+    /// matches, without creating a speaker or moving any centroid. No match
+    /// also clears the last label, so the next too-short line does not
+    /// carry the speaker from before this unknown voice.
     pub fn match_existing(&mut self, embedding: &[f32]) -> Option<String> {
-        let label = self
+        self.last_label = self
             .clusters
             .iter()
             .map(|c| (c, cosine_similarity(embedding, &c.centroid)))
             .filter(|(_, similarity)| *similarity >= CLUSTER_SIMILARITY_THRESHOLD)
             .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
-            .map(|(c, _)| c.label.clone())?;
-        self.last_label = Some(label.clone());
-        Some(label)
+            .map(|(c, _)| c.label.clone());
+        self.last_label.clone()
     }
 
     fn update_cluster(&mut self, idx: usize, embedding: &[f32]) -> String {
@@ -180,6 +181,7 @@ mod tests {
         assert_eq!(c.match_existing(&a), None);
         c.assign(&a);
         assert_eq!(c.match_existing(&stranger), None);
+        assert_eq!(c.last_label(), None, "an unknown voice clears the carried label");
         assert_eq!(c.match_existing(&a).as_deref(), Some("Speaker 1"));
         assert_eq!(c.speaker_count(), 1);
     }
