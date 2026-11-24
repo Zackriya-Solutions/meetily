@@ -678,9 +678,12 @@ const Sidebar: React.FC = () => {
       </button>
 
       <div
-        className={`h-screen bg-white border-r shadow-sm flex flex-col transition-all duration-300 ${isCollapsed ? 'w-16' : 'w-64'
+        className={`h-screen bg-white border-r shadow-sm flex flex-col transition-all duration-300 overflow-hidden ${isCollapsed ? 'w-16' : 'w-64'
           }`}
       >
+        {/* Inner column stays at the final width while the container animates,
+            so text never re-wraps mid-transition. */}
+        <div className={`h-full flex flex-col min-h-0 ${isCollapsed ? 'w-16' : 'w-64'}`}>
         {/*  Header with traffic light spacing */}
         <div className="flex-shrink-0 h-22 flex items-center">
 
@@ -817,6 +820,7 @@ const Sidebar: React.FC = () => {
             </div>
           </div>
         )}
+        </div>
       </div>
 
       {/* Confirmation Modal for Delete */}
