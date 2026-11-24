@@ -208,6 +208,18 @@ jobs:
           cd frontend
           pnpm install --frozen-lockfile
 
+      - name: Configure unsigned build
+        # createUpdaterArtifacts defaults to true in tauri.conf.json, and a missing
+        # TAURI_SIGNING_PRIVATE_KEY then fails every debug/unsigned build on a fork.
+        # Same --config override mechanism as build-windows.yml.
+        if: ${{ inputs.sign-build != true }}
+        id: unsigned-build
+        shell: bash
+        run: |
+          config_path="$RUNNER_TEMP/tauri.unsigned.conf.json"
+          printf '{"bundle":{"createUpdaterArtifacts":false}}' > "$config_path"
+          echo "args=--config \"$config_path\"" >> "$GITHUB_OUTPUT"
+
       - name: Build llama-helper sidecar
         run: |
           echo "Building llama-helper sidecar (CPU mode)..."
@@ -236,7 +248,7 @@ jobs:
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         with:
           projectPath: frontend
-          args: --target x86_64-unknown-linux-gnu --features openblas ${{ steps.build-profile.outputs.args }}
+          args: --target x86_64-unknown-linux-gnu --features openblas ${{ steps.build-profile.outputs.args }} ${{ steps.unsigned-build.outputs.args }}
 
       - name: Verify build artifacts
         run: |

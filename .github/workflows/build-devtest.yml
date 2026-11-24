@@ -426,6 +426,18 @@ jobs:
           projectPath: frontend
           args: ${{ matrix.args }} ${{ steps.build-features.outputs.features }} ${{ steps.windows-portability.outputs.args }}
 
+      # createUpdaterArtifacts is true in tauri.conf.json; without this override an
+      # unsigned run still tries to sign updater artifacts and fails on forks that
+      # lack TAURI_SIGNING_PRIVATE_KEY.
+      - name: Configure unsigned build
+        if: github.event.inputs.sign-build != 'true'
+        id: unsigned-build
+        shell: bash
+        run: |
+          config_path="$RUNNER_TEMP/tauri.unsigned.conf.json"
+          printf '{"bundle":{"createUpdaterArtifacts":false}}' > "$config_path"
+          echo "args=--config \"$config_path\"" >> "$GITHUB_OUTPUT"
+
       # Build step (without code signing - updater signing only)
       - name: Build Tauri app (unsigned)
         if: github.event.inputs.sign-build != 'true'
@@ -442,7 +454,7 @@ jobs:
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         with:
           projectPath: frontend
-          args: ${{ matrix.args }} ${{ steps.build-features.outputs.features }} ${{ steps.windows-portability.outputs.args }}
+          args: ${{ matrix.args }} ${{ steps.build-features.outputs.features }} ${{ steps.windows-portability.outputs.args }} ${{ steps.unsigned-build.outputs.args }}
 
       # Linux post-build processing
       - name: Remove libwayland-client.so from AppImage
