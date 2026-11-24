@@ -50,6 +50,29 @@ pub fn ensure_onnxruntime_runtime() {
         .join("binaries")
         .join("onnxruntime");
 
+    // sherpa-onnx-sys's copy_windows_runtime_dlls also drops
+    // onnxruntime_providers_shared.dll into the cargo profile dir, which Tauri
+    // would otherwise bundle as a runtime dependency. The 1.28.2 onnxruntime.dll
+    // does not import it, and CI (.github/verify-windows-dlls.ps1) enforces exactly
+    // one onnxruntime*.dll, so it must not be bundled. Resolve the profile dir
+    // via the same OUT_DIR-ancestor walk as build/sherpa.rs.
+    let out_dir = env::var("OUT_DIR").expect("OUT_DIR environment variable not set");
+    let profile = build_env::expect_profile(env::var("PROFILE"));
+    let profile_dir = build_env::resolve_profile_dir(Path::new(&out_dir), &profile);
+    let providers_shared = profile_dir.join("onnxruntime_providers_shared.dll");
+    if providers_shared.exists() {
+        fs::remove_file(&providers_shared).unwrap_or_else(|error| {
+            panic!(
+                "Failed to remove {}: {error}",
+                providers_shared.display()
+            )
+        });
+        println!(
+            "cargo:warning=Removed {} so it is not bundled",
+            providers_shared.display()
+        );
+    }
+
     match verify_staged_runtime(&destination) {
         Ok(()) => {
             println!(
@@ -103,14 +126,8 @@ pub fn ensure_onnxruntime_runtime() {
         },
     }
 
-    // Resolve the source DLL via the same OUT_DIR-ancestor walk as
-    // build/sherpa.rs: OUT_DIR is target/<triple>/<profile>/build/<crate>/out
-    // (with --target) or target/<profile>/build/<crate>/out (native), so this
-    // covers both target/<profile>/onnxruntime.dll and
-    // target/x86_64-pc-windows-msvc/<profile>/onnxruntime.dll.
-    let out_dir = env::var("OUT_DIR").expect("OUT_DIR environment variable not set");
-    let profile = build_env::expect_profile(env::var("PROFILE"));
-    let profile_dir = build_env::resolve_profile_dir(Path::new(&out_dir), &profile);
+    // Source DLL lives in the cargo profile dir (resolved above), which
+    // sherpa-onnx-sys's copy_windows_runtime_dlls populated before this script.
     let source = profile_dir.join(DLL_NAME);
 
     fs::create_dir_all(
