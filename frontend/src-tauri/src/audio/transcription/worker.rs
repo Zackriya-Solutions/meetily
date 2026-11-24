@@ -211,7 +211,7 @@ fn split_at_samples(chunk: AudioChunk, cuts: &[usize]) -> Vec<AudioChunk> {
 pub fn start_transcription_task<R: Runtime>(
     app: AppHandle<R>,
     transcription_receiver: tokio::sync::mpsc::UnboundedReceiver<AudioChunk>,
-) -> tokio::task::JoinHandle<()> {
+) -> tokio::task::JoinHandle<Vec<crate::diarization::Voiceprint>> {
     tokio::spawn(async move {
         info!("Starting transcription worker task");
 
@@ -238,7 +238,7 @@ pub fn start_transcription_task<R: Runtime>(
                         error!("Failed to stop recording after transcription init failure: {}", e);
                     }
                 });
-                return;
+                return Vec::new();
             }
         };
 
@@ -492,6 +492,7 @@ pub fn start_transcription_task<R: Runtime>(
             "Transcription worker task completed queued={} completed={}",
             final_queued, final_completed
         );
+        diarization.voiceprints()
     })
 }
 

@@ -5,6 +5,8 @@
 // similarity exceeds the threshold, otherwise starts a new "Speaker N"
 // cluster. Centroids are running means, re-normalized after update.
 
+use super::voiceprints::Voiceprint;
+
 /// Minimum cosine similarity for an embedding to join an existing cluster.
 /// Tuned for WeSpeaker CAM++ embeddings; raise to split more aggressively.
 pub const CLUSTER_SIMILARITY_THRESHOLD: f32 = 0.55;
@@ -55,6 +57,13 @@ impl SpeakerClusterer {
 
     pub fn speaker_count(&self) -> usize {
         self.clusters.len()
+    }
+
+    pub fn voiceprints(&self) -> Vec<Voiceprint> {
+        self.clusters
+            .iter()
+            .map(|c| Voiceprint { label: c.label.clone(), segments: c.count, embedding: c.centroid.clone() })
+            .collect()
     }
 
     /// Assign an L2-normalized embedding to a cluster, returning its label.
@@ -214,6 +223,9 @@ mod tests {
         let a2 = unit(vec![0.95, 0.15, 0.05]);
         assert_eq!(c.assign(&a), "Speaker 1");
         assert_eq!(c.assign(&a2), "Speaker 1");
+        let prints = c.voiceprints();
+        assert_eq!(prints.len(), 1);
+        assert_eq!((prints[0].label.as_str(), prints[0].segments), ("Speaker 1", 2));
     }
 
     #[test]

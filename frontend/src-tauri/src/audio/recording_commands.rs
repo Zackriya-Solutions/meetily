@@ -133,7 +133,7 @@ fn finalize_recording_start() {
 
 // Global recording manager and transcription task to keep them alive during recording
 static RECORDING_MANAGER: Mutex<Option<RecordingManager>> = Mutex::new(None);
-static TRANSCRIPTION_TASK: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
+static TRANSCRIPTION_TASK: Mutex<Option<JoinHandle<Vec<crate::diarization::Voiceprint>>>> = Mutex::new(None);
 
 // Listener ID for proper cleanup - prevents microphone from staying active after recording stops
 static TRANSCRIPT_LISTENER_ID: Mutex<Option<tauri::EventId>> = Mutex::new(None);
@@ -967,6 +967,7 @@ async fn stop_recording_for_session<R: Runtime>(
         global_task.take()
     };
 
+    let mut voiceprints = Vec::new();
     if let Some(task_handle) = transcription_task {
         info!("⏳ Waiting for ALL transcription chunks to be processed (no timeout - preserving every chunk)");
 
@@ -998,8 +999,9 @@ async fn stop_recording_for_session<R: Runtime>(
             tokio::time::Duration::from_secs(600), // 10 minutes max
             task_handle
         ).await {
-            Ok(Ok(())) => {
+            Ok(Ok(speakers)) => {
                 info!("✅ ALL transcription chunks processed successfully - no data lost");
+                voiceprints = speakers;
             }
             Ok(Err(e)) => {
                 warn!("⚠️ Transcription task completed with error: {:?}", e);
@@ -1241,6 +1243,13 @@ async fn stop_recording_for_session<R: Runtime>(
             Err(_) => {
                 warn!("⏱️ File I/O timeout (5 minutes) reached during save, continuing shutdown");
                 // Don't fail shutdown - transcripts are already preserved
+            }
+        }
+
+        if let (Some(folder), false) = (&meeting_folder, voiceprints.is_empty()) {
+            match crate::diarization::voiceprints::write_voiceprints(folder, &voiceprints) {
+                Ok(()) => info!("Saved {} speaker voiceprints with the meeting", voiceprints.len()),
+                Err(e) => warn!("Failed to save speaker voiceprints: {}", e),
             }
         }
 

@@ -5,6 +5,7 @@
 
 use super::clustering::{change_windows, cosine_similarity, SpeakerClusterer, CLUSTER_SIMILARITY_THRESHOLD};
 use super::embedding::{EmbeddingError, EmbeddingExtractor};
+use super::voiceprints::Voiceprint;
 use std::path::Path;
 
 /// Shortest segment whose embedding is trusted: below about a second the
@@ -61,6 +62,10 @@ impl DiarizationSession {
                 self.clusterer.last_label()
             }
         }
+    }
+
+    pub fn voiceprints(&self) -> Vec<Voiceprint> {
+        self.clusterer.voiceprints()
     }
 
     /// Sample offsets inside a 16kHz segment where a different voice takes
@@ -220,6 +225,16 @@ impl LiveDiarization {
         .await
         .ok()
         .flatten()
+    }
+
+    /// Each speaker heard so far; empty when the model never loaded.
+    pub fn voiceprints(&self) -> Vec<Voiceprint> {
+        self.session
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+            .map(|session| session.voiceprints())
+            .unwrap_or_default()
     }
 
     /// Where the voice changes inside a 16kHz segment (see

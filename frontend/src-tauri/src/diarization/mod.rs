@@ -12,5 +12,7 @@ pub mod embedding;
 pub mod fbank;
 pub mod models;
 pub mod session;
+pub mod voiceprints;
 
+pub use voiceprints::Voiceprint;
 pub use session::{DiarizationSession, LiveDiarization};
