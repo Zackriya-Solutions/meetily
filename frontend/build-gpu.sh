@@ -118,7 +118,8 @@ if [ -n "$TAURI_GPU_FEATURE" ]; then
 fi
 
 echo -e "   Building in $HELPER_DIR with features: ${HELPER_FEATURES:-none}"
-(cd "$HELPER_DIR" && cargo build --release $HELPER_FEATURES)
+# llama.cpp's bundled cpp-httplib does not compile against OpenSSL 4 (const X509_NAME); the helper never uses HTTPS, so build it without OpenSSL.
+(cd "$HELPER_DIR" && CMAKE_DISABLE_FIND_PACKAGE_OpenSSL=TRUE cargo build --release $HELPER_FEATURES)
 
 if [ $? -ne 0 ]; then
     echo -e "${RED}❌ Failed to build llama-helper${NC}"
