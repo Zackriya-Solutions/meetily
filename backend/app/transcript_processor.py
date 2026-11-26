@@ -10,56 +10,11 @@ from pydantic_ai.providers.anthropic import AnthropicProvider
 
 import logging
 import os
-import re
 from dotenv import load_dotenv
 from db import DatabaseManager
 from ollama import chat
 import asyncio
 from ollama import AsyncClient
-
-ARABIC_SCRIPT_RE = re.compile(r"[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]")
-SENTENCE_BOUNDARY_RE = re.compile(r"[\n.!?؟،؛]")
-
-
-def split_transcript_smart(text: str, chunk_size: int, overlap: int) -> List[str]:
-    """Split transcript on newline/sentence/word boundaries without slicing words or UTF-8 tokens mid-word."""
-    if not text:
-        return [""]
-    if chunk_size <= 0 or len(text) <= chunk_size:
-        return [text]
-
-    if overlap >= chunk_size:
-        overlap = max(0, chunk_size // 5)
-
-    chunks: List[str] = []
-    start = 0
-    n = len(text)
-    while start < n:
-        target_end = min(start + chunk_size, n)
-        if target_end < n:
-            window = text[start:target_end]
-            min_cut = max(1, int(len(window) * 0.75))
-            cut_offset = -1
-            for m in SENTENCE_BOUNDARY_RE.finditer(window):
-                if m.end() >= min_cut:
-                    cut_offset = m.end()
-            if cut_offset == -1:
-                last_space = window.rfind(" ")
-                if last_space >= min_cut:
-                    cut_offset = last_space + 1
-            if cut_offset > 0:
-                target_end = start + cut_offset
-
-        chunks.append(text[start:target_end])
-        if target_end >= n:
-            break
-        next_start = max(start + 1, target_end - overlap)
-        if 0 < next_start < n and not text[next_start - 1].isspace() and not text[next_start].isspace():
-            space_pos = text.find(" ", next_start, min(n, next_start + 80))
-            if space_pos != -1:
-                next_start = space_pos + 1
-        start = next_start
-    return chunks
 
 
 
@@ -168,18 +123,13 @@ class TranscriptProcessor:
                     model_name=model_name, provider=OpenAIProvider(base_url=ollama_base_url)
                 )
                 llm = ollama_model
-                has_arabic = bool(ARABIC_SCRIPT_RE.search(text))
-                if chunk_size == 5000:
-                    if model_name.lower().startswith("phi4") or model_name.lower().startswith("llama"):
-                        chunk_size = 6000 if has_arabic else 10000
-                        overlap = 600 if has_arabic else 1000
-                    else:
-                        chunk_size = 6000 if has_arabic else 12000
-                        overlap = 600 if has_arabic else 1000
-                elif has_arabic and chunk_size > 8000:
-                    chunk_size = 6000
-                    overlap = min(overlap, 600)
-                logger.info(f"Using Ollama model: {model_name} (chunk_size={chunk_size}, has_arabic={has_arabic})")
+                if model_name.lower().startswith("phi4") or model_name.lower().startswith("llama"):
+                    chunk_size = 10000
+                    overlap = 1000
+                else:
+                    chunk_size = 30000
+                    overlap = 1000
+                logger.info(f"Using Ollama model: {model_name}")
             elif model == "groq":
                 api_key = await db.get_api_key("groq")
                 if not api_key: raise ValueError("GROQ_API_KEY environment variable not set")
@@ -204,14 +154,14 @@ class TranscriptProcessor:
             )
             logger.info("Pydantic-AI Agent initialized.")
 
-            # Split transcript into chunks on sentence/word boundaries
+            # Split transcript into chunks
             step = chunk_size - overlap
             if step <= 0:
                 logger.warning(f"Overlap ({overlap}) >= chunk_size ({chunk_size}). Adjusting overlap.")
                 overlap = max(0, chunk_size - 100)
                 step = chunk_size - overlap
 
-            chunks = split_transcript_smart(text, chunk_size, overlap)
+            chunks = [text[i:i+chunk_size] for i in range(0, len(text), step)]
             num_chunks = len(chunks)
             logger.info(f"Split transcript into {num_chunks} chunks.")
 
@@ -283,33 +233,25 @@ class TranscriptProcessor:
             raise
     
     async def chat_ollama_model(self, model_name: str, transcript: str, custom_prompt: str):
-        has_arabic = bool(ARABIC_SCRIPT_RE.search(transcript))
-        lang_instruction = (
-            "IMPORTANT: The transcript contains Arabic. Preserve Arabic language in all extracted blocks, headings, and action items (do not translate Arabic into English)."
-            if has_arabic
-            else "Preserve the original language of the transcript in all extracted blocks."
-        )
-        system_message = {
-            'role': 'system',
-            'content': (
-                "You are an expert privacy-first meeting assistant. Extract structured meeting notes strictly matching the JSON schema. "
-                "If a section (like Critical Deadlines) has no relevant information in this chunk, return an empty list for its 'blocks'. "
-                f"{lang_instruction} Make sure the output is ONLY valid JSON."
-            ),
-        }
-        user_message = {
-            'role': 'user',
-            'content': f"""Transcript Chunk:
----
-{transcript}
----
-Please capture all relevant action items and correct obvious ASR spelling mistakes using context.
+        message = {
+        'role': 'system',
+        'content': f'''
+        Given the following meeting transcript chunk, extract the relevant information according to the required JSON structure. If a specific section (like Critical Deadlines) has no relevant information in this chunk, return an empty list for its 'blocks'. Ensure the output is only the JSON data.
 
-Additional Context / Instructions:
----
-{custom_prompt}
----
-Return ONLY the JSON object matching SummaryResponse.""",
+        Transcript Chunk:
+            ---
+            {transcript}
+            ---
+        Please capture all relevant action items. Transcription can have spelling mistakes. correct it if required. context is important.
+        
+        While generating the summary, please add the following context:
+        ---
+        {custom_prompt}
+        ---
+
+        Make sure the output is only the JSON data.
+    
+        ''',
         }
 
         # Create a client and track it for cleanup
@@ -318,13 +260,7 @@ Return ONLY the JSON object matching SummaryResponse.""",
         self.active_clients.append(client)
         
         try:
-            response = await client.chat(
-                model=model_name,
-                messages=[system_message, user_message],
-                stream=True,
-                format=SummaryResponse.model_json_schema(),
-                options={'num_ctx': 8192},
-            )
+            response = await client.chat(model=model_name, messages=[message], stream=True, format=SummaryResponse.model_json_schema())
             
             full_response = ""
             async for part in response:
