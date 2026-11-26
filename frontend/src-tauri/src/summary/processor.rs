@@ -283,54 +283,7 @@ pub fn chunk_text(text: &str, chunk_size_tokens: usize, overlap_tokens: usize) -
     let chunk_size_chars = (chunk_size_tokens as f64 * chars_per_token).ceil() as usize;
     let overlap_chars = (overlap_tokens as f64 * chars_per_token).ceil() as usize;
 
-    // Collect characters for indexing (needed for proper Unicode support)
-    let chars: Vec<char> = text.chars().collect();
-    let total_chars = chars.len();
-
-    if total_chars <= chunk_size_chars {
-        info!("Text is shorter than chunk size, returning as a single chunk.");
-        return vec![text.to_string()];
-    }
-
-    let mut chunks = Vec::new();
-    let mut start_char = 0;
-
-    while start_char < total_chars {
-        let end_char = (start_char + chunk_size_chars).min(total_chars);
-        let mut emitted_end_char = end_char;
-
-        // Convert character indices to byte indices for string slicing
-        let start_byte: usize = chars[..start_char].iter().map(|c| c.len_utf8()).sum();
-        let mut end_byte: usize = chars[..end_char].iter().map(|c| c.len_utf8()).sum();
-
-        // Try to break at sentence or word boundary for cleaner chunks
-        if end_char < total_chars {
-            let slice = &text[start_byte..end_byte];
-            let sentence_boundary = slice.rfind(". ").map(|index| index + 2);
-            let word_boundary = slice.rfind(' ').map(|index| index + 1);
-            let boundary = sentence_boundary
-                .filter(|end| slice[..*end].chars().count() > overlap_chars)
-                .or_else(|| {
-                    word_boundary.filter(|end| slice[..*end].chars().count() > overlap_chars)
-                });
-
-            if let Some(boundary) = boundary {
-                end_byte = start_byte + boundary;
-                emitted_end_char = start_char + slice[..boundary].chars().count();
-            }
-        }
-
-        // Extract chunk
-        chunks.push(text[start_byte..end_byte].to_string());
-
-        if emitted_end_char >= total_chars {
-            break;
-        }
-
-        start_char = emitted_end_char
-            .saturating_sub(overlap_chars)
-            .max(start_char + 1);
-    }
+    let chunks = super::chunking::split_windows(text, chunk_size_chars, overlap_chars);
 
     info!("Created {} chunks from text", chunks.len());
     chunks
