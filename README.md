@@ -131,6 +131,10 @@ pnpm install
 ./build-gpu.sh
 ```
 
+### 📱 **iOS (in development)**
+
+The first native iOS client is under `ios/Meetily`. Open `ios/Meetily/Meetily.xcodeproj` in Xcode 16 or later and run the shared **Meetily** scheme on an iOS 17+ simulator. The current slice connects to the existing backend and displays meetings and transcripts; recording and on-device transcription are next.
+
 ## Key Features in Action
 
 ### 🎯 Local Transcription

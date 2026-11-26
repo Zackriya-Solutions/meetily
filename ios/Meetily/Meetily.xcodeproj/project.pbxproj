@@ -1,0 +1,271 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		6A1B00010000000000000001 /* MeetilyApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A2B00010000000000000001 /* MeetilyApp.swift */; };
+		6A1B00010000000000000002 /* APISettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A2B00010000000000000002 /* APISettingsView.swift */; };
+		6A1B00010000000000000003 /* MeetingDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A2B00010000000000000003 /* MeetingDetailView.swift */; };
+		6A1B00010000000000000004 /* MeetingListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A2B00010000000000000004 /* MeetingListView.swift */; };
+		6A1B00010000000000000005 /* MeetingsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A2B00010000000000000005 /* MeetingsViewModel.swift */; };
+		6A1B00010000000000000006 /* Meeting.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A2B00010000000000000006 /* Meeting.swift */; };
+		6A1B00010000000000000007 /* MeetilyAPIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A2B00010000000000000007 /* MeetilyAPIClient.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		6A2B00010000000000000001 /* MeetilyApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetilyApp.swift; sourceTree = "<group>"; };
+		6A2B00010000000000000002 /* APISettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APISettingsView.swift; sourceTree = "<group>"; };
+		6A2B00010000000000000003 /* MeetingDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingDetailView.swift; sourceTree = "<group>"; };
+		6A2B00010000000000000004 /* MeetingListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingListView.swift; sourceTree = "<group>"; };
+		6A2B00010000000000000005 /* MeetingsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingsViewModel.swift; sourceTree = "<group>"; };
+		6A2B00010000000000000006 /* Meeting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Meeting.swift; sourceTree = "<group>"; };
+		6A2B00010000000000000007 /* MeetilyAPIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetilyAPIClient.swift; sourceTree = "<group>"; };
+		6A2B00010000000000000008 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		6A2B00010000000000000009 /* Meetily.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Meetily.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		6A3B00010000000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		6A4B00010000000000000001 = {
+			isa = PBXGroup;
+			children = (
+				6A4B00010000000000000002 /* Meetily */,
+				6A2B00010000000000000008 /* Info.plist */,
+				6A4B00010000000000000009 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		6A4B00010000000000000002 /* Meetily */ = {
+			isa = PBXGroup;
+			children = (
+				6A4B00010000000000000003 /* App */,
+				6A4B00010000000000000004 /* Features */,
+				6A4B00010000000000000005 /* Models */,
+				6A4B00010000000000000006 /* Networking */,
+			);
+			path = Sources/Meetily;
+			sourceTree = "<group>";
+		};
+		6A4B00010000000000000003 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				6A2B00010000000000000001 /* MeetilyApp.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		6A4B00010000000000000004 /* Features */ = {
+			isa = PBXGroup;
+			children = (
+				6A4B00010000000000000007 /* Meetings */,
+			);
+			path = Features;
+			sourceTree = "<group>";
+		};
+		6A4B00010000000000000005 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				6A2B00010000000000000006 /* Meeting.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		6A4B00010000000000000006 /* Networking */ = {
+			isa = PBXGroup;
+			children = (
+				6A2B00010000000000000007 /* MeetilyAPIClient.swift */,
+			);
+			path = Networking;
+			sourceTree = "<group>";
+		};
+		6A4B00010000000000000007 /* Meetings */ = {
+			isa = PBXGroup;
+			children = (
+				6A2B00010000000000000002 /* APISettingsView.swift */,
+				6A2B00010000000000000003 /* MeetingDetailView.swift */,
+				6A2B00010000000000000004 /* MeetingListView.swift */,
+				6A2B00010000000000000005 /* MeetingsViewModel.swift */,
+			);
+			path = Meetings;
+			sourceTree = "<group>";
+		};
+		6A4B00010000000000000009 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				6A2B00010000000000000009 /* Meetily.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		6A5B00010000000000000001 /* Meetily */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 6A6B00010000000000000002 /* Build configuration list for PBXNativeTarget "Meetily" */;
+			buildPhases = (
+				6A3B00010000000000000001 /* Frameworks */,
+				6A7B00010000000000000001 /* Sources */,
+				6A8B00010000000000000001 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = Meetily;
+			productName = Meetily;
+			productReference = 6A2B00010000000000000009 /* Meetily.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		6A5B00010000000000000002 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+					6A5B00010000000000000001 = {
+						CreatedOnToolsVersion = 16.0;
+					};
+				};
+			};
+			buildConfigurationList = 6A6B00010000000000000001 /* Build configuration list for PBXProject "Meetily" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 6A4B00010000000000000001;
+			productRefGroup = 6A4B00010000000000000009 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				6A5B00010000000000000001 /* Meetily */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		6A8B00010000000000000001 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		6A7B00010000000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				6A1B00010000000000000001 /* MeetilyApp.swift in Sources */,
+				6A1B00010000000000000002 /* APISettingsView.swift in Sources */,
+				6A1B00010000000000000003 /* MeetingDetailView.swift in Sources */,
+				6A1B00010000000000000004 /* MeetingListView.swift in Sources */,
+				6A1B00010000000000000005 /* MeetingsViewModel.swift in Sources */,
+				6A1B00010000000000000006 /* Meeting.swift in Sources */,
+				6A1B00010000000000000007 /* MeetilyAPIClient.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		6A6B00010000000000000003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				SDKROOT = iphoneos;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		6A6B00010000000000000004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				SDKROOT = iphoneos;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+			};
+			name = Release;
+		};
+		6A6B00010000000000000005 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.meetily.ai.ios;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		6A6B00010000000000000006 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.meetily.ai.ios;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		6A6B00010000000000000001 /* Build configuration list for PBXProject "Meetily" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				6A6B00010000000000000003 /* Debug */,
+				6A6B00010000000000000004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		6A6B00010000000000000002 /* Build configuration list for PBXNativeTarget "Meetily" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				6A6B00010000000000000005 /* Debug */,
+				6A6B00010000000000000006 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 6A5B00010000000000000002 /* Project object */;
+}
