@@ -458,20 +458,23 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
 
     // Validate that transcription models are available before starting recording
     info!("🔍 Validating transcription model availability before starting recording...");
-    if let Err(validation_error) = transcription::validate_transcription_model_ready(&app).await {
-        error!("Model validation failed: {}", validation_error);
+    let buffered_mlx = match transcription::validate_transcription_model_ready(&app).await {
+        Ok(buffered_mlx) => buffered_mlx,
+        Err(validation_error) => {
+            error!("Model validation failed: {}", validation_error);
 
-        // Emit error event for frontend - actionable: false to show toast instead of modal
-        // (download progress is already shown in top-right toast)
-        let _ = app.emit("transcription-error", serde_json::json!({
-            "error": validation_error,
-            "userMessage": format!("Recording cannot start: {}", validation_error),
-            "actionable": false,
-            "phase": "startup"
-        }));
+            // Emit error event for frontend - actionable: false to show toast instead of modal
+            // (download progress is already shown in top-right toast)
+            let _ = app.emit("transcription-error", serde_json::json!({
+                "error": validation_error,
+                "userMessage": format!("Recording cannot start: {}", validation_error),
+                "actionable": false,
+                "phase": "startup"
+            }));
 
-        return Err(validation_error);
-    }
+            return Err(validation_error);
+        }
+    };
     info!("✅ Transcription model validation passed");
 
     // Notify frontend that startup has begun (surfaces STARTING state)
@@ -544,7 +547,7 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
 
     // Start recording with resolved devices (replaces start_recording_with_defaults_and_auto_save call)
     let transcription_receiver = manager
-        .start_recording(microphone_device, system_device, auto_save)
+        .start_recording(microphone_device, system_device, auto_save, buffered_mlx)
         .await
         .map_err(|error| map_recording_start_error(&app, error))?;
 
@@ -686,20 +689,23 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
 
     // Validate that transcription models are available before starting recording
     info!("🔍 Validating transcription model availability before starting recording...");
-    if let Err(validation_error) = transcription::validate_transcription_model_ready(&app).await {
-        error!("Model validation failed: {}", validation_error);
+    let buffered_mlx = match transcription::validate_transcription_model_ready(&app).await {
+        Ok(buffered_mlx) => buffered_mlx,
+        Err(validation_error) => {
+            error!("Model validation failed: {}", validation_error);
 
-        // Emit error event for frontend - actionable: false to show toast instead of modal
-        // (download progress is already shown in top-right toast)
-        let _ = app.emit("transcription-error", serde_json::json!({
-            "error": validation_error,
-            "userMessage": format!("Recording cannot start: {}", validation_error),
-            "actionable": false,
-            "phase": "startup"
-        }));
+            // Emit error event for frontend - actionable: false to show toast instead of modal
+            // (download progress is already shown in top-right toast)
+            let _ = app.emit("transcription-error", serde_json::json!({
+                "error": validation_error,
+                "userMessage": format!("Recording cannot start: {}", validation_error),
+                "actionable": false,
+                "phase": "startup"
+            }));
 
-        return Err(validation_error);
-    }
+            return Err(validation_error);
+        }
+    };
     info!("✅ Transcription model validation passed");
 
     // Notify frontend that startup has begun (surfaces STARTING state)
@@ -758,7 +764,7 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
 
     // Start recording with specified devices and auto_save setting
     let transcription_receiver = manager
-        .start_recording(mic_device, system_device, auto_save)
+        .start_recording(mic_device, system_device, auto_save, buffered_mlx)
         .await
         .map_err(|error| map_recording_start_error(&app, error))?;
 
@@ -878,41 +884,6 @@ async fn save_stopped_recording<R: Runtime>(
         }
     };
     (folder, name, audio)
-}
-
-#[cfg(target_os = "macos")]
-async fn transcribe_final_recording<R: Runtime>(
-    app: &AppHandle<R>,
-    engine: &crate::parakeet_engine::ParakeetEngine,
-    selected_model: &str,
-    audio: std::path::PathBuf,
-) -> Result<Vec<(String, f64, f64)>> {
-    #[cfg(target_arch = "aarch64")]
-    {
-        const LIGHTNING: &str = crate::config::DEFAULT_PARAKEET_MODEL;
-        let mlx = if selected_model == crate::parakeet_engine::PARAKEET_MLX_MODEL_NAME
-            && engine.get_current_model().await.as_deref() == Some(LIGHTNING)
-        {
-            super::mlx_final_transcription::helper_path(app).zip(engine.downloaded_mlx_model())
-        } else {
-            None
-        };
-        if let Some((helper, model)) = mlx {
-            // Release the live model before MLX loads its weights.
-            engine.unload_model().await;
-            match super::mlx_final_transcription::transcribe(audio.clone(), helper, model).await {
-                Ok(transcript) if !transcript.is_empty() => {
-                    info!("Final transcript prepared with Parakeet MLX");
-                    return Ok(transcript);
-                }
-                _ => warn!("Parakeet MLX final transcription unavailable; trying CPU Parakeet"),
-            }
-            engine.load_model(LIGHTNING).await?;
-        }
-    }
-    #[cfg(not(target_arch = "aarch64"))]
-    let _ = (app, selected_model);
-    engine.transcribe_saved_recording(audio).await
 }
 
 /// Stop recording with optimized graceful shutdown ensuring NO transcript chunks are lost
@@ -1092,12 +1063,12 @@ async fn stop_recording_for_session<R: Runtime>(
 
     let live_segment_count = manager_for_cleanup.as_ref()
         .map_or(0, |manager| manager.get_transcript_segments().len() as u64);
-    let provider = config.as_ref().map(|config| config.provider.as_str());
-    let use_mlx = cfg!(all(target_os = "macos", target_arch = "aarch64"))
-        && config.as_ref().is_some_and(|config| {
-            config.provider == "parakeet"
-                && config.model == crate::parakeet_engine::PARAKEET_MLX_MODEL_NAME
-        });
+    let use_mlx = manager_for_cleanup.as_ref().is_some_and(|manager| manager.buffered_mlx);
+    let provider = if use_mlx {
+        Some("parakeet")
+    } else {
+        config.as_ref().map(|config| config.provider.as_str())
+    };
     let saved_for_final_pass = if use_mlx {
         Some(save_stopped_recording(&app, manager_for_cleanup.as_mut()).await)
     } else {
@@ -1106,7 +1077,7 @@ async fn stop_recording_for_session<R: Runtime>(
 
     #[allow(unused_mut)]
     let mut final_transcript: Option<Vec<crate::api::TranscriptSegment>> = None;
-    #[cfg(target_os = "macos")]
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     if let Some((Some(folder), _, Some(audio))) = &saved_for_final_pass {
         let engine = crate::parakeet_engine::commands::PARAKEET_ENGINE.lock().unwrap().clone();
         if let Some(engine) = engine {
@@ -1115,12 +1086,14 @@ async fn stop_recording_for_session<R: Runtime>(
                 "message": "Preparing the final transcript from saved audio…",
                 "progress": 65
             }));
-            let selected_model = config.as_ref().map_or("", |config| config.model.as_str());
-            match transcribe_final_recording(&app, &engine, selected_model, audio.into()).await {
+            match engine.transcribe_saved_recording(audio.into()).await {
                 Ok(results) if !results.is_empty() => {
                     let segments = super::common::create_transcript_segments(&results);
                     match super::common::write_transcripts_json(folder, &segments) {
-                        Ok(()) => final_transcript = Some(segments),
+                        Ok(()) => {
+                            info!("Final transcript prepared with Parakeet MLX");
+                            final_transcript = Some(segments);
+                        }
                         Err(_) => warn!("Could not save the final transcript; keeping the live transcript"),
                     }
                 }

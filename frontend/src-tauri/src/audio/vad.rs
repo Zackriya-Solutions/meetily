@@ -7,6 +7,9 @@ use std::time::Duration;
 /// Silero VAD only operates at 16kHz; input is resampled to this rate, and every
 /// sample count and timestamp inside this module is expressed in it.
 const VAD_SAMPLE_RATE: u32 = 16000;
+const FIRST_DRAFT: usize = 19_200; // 1.2 seconds at 16 kHz
+const DRAFT_INTERVAL: usize = 38_400;
+const LIVE_WINDOW: usize = 24 * VAD_SAMPLE_RATE as usize;
 
 /// Represents a complete speech segment detected by VAD
 #[derive(Debug, Clone)]
@@ -28,6 +31,9 @@ pub struct ContinuousVadProcessor {
     in_speech: bool,
     processed_samples: usize,
     speech_start_sample: usize,
+    session_origin_samples: usize,
+    draft_after_samples: usize,
+    redemption_time_ms: u32,
     last_logged_state: bool,
     large_speech_buffer_warned: bool,
 }
@@ -82,6 +88,9 @@ impl ContinuousVadProcessor {
             in_speech: false,
             processed_samples: 0,
             speech_start_sample: 0,
+            session_origin_samples: 0,
+            draft_after_samples: FIRST_DRAFT,
+            redemption_time_ms,
             last_logged_state: false,
             large_speech_buffer_warned: false,
         })
@@ -112,6 +121,40 @@ impl ContinuousVadProcessor {
         }
 
         Ok(completed_segments)
+    }
+
+    /// Snapshot an active utterance for a provisional caption. A long turn is
+    /// settled at the limit so both the decoder window and VAD history stay bounded.
+    pub(crate) fn live_caption(&mut self) -> Result<Option<(SpeechSegment, bool)>> {
+        if !self.in_speech {
+            return Ok(None);
+        }
+        let speech = self.session.get_current_speech();
+        if speech.len() < self.draft_after_samples.min(LIVE_WINDOW) {
+            return Ok(None);
+        }
+        let segment = SpeechSegment {
+            samples: speech.to_vec(),
+            start_timestamp_ms: self.speech_start_sample as f64 / 16.0,
+            end_timestamp_ms: self.processed_samples as f64 / 16.0,
+            confidence: 0.9,
+        };
+        if speech.len() < LIVE_WINDOW {
+            self.draft_after_samples = speech.len() + DRAFT_INTERVAL;
+            return Ok(Some((segment, true)));
+        }
+
+        self.rotate_live_session()?;
+        Ok(Some((segment, false)))
+    }
+
+    fn rotate_live_session(&mut self) -> Result<()> {
+        let mut next = Self::new(self.sample_rate, self.redemption_time_ms)?;
+        next.processed_samples = self.processed_samples;
+        next.session_origin_samples = self.processed_samples;
+        next.buffer = std::mem::take(&mut self.buffer);
+        *self = next;
+        Ok(())
     }
 
     /// Improved resampling from input sample rate to 16kHz with anti-aliasing
@@ -263,7 +306,9 @@ impl ContinuousVadProcessor {
                     // The only reader is the end-of-recording flush below, so the bug
                     // surfaced once per recording, on the final segment — which landed at
                     // ~2x the file duration and sorted to the end of the transcript.
-                    self.speech_start_sample = timestamp_ms * VAD_SAMPLE_RATE as usize / 1000;
+                    self.speech_start_sample = self.session_origin_samples
+                        + timestamp_ms * VAD_SAMPLE_RATE as usize / 1000;
+                    self.draft_after_samples = FIRST_DRAFT;
                     self.current_speech.clear();
                 }
                 VadTransition::SpeechEnd { start_timestamp_ms, end_timestamp_ms, samples } => {
@@ -284,8 +329,8 @@ impl ContinuousVadProcessor {
                     if !speech_samples.is_empty() {
                         let segment = SpeechSegment {
                             samples: speech_samples,
-                            start_timestamp_ms: start_timestamp_ms as f64,
-                            end_timestamp_ms: end_timestamp_ms as f64,
+                            start_timestamp_ms: start_timestamp_ms as f64 + self.session_origin_samples as f64 / 16.0,
+                            end_timestamp_ms: end_timestamp_ms as f64 + self.session_origin_samples as f64 / 16.0,
                             confidence: 0.9, // VAD confidence
                         };
 
@@ -436,6 +481,22 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn live_window_rotation_preserves_recording_time_and_pending_audio() {
+        let mut processor = ContinuousVadProcessor::new(16_000, 500).unwrap();
+        processor.processed_samples = LIVE_WINDOW + 480;
+        processor.in_speech = true;
+        processor.buffer = vec![0.125; 13];
+
+        processor.rotate_live_session().unwrap();
+
+        assert_eq!(processor.session_origin_samples, LIVE_WINDOW + 480);
+        assert_eq!(processor.processed_samples, LIVE_WINDOW + 480);
+        assert_eq!(processor.buffer, vec![0.125; 13]);
+        assert_eq!(processor.draft_after_samples, FIRST_DRAFT);
+        assert!(!processor.in_speech);
+    }
 
     /// Generate synthetic speech-like audio with alternating speech/silence
     fn generate_test_audio_with_speech(duration_seconds: f32, sample_rate: u32) -> Vec<f32> {

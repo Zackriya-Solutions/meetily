@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback, ReactNode, MutableRefObject } from 'react';
 import { Transcript, TranscriptUpdate } from '@/types';
 import { toast } from 'sonner';
+import { listen } from '@tauri-apps/api/event';
 import { useRecordingState } from './RecordingStateContext';
 import { transcriptService } from '@/services/transcriptService';
 import { recordingService } from '@/services/recordingService';
@@ -10,6 +11,7 @@ import { indexedDBService } from '@/services/indexedDBService';
 
 interface TranscriptContextType {
   transcripts: Transcript[];
+  liveDraft: string;
   transcriptsRef: MutableRefObject<Transcript[]>
   addTranscript: (update: TranscriptUpdate) => void;
   copyTranscript: () => void;
@@ -25,12 +27,28 @@ interface TranscriptContextType {
 const TranscriptContext = createContext<TranscriptContextType | undefined>(undefined);
 
 export function TranscriptProvider({ children }: { children: ReactNode }) {
+  const [liveDraft, setLiveDraft] = useState('');
   const [transcripts, setTranscripts] = useState<Transcript[]>([]);
   const [meetingTitle, setMeetingTitle] = useState('+ New Call');
   const [currentMeetingId, setCurrentMeetingId] = useState<string | null>(null);
 
   // Recording state context - provides backend-synced state
   const recordingState = useRecordingState();
+
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    void listen<string>('transcript-draft', event => {
+      if (active) setLiveDraft(event.payload);
+    }).then(remove => {
+      if (active) unlisten = remove;
+      else remove();
+    }).catch(console.warn);
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, []);
 
   // Refs for transcript management
   const transcriptsRef = useRef<Transcript[]>(transcripts);
@@ -482,6 +500,7 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
 
   // Clear transcripts (used when starting new recording)
   const clearTranscripts = useCallback(() => {
+    setLiveDraft('');
     setTranscripts([]);
     // Don't clear currentMeetingId here - it will be set by recording-started event
   }, []);
@@ -511,6 +530,7 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
 
   const value: TranscriptContextType = {
     transcripts,
+    liveDraft,
     transcriptsRef,
     addTranscript,
     copyTranscript,

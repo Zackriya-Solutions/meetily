@@ -8,6 +8,7 @@ use rubato::{Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolat
 
 use super::devices::AudioDevice;
 use super::recording_state::{AudioChunk, AudioError, RecordingState, DeviceType};
+use super::transcription::worker::TranscriptionChunk;
 use super::audio_processing::{audio_to_mono, LoudnessNormalizer, NoiseSuppressionProcessor, HighPassFilter};
 use super::vad::{ContinuousVadProcessor};
 
@@ -976,9 +977,10 @@ impl PipelineLogStats {
 /// Uses Voice Activity Detection to segment speech in real-time and send only speech to Whisper
 pub struct AudioPipeline {
     receiver: mpsc::UnboundedReceiver<AudioChunk>,
-    transcription_sender: mpsc::UnboundedSender<AudioChunk>,
+    transcription_sender: mpsc::UnboundedSender<TranscriptionChunk>,
     state: Arc<RecordingState>,
     vad_processor: ContinuousVadProcessor,
+    buffered_mlx: bool,
     sample_rate: u32,
     chunk_id_counter: u64,
     last_summary_time: std::time::Instant,
@@ -993,7 +995,8 @@ pub struct AudioPipeline {
 impl AudioPipeline {
     pub fn new(
         receiver: mpsc::UnboundedReceiver<AudioChunk>,
-        transcription_sender: mpsc::UnboundedSender<AudioChunk>,
+        transcription_sender: mpsc::UnboundedSender<TranscriptionChunk>,
+        buffered_mlx: bool,
         state: Arc<RecordingState>,
         target_chunk_duration_ms: u32,
         sample_rate: u32,
@@ -1053,6 +1056,7 @@ impl AudioPipeline {
         Ok(Self {
             receiver,
             transcription_sender,
+            buffered_mlx,
             state,
             vad_processor,
             sample_rate,
@@ -1127,6 +1131,28 @@ impl AudioPipeline {
         }
     }
 
+    fn send_speech_segment(&mut self, segment: super::vad::SpeechSegment, draft: bool) {
+        if segment.samples.len() < 800 {
+            self.log_stats.short += 1;
+            return;
+        }
+        if !draft {
+            self.log_stats.record_segment(segment.end_timestamp_ms - segment.start_timestamp_ms);
+        }
+        let audio = AudioChunk {
+            data: segment.samples,
+            sample_rate: 16000,
+            timestamp: segment.start_timestamp_ms / 1000.0,
+            chunk_id: self.chunk_id_counter,
+            device_type: DeviceType::Microphone,
+        };
+        if self.transcription_sender.send(TranscriptionChunk { audio, draft }).is_err() {
+            self.log_stats.send_failures += 1;
+        } else {
+            self.chunk_id_counter += 1;
+        }
+    }
+
     fn emit_mixed_window(&mut self, mic_window: &[f32], sys_window: &[f32], timestamp: f64) {
         // Simple mixing without aggressive ducking
         let mixed_clean = self.mixer.mix_window(&mic_window, &sys_window);
@@ -1141,23 +1167,13 @@ impl AudioPipeline {
         match self.vad_processor.process_audio(&mixed_with_gain) {
             Ok(speech_segments) => {
                 for segment in speech_segments {
-                    let duration_ms = segment.end_timestamp_ms - segment.start_timestamp_ms;
-                    if segment.samples.len() >= 800 {
-                        self.log_stats.record_segment(duration_ms);
-                        let transcription_chunk = AudioChunk {
-                            data: segment.samples,
-                            sample_rate: 16000,
-                            timestamp: segment.start_timestamp_ms / 1000.0,
-                            chunk_id: self.chunk_id_counter,
-                            device_type: DeviceType::Microphone,
-                        };
-                        if self.transcription_sender.send(transcription_chunk).is_err() {
-                            self.log_stats.send_failures += 1;
-                        } else {
-                            self.chunk_id_counter += 1;
-                        }
-                    } else {
-                        self.log_stats.short += 1;
+                    self.send_speech_segment(segment, false);
+                }
+                if self.buffered_mlx {
+                    match self.vad_processor.live_caption() {
+                        Ok(Some((segment, draft))) => self.send_speech_segment(segment, draft),
+                        Ok(None) => {}
+                        Err(error) => self.log_stats.record_vad_failure(VadOperation::Process, &error),
                     }
                 }
             }
@@ -1181,26 +1197,9 @@ impl AudioPipeline {
         #[cfg(target_os = "linux")]
         self.mix_ready(true, 0.0);
         match self.vad_processor.flush() {
-            Ok(final_segments) => {
-                for segment in final_segments {
-                    let duration_ms = segment.end_timestamp_ms - segment.start_timestamp_ms;
-                    if segment.samples.len() >= 800 {
-                        self.log_stats.record_segment(duration_ms);
-                        let transcription_chunk = AudioChunk {
-                            data: segment.samples,
-                            sample_rate: 16000,
-                            timestamp: segment.start_timestamp_ms / 1000.0,
-                            chunk_id: self.chunk_id_counter,
-                            device_type: DeviceType::Microphone,
-                        };
-                        if self.transcription_sender.send(transcription_chunk).is_err() {
-                            self.log_stats.send_failures += 1;
-                        } else {
-                            self.chunk_id_counter += 1;
-                        }
-                    } else {
-                        self.log_stats.short += 1;
-                    }
+            Ok(speech_segments) => {
+                for segment in speech_segments {
+                    self.send_speech_segment(segment, false);
                 }
             }
             Err(error) => self.log_stats.record_vad_failure(VadOperation::Flush, &error),
@@ -1246,7 +1245,8 @@ impl AudioPipelineManager {
     pub fn start(
         &mut self,
         state: Arc<RecordingState>,
-        transcription_sender: mpsc::UnboundedSender<AudioChunk>,
+        transcription_sender: mpsc::UnboundedSender<TranscriptionChunk>,
+        buffered_mlx: bool,
         target_chunk_duration_ms: u32,
         sample_rate: u32,
         recording_sender: Option<mpsc::UnboundedSender<AudioChunk>>,
@@ -1268,6 +1268,7 @@ impl AudioPipelineManager {
         let mut pipeline = AudioPipeline::new(
             audio_receiver,
             transcription_sender,
+            buffered_mlx,
             state.clone(),
             target_chunk_duration_ms,
             sample_rate,

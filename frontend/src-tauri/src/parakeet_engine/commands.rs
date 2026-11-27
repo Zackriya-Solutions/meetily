@@ -1,5 +1,5 @@
 use crate::parakeet_engine::parakeet_engine::{is_download_cancelled, CancelDownloadOutcome};
-use crate::parakeet_engine::{live_model_name, DownloadProgress, ModelInfo, ParakeetEngine};
+use crate::parakeet_engine::{DownloadProgress, ModelInfo, ParakeetEngine, PARAKEET_MLX_MODEL_NAME};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::{command, AppHandle, Emitter, Manager, Runtime};
@@ -8,11 +8,18 @@ use tauri::{command, AppHandle, Emitter, Manager, Runtime};
 pub static PARAKEET_ENGINE: Mutex<Option<Arc<ParakeetEngine>>> = Mutex::new(None);
 
 // Global models directory path (set during app initialization)
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+static MLX_HELPER: Mutex<Option<PathBuf>> = Mutex::new(None);
+
 static MODELS_DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
 
 /// Initialize the models directory path using app_data_dir
 /// This should be called during app setup before parakeet_init
 pub fn set_models_directory<R: Runtime>(app: &AppHandle<R>) {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        *MLX_HELPER.lock().unwrap() = crate::audio::mlx_final_transcription::helper_path(app);
+    }
     let app_data_dir = app.path().app_data_dir()
         .expect("Failed to get app data dir");
 
@@ -47,6 +54,12 @@ pub async fn parakeet_init() -> Result<(), String> {
     let models_dir = get_models_directory();
     let engine = ParakeetEngine::new_with_models_dir(models_dir)
         .map_err(|e| format!("Failed to initialize Parakeet engine: {}", e))?;
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    let engine = {
+        let mut engine = engine;
+        engine.mlx_helper = MLX_HELPER.lock().unwrap().clone();
+        engine
+    };
     *guard = Some(Arc::new(engine));
     Ok(())
 }
@@ -62,20 +75,10 @@ pub async fn parakeet_get_available_models<R: Runtime>(
     };
 
     if let Some(engine) = engine {
-        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-        let include_download_only = include_download_only.unwrap_or(false)
-            && crate::audio::mlx_final_transcription::helper_path(&app).is_some();
-        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
-        let include_download_only = {
-            let _ = (app, include_download_only);
-            false
-        };
-        let models = if include_download_only {
-            engine.discover_downloadable_models().await
-        } else {
-            engine.discover_models().await
-        };
-        models.map_err(|e| format!("Failed to discover Parakeet models: {}", e))
+        // Keep the optional argument for older callers. MLX is a regular runnable model.
+        let _ = (app, include_download_only);
+        engine.discover_models().await
+            .map_err(|e| format!("Failed to discover Parakeet models: {}", e))
     } else {
         Err("Parakeet engine not initialized".to_string())
     }
@@ -264,7 +267,7 @@ pub async fn parakeet_validate_model_ready_with_config<R: tauri::Runtime>(
                 );
                 if config.provider == "parakeet" && !config.model.is_empty() {
                     log::info!("Using user's configured Parakeet model: {}", config.model);
-                    Some(live_model_name(&config.model).to_owned())
+                    Some(config.model)
                 } else {
                     log::info!(
                         "API config uses non-Parakeet provider ({}) or empty model, will auto-select",
@@ -302,6 +305,12 @@ pub async fn parakeet_validate_model_ready_with_config<R: tauri::Runtime>(
             .iter()
             .filter(|model| matches!(model.status, crate::parakeet_engine::ModelStatus::Available))
             .collect();
+
+        if model_to_load.as_deref() == Some(PARAKEET_MLX_MODEL_NAME)
+            && !available_models.iter().any(|model| model.name == PARAKEET_MLX_MODEL_NAME)
+        {
+            return Err("Lightning (MLX) is unavailable. Download it or choose another model in Transcription Settings.".into());
+        }
 
         if available_models.is_empty() {
             return Err(

@@ -177,10 +177,15 @@ pub struct TranscriptUpdate {
 // NOTE: get_transcript_history and get_recording_meeting_name functions
 // have been moved to recording_commands.rs where they have access to RECORDING_MANAGER
 
+pub struct TranscriptionChunk {
+    pub(crate) audio: AudioChunk,
+    pub(crate) draft: bool,
+}
+
 /// Optimized parallel transcription task ensuring ZERO chunk loss
 pub fn start_transcription_task<R: Runtime>(
     app: AppHandle<R>,
-    transcription_receiver: tokio::sync::mpsc::UnboundedReceiver<AudioChunk>,
+    transcription_receiver: tokio::sync::mpsc::UnboundedReceiver<TranscriptionChunk>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         info!("Starting transcription worker task");
@@ -200,7 +205,7 @@ pub fn start_transcription_task<R: Runtime>(
         };
 
         const NUM_WORKERS: usize = 1;
-        let (work_sender, work_receiver) = tokio::sync::mpsc::unbounded_channel::<AudioChunk>();
+        let (work_sender, work_receiver) = tokio::sync::mpsc::unbounded_channel::<TranscriptionChunk>();
         let work_receiver = Arc::new(tokio::sync::Mutex::new(work_receiver));
         let chunks_queued = Arc::new(AtomicU64::new(0));
         let chunks_completed = Arc::new(AtomicU64::new(0));
@@ -219,6 +224,7 @@ pub fn start_transcription_task<R: Runtime>(
 
             worker_handles.push(tokio::spawn(async move {
                 let mut stats = WorkerLogStats::default();
+                let mut visible_draft = false;
                 let mut last_summary = Instant::now();
 
                 while let Some(chunk) = {
@@ -231,6 +237,22 @@ pub fn start_transcription_task<R: Runtime>(
                     stats.max_queue_depth = stats
                         .max_queue_depth
                         .max(queued.saturating_sub(completed_before));
+
+                    let TranscriptionChunk { audio: chunk, draft } = chunk;
+                    if draft {
+                        // An older draft is expendable when newer audio is already waiting.
+                        if queued.saturating_sub(completed_before) <= 1 {
+                            if let TranscriptionEngine::Parakeet(engine) = &engine_clone {
+                                if let Ok(text) = engine.transcribe_audio(chunk.data).await {
+                                    visible_draft = !text.is_empty();
+                                    let _ = app_clone.emit("transcript-draft", text);
+                                }
+                            }
+                        }
+                        stats.completed += 1;
+                        chunks_completed_clone.fetch_add(1, Ordering::SeqCst);
+                        continue;
+                    }
 
                     let chunk_timestamp = chunk.timestamp;
                     let chunk_duration = chunk.data.len() as f64 / chunk.sample_rate as f64;
@@ -319,6 +341,10 @@ pub fn start_transcription_task<R: Runtime>(
                         }
                     }
 
+                    if visible_draft {
+                        let _ = app_clone.emit("transcript-draft", "");
+                        visible_draft = false;
+                    }
                     stats.total_processing_duration += processing_started.elapsed();
                     stats.completed += 1;
                     let completed = chunks_completed_clone.fetch_add(1, Ordering::SeqCst) + 1;

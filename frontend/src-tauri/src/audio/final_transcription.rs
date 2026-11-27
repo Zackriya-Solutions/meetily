@@ -87,7 +87,7 @@ fn milliseconds(sample: usize) -> f64 {
     sample as f64 * 1000.0 / RATE as f64
 }
 
-fn owned_text(
+pub(super) fn owned_text(
     result: TimestampedResult,
     origin: usize,
     start: usize,

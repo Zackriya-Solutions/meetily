@@ -189,6 +189,7 @@ pub struct RecordingManager {
     stream_manager: AudioStreamManager,
     pipeline_manager: AudioPipelineManager,
     recording_saver: RecordingSaver,
+    pub(crate) buffered_mlx: bool,
     device_monitor: Option<AudioDeviceMonitor>,
     device_event_receiver: Option<mpsc::UnboundedReceiver<DeviceEvent>>,
 }
@@ -209,6 +210,7 @@ impl RecordingManager {
             stream_manager,
             pipeline_manager,
             recording_saver: RecordingSaver::new(),
+            buffered_mlx: false,
             device_monitor: Some(device_monitor),
             device_event_receiver: Some(device_event_receiver),
         }
@@ -230,11 +232,13 @@ impl RecordingManager {
         microphone_device: Option<Arc<AudioDevice>>,
         system_device: Option<Arc<AudioDevice>>,
         auto_save: bool,
-    ) -> std::result::Result<mpsc::UnboundedReceiver<AudioChunk>, RecordingStartError> {
+        buffered_mlx: bool,
+    ) -> std::result::Result<mpsc::UnboundedReceiver<super::transcription::worker::TranscriptionChunk>, RecordingStartError> {
         info!("Starting recording manager (auto_save: {})", auto_save);
 
         // Set up transcription channel
-        let (transcription_sender, transcription_receiver) = mpsc::unbounded_channel::<AudioChunk>();
+        self.buffered_mlx = buffered_mlx;
+        let (transcription_sender, transcription_receiver) = mpsc::unbounded_channel();
         let (recording_sender, recording_receiver) = mpsc::unbounded_channel::<AudioChunk>();
 
         // Start recording state first
@@ -264,6 +268,7 @@ impl RecordingManager {
         if let Err(error) = self.pipeline_manager.start(
             self.state.clone(),
             transcription_sender,
+            buffered_mlx,
             0, // Ignored - using dynamic sizing internally
             48000, // 48kHz sample rate
             Some(recording_sender), // CRITICAL: Pass recording sender to receive pre-mixed audio

@@ -174,7 +174,7 @@ export function ParakeetModelManager({
 
             const isMlx = modelName === PARAKEET_MLX_MODEL;
             toast.success(`${displayInfo?.icon || '✓'} ${displayName} downloaded`, {
-              description: isMlx ? 'Select to use MLX for the final transcript' : 'Model downloaded and ready to use',
+              description: isMlx ? 'Select to use MLX for live captions and the final transcript' : 'Model downloaded and ready to use',
               duration: 4000
             });
 
@@ -404,59 +404,26 @@ export function ParakeetModelManager({
     );
   }
 
-  const recommendedModel = models.find(m =>
-    m.name === DEFAULT_PARAKEET_MODEL
-  );
-  const otherModels = models.filter(m =>
-    m.name !== DEFAULT_PARAKEET_MODEL
-  );
+  const recommendedModel = models.some(model => model.name === PARAKEET_MLX_MODEL)
+    ? PARAKEET_MLX_MODEL
+    : DEFAULT_PARAKEET_MODEL;
 
   return (
-    <div className={`space-y-3 ${className}`}>
-      {/* Recommended Model */}
-      {recommendedModel && (
+    <div className="space-y-3">
+      {models.map(model => (
         <ModelCard
-          model={recommendedModel}
-          isSelected={selectedModel === recommendedModel.name}
-          isRecommended={true}
-          onSelect={() => {
-            if (recommendedModel.status === 'Available') {
-              selectModel(recommendedModel.name);
-            }
-          }}
-          onDownload={() => downloadModel(recommendedModel.name)}
-          onCancel={() => cancelDownload(recommendedModel.name)}
-          onDelete={() => deleteModel(recommendedModel.name)}
-          isDownloading={downloadingModels.has(recommendedModel.name)}
-          isCancelling={cancellingModels.has(recommendedModel.name)}
+          key={model.name}
+          model={model}
+          isSelected={selectedModel === model.name}
+          isRecommended={model.name === recommendedModel}
+          onSelect={() => selectModel(model.name)}
+          onDownload={() => downloadModel(model.name)}
+          onCancel={() => cancelDownload(model.name)}
+          onDelete={() => deleteModel(model.name)}
+          isDownloading={downloadingModels.has(model.name)}
+          isCancelling={cancellingModels.has(model.name)}
         />
-      )}
-
-      {/* Other Models */}
-      {otherModels.length > 0 && (
-        <div className="space-y-3">
-          {otherModels.map(model => (
-            <ModelCard
-              key={model.name}
-              model={model}
-              isSelected={selectedModel === model.name}
-              isRecommended={false}
-              requiresLightning={model.name === PARAKEET_MLX_MODEL && recommendedModel?.status !== 'Available'}
-              onSelect={() => {
-                if (model.status === 'Available') {
-                  selectModel(model.name);
-                }
-              }}
-              onDownload={() => downloadModel(model.name)}
-              onCancel={() => cancelDownload(model.name)}
-              onDelete={() => deleteModel(model.name)}
-              isDownloading={downloadingModels.has(model.name)}
-              isCancelling={cancellingModels.has(model.name)}
-            />
-          ))}
-        </div>
-      )}
-
+      ))}
       {/* Helper text */}
       {selectedModel && (
         <motion.div
@@ -465,7 +432,7 @@ export function ParakeetModelManager({
           className="text-xs text-gray-500 text-center pt-2"
         >
           {selectedModel === PARAKEET_MLX_MODEL
-            ? 'Live captions: Lightning · Final transcript: Lightning (MLX)'
+            ? 'Live captions and final transcript use Lightning (MLX)'
             : `Using ${getModelDisplayName(selectedModel)} for transcription`}
         </motion.div>
       )}
@@ -478,7 +445,6 @@ interface ModelCardProps {
   model: ParakeetModelInfo;
   isSelected: boolean;
   isRecommended: boolean;
-  requiresLightning?: boolean;
   onSelect: () => void;
   onDownload: () => void;
   onCancel: () => void;
@@ -491,7 +457,6 @@ function ModelCard({
   model,
   isSelected,
   isRecommended,
-  requiresLightning = false,
   onSelect,
   onDownload,
   onCancel,
@@ -506,7 +471,7 @@ function ModelCard({
   const tagline = displayInfo?.tagline || model.description || '';
 
   const isAvailable = model.status === 'Available';
-  const canSelect = isAvailable && !requiresLightning && !isCancelling;
+  const canSelect = isAvailable && !isCancelling;
   const isMissing = model.status === 'Missing';
   const isError = typeof model.status === 'object' && 'Error' in model.status;
   const isCorrupted = typeof model.status === 'object' && 'Corrupted' in model.status;
@@ -578,7 +543,7 @@ function ModelCard({
 
             {/* Tagline */}
             <p className="text-sm text-gray-600 ml-9">
-              {requiresLightning && isAvailable ? 'Download Lightning to enable live captions and select MLX.' : tagline}
+              {tagline}
             </p>
           </div>
 
@@ -588,7 +553,7 @@ function ModelCard({
               <>
                 <div className="flex items-center gap-1.5 text-green-600">
                   <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                  <span className="text-xs font-medium">{requiresLightning ? 'Downloaded' : 'Ready'}</span>
+                  <span className="text-xs font-medium">Ready</span>
                 </div>
                 <AnimatePresence>
                   {isHovered && (

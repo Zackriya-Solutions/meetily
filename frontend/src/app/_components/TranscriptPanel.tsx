@@ -31,7 +31,7 @@ export function TranscriptPanel({
   showModal
 }: TranscriptPanelProps) {
   // Contexts
-  const { transcripts, transcriptContainerRef, copyTranscript } = useTranscripts();
+  const { transcripts, liveDraft, transcriptContainerRef, copyTranscript } = useTranscripts();
   const { transcriptModelConfig } = useConfig();
   const { isRecording, isPaused } = useRecordingState();
   const { checkPermissions, isChecking, hasSystemAudio, hasMicrophone } = usePermissionCheck();
@@ -114,6 +114,11 @@ export function TranscriptPanel({
               enableStreaming={isRecording}
               showConfidence={true}
             />
+            {isRecording && !isPaused && !isStopping && liveDraft && (
+              <p aria-label="Provisional caption" className="px-4 py-2 text-sm text-gray-500">
+                {liveDraft}
+              </p>
+            )}
           </div>
         </div>
       </div>
