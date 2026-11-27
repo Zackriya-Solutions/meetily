@@ -8,9 +8,7 @@ import { useOnboarding } from '@/contexts/OnboardingContext';
 import { toast } from 'sonner';
 import { motion, AnimatePresence } from 'framer-motion';
 import { getSummaryModelSizeLabel, getSummaryModelSizeMb } from '@/lib/onboarding-summary-model';
-import type { ParakeetDownloadProgressEvent } from '@/lib/parakeet';
-
-const PARAKEET_MODEL = 'parakeet-tdt-0.6b-v3-int8';
+import { formatFileSize, getModelDisplayName, ParakeetAPI, type ParakeetDownloadProgressEvent } from '@/lib/parakeet';
 
 type DownloadStatus = 'waiting' | 'downloading' | 'completed' | 'cancelled' | 'error';
 
@@ -28,21 +26,24 @@ export function DownloadProgressStep() {
     goNext,
     selectedSummaryModel,
     recommendedSummaryModel,
+    selectedTranscriptionModel,
+    transcriptionModels,
     parakeetDownloaded,
     setParakeetDownloaded,
     summaryModelDownloaded,
     setSummaryModelDownloaded,
-    startBackgroundDownloads,
+    startBackgroundSummaryDownload,
     completeOnboarding,
   } = useOnboarding();
 
+  const transcriptionSize = transcriptionModels?.find(model => model.name === selectedTranscriptionModel)?.size_mb ?? 0;
   const [isMac, setIsMac] = useState(false);
 
   const [parakeetState, setParakeetState] = useState<DownloadState>({
     status: parakeetDownloaded ? 'completed' : 'waiting',
     progress: parakeetDownloaded ? 100 : 0,
     downloadedMb: 0,
-    totalMb: 670,
+    totalMb: transcriptionSize,
     speedMbps: 0,
   });
 
@@ -55,7 +56,6 @@ export function DownloadProgressStep() {
   });
 
   const [isCompleting, setIsCompleting] = useState(false);
-  const parakeetDownloadStartedRef = useRef(false);
   const summaryDownloadStartedRef = useRef(false);
   const retryingRef = useRef(false);
   const retryingSummaryRef = useRef(false);
@@ -82,7 +82,7 @@ export function DownloadProgressStep() {
     }));
 
     try {
-      await invoke('parakeet_retry_download', { modelName: PARAKEET_MODEL });
+      await invoke('parakeet_retry_download', { modelName: selectedTranscriptionModel });
       // Progress events will update state
     } catch (error) {
       console.error('[DownloadProgressStep] Retry failed:', error);
@@ -165,26 +165,6 @@ export function DownloadProgressStep() {
     checkPlatform();
   }, []);
 
-  // Start the required transcription model immediately; summary readiness must not block it.
-  useEffect(() => {
-    if (parakeetDownloadStartedRef.current) return;
-    parakeetDownloadStartedRef.current = true;
-
-    if (!parakeetDownloaded) {
-      setParakeetState((prev) => ({ ...prev, status: 'downloading' }));
-    }
-
-    startBackgroundDownloads({
-      includeParakeet: true,
-      includeSummary: false,
-    }).catch((error) => {
-      console.error('Failed to start Parakeet download:', error);
-      if (!parakeetDownloaded) {
-        setParakeetState((prev) => ({ ...prev, status: 'error', error: String(error) }));
-      }
-    });
-  }, []);
-
   // Start the selected summary model only after the backend recommendation is known.
   useEffect(() => {
     if (summaryDownloadStartedRef.current) return;
@@ -196,11 +176,12 @@ export function DownloadProgressStep() {
 
   // Listen to Parakeet download progress
   useEffect(() => {
+    let active = true;
     const unlistenProgress = listen<ParakeetDownloadProgressEvent>(
       'parakeet-model-download-progress',
       (event) => {
         const { modelName, progress, downloaded_mb, total_mb, speed_mbps, status } = event.payload;
-        if (modelName !== PARAKEET_MODEL) return;
+        if (modelName !== selectedTranscriptionModel) return;
 
         if (status === 'cancelled') {
           setParakeetState((prev) => ({
@@ -216,23 +197,19 @@ export function DownloadProgressStep() {
 
         setParakeetState((prev) => ({
           ...prev,
-          status: status === 'completed' ? 'completed' : 'downloading',
+          status: prev.status === 'completed' ? 'completed' : 'downloading',
           progress,
           downloadedMb: downloaded_mb ?? prev.downloadedMb,
           totalMb: total_mb ?? prev.totalMb,
           speedMbps: speed_mbps ?? prev.speedMbps,
         }));
-
-        if (status === 'completed') {
-          setParakeetDownloaded(true);
-        }
       }
     );
 
     const unlistenComplete = listen<{ modelName: string }>(
       'parakeet-model-download-complete',
       (event) => {
-        if (event.payload.modelName === PARAKEET_MODEL) {
+        if (event.payload.modelName === selectedTranscriptionModel) {
           setParakeetState((prev) => ({ ...prev, status: 'completed', progress: 100 }));
           setParakeetDownloaded(true);
         }
@@ -242,7 +219,7 @@ export function DownloadProgressStep() {
     const unlistenError = listen<{ modelName: string; error: string }>(
       'parakeet-model-download-error',
       (event) => {
-        if (event.payload.modelName === PARAKEET_MODEL) {
+        if (event.payload.modelName === selectedTranscriptionModel) {
           setParakeetState((prev) => ({
             ...prev,
             status: 'error',
@@ -252,12 +229,39 @@ export function DownloadProgressStep() {
       }
     );
 
+    const listeners = Promise.all([unlistenProgress, unlistenComplete, unlistenError]);
+    void listeners.then(async () => {
+      const model = (await ParakeetAPI.getAvailableModels()).find(
+        model => model.name === selectedTranscriptionModel
+      );
+      if (!active) return;
+      if (!model) throw new Error('The selected transcription model is unavailable.');
+
+      if (model.status === 'Available') {
+        setParakeetState(prev => ({ ...prev, status: 'completed', progress: 100 }));
+        setParakeetDownloaded(true);
+        return;
+      }
+
+      const ongoing = typeof model.status === 'object' && 'Downloading' in model.status;
+      setParakeetDownloaded(false);
+      setParakeetState(prev => ({ ...prev, status: 'downloading' }));
+      if (!ongoing) {
+        await ParakeetAPI.downloadModel(selectedTranscriptionModel);
+      }
+    }).catch(error => {
+      if (active) {
+        setParakeetState(prev => ({ ...prev, status: 'error', error: String(error) }));
+      }
+    });
+
     return () => {
-      unlistenProgress.then((fn) => fn());
-      unlistenComplete.then((fn) => fn());
-      unlistenError.then((fn) => fn());
+      active = false;
+      for (const listener of [unlistenProgress, unlistenComplete, unlistenError]) {
+        void listener.then(unlisten => unlisten()).catch(console.warn);
+      }
     };
-  }, []);
+  }, [selectedTranscriptionModel, setParakeetDownloaded]);
 
   // Listen to Summary Model download progress (always downloading for builtin-ai)
   useEffect(() => {
@@ -325,11 +329,7 @@ export function DownloadProgressStep() {
           status: 'downloading',
           totalMb: getSummaryModelSizeMb(selectedSummaryModel),
         }));
-        await startBackgroundDownloads({
-          includeParakeet: false,
-          includeSummary: true,
-          summaryModel: selectedSummaryModel,
-        });
+        startBackgroundSummaryDownload(selectedSummaryModel);
       } catch (error) {
         console.error('Failed to start summary model download:', error);
         setSummaryState((prev) => ({ ...prev, status: 'error', error: String(error) }));
@@ -340,28 +340,19 @@ export function DownloadProgressStep() {
   const handleContinue = async () => {
     // Verify actual model availability (catches state drift)
     try {
-      await invoke('parakeet_init');
-      const actuallyAvailable = await invoke<boolean>('parakeet_has_available_models');
+      const actuallyAvailable = (await ParakeetAPI.getAvailableModels()).some(
+        model => model.name === selectedTranscriptionModel && model.status === 'Available'
+      );
 
-      if (actuallyAvailable && !parakeetDownloaded) {
-        console.log('[DownloadProgressStep] Model available but state not updated');
-        setParakeetDownloaded(true);
-        setParakeetState((prev) => ({
-          ...prev,
-          status: 'completed',
-          progress: 100,
-        }));
-      } else if (
-        !actuallyAvailable &&
-        (parakeetState.status === 'error' || parakeetState.status === 'cancelled')
-      ) {
-        toast.error('Transcription engine required', {
-          description: 'Please retry the download before continuing.',
-        });
+      if (!actuallyAvailable) {
+        setParakeetDownloaded(false);
+        toast.error('Transcription model is still getting ready.');
         return;
       }
     } catch (error) {
       console.warn('[DownloadProgressStep] Failed to verify model:', error);
+      toast.error('Could not verify the transcription model. Please try again.');
+      return;
     }
 
     // Check if downloads are complete for toast notification
@@ -502,7 +493,7 @@ export function DownloadProgressStep() {
             'Transcription Engine',
             <Mic className="w-5 h-5 text-gray-600" />,
             parakeetState,
-            '~670 MB'
+            getModelDisplayName(selectedTranscriptionModel) + ' · ' + formatFileSize(transcriptionSize)
           )}
 
           {renderDownloadCard(

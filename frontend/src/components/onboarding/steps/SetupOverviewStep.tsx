@@ -3,6 +3,7 @@ import { Info } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { OnboardingContainer } from '../OnboardingContainer';
 import { useOnboarding } from '@/contexts/OnboardingContext';
+import { formatFileSize, getModelDisplayName } from '@/lib/parakeet';
 import {
   Tooltip,
   TooltipContent,
@@ -11,7 +12,12 @@ import {
 } from "@/components/ui/tooltip";
 
 export function SetupOverviewStep() {
-  const { goNext } = useOnboarding();
+  const {
+    transcriptionModels, selectedTranscriptionModel, loadTranscriptionModels, beginDownloads,
+  } = useOnboarding();
+  const [choice, setChoice] = useState(selectedTranscriptionModel);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState('');
   const [isMac, setIsMac] = useState(false);
 
   useEffect(() => {
@@ -39,8 +45,22 @@ export function SetupOverviewStep() {
     },
   ];
 
-  const handleContinue = () => {
-    goNext();
+  useEffect(() => {
+    setChoice(selectedTranscriptionModel);
+  }, [selectedTranscriptionModel]);
+
+  const handleContinue = async () => {
+    if (pending) return;
+    setPending(true);
+    setError('');
+    try {
+      if (transcriptionModels) await beginDownloads(choice);
+      else await loadTranscriptionModels();
+    } catch (error) {
+      setError(String(error));
+    } finally {
+      setPending(false);
+    }
   };
 
   return (
@@ -58,7 +78,7 @@ export function SetupOverviewStep() {
               return (
                 <div
                   key={step.number}
-                  className={`flex items-start gap-4 p-1`}
+                  className="p-1"
                 >
                   <div className="flex-1 ml-1">
                     <h3 className="font-medium text-gray-900 flex items-center gap-2">
@@ -81,6 +101,23 @@ export function SetupOverviewStep() {
                         )}
                         </h3>
                   </div>
+                  {step.type === 'transcription' && transcriptionModels && transcriptionModels.length > 1 && (
+                    <label className="flex flex-col gap-1.5 text-sm text-gray-700 mt-2">
+                      Transcription model
+                      <select
+                        className="rounded-md border border-gray-300 bg-white px-3 py-2"
+                        value={choice}
+                        onChange={event => setChoice(event.target.value)}
+                        disabled={pending}
+                      >
+                        {transcriptionModels.map(model => (
+                          <option key={model.name} value={model.name}>
+                            {getModelDisplayName(model.name)} · {formatFileSize(model.size_mb)}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
                 </div>
               );
             })}
@@ -90,11 +127,13 @@ export function SetupOverviewStep() {
 
         {/* CTA Section */}
         <div className="w-full max-w-xs space-y-4">
+          {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
           <Button
             onClick={handleContinue}
+            disabled={pending}
             className="w-full h-11 bg-gray-900 hover:bg-gray-800 text-white"
           >
-            Let's Go
+            {transcriptionModels ? "Let's Go" : 'Check transcription models'}
           </Button>
           <div className="text-center">
             <a

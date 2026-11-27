@@ -13,7 +13,7 @@ pnpm tauri build --target aarch64-apple-darwin --config src-tauri/tauri.parakeet
 
 The **Build and Test - macOS** workflow includes the helper by default. It can also build without it.
 
-For a signed build, set `APPLE_SIGNING_IDENTITY` when freezing the helper. The helper ships with its own runtime. Download and select **Lightning (MLX)** in **Settings → Transcription**.
+For a signed build, set `APPLE_SIGNING_IDENTITY` when freezing the helper. The helper ships with its own runtime. Choose **Lightning (MLX)** during setup or download and select it in **Settings → Transcription**. Setup downloads only the transcription model you choose.
 
 With **Lightning (MLX)** selected, Meetily uses the same local MLX model for live captions and the final transcript. Live captions show a draft during speech and settle at a pause or after a bounded window. After recording stops, Meetily processes saved audio in 24-second regions with three seconds of context on both sides. If the final pass fails, Meetily keeps the settled live transcript.
 
