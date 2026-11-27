@@ -23,6 +23,8 @@ pub struct ModelStatus {
     pub summary: String,   // Generic field for summary model (Qwen 3.5 or legacy Gemma variants)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selected_summary_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_transcription_model: Option<String>,
 }
 
 impl Default for OnboardingStatus {
@@ -35,6 +37,7 @@ impl Default for OnboardingStatus {
                 parakeet: "not_downloaded".to_string(),
                 summary: "not_downloaded".to_string(),  // Changed from gemma
                 selected_summary_model: None,
+                selected_transcription_model: None,
             },
             last_updated: chrono::Utc::now().to_rfc3339(),
         }
@@ -172,7 +175,31 @@ pub async fn complete_onboarding<R: Runtime>(
     app: AppHandle<R>,
     state: tauri::State<'_, AppState>,
     model: String,
+    transcription_model: Option<String>,
 ) -> Result<(), String> {
+    use crate::{
+        config::DEFAULT_PARAKEET_MODEL,
+        parakeet_engine::{commands, ModelStatus as ParakeetStatus, PARAKEET_MLX_MODEL_NAME},
+    };
+
+    let transcription_model = transcription_model
+        .as_deref()
+        .unwrap_or(DEFAULT_PARAKEET_MODEL);
+    if !matches!(transcription_model, DEFAULT_PARAKEET_MODEL | PARAKEET_MLX_MODEL_NAME) {
+        return Err("Invalid onboarding transcription model.".into());
+    }
+    commands::parakeet_init().await?;
+    let available = commands::parakeet_get_available_models(app.clone(), None)
+        .await?
+        .iter()
+        .any(|model| {
+            model.name == transcription_model && matches!(model.status, ParakeetStatus::Available)
+        });
+    if !available {
+        return Err("The selected transcription model is not ready.".into());
+    }
+
+
     info!("Completing onboarding with builtin-ai model: {}", model);
 
     // Step 1: Save model configuration to SQLite database FIRST
@@ -195,12 +222,12 @@ pub async fn complete_onboarding<R: Runtime>(
     if let Err(e) = SettingsRepository::save_transcript_config(
         pool,
         "parakeet",
-        crate::config::DEFAULT_PARAKEET_MODEL,
+        transcription_model,
     ).await {
         error!("Failed to save transcription model config: {}", e);
         return Err(format!("Failed to save transcription model config: {}", e));
     }
-    info!("Saved transcription model config: provider=parakeet, model={}", crate::config::DEFAULT_PARAKEET_MODEL);
+    info!("Saved transcription model config: provider=parakeet, model={}", transcription_model);
 
     // Step 2: Only NOW mark onboarding as complete (after DB operations succeed)
     let mut status = load_onboarding_status(&app)
@@ -212,6 +239,7 @@ pub async fn complete_onboarding<R: Runtime>(
     status.model_status.parakeet = "downloaded".to_string();
     status.model_status.summary = "downloaded".to_string();
     status.model_status.selected_summary_model = Some(model.clone());
+    status.model_status.selected_transcription_model = Some(transcription_model.to_owned());
 
     save_onboarding_status(&app, &status)
         .await
@@ -242,5 +270,23 @@ mod tests {
         .expect("old onboarding status should remain compatible");
 
         assert_eq!(status.model_status.selected_summary_model, None);
+        assert_eq!(status.model_status.selected_transcription_model, None);
     }
+
+    #[test]
+    fn onboarding_status_preserves_the_selected_transcription_model() {
+        let mut status = OnboardingStatus::default();
+        status.current_step = 3;
+        status.model_status.selected_transcription_model =
+            Some(crate::parakeet_engine::PARAKEET_MLX_MODEL_NAME.into());
+        let serialized = serde_json::to_value(&status).unwrap();
+        let restored: OnboardingStatus = serde_json::from_value(serialized).unwrap();
+
+        assert_eq!(restored.current_step, 3);
+        assert_eq!(
+            restored.model_status.selected_transcription_model.as_deref(),
+            Some(crate::parakeet_engine::PARAKEET_MLX_MODEL_NAME)
+        );
+    }
+
 }

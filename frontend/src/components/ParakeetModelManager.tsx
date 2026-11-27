@@ -3,9 +3,11 @@ import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'sonner';
+import { DEFAULT_PARAKEET_MODEL } from '@/constants/modelDefaults';
 import {
   ModelStatus,
   ParakeetAPI,
+  PARAKEET_MLX_MODEL,
   ParakeetDownloadProgressEvent,
   ParakeetModelInfo,
   formatFileSize,
@@ -37,6 +39,7 @@ export function ParakeetModelManager({
   // Refs for stable callbacks
   const onModelSelectRef = useRef(onModelSelect);
   const autoSaveRef = useRef(autoSave);
+  const savingSelectionRef = useRef(false);
 
   useEffect(() => {
     onModelSelectRef.current = onModelSelect;
@@ -62,7 +65,7 @@ export function ParakeetModelManager({
       try {
         setLoading(true);
         await ParakeetAPI.init();
-        const modelList = await ParakeetAPI.getAvailableModels();
+        const modelList = await ParakeetAPI.getAvailableModels(true);
         setModels(modelList.map(model => ({
           ...model,
           status: latestStatusByModelRef.current.get(model.name) ?? model.status
@@ -169,13 +172,14 @@ export function ParakeetModelManager({
             // Clean up throttle data
             progressThrottleRef.current.delete(modelName);
 
-            toast.success(`${displayInfo?.icon || '✓'} ${displayName} ready!`, {
-              description: 'Model downloaded and ready to use',
+            const isMlx = modelName === PARAKEET_MLX_MODEL;
+            toast.success(`${displayInfo?.icon || '✓'} ${displayName} downloaded`, {
+              description: isMlx ? 'Select to use MLX for live captions and the final transcript' : 'Model downloaded and ready to use',
               duration: 4000
             });
 
             // Auto-select after download using stable refs
-            if (onModelSelectRef.current) {
+            if (!isMlx && onModelSelectRef.current) {
               onModelSelectRef.current(modelName);
               if (autoSaveRef.current) {
                 saveModelSelection(modelName);
@@ -262,8 +266,11 @@ export function ParakeetModelManager({
         model: modelName,
         apiKey: null
       });
+      return true;
     } catch (error) {
       console.error('Failed to save model selection:', error);
+      toast.error('Could not save the transcription model');
+      return false;
     }
   };
 
@@ -332,19 +339,15 @@ export function ParakeetModelManager({
   };
 
   const selectModel = async (modelName: string) => {
-    if (onModelSelect) {
-      onModelSelect(modelName);
+    if (modelName === selectedModel || savingSelectionRef.current) return;
+    savingSelectionRef.current = true;
+    try {
+      if (autoSave && !await saveModelSelection(modelName)) return;
+      onModelSelect?.(modelName);
+      toast.success(`Switched to ${getModelDisplayName(modelName)}`, { duration: 3000 });
+    } finally {
+      savingSelectionRef.current = false;
     }
-
-    if (autoSave) {
-      await saveModelSelection(modelName);
-    }
-
-    const displayInfo = getModelDisplayInfo(modelName);
-    const displayName = displayInfo?.friendlyName || modelName;
-    toast.success(`Switched to ${displayName}`, {
-      duration: 3000
-    });
   };
 
   const deleteModel = async (modelName: string) => {
@@ -355,7 +358,7 @@ export function ParakeetModelManager({
       await ParakeetAPI.deleteCorruptedModel(modelName);
 
       // Refresh models list
-      const modelList = await ParakeetAPI.getAvailableModels();
+      const modelList = await ParakeetAPI.getAvailableModels(true);
       setModels(modelList);
 
       toast.success(`${displayName} deleted`, {
@@ -365,7 +368,12 @@ export function ParakeetModelManager({
 
       // If deleted model was selected, clear selection
       if (selectedModel === modelName && onModelSelect) {
-        onModelSelect('');
+        if (modelName === PARAKEET_MLX_MODEL &&
+            modelList.some(model => model.name === DEFAULT_PARAKEET_MODEL && model.status === 'Available')) {
+          await selectModel(DEFAULT_PARAKEET_MODEL);
+        } else {
+          onModelSelect('');
+        }
       }
     } catch (err) {
       console.error('Failed to delete model:', err);
@@ -396,58 +404,26 @@ export function ParakeetModelManager({
     );
   }
 
-  const recommendedModel = models.find(m =>
-    m.name === 'parakeet-tdt-0.6b-v3-int8'
-  );
-  const otherModels = models.filter(m =>
-    m.name !== 'parakeet-tdt-0.6b-v3-int8'
-  );
+  const recommendedModel = models.some(model => model.name === PARAKEET_MLX_MODEL)
+    ? PARAKEET_MLX_MODEL
+    : DEFAULT_PARAKEET_MODEL;
 
   return (
-    <div className={`space-y-3 ${className}`}>
-      {/* Recommended Model */}
-      {recommendedModel && (
+    <div className="space-y-3">
+      {models.map(model => (
         <ModelCard
-          model={recommendedModel}
-          isSelected={selectedModel === recommendedModel.name}
-          isRecommended={true}
-          onSelect={() => {
-            if (recommendedModel.status === 'Available') {
-              selectModel(recommendedModel.name);
-            }
-          }}
-          onDownload={() => downloadModel(recommendedModel.name)}
-          onCancel={() => cancelDownload(recommendedModel.name)}
-          onDelete={() => deleteModel(recommendedModel.name)}
-          isDownloading={downloadingModels.has(recommendedModel.name)}
-          isCancelling={cancellingModels.has(recommendedModel.name)}
+          key={model.name}
+          model={model}
+          isSelected={selectedModel === model.name}
+          isRecommended={model.name === recommendedModel}
+          onSelect={() => selectModel(model.name)}
+          onDownload={() => downloadModel(model.name)}
+          onCancel={() => cancelDownload(model.name)}
+          onDelete={() => deleteModel(model.name)}
+          isDownloading={downloadingModels.has(model.name)}
+          isCancelling={cancellingModels.has(model.name)}
         />
-      )}
-
-      {/* Other Models */}
-      {otherModels.length > 0 && (
-        <div className="space-y-3">
-          {otherModels.map(model => (
-            <ModelCard
-              key={model.name}
-              model={model}
-              isSelected={selectedModel === model.name}
-              isRecommended={false}
-              onSelect={() => {
-                if (model.status === 'Available') {
-                  selectModel(model.name);
-                }
-              }}
-              onDownload={() => downloadModel(model.name)}
-              onCancel={() => cancelDownload(model.name)}
-              onDelete={() => deleteModel(model.name)}
-              isDownloading={downloadingModels.has(model.name)}
-              isCancelling={cancellingModels.has(model.name)}
-            />
-          ))}
-        </div>
-      )}
-
+      ))}
       {/* Helper text */}
       {selectedModel && (
         <motion.div
@@ -455,7 +431,9 @@ export function ParakeetModelManager({
           animate={{ opacity: 1, y: 0 }}
           className="text-xs text-gray-500 text-center pt-2"
         >
-          Using {getModelDisplayName(selectedModel)} for transcription
+          {selectedModel === PARAKEET_MLX_MODEL
+            ? 'Live captions and final transcript use Lightning (MLX)'
+            : `Using ${getModelDisplayName(selectedModel)} for transcription`}
         </motion.div>
       )}
     </div>
@@ -493,6 +471,7 @@ function ModelCard({
   const tagline = displayInfo?.tagline || model.description || '';
 
   const isAvailable = model.status === 'Available';
+  const canSelect = isAvailable && !isCancelling;
   const isMissing = model.status === 'Missing';
   const isError = typeof model.status === 'object' && 'Error' in model.status;
   const isCorrupted = typeof model.status === 'object' && 'Corrupted' in model.status;
@@ -510,17 +489,17 @@ function ModelCard({
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
       className={`
-        relative rounded-lg border-2 transition-all cursor-pointer
+        relative rounded-lg border-2 transition-all
         ${isSelected && isAvailable
           ? 'border-blue-500 bg-blue-50'
           : isAvailable
             ? 'border-gray-200 hover:border-gray-300 bg-white'
             : 'border-gray-200 bg-gray-50'
         }
-        ${isAvailable ? '' : 'cursor-default'}
+        ${canSelect ? 'cursor-pointer' : 'cursor-default'}
       `}
       onClick={() => {
-        if (isAvailable) onSelect();
+        if (canSelect) onSelect();
       }}
     >
       {/* Recommended Badge */}
@@ -536,8 +515,22 @@ function ModelCard({
             {/* Model Name */}
             <div className="flex items-center gap-2 mb-1">
               <span className="text-2xl">{icon}</span>
-              <h3 className="font-semibold text-gray-900">{displayName}</h3>
-              {isSelected && isAvailable && (
+              <h3 className="font-semibold text-gray-900">
+                {canSelect ? (
+                  <button
+                    type="button"
+                    aria-pressed={isSelected}
+                    className="rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
+                    onClick={event => {
+                      event.stopPropagation();
+                      onSelect();
+                    }}
+                  >
+                    {displayName}
+                  </button>
+                ) : displayName}
+              </h3>
+              {isSelected && canSelect && (
                 <motion.span
                   initial={{ scale: 0 }}
                   animate={{ scale: 1 }}
@@ -549,7 +542,9 @@ function ModelCard({
             </div>
 
             {/* Tagline */}
-            <p className="text-sm text-gray-600 ml-9">{tagline}</p>
+            <p className="text-sm text-gray-600 ml-9">
+              {tagline}
+            </p>
           </div>
 
           {/* Status/Action */}

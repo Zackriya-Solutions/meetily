@@ -189,6 +189,7 @@ pub struct RecordingManager {
     stream_manager: AudioStreamManager,
     pipeline_manager: AudioPipelineManager,
     recording_saver: RecordingSaver,
+    pub(crate) buffered_mlx: bool,
     device_monitor: Option<AudioDeviceMonitor>,
     device_event_receiver: Option<mpsc::UnboundedReceiver<DeviceEvent>>,
 }
@@ -209,6 +210,7 @@ impl RecordingManager {
             stream_manager,
             pipeline_manager,
             recording_saver: RecordingSaver::new(),
+            buffered_mlx: false,
             device_monitor: Some(device_monitor),
             device_event_receiver: Some(device_event_receiver),
         }
@@ -230,11 +232,13 @@ impl RecordingManager {
         microphone_device: Option<Arc<AudioDevice>>,
         system_device: Option<Arc<AudioDevice>>,
         auto_save: bool,
-    ) -> std::result::Result<mpsc::UnboundedReceiver<AudioChunk>, RecordingStartError> {
+        buffered_mlx: bool,
+    ) -> std::result::Result<mpsc::UnboundedReceiver<super::transcription::worker::TranscriptionChunk>, RecordingStartError> {
         info!("Starting recording manager (auto_save: {})", auto_save);
 
         // Set up transcription channel
-        let (transcription_sender, transcription_receiver) = mpsc::unbounded_channel::<AudioChunk>();
+        self.buffered_mlx = buffered_mlx;
+        let (transcription_sender, transcription_receiver) = mpsc::unbounded_channel();
         let (recording_sender, recording_receiver) = mpsc::unbounded_channel::<AudioChunk>();
 
         // Start recording state first
@@ -264,6 +268,7 @@ impl RecordingManager {
         if let Err(error) = self.pipeline_manager.start(
             self.state.clone(),
             transcription_sender,
+            buffered_mlx,
             0, // Ignored - using dynamic sizing internally
             48000, // 48kHz sample rate
             Some(recording_sender), // CRITICAL: Pass recording sender to receive pre-mixed audio
@@ -389,29 +394,9 @@ impl RecordingManager {
     }
 
     /// Save recording after transcription is complete
-    pub async fn save_recording_only<R: tauri::Runtime>(&mut self, app: &tauri::AppHandle<R>) -> Result<()> {
-        debug!("Saving recording with transcript chunks");
-
-        // Get actual recording duration from state
-        let recording_duration = self.state.get_active_recording_duration();
-        info!("Recording duration from state: {:?}s", recording_duration);
-
-        // Save the recording with actual duration
-        match self.recording_saver.stop_and_save(app, recording_duration).await {
-            Ok(Some(file_path)) => {
-                info!("Recording saved successfully to: {}", file_path);
-            }
-            Ok(None) => {
-                debug!("Recording not saved (auto-save disabled or no audio data)");
-            }
-            Err(e) => {
-                error!("Failed to save recording: {}", e);
-                // Don't fail the stop operation if saving fails
-            }
-        }
-
-        debug!("Recording save operation completed");
-        Ok(())
+    pub async fn save_recording_only<R: tauri::Runtime>(&mut self, app: &tauri::AppHandle<R>) -> Result<Option<String>> {
+        let duration = self.state.get_active_recording_duration();
+        self.recording_saver.stop_and_save(app, duration).await.map_err(anyhow::Error::msg)
     }
 
     /// Stop recording and save audio (legacy method)

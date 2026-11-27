@@ -51,12 +51,20 @@ export interface ModelDisplayInfo {
   tier: 'fastest' | 'balanced' | 'precise';
 }
 
+export const PARAKEET_MLX_MODEL = 'parakeet-tdt-0.6b-v3-mlx';
+
 export const MODEL_DISPLAY_CONFIG: Record<string, ModelDisplayInfo> = {
   'parakeet-tdt-0.6b-v3-int8': {
     friendlyName: 'Lightning',
     icon: '⚡',
     tagline: 'Real time • Best for speed, great accuracy',
     recommended: true,
+    tier: 'fastest'
+  },
+  [PARAKEET_MLX_MODEL]: {
+    friendlyName: 'Lightning (MLX)',
+    icon: '⚡',
+    tagline: 'Apple Silicon GPU · Live captions and final transcript',
     tier: 'fastest'
   },
   'parakeet-tdt-0.6b-v2-int8': {
@@ -170,8 +178,8 @@ export class ParakeetAPI {
     await invoke('parakeet_init');
   }
 
-  static async getAvailableModels(): Promise<ParakeetModelInfo[]> {
-    return await invoke('parakeet_get_available_models');
+  static async getAvailableModels(includeDownloadOnly = false): Promise<ParakeetModelInfo[]> {
+    return await invoke('parakeet_get_available_models', { includeDownloadOnly });
   }
 
   static async loadModel(modelName: string): Promise<void> {

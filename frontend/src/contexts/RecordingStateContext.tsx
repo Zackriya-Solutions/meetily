@@ -164,6 +164,10 @@ export function RecordingStateProvider({ children }: { children: React.ReactNode
         unsubscribers.push(unlistenStarting);
 
         const unlistenShutdown = await listen<{ stage: string }>('recording-shutdown-progress', ({ payload }) => {
+          if (payload.stage === 'final_transcription') {
+            setState(prev => ({ ...prev, statusMessage: 'Preparing the final transcript from saved audio…' }));
+            return;
+          }
           if (payload.stage !== 'stopping_audio') return;
           setState(prev => (prev.status === RecordingStatus.RECORDING ||
             (prev.status === RecordingStatus.IDLE && prev.isRecording))
@@ -173,8 +177,8 @@ export function RecordingStateProvider({ children }: { children: React.ReactNode
         unsubscribers.push(unlistenShutdown);
 
         // Recording stopped
-        const unlistenStopped = await recordingService.onRecordingStopped((payload) => {
-          console.log('[RecordingStateContext] Recording stopped event:', payload);
+        const unlistenStopped = await recordingService.onRecordingStopped(() => {
+          console.log('[RecordingStateContext] Recording stopped event');
           setState(prev => {
             // Set status to STOPPING if not already in stop flow
             // This ensures smooth UI transition for tray/keyboard stops

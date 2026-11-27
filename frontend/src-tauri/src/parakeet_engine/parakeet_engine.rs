@@ -117,6 +117,8 @@ const PARAKEET_V2_ARTIFACTS: &[ArtifactSpec] = &[
     ArtifactSpec { filename: "vocab.txt", exact_bytes: 9_384 },
 ];
 
+pub(crate) const PARAKEET_MLX_MODEL_NAME: &str = "parakeet-tdt-0.6b-v3-mlx";
+
 const PARAKEET_MODEL_SPECS: &[ModelSpec] = &[
     ModelSpec {
         name: "parakeet-tdt-0.6b-v3-int8",
@@ -126,6 +128,19 @@ const PARAKEET_MODEL_SPECS: &[ModelSpec] = &[
         description: "Real time on M4 Max, latest version with int8 quantization",
         source_base_url: "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/8f23f0c03c8761650bdb5b40aaf3e40d2c15f1ce",
         artifacts: PARAKEET_V3_ARTIFACTS,
+    },
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    ModelSpec {
+        name: PARAKEET_MLX_MODEL_NAME,
+        size_mb: 2509,
+        quantization: QuantizationType::FP32,
+        speed: "Apple Silicon GPU",
+        description: "Apple Silicon GPU model for live captions and the final transcript.",
+        source_base_url: "https://huggingface.co/mlx-community/parakeet-tdt-0.6b-v3/resolve/ed2b7e8c15f9aaa0b5772e2efb986255eaef7e15",
+        artifacts: &[
+            ArtifactSpec { filename: "config.json", exact_bytes: 244_093 },
+            ArtifactSpec { filename: "model.safetensors", exact_bytes: 2_508_288_736 },
+        ],
     },
     ModelSpec {
         name: "parakeet-tdt-0.6b-v2-int8",
@@ -260,9 +275,17 @@ impl From<std::io::Error> for ParakeetEngineError {
     }
 }
 
+enum LoadedModel {
+    Onnx(Box<ParakeetModel>),
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    Mlx(crate::audio::mlx_final_transcription::MlxDecoder),
+}
+
 pub struct ParakeetEngine {
     models_dir: PathBuf,
-    current_model: Arc<RwLock<Option<ParakeetModel>>>,
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    pub(super) mlx_helper: Option<PathBuf>,
+    current_model: Arc<RwLock<Option<LoadedModel>>>,
     current_model_name: Arc<RwLock<Option<String>>>,
     model_lifecycle_lock: Mutex<()>,
     pub(crate) available_models: Arc<RwLock<HashMap<String, ModelInfo>>>,
@@ -306,6 +329,8 @@ impl ParakeetEngine {
 
         Ok(Self {
             models_dir,
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            mlx_helper: None,
             current_model: Arc::new(RwLock::new(None)),
             current_model_name: Arc::new(RwLock::new(None)),
             model_lifecycle_lock: Mutex::new(()),
@@ -330,7 +355,13 @@ impl ParakeetEngine {
 
     /// Discover available Parakeet models.
     pub async fn discover_models(&self) -> Result<Vec<ModelInfo>> {
-        self.discover_models_from_specs(PARAKEET_MODEL_SPECS).await
+        let mut models = self.discover_models_from_specs(PARAKEET_MODEL_SPECS).await?;
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        if self.mlx_helper.is_some() {
+            return Ok(models);
+        }
+        models.retain(|model| model.name != PARAKEET_MLX_MODEL_NAME);
+        Ok(models)
     }
 
     async fn discover_models_from_specs(&self, specs: &[ModelSpec]) -> Result<Vec<ModelInfo>> {
@@ -458,32 +489,18 @@ impl ParakeetEngine {
 
                 log::info!("Loading Parakeet model: {}", model_name);
 
-                let quantized = model_info.quantization == QuantizationType::Int8;
-                let model_path = model_info.path.clone();
-                #[cfg(test)]
-                let model_lifecycle_test_hook = self.load_test_hook().await;
-                #[cfg(test)]
-                let runtime_handle = tokio::runtime::Handle::current();
-                let model = tokio::task::spawn_blocking(move || {
-                    #[cfg(test)]
-                    if let Some(hook) = model_lifecycle_test_hook {
-                        hook.load_started.notify_one();
-                        runtime_handle.block_on(hook.continue_load.notified());
-                    }
-                    ParakeetModel::new(&model_path, quantized)
-                        .map_err(|error| error.to_string())
-                })
-                .await
-                .map_err(|error| {
-                    anyhow!(
-                        "Parakeet model load task failed for {}: {}",
-                        model_name,
-                        error
-                    )
-                })?
-                .map_err(|error| {
-                    anyhow!("Failed to load Parakeet model {}: {}", model_name, error)
-                })?;
+                #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+                let model = if model_name == PARAKEET_MLX_MODEL_NAME {
+                    let helper = self.mlx_helper.as_deref()
+                        .ok_or_else(|| anyhow!("This build does not include Parakeet MLX. Choose another transcription model in Settings."))?;
+                    LoadedModel::Mlx(crate::audio::mlx_final_transcription::MlxDecoder::start(
+                        helper, &model_info.path,
+                    ).await?)
+                } else {
+                    self.load_onnx(model_name, &model_info).await?
+                };
+                #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+                let model = self.load_onnx(model_name, &model_info).await?;
 
                 *self.current_model.write().await = Some(model);
                 *self.current_model_name.write().await = Some(model_name.to_string());
@@ -491,7 +508,7 @@ impl ParakeetEngine {
                 log::info!(
                     "Successfully loaded Parakeet model: {} ({})",
                     model_name,
-                    if quantized { "Int8 quantized" } else { "FP32" }
+                    if model_info.quantization == QuantizationType::Int8 { "Int8 quantized" } else { "MLX" }
                 );
                 Ok(())
             }
@@ -508,6 +525,36 @@ impl ParakeetEngine {
                 Err(anyhow!("Parakeet model {} is corrupted and cannot be loaded", model_name))
             }
         }
+    }
+
+    async fn load_onnx(&self, model_name: &str, model_info: &ModelInfo) -> Result<LoadedModel> {
+        let quantized = model_info.quantization == QuantizationType::Int8;
+        let model_path = model_info.path.clone();
+        #[cfg(test)]
+        let model_lifecycle_test_hook = self.load_test_hook().await;
+        #[cfg(test)]
+        let runtime_handle = tokio::runtime::Handle::current();
+        let model = tokio::task::spawn_blocking(move || {
+            #[cfg(test)]
+            if let Some(hook) = model_lifecycle_test_hook {
+                hook.load_started.notify_one();
+                runtime_handle.block_on(hook.continue_load.notified());
+            }
+            ParakeetModel::new(&model_path, quantized)
+                .map_err(|error| error.to_string())
+        })
+        .await
+        .map_err(|error| {
+            anyhow!(
+                "Parakeet model load task failed for {}: {}",
+                model_name,
+                error
+            )
+        })?
+        .map_err(|error| {
+            anyhow!("Failed to load Parakeet model {}: {}", model_name, error)
+        })?;
+        Ok(LoadedModel::Onnx(Box::new(model)))
     }
 
     /// Unload the current model
@@ -547,12 +594,29 @@ impl ParakeetEngine {
             .ok_or_else(|| anyhow!("No Parakeet model loaded. Please load a model first."))?;
 
 
-        let result = model
-            .transcribe_samples(audio_data)
-            .map_err(|e| anyhow!("Parakeet transcription failed: {}", e))?;
+        match model {
+            LoadedModel::Onnx(model) => Ok(model.transcribe_samples(audio_data)?.text),
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            LoadedModel::Mlx(model) => model.text(audio_data).await,
+        }
+    }
 
-
-        Ok(result.text)
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    pub(crate) async fn transcribe_saved_recording(
+        &self,
+        path: PathBuf,
+    ) -> Result<Vec<(String, f64, f64)>> {
+        use crate::audio::{final_transcription::transcribe_saved_audio_with_context, mlx_final_transcription::EDGE_SECONDS};
+        let runtime = tokio::runtime::Handle::current();
+        let mut model = self.current_model.clone().write_owned().await;
+        tokio::task::spawn_blocking(move || {
+            let Some(LoadedModel::Mlx(decoder)) = model.as_mut() else {
+                return Err(anyhow!("Parakeet MLX is not loaded"));
+            };
+            transcribe_saved_audio_with_context(&path, EDGE_SECONDS, |samples| {
+                runtime.block_on(decoder.decode(samples))
+            })
+        }).await?
     }
 
     /// Get the models directory path
@@ -1372,6 +1436,34 @@ mod tests {
             .expect("test model remains registered")
             .status
             .clone()
+    }
+
+    #[tokio::test]
+    async fn mlx_files_are_downloadable_only_on_apple_silicon_macos() {
+        let (_temp_dir, engine, _) = test_engine().await;
+        let spec = find_model_spec(PARAKEET_MLX_MODEL_NAME);
+        assert_eq!(spec.is_some(), cfg!(all(target_os = "macos", target_arch = "aarch64")));
+
+        if let Some(spec) = spec {
+            let path = engine.models_dir.join(spec.name);
+            fs::create_dir_all(&path).await.unwrap();
+            for artifact in spec.artifacts {
+                let file = fs::File::create(path.join(artifact.filename)).await.unwrap();
+                file.set_len(artifact.exact_bytes).await.unwrap();
+            }
+
+            let models = engine.discover_models_from_specs(PARAKEET_MODEL_SPECS).await.unwrap();
+            let names: Vec<_> = models.iter().map(|model| model.name.as_str()).collect();
+            assert_eq!(
+                names,
+                ["parakeet-tdt-0.6b-v3-int8", spec.name, "parakeet-tdt-0.6b-v2-int8"]
+            );
+            assert!(matches!(models[1].status, ModelStatus::Available));
+        }
+
+        let models = engine.discover_models().await.unwrap();
+        assert!(models.iter().all(|model| model.name != PARAKEET_MLX_MODEL_NAME));
+        assert!(engine.load_model(PARAKEET_MLX_MODEL_NAME).await.is_err());
     }
 
     #[tokio::test]

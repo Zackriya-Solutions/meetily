@@ -1,0 +1,5 @@
+{
+  "bundle": {
+    "resources": ["templates/*.json", "binaries/parakeet-mlx/"]
+  }
+}

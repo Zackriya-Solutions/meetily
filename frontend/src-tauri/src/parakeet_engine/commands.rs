@@ -1,5 +1,5 @@
 use crate::parakeet_engine::parakeet_engine::{is_download_cancelled, CancelDownloadOutcome};
-use crate::parakeet_engine::{DownloadProgress, ModelInfo, ParakeetEngine};
+use crate::parakeet_engine::{DownloadProgress, ModelInfo, ParakeetEngine, PARAKEET_MLX_MODEL_NAME};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::{command, AppHandle, Emitter, Manager, Runtime};
@@ -8,11 +8,18 @@ use tauri::{command, AppHandle, Emitter, Manager, Runtime};
 pub static PARAKEET_ENGINE: Mutex<Option<Arc<ParakeetEngine>>> = Mutex::new(None);
 
 // Global models directory path (set during app initialization)
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+static MLX_HELPER: Mutex<Option<PathBuf>> = Mutex::new(None);
+
 static MODELS_DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
 
 /// Initialize the models directory path using app_data_dir
 /// This should be called during app setup before parakeet_init
 pub fn set_models_directory<R: Runtime>(app: &AppHandle<R>) {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        *MLX_HELPER.lock().unwrap() = crate::audio::mlx_final_transcription::helper_path(app);
+    }
     let app_data_dir = app.path().app_data_dir()
         .expect("Failed to get app data dir");
 
@@ -47,21 +54,30 @@ pub async fn parakeet_init() -> Result<(), String> {
     let models_dir = get_models_directory();
     let engine = ParakeetEngine::new_with_models_dir(models_dir)
         .map_err(|e| format!("Failed to initialize Parakeet engine: {}", e))?;
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    let engine = {
+        let mut engine = engine;
+        engine.mlx_helper = MLX_HELPER.lock().unwrap().clone();
+        engine
+    };
     *guard = Some(Arc::new(engine));
     Ok(())
 }
 
 #[command]
-pub async fn parakeet_get_available_models() -> Result<Vec<ModelInfo>, String> {
+pub async fn parakeet_get_available_models<R: Runtime>(
+    app: AppHandle<R>,
+    include_download_only: Option<bool>,
+) -> Result<Vec<ModelInfo>, String> {
     let engine = {
         let guard = PARAKEET_ENGINE.lock().unwrap();
         guard.as_ref().cloned()
     };
 
     if let Some(engine) = engine {
-        engine
-            .discover_models()
-            .await
+        // Keep the optional argument for older callers. MLX is a regular runnable model.
+        let _ = (app, include_download_only);
+        engine.discover_models().await
             .map_err(|e| format!("Failed to discover Parakeet models: {}", e))
     } else {
         Err("Parakeet engine not initialized".to_string())
@@ -236,15 +252,6 @@ pub async fn parakeet_validate_model_ready_with_config<R: tauri::Runtime>(
     };
 
     if let Some(engine) = engine {
-        // Check if a model is currently loaded
-        if engine.is_model_loaded().await {
-            if let Some(current_model) = engine.get_current_model().await {
-                log::info!("Parakeet model already loaded: {}", current_model);
-                return Ok(current_model);
-            }
-        }
-
-        // No model loaded - try to load user's configured model from transcript config
         let model_to_load = match crate::api::api::api_get_transcript_config(
             app.clone(),
             app.state(),
@@ -282,6 +289,12 @@ pub async fn parakeet_validate_model_ready_with_config<R: tauri::Runtime>(
             }
         };
 
+        if let Some(current_model) = engine.get_current_model().await {
+            if model_to_load.as_ref().is_none_or(|requested| requested == &current_model) {
+                return Ok(current_model);
+            }
+        }
+
         // Check available models
         let models = engine
             .discover_models()
@@ -292,6 +305,12 @@ pub async fn parakeet_validate_model_ready_with_config<R: tauri::Runtime>(
             .iter()
             .filter(|model| matches!(model.status, crate::parakeet_engine::ModelStatus::Available))
             .collect();
+
+        if model_to_load.as_deref() == Some(PARAKEET_MLX_MODEL_NAME)
+            && !available_models.iter().any(|model| model.name == PARAKEET_MLX_MODEL_NAME)
+        {
+            return Err("Lightning (MLX) is unavailable. Download it or choose another model in Transcription Settings.".into());
+        }
 
         if available_models.is_empty() {
             return Err(

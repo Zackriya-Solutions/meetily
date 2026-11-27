@@ -11,6 +11,11 @@ on:
           - debug
           - release
         default: release
+      parakeet-mlx:
+        description: 'Include Lightning (MLX) for final transcription'
+        required: true
+        type: boolean
+        default: true
       sign-build:
         description: 'Sign the build'
         required: true
@@ -149,6 +154,22 @@ jobs:
           echo "Copied llama-helper to frontend/src-tauri/binaries/"
           ls -la frontend/src-tauri/binaries/
 
+      - name: Set up Python for Parakeet MLX
+        if: inputs.parakeet-mlx
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build Parakeet MLX helper
+        if: inputs.parakeet-mlx
+        id: parakeet-mlx
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ inputs.sign-build && env.CERT_ID || '' }}
+        run: |
+          python -m pip install mlx==0.32.4 parakeet-mlx==0.7.0 librosa==1.0.1 numpy==2.5.5 pyinstaller==6.20.0
+          scripts/parakeet-mlx/build.sh "$(command -v python)"
+          echo "args=--config src-tauri/tauri.parakeet-mlx.conf.json" >> "$GITHUB_OUTPUT"
+
       - name: Cache FFmpeg binary
         uses: actions/cache@v4
         with:
@@ -179,7 +200,7 @@ jobs:
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         with:
           projectPath: frontend
-          args: --target aarch64-apple-darwin ${{ steps.build-profile.outputs.args }}
+          args: --target aarch64-apple-darwin ${{ steps.build-profile.outputs.args }} ${{ steps.parakeet-mlx.outputs.args }}
 
       - name: Build Tauri app (unsigned)
         if: ${{ github.event.inputs.sign-build != 'true' }}
@@ -197,7 +218,7 @@ jobs:
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         with:
           projectPath: frontend
-          args: --target aarch64-apple-darwin ${{ steps.build-profile.outputs.args }}
+          args: --target aarch64-apple-darwin ${{ steps.build-profile.outputs.args }} ${{ steps.parakeet-mlx.outputs.args }}
 
       - name: Verify build artifacts
         run: |

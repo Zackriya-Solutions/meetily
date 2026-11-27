@@ -3,6 +3,10 @@ pub mod audio_processing;
 pub mod decoder;
 pub mod encode;
 pub mod ffmpeg;
+#[cfg(target_os = "macos")]
+pub mod final_transcription;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+pub mod mlx_final_transcription;
 pub mod vad;
 
 // Modularized device management
